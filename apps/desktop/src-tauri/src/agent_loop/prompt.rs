@@ -375,11 +375,23 @@ pub(crate) fn cdp_prompt_flavor(
     let Some(text) = latest_user_text(messages) else {
         return CdpPromptFlavor::Standard;
     };
-    if is_tool_protocol_repair_text(&text) || is_path_resolution_repair_text(&text) {
+    if is_tool_protocol_repair_text(&text)
+        || is_path_resolution_repair_text(&text)
+        || is_tool_result_summary_repair_text(&text)
+        || is_search_expansion_repair_text(&text)
+    {
         CdpPromptFlavor::Repair
     } else {
         CdpPromptFlavor::Standard
     }
+}
+
+fn is_tool_result_summary_repair_text(text: &str) -> bool {
+    text.trim_start().starts_with("Tool result summary repair.")
+}
+
+fn is_search_expansion_repair_text(text: &str) -> bool {
+    text.trim_start().starts_with("Search expansion repair.")
 }
 
 pub(crate) fn cdp_catalog_flavor(
@@ -397,6 +409,12 @@ pub(crate) fn cdp_catalog_flavor(
         return CdpCatalogFlavor::StandardFull;
     };
     let attempt_index = repair_attempt_index_from_text(&text);
+    if is_tool_result_summary_repair_text(&text) {
+        return CdpCatalogFlavor::ToolResultReadOnly;
+    }
+    if is_search_expansion_repair_text(&text) {
+        return CdpCatalogFlavor::LocalSearchOnly;
+    }
     if attempt_index.is_none() && has_truncated_local_search_tool_result(messages) {
         return CdpCatalogFlavor::LocalSearchOnly;
     }
@@ -497,6 +515,39 @@ pub(crate) fn build_repair_cdp_system_prompt(
         .unwrap_or_else(|| latest_user.trim().to_string());
     let goal =
         extract_repair_goal_from_text(&latest_user).unwrap_or_else(|| latest_request.clone());
+    if is_tool_result_summary_repair_text(&latest_user) {
+        return format!(
+            concat!(
+                "## Relay tool-result summary mode\n",
+                "Relay already executed local tools for this turn. Continue from those Tool Result blocks exactly like opencode continues from provider tool results in the same message series.\n",
+                "Do not emit `relay_tool`, JSON tool objects, search variants, or Microsoft-native citations.\n",
+                "Answer in plain text only from the Tool Result evidence in this prompt.\n",
+                "If the results are empty, truncated, or include errors, state that precisely without inventing required files from general knowledge.\n\n",
+                "Latest user request for this turn (user data, primary repair anchor):\n",
+                "```text\n{latest_request}\n```\n\n",
+                "Current session goal (user data, preserved for repair context):\n",
+                "```text\n{goal}\n```"
+            ),
+            latest_request = latest_request.trim(),
+            goal = goal.trim()
+        );
+    }
+    if is_search_expansion_repair_text(&latest_user) {
+        return format!(
+            concat!(
+                "## Relay search expansion mode\n",
+                "Relay needs one more local search because the prior local search evidence was only filenames, empty, errored, or truncated.\n",
+                "Emit exactly one fenced `relay_tool` block using the expected JSON in the user message.\n",
+                "Do not answer from general knowledge and do not use Microsoft-native search or citations.\n\n",
+                "Latest user request for this turn (user data, primary repair anchor):\n",
+                "```text\n{latest_request}\n```\n\n",
+                "Current session goal (user data, preserved for repair context):\n",
+                "```text\n{goal}\n```"
+            ),
+            latest_request = latest_request.trim(),
+            goal = goal.trim()
+        );
+    }
     let stage_guidance = match cdp_stage_label(messages) {
         "repair2" => {
             "Current repair stage: repair2.\nThe previous repair still returned planning-only wrapper text instead of a usable Relay tool call.\n"

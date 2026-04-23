@@ -15,6 +15,46 @@
 
 ## Milestone Log
 
+### 2026-04-23 Opencode alignment follow-up: repair evidence continuity
+
+Followed up on a Windows live trace where the first repair correctly continued
+the Copilot thread but still drifted:
+
+- The initial repair emitted `office_search` with a narrow literal pattern
+  (`キャッシュフロー計算書作成`) and `max_files=80`, yielding 0 results with
+  `files_truncated=true`.
+- The next `Tool result summary repair` was classified as `Standard/original`,
+  so the CDP prompt again logged `tool_result_count=0` and Copilot answered
+  from prose instead of the Relay tool transcript.
+
+Changes:
+
+- `Tool result summary repair` and `Search expansion repair` now use
+  `CdpPromptFlavor::Repair` and repair stage labels instead of falling back to
+  `Standard/original`.
+- Tool-result summary repair now uses a read-only summary prompt and
+  `ToolResultReadOnly` catalog so Copilot must answer from existing Relay Tool
+  Results rather than emit more search JSON.
+- Search-expansion repair now keeps the local-search catalog and same-turn
+  evidence, matching opencode's "tool result stays in the same message series,
+  then choose the next tool/input" behavior.
+- Cash-flow Office search repair now uses a broader regex pattern
+  (`CFS|キャッシュ.?フロー|CF.?精算|連結CFS|CFS精算表`) and no longer caps
+  `max_files` at 80, allowing the runtime Office search default of 1000 files.
+- Empty `office_search` summaries now expose `truncated: true` when truncation
+  metadata is present, so the next prompt can distinguish "no hits in searched
+  slice" from "complete no hits".
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_repair_uses_root_path_and_include_ext_filter -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_result_summary_repair_keeps_evidence_and_disables_tools -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml search_expansion_repair_uses_repair_flavor_and_local_search_catalog -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 8 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_repair_ -- --nocapture`: passed, 3 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+
 ### 2026-04-23 Opencode alignment Phase 1: repair thread continuity
 
 Implemented Phase 1 from `docs/OPENCODE_ALIGNMENT_PLAN.md` (P0 + P2) after

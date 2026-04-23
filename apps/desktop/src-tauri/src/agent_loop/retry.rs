@@ -726,6 +726,12 @@ fn infer_office_search_pattern_for_search_request(text: &str) -> Option<String> 
 }
 
 fn infer_office_search_pattern_and_regex_for_search_request(text: &str) -> Option<(String, bool)> {
+    if is_cash_flow_search_request(text) {
+        return Some((
+            "CFS|キャッシュ.?フロー|CF.?精算|連結CFS|CFS精算表".to_string(),
+            true,
+        ));
+    }
     let terms = expanded_search_terms_for_request(text);
     let first = terms.first()?;
     if terms.len() > 1 && should_use_office_search_term_batch(first) {
@@ -1091,7 +1097,6 @@ fn build_office_search_tool_call(latest_request: &str, path: Option<&str>) -> Va
             "paths": office_search_paths_for_repair(latest_request, path),
             "regex": regex,
             "include_ext": include_ext,
-            "max_files": 80,
             "max_results": 30,
             "context": 40,
         },
@@ -1582,6 +1587,7 @@ fn is_repair_turn_input(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("Tool protocol repair.")
         || trimmed.starts_with("Tool result summary repair.")
+        || trimmed.starts_with("Search expansion repair.")
 }
 
 fn is_toolless_local_search_summary_answer(text: &str) -> bool {
@@ -1989,6 +1995,12 @@ mod tests {
 
         assert_eq!(input.get("paths"), Some(&json!(["**"])));
         assert_eq!(
+            input.get("pattern"),
+            Some(&json!("CFS|キャッシュ.?フロー|CF.?精算|連結CFS|CFS精算表"))
+        );
+        assert_eq!(input.get("regex"), Some(&json!(true)));
+        assert_eq!(input.get("max_files"), None);
+        assert_eq!(
             input.get("include_ext"),
             Some(&json!(["docx", "xlsx", "xlsm", "pptx", "pdf"]))
         );
@@ -2003,6 +2015,12 @@ mod tests {
             .expect("office_search input");
 
         assert_eq!(input.get("paths"), Some(&json!(["reports/**"])));
+        assert_eq!(
+            input.get("pattern"),
+            Some(&json!("CFS|キャッシュ.?フロー|CF.?精算|連結CFS|CFS精算表"))
+        );
+        assert_eq!(input.get("regex"), Some(&json!(true)));
+        assert_eq!(input.get("max_files"), None);
         assert_eq!(
             input.get("include_ext"),
             Some(&json!(["docx", "xlsx", "xlsm", "pptx", "pdf"]))

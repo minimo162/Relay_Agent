@@ -2113,6 +2113,10 @@ fn is_tool_result_summary_repair_text(text: &str) -> bool {
     text.trim_start().starts_with("Tool result summary repair.")
 }
 
+fn is_search_expansion_repair_text(text: &str) -> bool {
+    text.trim_start().starts_with("Search expansion repair.")
+}
+
 fn is_compaction_replay_text(text: &str) -> bool {
     text.trim_start()
         .starts_with("Resume the existing task from the compacted summary")
@@ -2124,6 +2128,7 @@ fn is_synthetic_control_user_text(text: &str) -> bool {
         || is_tool_protocol_repair_text(trimmed)
         || is_path_resolution_repair_text(trimmed)
         || is_tool_result_summary_repair_text(trimmed)
+        || is_search_expansion_repair_text(trimmed)
         || is_compaction_replay_text(trimmed)
 }
 
@@ -2218,6 +2223,9 @@ fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
     let trimmed = text.trim();
     if is_path_resolution_repair_text(trimmed) {
         return "path-repair";
+    }
+    if is_tool_result_summary_repair_text(trimmed) || is_search_expansion_repair_text(trimmed) {
+        return "repair2";
     }
     match repair_attempt_index_from_text(trimmed) {
         Some(0) => "repair1",
@@ -3248,6 +3256,9 @@ fn summarize_office_search_tool_result(output: &str) -> Option<String> {
             format!("candidate_count: {candidate_count}"),
             format!("files_scanned: {files_scanned}"),
         ];
+        if truncated {
+            lines.push("truncated: true".to_string());
+        }
         if !errors.is_empty() {
             lines.push(format!("errors: {}", errors.len()));
             for error in errors.iter().take(3) {
@@ -4815,6 +4826,106 @@ mod cdp_copilot_tool_tests {
         assert!(!bundle.message_text.contains("検索結果は空でした。"));
         assert_eq!(bundle.tool_result_count(), 1);
         assert!(bundle.tool_result_chars() > 0);
+    }
+
+    #[test]
+    fn tool_result_summary_repair_keeps_evidence_and_disables_tools() {
+        let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
+        let repair = format!(
+            concat!(
+                "Tool result summary repair.\n",
+                "Local search tools are disabled for this repair step.\n\n",
+                "{latest_request_marker}{request}\n```\n\n",
+                "{original_goal_marker}{request}\n```"
+            ),
+            latest_request_marker = crate::agent_loop::prompt::LATEST_REQUEST_MARKER,
+            original_goal_marker = crate::agent_loop::prompt::ORIGINAL_GOAL_MARKER,
+            request = request,
+        );
+        let office_output = serde_json::json!({
+            "candidate_count": 320,
+            "filesScanned": 80,
+            "files_truncated": true,
+            "results": [],
+            "errors": ["password protected"]
+        })
+        .to_string();
+        let messages = vec![
+            ConversationMessage::user_text(request),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "office_search".to_string(),
+                input: r#"{"pattern":"キャッシュフロー計算書作成","paths":["**"],"max_files":80}"#
+                    .to_string(),
+            }]),
+            ConversationMessage::tool_result("tool-1", "office_search", office_output, false),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "一般知識から候補を推測します。".to_string(),
+            }]),
+            ConversationMessage::user_text(repair),
+        ];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &["Long standard system prompt".repeat(200)],
+            &messages,
+            cdp_prompt_flavor(&messages),
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(cdp_prompt_flavor(&messages), CdpPromptFlavor::Repair);
+        assert_eq!(cdp_stage_label(&messages), "repair2");
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::ToolResultReadOnly);
+        assert!(bundle.system_text.contains("tool-result summary mode"));
+        assert!(bundle.system_text.contains("plain text only"));
+        assert!(bundle.message_text.contains("[Tool Call: office_search]"));
+        assert!(bundle.message_text.contains("truncated"));
+        assert!(!bundle.message_text.contains("一般知識から候補"));
+        assert_eq!(bundle.tool_result_count(), 1);
+        assert!(bundle.tool_result_chars() > 0);
+        assert!(bundle.catalog_text.contains("### `read`"));
+        assert!(!bundle.catalog_text.contains("### `office_search`"));
+    }
+
+    #[test]
+    fn search_expansion_repair_uses_repair_flavor_and_local_search_catalog() {
+        let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
+        let repair = format!(
+            concat!(
+                "Search expansion repair.\n",
+                "Expected JSON for the next reply:\n```json\n",
+                "{{\"name\":\"office_search\",\"relay_tool_call\":true,\"input\":{{\"pattern\":\"CFS|キャッシュ.?フロー\",\"regex\":true,\"paths\":[\"**\"]}}}}\n",
+                "```\n\n",
+                "{latest_request_marker}{request}\n```\n\n",
+                "{original_goal_marker}{request}\n```"
+            ),
+            latest_request_marker = crate::agent_loop::prompt::LATEST_REQUEST_MARKER,
+            original_goal_marker = crate::agent_loop::prompt::ORIGINAL_GOAL_MARKER,
+            request = request,
+        );
+        let messages = vec![
+            ConversationMessage::user_text(request),
+            ConversationMessage::tool_result(
+                "tool-1",
+                "glob",
+                r#"{"matches":["CFS精算表.xlsx"]}"#,
+                false,
+            ),
+            ConversationMessage::user_text(repair),
+        ];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            cdp_prompt_flavor(&messages),
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(cdp_prompt_flavor(&messages), CdpPromptFlavor::Repair);
+        assert_eq!(cdp_stage_label(&messages), "repair2");
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
+        assert!(bundle.system_text.contains("search expansion mode"));
+        assert!(bundle
+            .message_text
+            .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"glob\" status=\"ok\">"));
+        assert!(bundle.catalog_text.contains("### `office_search`"));
     }
 
     #[test]
