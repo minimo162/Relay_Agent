@@ -2113,10 +2113,6 @@ fn is_tool_result_summary_repair_text(text: &str) -> bool {
     text.trim_start().starts_with("Tool result summary repair.")
 }
 
-fn is_search_expansion_repair_text(text: &str) -> bool {
-    text.trim_start().starts_with("Search expansion repair.")
-}
-
 fn is_compaction_replay_text(text: &str) -> bool {
     text.trim_start()
         .starts_with("Resume the existing task from the compacted summary")
@@ -2128,7 +2124,6 @@ fn is_synthetic_control_user_text(text: &str) -> bool {
         || is_tool_protocol_repair_text(trimmed)
         || is_path_resolution_repair_text(trimmed)
         || is_tool_result_summary_repair_text(trimmed)
-        || is_search_expansion_repair_text(trimmed)
         || is_compaction_replay_text(trimmed)
 }
 
@@ -2224,7 +2219,7 @@ fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
     if is_path_resolution_repair_text(trimmed) {
         return "path-repair";
     }
-    if is_tool_result_summary_repair_text(trimmed) || is_search_expansion_repair_text(trimmed) {
+    if is_tool_result_summary_repair_text(trimmed) {
         return "repair2";
     }
     match repair_attempt_index_from_text(trimmed) {
@@ -4886,49 +4881,6 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn search_expansion_repair_uses_repair_flavor_and_local_search_catalog() {
-        let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
-        let repair = format!(
-            concat!(
-                "Search expansion repair.\n",
-                "Expected JSON for the next reply:\n```json\n",
-                "{{\"name\":\"office_search\",\"relay_tool_call\":true,\"input\":{{\"pattern\":\"CFS|キャッシュ.?フロー\",\"regex\":true,\"paths\":[\"**\"]}}}}\n",
-                "```\n\n",
-                "{latest_request_marker}{request}\n```\n\n",
-                "{original_goal_marker}{request}\n```"
-            ),
-            latest_request_marker = crate::agent_loop::prompt::LATEST_REQUEST_MARKER,
-            original_goal_marker = crate::agent_loop::prompt::ORIGINAL_GOAL_MARKER,
-            request = request,
-        );
-        let messages = vec![
-            ConversationMessage::user_text(request),
-            ConversationMessage::tool_result(
-                "tool-1",
-                "glob",
-                r#"{"matches":["CFS精算表.xlsx"]}"#,
-                false,
-            ),
-            ConversationMessage::user_text(repair),
-        ];
-        let bundle = build_cdp_prompt_bundle_from_messages(
-            &[],
-            &messages,
-            cdp_prompt_flavor(&messages),
-            cdp_catalog_flavor(&messages),
-        );
-
-        assert_eq!(cdp_prompt_flavor(&messages), CdpPromptFlavor::Repair);
-        assert_eq!(cdp_stage_label(&messages), "repair2");
-        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
-        assert!(bundle.system_text.contains("search expansion mode"));
-        assert!(bundle
-            .message_text
-            .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"glob\" status=\"ok\">"));
-        assert!(bundle.catalog_text.contains("### `office_search`"));
-    }
-
-    #[test]
     fn repair_prompt_excludes_older_turns_but_keeps_messages_after_synthetic_repair_user() {
         let repair =
             build_tool_protocol_repair_input("Original request", "Create ./tetris.html", 0);
@@ -7539,11 +7491,12 @@ mod loop_controller_tests {
         assert!(next_input.contains("キャッシュフロー計算書"));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(next_input.contains("`office_search` for Office/PDF contents"));
+        assert!(!next_input.contains("Search expansion repair."));
         assert!(!next_input.contains(r#""name": "write""#));
     }
 
     #[test]
-    fn glob_only_office_lookup_repairs_to_office_search_expansion() {
+    fn glob_only_office_lookup_does_not_inject_search_expansion_repair() {
         let s = summary(
             "検索結果を踏まえると、キャッシュフロー計算書の作成に直接関係しそうなファイルは連結PKGや精算表です。",
             vec![tool_success_result(
@@ -7553,15 +7506,10 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         let request = "キャッシュフロー計算書の作成に関係するファイルを検索して";
-        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
-        let LoopDecision::Continue { next_input, kind } = decision else {
-            panic!("expected glob-only Office lookup to request office_search expansion");
-        };
-        assert_eq!(kind, LoopContinueKind::MetaNudge);
-        assert!(next_input.contains("Search expansion repair."));
-        assert!(next_input.contains(r#""name": "office_search""#));
-        assert!(next_input.contains(r#""pattern": "キャッシュフロー計算書""#));
-        assert!(next_input.contains("Filename candidates alone are not enough evidence"));
+        assert_eq!(
+            decide_loop_after_success(request, request, 0, 0, 2, false, &s),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
     }
 
     #[test]

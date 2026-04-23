@@ -772,25 +772,6 @@ fn is_cash_flow_search_request(text: &str) -> bool {
         || (trimmed.contains("キャッシュ") && trimmed.contains("フロー"))
 }
 
-fn needs_office_content_evidence(text: &str) -> bool {
-    let trimmed = text.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    is_cash_flow_search_request(trimmed)
-        || lower.contains("needed")
-        || lower.contains("required")
-        || lower.contains("related")
-        || lower.contains("relevant")
-        || lower.contains("content")
-        || lower.contains("contents")
-        || trimmed.contains("必要")
-        || trimmed.contains("関連")
-        || trimmed.contains("関係")
-        || trimmed.contains("該当")
-        || trimmed.contains("候補")
-        || trimmed.contains("作成")
-        || trimmed.contains("内容")
-}
-
 fn office_search_include_ext_for_search_request(text: &str) -> Vec<&'static str> {
     let trimmed = text.trim();
     let lower = trimmed.to_ascii_lowercase();
@@ -1144,33 +1125,6 @@ fn build_tool_result_summary_repair_input(
     )
 }
 
-fn build_office_content_search_repair_input(
-    goal: &str,
-    latest_request: &str,
-    path: Option<&str>,
-) -> String {
-    let expected_payload = build_office_search_tool_call(latest_request, path);
-    let expected_json =
-        serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        concat!(
-            "Search expansion repair.\n",
-            "Relay has only executed filename/glob search for this local Office/PDF lookup. Filename candidates alone are not enough evidence for needed, related, or relevant document questions.\n",
-            "Do not summarize from general accounting/domain knowledge and do not treat broad or truncated `glob` results as confirmed relevance.\n",
-            "Emit exactly one Relay `office_search` tool call now, using concrete pattern terms derived from the user's request. For compact abbreviation+noun queries such as `CFS 精算表`, use `regex: true` with a small alternation instead of searching only the abbreviation. Do not write prose before or after the JSON.\n\n",
-            "Expected JSON for the next reply:\n",
-            "```json\n{expected_json}\n```\n\n",
-            "{latest_request_marker}{latest_request}\n```\n\n",
-            "{original_goal_marker}{goal}\n```"
-        ),
-        expected_json = expected_json,
-        latest_request_marker = LATEST_REQUEST_MARKER,
-        latest_request = latest_request.trim(),
-        original_goal_marker = ORIGINAL_GOAL_MARKER,
-        goal = goal.trim(),
-    )
-}
-
 fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
     let trimmed = latest_request.trim();
     if trimmed.is_empty() {
@@ -1450,26 +1404,6 @@ fn has_local_search_tool_result(summary: &runtime::TurnSummary) -> bool {
     })
 }
 
-fn local_search_tool_result_names(summary: &runtime::TurnSummary) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    for message in &summary.tool_results {
-        for block in &message.blocks {
-            let ContentBlock::ToolResult { tool_name, .. } = block else {
-                continue;
-            };
-            if matches!(tool_name.as_str(), "glob" | "grep" | "office_search") {
-                names.insert(tool_name.clone());
-            }
-        }
-    }
-    names
-}
-
-fn local_office_lookup_needs_content_search(summary: &runtime::TurnSummary) -> bool {
-    let names = local_search_tool_result_names(summary);
-    names.contains("glob") && !names.contains("grep") && !names.contains("office_search")
-}
-
 fn has_successful_office_search_tool_result(summary: &runtime::TurnSummary) -> bool {
     summary.tool_results.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -1587,7 +1521,6 @@ fn is_repair_turn_input(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("Tool protocol repair.")
         || trimmed.starts_with("Tool result summary repair.")
-        || trimmed.starts_with("Search expansion repair.")
 }
 
 fn is_toolless_local_search_summary_answer(text: &str) -> bool {
@@ -1749,10 +1682,6 @@ pub(crate) fn decide_loop_after_success(
         has_local_search_tool_result(summary) && is_copilot_search_leak_text(assistant_text);
     let is_empty_local_search_false_evidence_claim = local_search_results_are_empty(summary)
         && claims_local_search_found_evidence(assistant_text);
-    let is_office_lookup_needs_content_search = is_local_file_search
-        && is_office_content_search_request(latest_turn_input)
-        && needs_office_content_evidence(latest_turn_input)
-        && local_office_lookup_needs_content_search(summary);
     let is_repair_refusal =
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_false_completion = summary.tool_results.is_empty()
@@ -1826,16 +1755,6 @@ pub(crate) fn decide_loop_after_success(
             path_repair_used,
             truncate_for_log(assistant_text, 240)
         );
-    } else if is_office_lookup_needs_content_search {
-        tracing::info!(
-            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} office_lookup_needs_content_search=true assistant_excerpt={:?}",
-            summary.outcome,
-            summary.iterations,
-            meta_stall_nudges_used,
-            meta_stall_nudge_limit,
-            path_repair_used,
-            truncate_for_log(assistant_text, 240)
-        );
     }
 
     if is_copilot_search_leak_after_local_search || is_empty_local_search_false_evidence_claim {
@@ -1845,23 +1764,6 @@ pub(crate) fn decide_loop_after_success(
                     goal,
                     latest_turn_input,
                     assistant_text,
-                ),
-                kind: LoopContinueKind::MetaNudge,
-            };
-        }
-        return LoopDecision::Stop(LoopStopReason::MetaStall);
-    }
-
-    if is_office_lookup_needs_content_search {
-        if meta_stall_nudges_used < meta_stall_nudge_limit {
-            let path_anchor = extract_path_anchors_from_text(latest_turn_input)
-                .into_iter()
-                .next();
-            return LoopDecision::Continue {
-                next_input: build_office_content_search_repair_input(
-                    goal,
-                    latest_turn_input,
-                    path_anchor.as_deref(),
                 ),
                 kind: LoopContinueKind::MetaNudge,
             };

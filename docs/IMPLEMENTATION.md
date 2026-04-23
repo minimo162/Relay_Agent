@@ -50,6 +50,33 @@ Verification:
 - `node -e "...workflow trigger check..."`: passed (`pull_request` and
   `workflow_dispatch` present; `push` and `cargo clippy` absent).
 
+### 2026-04-23 Opencode alignment follow-up: remove search expansion repair
+
+Moved Office/PDF lookup behavior closer to OpenCode's normal tool-selection
+loop by removing Relay's post-hoc `Search expansion repair` path.
+
+Changes:
+
+- Removed the `office_lookup_needs_content_search` classifier and synthetic
+  `Search expansion repair` prompt that forced a second repair after glob-only
+  evidence.
+- Removed CDP prompt/orchestrator special handling for search expansion repair.
+- Kept the first tool-protocol repair routing that selects `office_search`
+  directly for Office/PDF and CFS-style local document lookup requests.
+- Updated regression coverage so glob-only Office lookup results are no longer
+  rewritten into a Relay-specific follow-up repair.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml glob_only_office_lookup_does_not_inject_search_expansion_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_repair_ -- --nocapture`: passed, 3 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 8 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-23 Opencode alignment follow-up: repair evidence continuity
 
 Followed up on a Windows live trace where the first repair correctly continued
