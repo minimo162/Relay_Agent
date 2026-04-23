@@ -179,6 +179,46 @@ Acceptance criteria:
 - Risky actions are explained through inline approval requests instead of a separate mode or permission matrix.
 - Root `pnpm check` passes and Playwright coverage confirms first-run gating plus the simplified shell labels.
 
+### Phase 6: Opencode-Like Search Surface With Office/PDF Backends
+
+Goal: keep Office/PDF shared-document search as a Relay capability while moving
+the model-facing tool surface back toward opencode's simple `read` / `glob` /
+`grep` shape.
+
+Change targets:
+
+- `apps/desktop/src-tauri/crates/runtime/src/file_ops.rs`
+- `apps/desktop/src-tauri/crates/runtime/src/office/mod.rs`
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `docs/OPENCODE_ALIGNMENT_PLAN.md`
+- `docs/OFFICE_SEARCH_DESIGN.md`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- `grep` can search mixed plaintext and Office/PDF candidates through internal
+  backends while returning one grep-like evidence shape.
+- `read` remains the model-facing path for exact Office/PDF files.
+- `office_search` is hidden from CDP catalogs and repair prompts; it remains
+  only as an internal compatibility helper until callers are migrated.
+- Local lookup repair generates only active model-facing tools: `read`, `glob`,
+  and `grep`.
+- Office/PDF filename discovery stays a `glob` responsibility; only extracted
+  text matches become content evidence.
+- Root verification follows the repository acceptance policy, with focused
+  runtime and agent-loop regressions covering mixed-backend grep and no
+  `office_search` repair.
+
+Status 2026-04-23:
+
+- Implemented for the CDP agent loop. `grep` now delegates Office/PDF targets to
+  the extracted-text backend internally, CDP local-search catalogs expose only
+  `read` / `glob` / `grep`, and local lookup repair no longer generates
+  `office_search`.
+- `office_search` remains present as a hidden compatibility/internal execution
+  path until all non-CDP callers and legacy transcript handling are migrated.
+
 ### Cross-Cutting Hardening: Workspace Approval Persistence
 
 Goal: make persisted "Allow for this workspace" approvals resilient to interrupted writes and visible when the store is damaged.
@@ -238,12 +278,14 @@ Acceptance criteria:
 - `office_search` accepts concrete paths or globs, validates `include_ext`, silently drops sensitive-path rejects, returns per-anchor hits, and reports parse failures in `errors`.
 - Extraction cache records are path-indexed, content-hash invalidated, schema-versioned, and store OS-native path bytes.
 - Office extraction enforces zip/XML/output limits, xlsx snapshot preflight, per-file timeout, per-path in-flight guarding, and a process-wide extraction cap.
-- Tool catalog and Copilot prompt guidance advertise `office_search` and remove the old blanket Office `read` exception.
+- `office_search` remains a runtime/internal compatibility helper; CDP-facing
+  tool catalog and Copilot prompt guidance expose Office/PDF search through
+  opencode-like `grep` / `read` instead.
 
 ### Cross-Cutting Feature: Agentic Workspace Search
 
-Goal: add a Relay-only read-only orchestration layer above `glob`,
-`grep`, `office_search`, and `read` style evidence expansion so
+Goal: add a Relay-only read-only orchestration layer above `glob`, `grep`, and
+`read` style evidence expansion so
 vague local lookup requests start with ranked candidates, snippets, searched
 scope, and truncation state instead of relying on the model to manually chain
 low-level tools.
@@ -259,8 +301,8 @@ Change targets:
 Acceptance criteria:
 
 - The active search surface stays close to opencode-style low-level tools:
-  `glob` for path discovery, `grep` for plaintext/code content,
-  and `office_search` for Office/PDF text.
+  `glob` for path discovery, `grep` for plaintext/code plus extracted
+  Office/PDF text, and `read` for exact file inspection.
 - Standard ignore directories such as `.git`, `node_modules`, and `target`,
   plus `.gitignore` patterns, are skipped by default, and
   large/plainly unreadable/binary files do not bloat results.
@@ -268,9 +310,8 @@ Acceptance criteria:
   search telemetry for counts, elapsed time, truncation, and failure surfaces.
 - Search roots are constrained to the current workspace; paths or symlink
   resolutions that escape the workspace are not read.
-- CDP prompt guidance prefers concrete `glob`, `grep`, or
-  `office_search` calls for implementation, related-file, and evidence lookup
-  requests.
+- CDP prompt guidance prefers concrete `glob`, `grep`, or `read` calls for
+  implementation, related-file, and evidence lookup requests.
 - Important conclusions, reviews, edits, comparisons, and recommendations must
   expand relevant search candidates with `read`; search snippets are
   candidate evidence, not a substitute for full-file inspection.

@@ -19,12 +19,12 @@ The latest Tool Result blocks above are evidence from Relay tools. Use them to d
 - Prefer the exact path strings from the latest real user turn when present.";
 const CDP_LOCAL_SEARCH_RESULT_CONTINUATION_GUARD: &str = r#"## Local search continuation guard
 
-Relay already executed local search tools for this turn. Do not keep issuing `glob`, `grep`, or `office_search` just to try spelling, abbreviation, or wildcard variants.
+Relay already executed local search tools for this turn. Do not keep issuing `glob` or `grep` just to try spelling, abbreviation, or wildcard variants.
 
 - If the user gives an exact file path, prefer `read` directly.
 - If the Tool Results contain matches, paths, anchors, previews, or errors, summarize those existing results for simple locate/list requests. For important conclusions, reviews, edits, comparisons, or recommendations, call `read` on the relevant top candidate(s) first; search snippets identify candidates but are not a substitute for file inspection.
-- A `glob` result with 0 files only means that filename pattern did not match. It does not negate content matches from `grep` or Office/PDF content matches from `office_search`.
-- If an `office_search` Tool Result already exists and it is not truncated, do not emit another `office_search` just to vary spelling, wildcard, path, or `include_ext`. Summarize the existing Office/PDF matches, or call `read` on the best candidate(s) if deeper evidence is needed.
+- A `glob` result with 0 files only means that filename pattern did not match. It does not negate content matches from `grep`, including extracted Office/PDF content matches.
+- If a `grep` Tool Result already exists and it is not truncated, do not emit another `grep` just to vary spelling, wildcard, path, or include filters. Summarize the existing matches, or call `read` on the best candidate(s) if deeper evidence is needed.
 - If the latest search result explicitly says `files_truncated`, `results_truncated`, `wall_clock_truncated`, or `Results truncated`, at most one narrowed follow-up search is allowed using a more specific user-derived pattern or subpath. Do not repeat the same broad search.
 - If search snippets and `read` content conflict, treat `read` as authoritative evidence.
 - After `read`, final answers for file judgments should cite the evidence path and line anchor or startLine when available.

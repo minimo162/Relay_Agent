@@ -1383,7 +1383,7 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 
 ## Windows desktop Office and .msg (PowerShell + COM)
 
-On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.xlsm` / `.pptx`, use `office_search` or `read` first.
+On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.xlsm` / `.pptx`, use `grep` or `read` first.
 
 ### Hybrid read (data + layout)
 
@@ -1440,7 +1440,7 @@ fn cdp_catalog_specs_for_flavor(
         CdpCatalogFlavor::StandardFull => specs,
         CdpCatalogFlavor::LocalSearchOnly => specs
             .into_iter()
-            .filter(|spec| matches!(spec.name, "read" | "glob" | "grep" | "office_search"))
+            .filter(|spec| matches!(spec.name, "read" | "glob" | "grep"))
             .collect(),
         CdpCatalogFlavor::ToolResultReadOnly => specs
             .into_iter()
@@ -1453,88 +1453,13 @@ fn cdp_catalog_specs_for_flavor(
     }
 }
 
-fn should_use_office_search_catalog(messages: &[ConversationMessage]) -> bool {
-    let Some(turn) = latest_actionable_user_turn(messages) else {
-        return false;
-    };
-    should_use_office_search_catalog_for_request(&turn.text)
-}
-
-fn should_use_office_search_catalog_for_request(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let filename_only = lower.contains("filename")
-        || lower.contains("file name")
-        || trimmed.contains("ファイル名")
-        || trimmed.contains("一覧")
-        || trimmed.contains("リスト");
-    if filename_only
-        && !(lower.contains("content")
-            || lower.contains("contents")
-            || lower.contains("relevant")
-            || lower.contains("related")
-            || lower.contains("required")
-            || lower.contains("needed")
-            || trimmed.contains("内容")
-            || trimmed.contains("関連")
-            || trimmed.contains("関係")
-            || trimmed.contains("必要"))
-    {
-        return false;
-    }
-    let document_corpus = lower.contains(".docx")
-        || lower.contains(".xlsx")
-        || lower.contains(".xlsm")
-        || lower.contains(".pptx")
-        || lower.contains(".pdf")
-        || lower.contains("excel")
-        || lower.contains("word")
-        || lower.contains("powerpoint")
-        || lower.contains("spreadsheet")
-        || trimmed.contains("PDF")
-        || trimmed.contains("Excel")
-        || trimmed.contains("エクセル")
-        || trimmed.contains("ワード")
-        || trimmed.contains("パワポ")
-        || trimmed.contains("パワーポイント")
-        || trimmed.contains("資料")
-        || trimmed.contains("帳票")
-        || trimmed.contains("計算書")
-        || trimmed.contains("精算表");
-    let relevance_or_content = lower.contains("content")
-        || lower.contains("contents")
-        || lower.contains("relevant")
-        || lower.contains("related")
-        || lower.contains("required")
-        || lower.contains("needed")
-        || lower.contains("which file")
-        || trimmed.contains("内容")
-        || trimmed.contains("関連")
-        || trimmed.contains("関係")
-        || trimmed.contains("必要")
-        || trimmed.contains("該当")
-        || trimmed.contains("候補")
-        || trimmed.contains("作成")
-        || trimmed.contains("どのファイル");
-    document_corpus && relevance_or_content
-}
-
 fn cdp_active_catalog_specs_for_flavor(
     prompt_flavor: CdpPromptFlavor,
     catalog_flavor: CdpCatalogFlavor,
     messages: &[ConversationMessage],
 ) -> Vec<tools::CdpPromptToolSpec> {
-    let specs = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
-    match catalog_flavor {
-        CdpCatalogFlavor::LocalSearchOnly if should_use_office_search_catalog(messages) => specs
-            .into_iter()
-            .filter(|spec| matches!(spec.name, "read" | "office_search"))
-            .collect(),
-        _ => specs,
-    }
+    let _ = messages;
+    cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor)
 }
 
 fn format_cdp_tool_arg_list(items: &[String]) -> String {
@@ -1636,13 +1561,13 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read` first** before edits.
 - **Exact path:** If the latest user message gives an exact file path, prefer `read` directly.
-- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `office_search`.
+- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `read`.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob` for file name patterns, `grep` for plaintext/code content regex search, and `office_search` only where opencode-style grep/read cannot inspect Office/PDF containers. Search for concrete terms from the user request; do not add broad domain expansions such as BS/PL or generic accounting checklists unless the user named those terms. You may call multiple useful search tools in one `relay_tool` array.
+- **Search tool selection:** Use `glob` for file name patterns, `grep` for content regex search, and `read` for exact paths or follow-up inspection. Relay's `grep` can search extracted Office/PDF text when the path or `include` filter targets `.docx`, `.xlsx`, `.xlsm`, `.pptx`, or `.pdf`. Search for concrete terms from the user request; do not add broad domain expansions such as BS/PL or generic accounting checklists unless the user named those terms. You may call multiple useful search tools in one `relay_tool` array.
 - **Evidence expansion before judgments:** Search snippets are discovery evidence. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read` on the relevant path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
 - **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
-- **Search iteration:** Follow opencode's simple loop: use concrete `glob` / `grep` calls for discovery, batch obviously useful searches when helpful, then `read` the best candidate(s). Use the Relay-only `office_search` extension only for Office/PDF content, and keep its pattern narrow rather than expanding into inferred domain prerequisites. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
+- **Search iteration:** Follow opencode's simple loop: use concrete `glob` / `grep` calls for discovery, batch obviously useful searches when helpful, then `read` the best candidate(s). For Office/PDF content, keep `grep` patterns narrow and user-derived rather than expanding into inferred domain prerequisites. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
@@ -1690,7 +1615,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write`
 - local file lookup / needed files / related files => use the advertised search tools for this request shape; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
-- open-ended search => follow opencode's `glob` / `grep` discovery style; batch obviously useful searches in one `relay_tool` array, then `read` top candidates; use `office_search` only for Office/PDF content with user-derived terms
+- open-ended search => follow opencode's `glob` / `grep` discovery style; batch obviously useful searches in one `relay_tool` array, then `read` top candidates; for Office/PDF content, use `grep` with an Office/PDF include filter and user-derived terms
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -1709,7 +1634,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
 - **File I/O:** use `read`, `write`, and `edit` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
-- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx`**, use `office_search` or `read` first for plaintext extraction and search. Use **`PowerShell` + COM** when the user needs high-fidelity layout, exact Excel formatting, edits through Office itself, or **`.msg`** handling. For layout text, COM may write a **temporary `.pdf`**, then `read` can read that PDF (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
+- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx`**, use `grep` or `read` first for plaintext extraction and search. Use **`PowerShell` + COM** when the user needs high-fidelity layout, exact Excel formatting, edits through Office itself, or **`.msg`** handling. For layout text, COM may write a **temporary `.pdf`**, then `read` can read that PDF (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
 {win_addon}
 Example:
 
@@ -1722,34 +1647,20 @@ Example:
             )
         }
         CdpCatalogFlavor::LocalSearchOnly => {
-            let office_search_catalog = should_use_office_search_catalog(messages);
             let rendered_tools = catalog
                 .iter()
                 .map(render_compact_cdp_tool_entry)
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            let search_surface = if office_search_catalog {
-                "Use only the active tools below. This request is an Office/PDF-style document lookup, so the active search surface is `office_search` plus `read` for exact paths or follow-up inspection."
-            } else {
-                "Use only the local inspection/search tools below. This keeps the prompt on opencode's small `read` / `glob` / `grep` search surface, with `office_search` only as Relay's Office/PDF adapter."
-            };
-            let preferred_sequences = if office_search_catalog {
-                concat!(
-                    "- exact path inspect => `read`\n",
-                    "- Office/PDF content lookup => `office_search`\n",
-                    "- after `office_search` identifies candidates, use `read` only when deeper file inspection is required\n",
-                    "- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query"
-                )
-            } else {
-                concat!(
-                    "- exact path inspect => `read`\n",
-                    "- filename/path lookup => `glob`\n",
-                    "- plaintext/code content lookup => `grep`\n",
-                    "- Office/PDF content lookup => `office_search`\n",
-                    "- open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content with user-derived terms; after duplicate-search or search-budget notices, stop tools and summarize\n",
-                    "- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query"
-                )
-            };
+            let search_surface = "Use only the local inspection/search tools below. This keeps the prompt on opencode's small `read` / `glob` / `grep` search surface. Relay extends `grep` and `read` internally for Office/PDF containers when the path or include filter targets them.";
+            let preferred_sequences = concat!(
+                "- exact path inspect => `read`\n",
+                "- filename/path lookup => `glob`\n",
+                "- content lookup => `grep`\n",
+                "- Office/PDF content lookup => `grep` with an include filter such as `*.{xlsx,pdf,docx,pptx}` or an exact Office/PDF file path\n",
+                "- open-ended lookup => one `relay_tool` array with useful `glob` / `grep` searches; after duplicate-search or search-budget notices, stop tools and summarize\n",
+                "- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query"
+            );
             format!(
                 r#"## CDP session: Relay Agent local search
 
@@ -1773,12 +1684,12 @@ For the initial lookup reply, output exactly one fenced `relay_tool` or `json` b
 - No prose after the fence.
 - Do not write `はい、...を検索します`.
 - Prefer one JSON array when two complementary searches are useful.
-- In follow-ups after truncated search results, prefer narrowing over raising `max_files`; Relay keeps the default Office/PDF scan budget compact and only widens when explicitly requested.
+- In follow-ups after truncated search results, prefer narrowing path/include/pattern over widening the scan.
 
 Example:
 
 ```relay_tool
-{{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"契約|更新","regex":true,"paths":["reports/**"],"include_ext":["xlsx","pdf"]}}}}
+{{"name":"grep","relay_tool_call":true,"input":{{"pattern":"契約|更新","path":"reports","include":"*.{{xlsx,pdf}}"}}}}
 ```
 "#,
                 search_surface = search_surface,
@@ -1805,7 +1716,7 @@ Use the single follow-up tool below only when you must inspect a specific candid
 
 If `read` is required, output exactly one fenced `relay_tool` or `json` block with JSON only.
 
-- No more `glob`, `grep`, or `office_search` in this follow-up.
+- No more `glob` or `grep` in this follow-up.
 - No prose before or after the fence when calling `read`.
 - If `read` is not required, answer normally in plain text and do not include a tool fence.
 
@@ -3234,7 +3145,7 @@ fn summarize_glob_tool_result(output: &str) -> Option<String> {
             "pattern: {}\n",
             "base_dir: {}\n",
             "search_pattern: {}\n",
-            "scope_note: this is only a filename/glob-pattern miss; it does not mean grep or office_search found no relevant content.\n",
+            "scope_note: this is only a filename/glob-pattern miss; it does not mean grep found no relevant content.\n",
             "truncated: {}"
         ),
         pattern, base_dir, search_pattern, truncated
@@ -3474,7 +3385,7 @@ fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
         return Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS);
     }
     match tool_name {
-        "glob" | "grep" | "office_search" => Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS),
+        "glob" | "grep" => Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS),
         "read" => Some(CDP_READ_FILE_TOOL_RESULT_MAX_CHARS),
         "git_diff" => Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS),
         "git_status" => Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS),
@@ -4405,7 +4316,7 @@ pub fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
 fn windows_desktop_office_system_prompt_addon() -> &'static str {
     r#"## Windows: desktop Office and .msg (PowerShell + COM)
 
-Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.xlsm` / `.pptx`, use `office_search` or `read` first.
+Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.xlsm` / `.pptx`, use `grep` or `read` first.
 
 **Hybrid read (data + layout):** For **`.xlsx`/`.xlsm`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
 
@@ -4476,9 +4387,9 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- Prefer read-only tools before mutating tools.\n",
                 "- When modifying files, prefer saving copies.\n",
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
-                "- If no workspace is set, read, glob, grep, and office_search may use absolute local paths the OS user can read.\n",
-                "- read returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, `.xlsm`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
-                "- For local file lookup requests, follow opencode's search shape: use glob for filename patterns, grep for plaintext/code regex search, and office_search only where Office/PDF containers block grep/read. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- If no workspace is set, read, glob, and grep may use absolute local paths the OS user can read.\n",
+                "- read returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, `.xlsm`, and `.pptx` are parsed as plaintext extraction. grep searches extracted Office/PDF text when the path or include filter targets those containers. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
+                "- For local file lookup requests, follow opencode's search shape: use glob for filename patterns and grep for content regex search. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read directly.\n",
                 "- Treat search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read the top candidate path(s); otherwise describe matches as candidates only. If snippets conflict with read, read is authoritative. After read, cite evidence path and line anchor/startLine when available.\n",
                 "- Batch obviously useful search calls in one relay_tool array when helpful, then read the best candidate path(s). If Relay reports duplicate-search suppression or a search-budget limit, stop searching and summarize the accumulated results in text.\n",
@@ -4717,7 +4628,8 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::LocalSearchOnly
         );
         assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
-        assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(bundle.catalog_text.contains("### `grep`"));
+        assert!(!bundle.catalog_text.contains("### `office_search`"));
         assert!(!bundle.catalog_text.contains("### `write`"));
         assert!(
             bundle.catalog_chars() < 10_000,
@@ -4757,7 +4669,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.catalog_text.contains("Relay Agent local search"));
         assert!(bundle
             .catalog_text
-            .contains("the active search surface is `office_search` plus `read`"));
+            .contains("opencode's small `read` / `glob` / `grep` search surface"));
         assert!(bundle
             .catalog_text
             .contains("Do not write `はい、...を検索します`"));
@@ -4768,14 +4680,14 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.catalog_text.contains("not Microsoft Copilot tools"));
         assert!(bundle
             .catalog_text
-            .contains("Office/PDF content lookup => `office_search`"));
+            .contains("Office/PDF content lookup => `grep`"));
         assert!(bundle
             .catalog_text
-            .contains("after `office_search` identifies candidates"));
+            .contains("include filter such as `*.{xlsx,pdf,docx,pptx}`"));
         assert!(bundle.catalog_text.contains("### `read`"));
-        assert!(bundle.catalog_text.contains("### `office_search`"));
-        assert!(!bundle.catalog_text.contains("### `glob`"));
-        assert!(!bundle.catalog_text.contains("### `grep`"));
+        assert!(bundle.catalog_text.contains("### `glob`"));
+        assert!(bundle.catalog_text.contains("### `grep`"));
+        assert!(!bundle.catalog_text.contains("### `office_search`"));
         assert!(!bundle.catalog_text.contains("### `write`"));
         assert!(!bundle.catalog_text.contains("### `bash`"));
         assert!(!bundle.catalog_text.contains("### `WebSearch`"));
@@ -4788,7 +4700,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn office_relevance_lookup_active_catalog_excludes_filename_tools() {
+    fn office_relevance_lookup_active_catalog_keeps_opencode_search_tools() {
         let messages = vec![ConversationMessage::user_text(
             "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
         )];
@@ -4799,9 +4711,9 @@ mod cdp_copilot_tool_tests {
         );
 
         assert!(active.contains("read"));
-        assert!(active.contains("office_search"));
-        assert!(!active.contains("glob"));
-        assert!(!active.contains("grep"));
+        assert!(active.contains("glob"));
+        assert!(active.contains("grep"));
+        assert!(!active.contains("office_search"));
     }
 
     #[test]
@@ -4817,7 +4729,7 @@ mod cdp_copilot_tool_tests {
         assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
         assert!(bundle.catalog_text.contains("### `glob`"));
         assert!(bundle.catalog_text.contains("### `grep`"));
-        assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(!bundle.catalog_text.contains("### `office_search`"));
     }
 
     #[test]
@@ -4832,11 +4744,11 @@ mod cdp_copilot_tool_tests {
         assert!(active.contains("read"));
         assert!(active.contains("glob"));
         assert!(active.contains("grep"));
-        assert!(active.contains("office_search"));
+        assert!(!active.contains("office_search"));
     }
 
     #[test]
-    fn office_relevance_active_whitelist_rejects_hidden_glob_call() {
+    fn office_relevance_active_whitelist_rejects_hidden_office_search_call() {
         let messages = vec![ConversationMessage::user_text(
             "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
         )];
@@ -4846,7 +4758,7 @@ mod cdp_copilot_tool_tests {
             &messages,
         );
         let reply = r#"```relay_tool
-{"name":"glob","relay_tool_call":true,"input":{"pattern":"**/*CF*.*"}}
+{"name":"office_search","relay_tool_call":true,"input":{"pattern":"CF","paths":["**"],"include_ext":["xlsx"]}}
 ```"#;
 
         let (_visible, tools) =
@@ -4924,7 +4836,7 @@ mod cdp_copilot_tool_tests {
         .join("\n");
 
         assert!(system.contains("follow opencode's search shape"));
-        assert!(system.contains("office_search only where Office/PDF containers block grep/read"));
+        assert!(system.contains("grep searches extracted Office/PDF text"));
         assert!(system.contains("Before important conclusions"));
         assert!(system.contains("read the top candidate path"));
         assert!(system.contains("`必要なファイル`"));
@@ -5219,7 +5131,8 @@ mod cdp_copilot_tool_tests {
             .system_text
             .contains("Very long desktop system prompt"));
         assert!(bundle.catalog_text.contains("### `read`"));
-        assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(bundle.catalog_text.contains("### `grep`"));
+        assert!(!bundle.catalog_text.contains("### `office_search`"));
         assert!(bundle.catalog_text.contains("truncated follow-up"));
         assert!(bundle
             .prompt
@@ -5504,7 +5417,7 @@ mod cdp_copilot_tool_tests {
         assert!(rendered.contains("pattern: **/*CFS*"));
         assert!(rendered.contains("base_dir: C:\\Users\\m242054\\Relay_Agent"));
         assert!(rendered.contains("filename/glob-pattern miss"));
-        assert!(rendered.contains("does not mean grep or office_search"));
+        assert!(rendered.contains("does not mean grep"));
         assert!(!rendered.contains(r#""filenames":[]"#));
     }
 
@@ -7221,7 +7134,7 @@ mod loop_controller_tests {
                 tool_success_result("glob", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
                 tool_success_result(
                     "glob",
-                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob`, `grep`, or `office_search` calls for this request; summarize the existing findings for the user.",
+                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob` or `grep` calls for this request; summarize the existing findings for the user.",
                 ),
             ],
             runtime::TurnOutcome::ToolError {
@@ -7703,7 +7616,7 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn local_office_search_plan_escalates_to_filename_and_content_search_repair() {
+    fn local_office_lookup_plan_repairs_to_grep_backend_search() {
         let s = summary(
             "了解。まず実ファイルを探します。ワークスペース配下で、キャッシュフロー計算書作成に関係しそうなファイル名を広く検索します。",
             Vec::new(),
@@ -7729,10 +7642,11 @@ mod loop_controller_tests {
         assert!(next_input.contains("enterprise search"));
         assert!(next_input.contains("turn1search"));
         assert!(next_input.contains("not Relay tool results"));
-        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""name": "grep""#));
         assert!(next_input.contains("キャッシュフロー計算書"));
-        assert!(next_input.contains(r#""include_ext": ["#));
-        assert!(next_input.contains("`office_search` for Office/PDF contents"));
+        assert!(next_input.contains(r#""include":"#) || next_input.contains(r#""include": "#));
+        assert!(next_input.contains("*.{docx,xlsx,xlsm,pptx,pdf}"));
+        assert!(!next_input.contains(r#""name": "office_search""#));
         assert!(!next_input.contains("Search expansion repair."));
         assert!(!next_input.contains(r#""name": "write""#));
     }
@@ -7807,15 +7721,16 @@ mod loop_controller_tests {
             panic!("expected required-file lookup to escalate to local search repair");
         };
         assert!(next_input.contains("This is a local file/document search request."));
-        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""name": "grep""#));
         assert!(next_input.contains("キャッシュフロー計算書"));
-        assert!(next_input.contains(r#""include_ext": ["#));
+        assert!(next_input.contains(r#""include":"#) || next_input.contains(r#""include": "#));
+        assert!(!next_input.contains(r#""name": "office_search""#));
         assert!(!next_input.contains(r#""name": "write""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
 
     #[test]
-    fn local_file_search_without_known_keyword_still_gets_office_search_repair() {
+    fn local_file_search_without_known_keyword_still_gets_grep_repair() {
         let s = summary(
             "対象ファイルを確認してから回答します。",
             Vec::new(),
@@ -7824,12 +7739,13 @@ mod loop_controller_tests {
         let request = "ワークスペース配下の関連資料を検索して";
         let decision = decide_loop_after_success(request, request, 1, 0, 2, false, &s);
         let LoopDecision::Continue { next_input, kind } = decision else {
-            panic!("expected generic local search request to emit office_search repair");
+            panic!("expected generic local search request to emit grep repair");
         };
         assert!(next_input.contains("This is a local"));
         assert!(next_input.contains("search request."));
-        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""name": "grep""#));
         assert!(next_input.contains(r#""pattern":"#) || next_input.contains(r#""pattern": "#));
+        assert!(!next_input.contains(r#""name": "office_search""#));
         assert!(!next_input.contains(r#""name": "workspace""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
@@ -7869,9 +7785,7 @@ mod loop_controller_tests {
         assert_eq!(kind, LoopContinueKind::MetaNudge);
         assert!(next_input.contains("Tool protocol repair."));
         assert!(
-            next_input.contains(r#""name": "grep""#)
-                || next_input.contains(r#""name": "glob""#)
-                || next_input.contains(r#""name": "office_search""#)
+            next_input.contains(r#""name": "grep""#) || next_input.contains(r#""name": "glob""#)
         );
         assert!(!next_input.contains(r#""name": "workspace""#));
     }
@@ -8004,7 +7918,9 @@ mod loop_controller_tests {
         };
         assert_eq!(kind, LoopContinueKind::MetaNudge);
         assert!(next_input.contains("Tool protocol repair."));
-        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""name": "grep""#));
+        assert!(next_input.contains(r#""include":"#) || next_input.contains(r#""include": "#));
+        assert!(!next_input.contains(r#""name": "office_search""#));
     }
 
     #[test]

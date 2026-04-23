@@ -808,12 +808,26 @@ pub fn grep(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
     validate_grep_pattern(input)?;
 
     let base_path = normalize_optional_search_path(input.path.as_deref())?;
+    let office_exts = office_exts_for_grep(input, &base_path);
+    let office_backend_enabled = !office_exts.is_empty();
+    let office_only = office_backend_enabled && grep_include_is_office_only(input, &base_path);
 
-    if let Some(output) = grep_with_rg(input, &base_path)? {
-        return Ok(output);
+    let mut output = if office_only {
+        empty_grep_output()
+    } else if let Some(output) = grep_with_rg(input, &base_path)? {
+        output
+    } else {
+        grep_fallback(input, &base_path)?
+    };
+
+    if office_backend_enabled {
+        merge_office_grep_results(
+            &mut output,
+            grep_office_backend(input, &base_path, office_exts)?,
+        );
     }
 
-    grep_fallback(input, &base_path)
+    Ok(output)
 }
 
 fn validate_grep_pattern(input: &GrepSearchInput) -> io::Result<()> {
@@ -978,6 +992,159 @@ fn grep_fallback(input: &GrepSearchInput, base_path: &Path) -> io::Result<GrepSe
         "grep completed"
     );
     Ok(output)
+}
+
+fn empty_grep_output() -> GrepSearchOutput {
+    GrepSearchOutput {
+        mode: Some(String::from("content")),
+        num_files: 0,
+        filenames: Vec::new(),
+        content: Some(String::new()),
+        num_lines: Some(0),
+        num_matches: None,
+        applied_limit: Some(100),
+        applied_offset: Some(0),
+    }
+}
+
+fn office_exts_for_grep(input: &GrepSearchInput, base_path: &Path) -> Vec<String> {
+    let mut exts = HashSet::new();
+    if base_path.is_file() {
+        if let Some(ext) = office_ext_from_path(base_path) {
+            exts.insert(ext.to_string());
+        }
+    }
+    if let Some(include) = input.include.as_deref() {
+        let lower = include.to_ascii_lowercase();
+        for ext in ["docx", "xlsx", "xlsm", "pptx", "pdf"] {
+            if lower.contains(ext) {
+                exts.insert(ext.to_string());
+            }
+        }
+    }
+    let mut exts = exts.into_iter().collect::<Vec<_>>();
+    exts.sort();
+    exts
+}
+
+fn office_ext_from_path(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("docx") => Some("docx"),
+        Some("xlsx") => Some("xlsx"),
+        Some("xlsm") => Some("xlsm"),
+        Some("pptx") => Some("pptx"),
+        Some("pdf") => Some("pdf"),
+        _ => None,
+    }
+}
+
+fn grep_include_is_office_only(input: &GrepSearchInput, base_path: &Path) -> bool {
+    if base_path.is_file() {
+        return office_ext_from_path(base_path).is_some();
+    }
+    let Some(include) = input.include.as_deref() else {
+        return false;
+    };
+    let lower = include.to_ascii_lowercase();
+    let has_office = ["docx", "xlsx", "xlsm", "pptx", "pdf"]
+        .iter()
+        .any(|ext| lower.contains(ext));
+    let has_plaintext = [
+        "txt", "md", "rs", "ts", "tsx", "js", "jsx", "json", "toml", "yaml", "yml", "csv", "log",
+        "html", "css", "xml",
+    ]
+    .iter()
+    .any(|ext| lower.contains(ext));
+    has_office && !has_plaintext
+}
+
+fn grep_office_backend(
+    input: &GrepSearchInput,
+    base_path: &Path,
+    include_ext: Vec<String>,
+) -> io::Result<GrepSearchOutput> {
+    let paths = vec![base_path.to_string_lossy().into_owned()];
+    let output = office::office_search(&office::OfficeSearchInput {
+        pattern: input.pattern.clone(),
+        paths,
+        regex: Some(true),
+        include_ext: Some(include_ext),
+        context: Some(80),
+        max_results: Some(100),
+        max_files: Some(100),
+    })?;
+
+    let mut filenames = Vec::new();
+    let mut seen = HashSet::new();
+    let lines = output
+        .results
+        .iter()
+        .take(100)
+        .map(|hit| {
+            if seen.insert(hit.path.clone()) {
+                filenames.push(hit.path.clone());
+            }
+            format!(
+                "{}:{}:{}",
+                hit.path,
+                hit.anchor,
+                truncate_grep_line(hit.preview.trim_end_matches(['\r', '\n']))
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Ok(GrepSearchOutput {
+        mode: Some(String::from("content")),
+        num_files: filenames.len(),
+        filenames,
+        content: Some(lines.join("\n")),
+        num_lines: Some(lines.len()),
+        num_matches: Some(output.results.len()),
+        applied_limit: Some(100),
+        applied_offset: Some(0),
+    })
+}
+
+fn merge_office_grep_results(output: &mut GrepSearchOutput, office: GrepSearchOutput) {
+    if office.filenames.is_empty() && office.content.as_deref().unwrap_or_default().is_empty() {
+        return;
+    }
+    let mut seen = output.filenames.iter().cloned().collect::<HashSet<_>>();
+    for filename in office.filenames {
+        if seen.insert(filename.clone()) {
+            output.filenames.push(filename);
+        }
+    }
+    output.num_files = output.filenames.len();
+
+    let mut lines = output
+        .content
+        .take()
+        .unwrap_or_default()
+        .lines()
+        .map(ToString::to_string)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    lines.extend(
+        office
+            .content
+            .unwrap_or_default()
+            .lines()
+            .map(ToString::to_string)
+            .filter(|line| !line.is_empty()),
+    );
+    let total = lines.len();
+    lines.truncate(100);
+    output.content = Some(lines.join("\n"));
+    output.num_lines = Some(lines.len());
+    output.num_matches = Some(output.num_matches.unwrap_or(0) + office.num_matches.unwrap_or(0));
+    output.applied_limit = (total > 100).then_some(100).or(output.applied_limit);
+    output.applied_offset = output.applied_offset.or(Some(0));
 }
 
 fn normalize_optional_search_path(path: Option<&str>) -> io::Result<PathBuf> {
@@ -1423,6 +1590,24 @@ mod tests {
             serde_json::from_str(r#"{"pattern":"hello","path":"src","include":"*.rs"}"#)
                 .expect("include should deserialize");
         assert_eq!(input.include.as_deref(), Some("*.rs"));
+    }
+
+    #[test]
+    fn grep_office_include_uses_extracted_text_backend_only() {
+        let dir = temp_path("grep-office-backend");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        fs::write(dir.join("raw.xlsx"), "needle in invalid workbook bytes\n")
+            .expect("write invalid workbook");
+
+        let output = grep(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            include: Some(String::from("*.xlsx")),
+        })
+        .expect("grep should succeed through office backend");
+
+        assert!(output.filenames.is_empty());
+        assert_eq!(output.content.as_deref(), Some(""));
     }
 
     #[test]

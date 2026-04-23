@@ -134,9 +134,14 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "glob" | "grep" | "office_search" => ToolMetadata {
+        "glob" | "grep" => ToolMetadata {
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "office_search" => ToolMetadata {
+            tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "write" => ToolMetadata {
@@ -554,7 +559,9 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
         "write" => "Create or overwrite a workspace text file when the final content is known.",
         "edit" => "Apply a targeted replacement inside an existing workspace file.",
         "glob" => "Fast file pattern matching that works with any codebase size.",
-        "grep" => "Fast content search that works with any codebase size.",
+        "grep" => {
+            "Fast content search over plaintext/code plus extracted Office/PDF text when requested."
+        }
         "office_search" => "Relay extension for searching extracted DOCX/XLSX/XLSM/PPTX/PDF text.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
@@ -582,7 +589,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "write" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit" => "Use after reading the file when you need a targeted text replacement.",
         "glob" => "Use when you need to find files by name patterns such as `**/*.js` or `src/**/*.ts`. You may call multiple useful search tools in one response.",
-        "grep" => "Use when you need to find files containing a regex pattern. Filter files with `include` such as `*.js` or `*.{ts,tsx}`.",
+        "grep" => "Use when you need to find files containing a regex pattern. Filter files with `include` such as `*.js`, `*.{ts,tsx}`, or `*.{xlsx,pdf,docx,pptx}`.",
         "office_search" => "Use only where opencode grep/read would be blocked by Office/PDF containers; keep inputs concrete with user-derived pattern terms plus optional paths/include_ext.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
@@ -608,7 +615,7 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "write" => "Avoid for incremental edits to an existing file; prefer `edit` after `read`.",
         "edit" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
         "glob" => "Avoid for content search; use grep for plaintext/code contents.",
-        "grep" => "Avoid for identifying/counting match totals across files; use bash with rg directly when that exact count is required.",
+        "grep" => "Avoid for filename-only lookup; use glob there. For exact match counts, use bash with rg directly when that exact count is required.",
         "office_search" => "Avoid for plaintext/code files; use grep there. Do not use it as semantic ranking, and do not add generic domain terms such as BS/PL unless the user named them.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
@@ -789,7 +796,7 @@ fn build_mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "grep",
-            description: "Fast rg-backed plaintext/code content search with a regex pattern. Use this for concrete content lookup; use office_search for DOCX/XLSX/PPTX/PDF.",
+            description: "Fast opencode-style content search with a regex pattern. Plaintext/code uses rg; Office/PDF containers are searched through Relay's extracted-text backend when the path or include filter targets .docx/.xlsx/.xlsm/.pptx/.pdf.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -4107,7 +4114,6 @@ mod tests {
                 "edit",
                 "glob",
                 "grep",
-                "office_search",
                 "git_status",
                 "git_diff",
                 "pdf_merge",
@@ -4232,20 +4238,9 @@ mod tests {
             grep.important_optional_args,
             vec!["path".to_string(), "include".to_string()]
         );
-        let office = specs
-            .iter()
-            .find(|spec| spec.name == "office_search")
-            .expect("office_search cdp prompt spec");
-        assert!(office.purpose.contains("Relay extension"));
-        assert_eq!(
-            office.important_optional_args,
-            vec![
-                "paths".to_string(),
-                "regex".to_string(),
-                "include_ext".to_string()
-            ]
-        );
-        assert!(office.avoid_when.contains("semantic ranking"));
+        assert!(grep.purpose.contains("Office/PDF"));
+        assert!(grep.use_when.contains("*.{xlsx,pdf,docx,pptx}"));
+        assert!(!names.contains(&"office_search"));
     }
 
     // `PowerShell` is only registered in the catalog under `#[cfg(windows)]`

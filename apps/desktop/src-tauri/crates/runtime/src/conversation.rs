@@ -430,7 +430,7 @@ where
             if is_turn_level_local_search_tool(&tool_name) {
                 if *local_search_tool_calls >= TURN_LOCAL_SEARCH_TOOL_LIMIT {
                     let notice = format!(
-                        "Search tool budget reached: Relay already executed {TURN_LOCAL_SEARCH_TOOL_LIMIT} local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob`, `grep`, or `office_search` calls for this request; summarize the existing findings for the user."
+                        "Search tool budget reached: Relay already executed {TURN_LOCAL_SEARCH_TOOL_LIMIT} local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob` or `grep` calls for this request; summarize the existing findings for the user."
                     );
                     tracing::info!(
                         "[runtime] synthesized no-op for search budget on {tool_name} (limit={TURN_LOCAL_SEARCH_TOOL_LIMIT})"
@@ -460,7 +460,7 @@ where
                     let duplicate_tool_name = tool_name.clone();
                     let notice = if duplicate_is_local_search {
                         format!(
-                            "Duplicate local search suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Local search tools (`glob`, `grep`, `office_search`) are now disabled for this request; do not issue another search variant. Respond with text only and summarize the existing findings, or say no matching local files/results were found in the searched scope."
+                            "Duplicate local search suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Local search tools (`glob`, `grep`) are now disabled for this request; do not issue another search variant. Respond with text only and summarize the existing findings, or say no matching local files/results were found in the searched scope."
                         )
                     } else {
                         format!(
@@ -703,7 +703,7 @@ const TURN_TOOL_DUPLICATE_LIMIT: usize = 3;
 const TURN_LOCAL_SEARCH_TOOL_LIMIT: usize = 6;
 
 fn is_turn_level_local_search_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "glob" | "grep" | "office_search")
+    matches!(tool_name, "glob" | "grep")
 }
 
 fn pending_tool_uses_from_message(msg: &ConversationMessage) -> Vec<(String, String, String)> {
@@ -1750,9 +1750,9 @@ mod tests {
         assert!(
             summary.tool_results.iter().any(|message| {
                 message.blocks.iter().any(|block| match block {
-                    ContentBlock::ToolResult { output, .. } => output.contains(
-                        "Local search tools (`glob`, `grep`, `office_search`) are now disabled",
-                    ),
+                    ContentBlock::ToolResult { output, .. } => {
+                        output.contains("Local search tools (`glob`, `grep`) are now disabled")
+                    }
                     _ => false,
                 })
             }),
@@ -1871,7 +1871,7 @@ mod tests {
     fn local_search_tools_count_toward_turn_search_budget() {
         assert!(super::is_turn_level_local_search_tool("glob"));
         assert!(super::is_turn_level_local_search_tool("grep"));
-        assert!(super::is_turn_level_local_search_tool("office_search"));
+        assert!(!super::is_turn_level_local_search_tool("office_search"));
         assert!(!super::is_turn_level_local_search_tool("workspace"));
     }
 

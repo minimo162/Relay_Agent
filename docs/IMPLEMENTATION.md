@@ -15,6 +15,65 @@
 
 ## Milestone Log
 
+### 2026-04-23 Plan: Office/PDF as grep/read backend capability
+
+Revisited the Office/PDF search design after reviewing whether wrapping it as a
+dedicated model-facing tool was itself causing bugs. The conclusion is that the
+Office/PDF parsing value should remain, but `office_search` should move out of
+the CDP-visible tool surface and become an internal backend behind opencode-like
+`grep` / `read`.
+
+Artifacts:
+
+- Updated `docs/OPENCODE_ALIGNMENT_PLAN.md` with the revised migration plan:
+  model-facing tools are `read`, `glob`, and `grep`; Office/PDF extraction
+  becomes an internal grep/read backend capability.
+- Updated `PLANS.md` with Phase 6 so the scope change is reflected in the
+  repository source-of-truth plan.
+
+Verification:
+
+- Documentation-only planning change; no runtime verification required.
+
+### 2026-04-23 Implementation: opencode-like grep surface for Office/PDF
+
+Implemented the revised Office/PDF search direction from
+`docs/OPENCODE_ALIGNMENT_PLAN.md`: model-facing local search is now the compact
+opencode-like `read` / `glob` / `grep` surface, while Office/PDF parsing remains
+an internal backend capability.
+
+Changes:
+
+- `grep` now dispatches Office/PDF candidates to the existing extracted-text
+  backend when `path` or `include` targets `.docx`, `.xlsx`, `.xlsm`, `.pptx`,
+  or `.pdf`, then normalizes matches back into the regular grep-style result.
+- `office_search` is hidden from CDP catalog output and active parser
+  whitelists. It remains callable internally for compatibility and as the
+  implementation backend while callers migrate.
+- CDP local-search prompts and active tools are simplified to `read`, `glob`,
+  and `grep`; Office/PDF content search is described as `grep` with an
+  `include` filter instead of a dedicated tool.
+- Local lookup repair now generates `grep` / `glob` only, never
+  `office_search`. The old hard-coded cash-flow/CFS repair expansion was
+  removed so repair uses user-derived search terms rather than domain-specific
+  prompt logic.
+- Search-budget and continuation guard text now names only the model-facing
+  `glob` / `grep` tools. Legacy `office_search` tool results can still be
+  summarized if they already exist in an older transcript.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop agent_loop::retry::tests -- --nocapture`: passed, 4 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime grep -- --nocapture`: passed, 10 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp -- --nocapture`: passed, 8 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop cdp_copilot_tool_tests -- --nocapture`: passed, 98 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop loop_controller_tests -- --nocapture`: passed, 62 passed, 1 ignored.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-23 Office/PDF extraction reuse speedup
 
 Reviewed the Office/PDF search path after the compact active-catalog changes.

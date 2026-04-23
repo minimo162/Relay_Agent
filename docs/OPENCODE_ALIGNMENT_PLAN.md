@@ -8,6 +8,212 @@ Scope: Agent loop / Copilot CDP bridge / repair pipeline
 
 `PLANS.md` / `AGENTS.md` / `docs/IMPLEMENTATION.md` / `docs/CLAW_CODE_ALIGNMENT.md` の補助ドキュメントとして位置付け、本プラン単独でスコープを広げない。各フェーズ完了時は `docs/IMPLEMENTATION.md` に検証ログを追記する。
 
+## 0. 2026-04-23 改訂方針: Office/PDF は専用 model-facing tool ではなく backend capability にする
+
+その後の設計レビューで、`office_search` を LLM へ直接公開すること自体が
+バグと遅延を増やしていると判断した。Office/PDF 本文探索の価値は残すが、
+opencode に寄せる核心は **model-facing tool surface を `read` / `glob` /
+`grep` に戻し、Office/PDF パーサーは `grep` / `read` の内部 backend として
+扱う**ことである。
+
+この改訂方針は、下記旧 P1/P3/P4 の「`office_search` repair を改善する」
+方向を置き換える。`office_search` の runtime 実装は当面互換用に残すが、
+CDP catalog / repair / parser whitelist から段階的に外す。
+
+### 0.1 目標
+
+- LLM に見える検索 tool は opencode に近い `glob`, `grep`, `read` に寄せる。
+- Office/PDF は `grep` が扱える検索 backend の一種として統合する。
+- `read` は既存どおり `.pdf` / `.docx` / `.xlsx` / `.xlsm` / `.pptx` を
+  plaintext extraction で読める model-facing tool として残す。
+- `office_search` 特有の prompt 文言、repair 分岐、duplicate-loop 分岐、
+  domain-specific 生成を削る。
+- 共有フォルダ・経理資料・Excel 手順書・PDF 規程・PowerPoint 資料の
+  横断探索は維持する。
+
+### 0.2 非目標
+
+- Office/PDF 抽出機能そのものは削除しない。
+- OCR、semantic search、vector DB、Graph API / SharePoint search はこの
+  フェーズでは追加しない。
+- `grep` の model-facing schema を大きく増やさない。必要なら既存の
+  `include` / `glob` 相当の小さいフィルタに寄せる。
+- arbitrary shell / VBA / uncontrolled COM execution に逃がさない。
+
+### 0.3 新しい tool architecture
+
+```text
+model-facing tools:
+  read
+  glob
+  grep
+
+internal search backends:
+  plaintext/code grep backend
+  office/pdf extracted-text backend
+  office/pdf cache
+  LiteParse PDF parser
+  DOCX/XLSX/PPTX parsers
+
+compat/internal-only:
+  office_search runtime function
+```
+
+`grep` が受け取った path / glob / include filter から候補を分ける。
+
+- plaintext/code files -> existing rg/fallback grep
+- `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` -> Office/PDF backend
+- mixed trees -> both backends execute, results are normalized into one grep-like
+  output
+
+### 0.4 Result contract
+
+`grep` output に Office/PDF 固有の別 contract を混ぜすぎない。
+
+- plaintext result: `path`, `line`, `preview`, `match`
+- Office/PDF result: `path`, `anchor`, `preview`, `match`
+- 共通 metadata: `filesScanned`, `resultsTruncated`, `filesTruncated`,
+  `backend: "text" | "office"`
+
+重要な区別:
+
+- filename / candidate discovery は `glob` の責務。
+- 本文一致だけが `grep` result。
+- Office/PDF 抽出エラーは `errors` に出すが、候補を本文 evidence として扱わない。
+- `read` が読めた本文は、snippet より強い evidence とする。
+
+### 0.5 Performance policy
+
+- 初回 broad scan は compact に保つ。Office/PDF backend の default candidate
+  budget は小さく、caller が明示した場合だけ広げる。
+- `grep` は candidate planning を先に行い、Office/PDF 抽出は必要な拡張子に
+  だけ走らせる。
+- result 上限到達時は未開始候補を即停止する。in-flight extraction は既存の
+  timeout / semaphore に従って回収する。
+- process-local extracted-doc cache と disk cache を `read` / `grep` で共有する。
+- short regex alternatives など recall より false-positive が大きい入力は、
+  internal planner で警告または compact fallback にする。ただし model prompt で
+  domain term を足さない。
+
+### 0.6 Migration phases
+
+Status on 2026-04-23:
+
+- Phase A is implemented in `runtime::file_ops::grep`: Office/PDF targets are
+  routed to the extracted-text backend and returned through the regular
+  grep-style output shape.
+- Phase B is implemented for CDP: `office_search` is hidden from the catalog and
+  active whitelist, while `grep` documents the internal Office/PDF backend.
+- Phase C is implemented for local lookup repair: generated repair payloads use
+  `grep` / `glob` only, and the old cash-flow/CFS-specific repair expansion was
+  removed.
+- Phase D is partial: legacy `office_search` execution and result summarization
+  remain for compatibility with older transcripts and non-CDP callers.
+
+#### Phase A: `grep` backend integration
+
+Change targets:
+
+- `apps/desktop/src-tauri/crates/runtime/src/file_ops.rs`
+- `apps/desktop/src-tauri/crates/runtime/src/office/mod.rs`
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
+
+Tasks:
+
+1. `GrepSearchInput` の既存 schema を壊さず、Office/PDF candidate を検出できる
+   include/glob/path handling を整理する。
+2. `grep` 実行時に Office/PDF 候補を internal backend へ分配する。
+3. `office_search` result を grep-like result へ正規化する adapter を追加する。
+4. `office_search` runtime function は deprecated internal helper として残す。
+
+Acceptance:
+
+- `.txt` と `.xlsx` / `.pdf` が混在する fixture で、1 回の `grep` が両方の
+  本文一致を返す。
+- filename-only match は grep result にならない。
+- `read` after `grep` が extraction cache を再利用する。
+
+#### Phase B: CDP catalog simplification
+
+Change targets:
+
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
+
+Tasks:
+
+1. CDP compact / local-search catalog から `office_search` entry を外す。
+2. `grep` の description を「plaintext/code plus extracted Office/PDF text when
+   filters include those containers」程度に短くする。
+3. `cdp_active_tool_names_for_flavor` から `office_search` を外し、parser whitelist
+   でも hidden `office_search` call を拒否する。
+4. system prompt から `office_search` 優先・Office/PDF 特例文言を削る。
+
+Acceptance:
+
+- Office/PDF lookup initial prompt の active tools は `read`, `glob`, `grep` のみ。
+- hidden `office_search` JSON は parse されない。
+- PDF 一覧など filename-only task は `glob` を使える。
+
+#### Phase C: Repair path removal
+
+Change targets:
+
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `apps/desktop/src-tauri/crates/runtime/src/conversation.rs`
+
+Tasks:
+
+1. `office_search` を生成する targeted repair を削除し、local lookup repair は
+   `grep` / `glob` / `read` のみを生成する。
+2. `repeated_office_search_after_results` 系の分類を deprecated にし、
+   `repeated_search_after_results` として `grep` / `glob` 汎用へ寄せる。
+3. duplicate-search suppression message から `office_search` を消す。
+4. prior tool result がある repair は tool 再実行ではなく summary/read follow-up
+   を優先する。
+
+Acceptance:
+
+- local lookup without tools repairs to `grep` or `glob`, never `office_search`.
+- malformed `office_search` JSON after results escalates to summary-only or is ignored
+  as hidden unsupported tool.
+- search-budget and duplicate messages name only active model-facing tools.
+
+#### Phase D: compatibility and cleanup
+
+Change targets:
+
+- `docs/OFFICE_SEARCH_DESIGN.md`
+- `docs/IMPLEMENTATION.md`
+- `README.md`
+- tests under `orchestrator.rs`, `file_ops.rs`, `office/mod.rs`
+
+Tasks:
+
+1. Document that Office/PDF search is a `grep` backend capability.
+2. Keep `office_search` callable internally for one release window if UI/IPC still
+   references it, but mark it hidden from CDP.
+3. Remove obsolete prompt tests expecting `### office_search`.
+4. Add regression tests for mixed backend grep, cache reuse, result evidence
+   distinction, and no `office_search` repair.
+
+Acceptance:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime grep`
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_search`
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_active`
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+- `pnpm check`
+
+### 0.7 Rollback plan
+
+If mixed-backend `grep` causes unacceptable latency or recall regressions:
+
+1. Keep model-facing catalog on `read` / `glob` / `grep`.
+2. Disable Office/PDF backend behind `RELAY_GREP_OFFICE_BACKEND=0`.
+3. Surface a concise grep error telling the model/user that Office/PDF content
+   search is disabled, while filename `glob` and exact-path `read` still work.
+
 ---
 
 ## 1. 観測された症状（2026-04-23 ライブログ）
