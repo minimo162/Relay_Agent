@@ -50,30 +50,41 @@ Verification:
 - `node -e "...workflow trigger check..."`: passed (`pull_request` and
   `workflow_dispatch` present; `push` and `cargo clippy` absent).
 
-### 2026-04-23 Opencode alignment follow-up: first-turn Office search routing
+### 2026-04-23 Opencode alignment follow-up: request-scoped active search catalog
 
 Reviewed current `anomalyco/opencode` HEAD
 `97300085437899af8af6c2bbf6ebc6bdab110174`. Its `glob` and `grep` tools keep
 short schemas and descriptions, return compact evidence, and let the provider
 choose tools in the same message series. The live Relay trace still showed a
-first-turn CDP prompt choosing filename-only `glob` for a CFS/Office relevance
-lookup, then requiring a later repair to request `office_search`.
+first-turn CDP prompt choosing filename-only `glob` for an Office/PDF-style
+document relevance lookup, then requiring a later repair to request
+`office_search`.
 
 Changes:
 
-- The compact CDP local-search catalog now detects Office/PDF-style
-  relevance/needed-file requests and adds a request-specific routing hint:
-  start with `office_search`, not filename-only `glob`.
-- For those requests, `office_search` is listed before `glob` in the compact
-  catalog so Copilot sees the content-search adapter first.
+- The compact CDP local-search catalog now scopes active tools by request.
+  Office/PDF-style relevance/needed-file requests advertise only
+  `office_search` and `read`, removing filename-only `glob` and plaintext
+  `grep` from the initial active tool set.
+- Removed the natural-language `office_search`-first routing hint. Tool choice
+  is now constrained by the active catalog, which is closer to opencode's
+  provider-facing `activeTools` filtering than prompt persuasion.
+- The CDP response parser now uses the same request-scoped active catalog as a
+  whitelist, so hidden `glob` / `grep` calls are ignored when they were not
+  advertised for the request.
+- Removed cash-flow/CFS-specific routing terms from the catalog decision; the
+  predicate is based on document/container signals plus relevance/content
+  intent.
 - Plain filename/listing requests such as "PDFファイルを一覧にして" keep the
-  normal opencode-like `glob` discovery path and do not receive the
-  Office-first hint.
+  normal opencode-like `glob` / `grep` / `office_search` discovery surface.
 
 Verification:
 
 - `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_uses_compact_search_catalog -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_relevance_lookup_active_catalog_excludes_filename_tools -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_relevance_active_whitelist_rejects_hidden_glob_call -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml simple_pdf_listing_active_catalog_keeps_discovery_tools -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml simple_pdf_listing_initial_prompt_does_not_force_office_search_first -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml first_local_search_repair_uses_local_search_catalog -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 8 passed.

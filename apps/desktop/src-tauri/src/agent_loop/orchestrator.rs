@@ -1299,8 +1299,16 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                 truncate_for_log(&response_text, 240)
             );
 
-            let (mut visible_text, tool_calls) =
-                parse_copilot_tool_response(&response_text, parse_mode);
+            let active_tool_names = cdp_active_tool_names_for_flavor(
+                prompt_flavor,
+                catalog_flavor,
+                &compacted_messages,
+            );
+            let (mut visible_text, tool_calls) = parse_copilot_tool_response_with_whitelist(
+                &response_text,
+                parse_mode,
+                &active_tool_names,
+            );
             if visible_text.trim().is_empty()
                 && tool_calls.is_empty()
                 && !response_text.trim().is_empty()
@@ -1445,14 +1453,14 @@ fn cdp_catalog_specs_for_flavor(
     }
 }
 
-fn should_prefer_office_search_first(messages: &[ConversationMessage]) -> bool {
+fn should_use_office_search_catalog(messages: &[ConversationMessage]) -> bool {
     let Some(turn) = latest_actionable_user_turn(messages) else {
         return false;
     };
-    should_prefer_office_search_for_request(&turn.text)
+    should_use_office_search_catalog_for_request(&turn.text)
 }
 
-fn should_prefer_office_search_for_request(text: &str) -> bool {
+fn should_use_office_search_catalog_for_request(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
@@ -1477,7 +1485,7 @@ fn should_prefer_office_search_for_request(text: &str) -> bool {
     {
         return false;
     }
-    let office_corpus = lower.contains(".docx")
+    let document_corpus = lower.contains(".docx")
         || lower.contains(".xlsx")
         || lower.contains(".xlsm")
         || lower.contains(".pptx")
@@ -1486,9 +1494,6 @@ fn should_prefer_office_search_for_request(text: &str) -> bool {
         || lower.contains("word")
         || lower.contains("powerpoint")
         || lower.contains("spreadsheet")
-        || lower.contains("cash flow")
-        || lower.contains("cashflow")
-        || lower.contains("cfs")
         || trimmed.contains("PDF")
         || trimmed.contains("Excel")
         || trimmed.contains("エクセル")
@@ -1498,8 +1503,7 @@ fn should_prefer_office_search_for_request(text: &str) -> bool {
         || trimmed.contains("資料")
         || trimmed.contains("帳票")
         || trimmed.contains("計算書")
-        || trimmed.contains("精算表")
-        || (trimmed.contains("キャッシュ") && trimmed.contains("フロー"));
+        || trimmed.contains("精算表");
     let relevance_or_content = lower.contains("content")
         || lower.contains("contents")
         || lower.contains("relevant")
@@ -1515,7 +1519,7 @@ fn should_prefer_office_search_for_request(text: &str) -> bool {
         || trimmed.contains("候補")
         || trimmed.contains("作成")
         || trimmed.contains("どのファイル");
-    office_corpus && relevance_or_content
+    document_corpus && relevance_or_content
 }
 
 fn format_cdp_tool_arg_list(items: &[String]) -> String {
@@ -1669,7 +1673,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 
 - named existing file inspect/edit/review => `read` then `edit`
 - named new file create => `write`
-- local file lookup / needed files / related files => `glob` / `grep` / `office_search`; for Office/PDF relevance, prefer `office_search` over a broad filename glob; do not answer from general knowledge before tools
+- local file lookup / needed files / related files => use the advertised search tools for this request shape; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
 - open-ended search => follow opencode's `glob` / `grep` discovery style; batch obviously useful searches in one `relay_tool` array, then `read` top candidates; use `office_search` only for Office/PDF content with user-derived terms
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
@@ -1703,50 +1707,54 @@ Example:
             )
         }
         CdpCatalogFlavor::LocalSearchOnly => {
-            let prefer_office_search = should_prefer_office_search_first(messages);
-            let mut ordered = catalog;
-            if prefer_office_search {
-                ordered.sort_by_key(|spec| match spec.name {
-                    "office_search" => 0,
-                    "read" => 1,
-                    "grep" => 2,
-                    "glob" => 3,
-                    _ => 4,
-                });
-            }
-            let routing_hint = if prefer_office_search {
-                concat!(
-                    "\n## Current request routing\n\n",
-                    "- Start with `office_search` (not `glob`) because the latest request asks for needed/related/relevant Office/PDF-style document evidence.\n",
-                    "- `glob` is filename-only discovery; it cannot prove document relevance. Use it only after content search if you still need filename-pattern discovery.\n"
-                )
+            let office_search_catalog = should_use_office_search_catalog(messages);
+            let active_catalog = if office_search_catalog {
+                catalog
+                    .into_iter()
+                    .filter(|spec| matches!(spec.name, "read" | "office_search"))
+                    .collect::<Vec<_>>()
             } else {
-                ""
+                catalog
             };
-            let rendered_tools = ordered
+            let rendered_tools = active_catalog
                 .iter()
                 .map(render_compact_cdp_tool_entry)
                 .collect::<Vec<_>>()
                 .join("\n\n");
+            let search_surface = if office_search_catalog {
+                "Use only the active tools below. This request is an Office/PDF-style document lookup, so the active search surface is `office_search` plus `read` for exact paths or follow-up inspection."
+            } else {
+                "Use only the local inspection/search tools below. This keeps the prompt on opencode's small `read` / `glob` / `grep` search surface, with `office_search` only as Relay's Office/PDF adapter."
+            };
+            let preferred_sequences = if office_search_catalog {
+                concat!(
+                    "- exact path inspect => `read`\n",
+                    "- Office/PDF content lookup => `office_search`\n",
+                    "- after `office_search` identifies candidates, use `read` only when deeper file inspection is required\n",
+                    "- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query"
+                )
+            } else {
+                concat!(
+                    "- exact path inspect => `read`\n",
+                    "- filename/path lookup => `glob`\n",
+                    "- plaintext/code content lookup => `grep`\n",
+                    "- Office/PDF content lookup => `office_search`\n",
+                    "- open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content with user-derived terms; after duplicate-search or search-budget notices, stop tools and summarize\n",
+                    "- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query"
+                )
+            };
             format!(
                 r#"## CDP session: Relay Agent local search
 
 - This reply is parsed by Relay Agent, not Microsoft Copilot tools.
-- Use only the local inspection/search tools below. This keeps the prompt on opencode's small `read` / `glob` / `grep` search surface, with `office_search` only as Relay's Office/PDF adapter.
+- {search_surface}
 - Tool calls must be one fenced `relay_tool` or `json` block containing only JSON.
 
 Do not use M365/Copilot search, web search, citations, uploaded files, Python/code execution, Pages, `<File>` cards, or `office365_search`-style actions.
 
 ## Preferred sequences
 
-- exact path inspect => `read`
-- filename/path lookup => `glob`
-- plaintext/code content lookup => `grep`
-- Office/PDF content lookup => `office_search`
-- open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content with user-derived terms; after duplicate-search or search-budget notices, stop tools and summarize
-- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query
-
-{routing_hint}
+{preferred_sequences}
 
 {rendered_tools}
 
@@ -1763,10 +1771,11 @@ For the initial lookup reply, output exactly one fenced `relay_tool` or `json` b
 Example:
 
 ```relay_tool
-{{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"CFS|精算表","regex":true,"paths":["reports/**"],"include_ext":["xlsx","pdf"]}}}}
+{{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"契約|更新","regex":true,"paths":["reports/**"],"include_ext":["xlsx","pdf"]}}}}
 ```
 "#,
-                routing_hint = routing_hint,
+                search_surface = search_surface,
+                preferred_sequences = preferred_sequences,
                 rendered_tools = rendered_tools,
             )
         }
@@ -1796,7 +1805,7 @@ If `read` is required, output exactly one fenced `relay_tool` or `json` block wi
 Example:
 
 ```relay_tool
-{{"name":"read","relay_tool_call":true,"input":{{"filePath":"reports/cfs.xlsx"}}}}
+{{"name":"read","relay_tool_call":true,"input":{{"filePath":"reports/summary.xlsx"}}}}
 ```
 "#,
                 rendered_tools = rendered_tools,
@@ -1855,6 +1864,26 @@ fn mvp_tool_names_whitelist() -> HashSet<String> {
         .collect()
 }
 
+fn cdp_active_tool_names_for_flavor(
+    prompt_flavor: CdpPromptFlavor,
+    catalog_flavor: CdpCatalogFlavor,
+    messages: &[ConversationMessage],
+) -> HashSet<String> {
+    let specs = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
+    let active_specs = match catalog_flavor {
+        CdpCatalogFlavor::LocalSearchOnly if should_use_office_search_catalog(messages) => specs
+            .into_iter()
+            .filter(|spec| matches!(spec.name, "read" | "office_search"))
+            .collect::<Vec<_>>(),
+        _ => specs,
+    };
+    active_specs
+        .into_iter()
+        .filter(|spec| spec.name != "invalid")
+        .map(|spec| spec.name.to_string())
+        .collect()
+}
+
 /// Strip `relay_tool` fences and parse tool calls. Returns `(visible_text, Vec<(id, name, input_json)>)`.
 ///
 /// M365 Copilot often emits tool JSON in ` ```json ` or bare ` ``` ` fences instead of ` ```relay_tool `;
@@ -1870,57 +1899,69 @@ pub(crate) fn parse_copilot_tool_response(
     parse_mode: CdpToolParseMode,
 ) -> (String, Vec<(String, String, String)>) {
     let whitelist = mvp_tool_names_whitelist();
+    parse_copilot_tool_response_with_whitelist(raw, parse_mode, &whitelist)
+}
+
+fn parse_copilot_tool_response_with_whitelist(
+    raw: &str,
+    parse_mode: CdpToolParseMode,
+    whitelist: &HashSet<String>,
+) -> (String, Vec<(String, String, String)>) {
     let sentinel_policy = fallback_sentinel_policy();
     let (stripped, payloads) = extract_relay_tool_fences(raw);
-    let mut calls = parse_tool_payloads(&payloads, &whitelist, sentinel_policy);
+    let mut calls = parse_tool_payloads(&payloads, whitelist, sentinel_policy);
     let mut display = stripped;
     if calls.is_empty() {
         if let Some((d, openai_calls)) =
-            parse_top_level_openai_compatible_tool_payload(&display, &whitelist)
+            parse_top_level_openai_compatible_tool_payload(&display, whitelist)
         {
             display = d;
             calls.extend(openai_calls);
         }
     }
     if calls.is_empty() {
-        if let Some((d, call)) = salvage_generated_write_from_reply(&display) {
-            display = d;
-            calls.push(call);
+        if whitelist.contains("write") {
+            if let Some((d, call)) = salvage_generated_write_from_reply(&display) {
+                display = d;
+                calls.push(call);
+            }
         }
     }
     if calls.is_empty() {
-        let (d, fb_payloads) = extract_fallback_markdown_fences(&display, &whitelist, |v| {
+        let (d, fb_payloads) = extract_fallback_markdown_fences(&display, whitelist, |v| {
             parse_one_tool_call(v).is_some()
         });
         display = d;
         calls.extend(parse_fallback_payloads(
             &fb_payloads,
-            &whitelist,
+            whitelist,
             sentinel_policy,
             "fenced JSON fallback",
             parse_one_tool_call,
         ));
         calls.extend(parse_openai_compatible_tool_payloads(
             &fb_payloads,
-            &whitelist,
+            whitelist,
         ));
     }
     if calls.is_empty() {
         if let Some((d, openai_calls)) =
-            parse_top_level_openai_compatible_tool_payload(&display, &whitelist)
+            parse_top_level_openai_compatible_tool_payload(&display, whitelist)
         {
             display = d;
             calls.extend(openai_calls);
         }
     }
-    if calls.is_empty() && should_try_inline_tool_json_fallback(raw, &display, parse_mode) {
-        let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist, |v| {
+    if calls.is_empty()
+        && should_try_inline_tool_json_fallback(raw, &display, parse_mode, whitelist)
+    {
+        let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, whitelist, |v| {
             parse_one_tool_call(v).is_some()
         });
         display = d;
         calls.extend(parse_fallback_payloads(
             &uf_payloads,
-            &whitelist,
+            whitelist,
             sentinel_policy,
             "inline tool-shaped object fallback",
             parse_one_tool_call,
@@ -1933,6 +1974,7 @@ fn should_try_inline_tool_json_fallback(
     raw: &str,
     display: &str,
     parse_mode: CdpToolParseMode,
+    whitelist: &HashSet<String>,
 ) -> bool {
     if parse_mode == CdpToolParseMode::RetryRepair {
         return true;
@@ -1946,10 +1988,10 @@ fn should_try_inline_tool_json_fallback(
     }
     is_tool_protocol_confusion_text(raw)
         || is_tool_protocol_confusion_text(display)
-        || parser_has_inline_whitelisted_tool_candidate(raw, &mvp_tool_names_whitelist(), |v| {
+        || parser_has_inline_whitelisted_tool_candidate(raw, whitelist, |v| {
             parse_one_tool_call(v).is_some()
         })
-        || parser_has_inline_whitelisted_tool_candidate(display, &mvp_tool_names_whitelist(), |v| {
+        || parser_has_inline_whitelisted_tool_candidate(display, whitelist, |v| {
             parse_one_tool_call(v).is_some()
         })
 }
@@ -4711,7 +4753,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.catalog_text.contains("Relay Agent local search"));
         assert!(bundle
             .catalog_text
-            .contains("opencode's small `read` / `glob` / `grep` search surface"));
+            .contains("the active search surface is `office_search` plus `read`"));
         assert!(bundle
             .catalog_text
             .contains("Do not write `はい、...を検索します`"));
@@ -4720,26 +4762,16 @@ mod cdp_copilot_tool_tests {
             .catalog_text
             .contains("Do not use M365/Copilot search"));
         assert!(bundle.catalog_text.contains("not Microsoft Copilot tools"));
-        assert!(bundle.catalog_text.contains("## Current request routing"));
         assert!(bundle
             .catalog_text
-            .contains("Start with `office_search` (not `glob`)"));
+            .contains("Office/PDF content lookup => `office_search`"));
         assert!(bundle
             .catalog_text
-            .contains("open-ended lookup => one `relay_tool` array with the useful"));
-        let office_index = bundle
-            .catalog_text
-            .find("### `office_search`")
-            .expect("office_search entry");
-        let glob_index = bundle.catalog_text.find("### `glob`").expect("glob entry");
-        assert!(
-            office_index < glob_index,
-            "office_search should be listed before filename-only glob for Office/PDF relevance lookups"
-        );
+            .contains("after `office_search` identifies candidates"));
         assert!(bundle.catalog_text.contains("### `read`"));
-        assert!(bundle.catalog_text.contains("### `glob`"));
-        assert!(bundle.catalog_text.contains("### `grep`"));
         assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(!bundle.catalog_text.contains("### `glob`"));
+        assert!(!bundle.catalog_text.contains("### `grep`"));
         assert!(!bundle.catalog_text.contains("### `write`"));
         assert!(!bundle.catalog_text.contains("### `bash`"));
         assert!(!bundle.catalog_text.contains("### `WebSearch`"));
@@ -4749,6 +4781,23 @@ mod cdp_copilot_tool_tests {
             "local search catalog should stay compact; got {} chars",
             bundle.catalog_chars()
         );
+    }
+
+    #[test]
+    fn office_relevance_lookup_active_catalog_excludes_filename_tools() {
+        let messages = vec![ConversationMessage::user_text(
+            "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
+        )];
+        let active = cdp_active_tool_names_for_flavor(
+            CdpPromptFlavor::Standard,
+            cdp_catalog_flavor(&messages),
+            &messages,
+        );
+
+        assert!(active.contains("read"));
+        assert!(active.contains("office_search"));
+        assert!(!active.contains("glob"));
+        assert!(!active.contains("grep"));
     }
 
     #[test]
@@ -4762,10 +4811,44 @@ mod cdp_copilot_tool_tests {
         );
 
         assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
-        assert!(!bundle.catalog_text.contains("## Current request routing"));
-        assert!(!bundle
-            .catalog_text
-            .contains("Start with `office_search` (not `glob`)"));
+        assert!(bundle.catalog_text.contains("### `glob`"));
+        assert!(bundle.catalog_text.contains("### `grep`"));
+        assert!(bundle.catalog_text.contains("### `office_search`"));
+    }
+
+    #[test]
+    fn simple_pdf_listing_active_catalog_keeps_discovery_tools() {
+        let messages = vec![ConversationMessage::user_text("PDFファイルを一覧にして")];
+        let active = cdp_active_tool_names_for_flavor(
+            CdpPromptFlavor::Standard,
+            cdp_catalog_flavor(&messages),
+            &messages,
+        );
+
+        assert!(active.contains("read"));
+        assert!(active.contains("glob"));
+        assert!(active.contains("grep"));
+        assert!(active.contains("office_search"));
+    }
+
+    #[test]
+    fn office_relevance_active_whitelist_rejects_hidden_glob_call() {
+        let messages = vec![ConversationMessage::user_text(
+            "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
+        )];
+        let active = cdp_active_tool_names_for_flavor(
+            CdpPromptFlavor::Standard,
+            cdp_catalog_flavor(&messages),
+            &messages,
+        );
+        let reply = r#"```relay_tool
+{"name":"glob","relay_tool_call":true,"input":{"pattern":"**/*CF*.*"}}
+```"#;
+
+        let (_visible, tools) =
+            parse_copilot_tool_response_with_whitelist(reply, CdpToolParseMode::Initial, &active);
+
+        assert!(tools.is_empty());
     }
 
     #[test]
