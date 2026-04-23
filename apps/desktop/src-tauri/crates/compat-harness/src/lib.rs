@@ -73,7 +73,7 @@ mod parity_style {
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join("hello.txt");
         fs::write(&f, "parity").unwrap();
-        let v = json!({ "path": f.to_string_lossy() });
+        let v = json!({ "filePath": f.to_string_lossy() });
         let out = execute_tool("read", &v).expect("read");
         assert!(out.contains("parity"), "{out}");
         let _ = fs::remove_dir_all(&dir);
@@ -203,9 +203,7 @@ mod parity_style {
             &json!({
                 "pattern": "agentic_search_flow",
                 "path": "src",
-                "glob": "*.rs",
-                "output_mode": "content",
-                "context": 1
+                "include": "*.rs"
             }),
         )
         .expect("grep");
@@ -225,7 +223,7 @@ mod parity_style {
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join("out.txt");
         let v = json!({
-            "path": f.to_string_lossy(),
+            "filePath": f.to_string_lossy(),
             "content": "parity-write-ok\n",
         });
         let out = execute_tool("write", &v).expect("write");
@@ -252,13 +250,12 @@ mod parity_style {
             &json!({
                 "pattern": "parity",
                 "path": dir.join("fixture.txt").to_string_lossy(),
-                "output_mode": "count",
             }),
         )
         .expect("grep");
         assert!(
-            out.contains("\"numMatches\":2") || out.contains(r#""numMatches": 2"#),
-            "expected 2 matches in count output: {out}"
+            out.contains("\"numLines\":2") || out.contains(r#""numLines": 2"#),
+            "expected 2 matching lines in content output: {out}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -274,8 +271,7 @@ mod parity_style {
             &json!({
                 "pattern": "find_me",
                 "path": dir.to_string_lossy(),
-                "glob": "**/*.rs",
-                "output_mode": "content",
+                "include": "**/*.rs",
             }),
         )
         .expect("grep");
@@ -297,7 +293,7 @@ mod parity_style {
         .unwrap();
 
         let read_out =
-            execute_tool("read", &json!({ "path": fixture.to_string_lossy() })).expect("read");
+            execute_tool("read", &json!({ "filePath": fixture.to_string_lossy() })).expect("read");
         assert!(read_out.contains("alpha parity line"), "{read_out}");
 
         let grep_out = execute_tool(
@@ -305,12 +301,11 @@ mod parity_style {
             &json!({
                 "pattern": "parity",
                 "path": fixture.to_string_lossy(),
-                "output_mode": "count",
             }),
         )
         .expect("grep");
         assert!(
-            grep_out.contains("\"numMatches\":2") || grep_out.contains(r#""numMatches": 2"#),
+            grep_out.contains("\"numLines\":2") || grep_out.contains(r#""numLines": 2"#),
             "{grep_out}"
         );
 
@@ -379,7 +374,7 @@ mod parity_style {
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join(".env.local");
         fs::write(&f, "SECRET=x\n").unwrap();
-        let err = execute_tool("read", &json!({ "path": f.to_string_lossy() }))
+        let err = execute_tool("read", &json!({ "filePath": f.to_string_lossy() }))
             .expect_err(".env blocked");
         assert!(
             err.to_ascii_lowercase().contains("denylist")

@@ -2247,7 +2247,7 @@ fn cdp_should_request_new_chat(
     stage_label: &str,
 ) -> bool {
     let first_request = pending_new_chat.swap(false, Ordering::SeqCst);
-    first_request || (stage_label == "original" && cdp_has_tool_result(messages))
+    first_request && stage_label == "original" && !cdp_has_tool_result(messages)
 }
 
 fn cdp_force_fresh_chat(messages: &[ConversationMessage]) -> bool {
@@ -4766,6 +4766,53 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .message_text
             .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">"));
+        assert_eq!(bundle.tool_result_count(), 1);
+        assert!(bundle.tool_result_chars() > 0);
+    }
+
+    #[test]
+    fn repair_prompt_prepends_tool_context_before_synthetic_repair_user() {
+        let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
+        let repair = build_tool_protocol_repair_input(request, request, 0);
+        let office_output = serde_json::json!({
+            "candidate_count": 320,
+            "results": [
+                {
+                    "path": "H:/shr1/05_経理部/CFS精算表.xlsx",
+                    "anchor": "Sheet1!A1",
+                    "preview": "キャッシュフロー 精算表"
+                }
+            ],
+            "errors": []
+        })
+        .to_string();
+        let messages = vec![
+            ConversationMessage::user_text(request),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "office_search".to_string(),
+                input:
+                    r#"{"pattern":"キャッシュフロー","paths":["**"],"include_ext":["xlsx","pdf"]}"#
+                        .to_string(),
+            }]),
+            ConversationMessage::tool_result("tool-1", "office_search", office_output, false),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "検索結果は空でした。".to_string(),
+            }]),
+            ConversationMessage::user_text(repair),
+        ];
+
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Repair,
+            CdpCatalogFlavor::LocalSearchOnly,
+        );
+
+        assert!(bundle.message_text.contains("[Tool Call: office_search]"));
+        assert!(bundle.message_text.contains("CFS精算表.xlsx"));
+        assert!(bundle.message_text.contains("Tool protocol repair."));
+        assert!(!bundle.message_text.contains("検索結果は空でした。"));
         assert_eq!(bundle.tool_result_count(), 1);
         assert!(bundle.tool_result_chars() > 0);
     }
@@ -7874,15 +7921,20 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn tool_result_followup_requests_fresh_chat_for_stateless_cdp_prompt() {
+    fn tool_result_followup_continues_existing_cdp_thread() {
         let continuation = Arc::new(AtomicBool::new(false));
         let messages = vec![
             ConversationMessage::user_text("Find files"),
             ConversationMessage::tool_result("tool-1", "office_search", "Found 1 match", false),
         ];
         assert!(
-            cdp_should_request_new_chat(&continuation, &messages, "original"),
-            "tool-result follow-ups paste a complete Relay prompt bundle and should not inherit the prior M365 thread"
+            !cdp_should_request_new_chat(&continuation, &messages, "original"),
+            "tool-result follow-ups must preserve the existing Copilot thread so prior Relay evidence remains visible"
+        );
+        let fresh_with_tool_result = Arc::new(AtomicBool::new(true));
+        assert!(
+            !cdp_should_request_new_chat(&fresh_with_tool_result, &messages, "original"),
+            "a restored tool-result continuation must not force a fresh Copilot chat"
         );
         assert!(
             !cdp_should_request_new_chat(&continuation, &messages, "repair1"),

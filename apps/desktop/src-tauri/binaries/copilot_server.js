@@ -270,7 +270,6 @@ export function shouldStartNewChatForRequest({
   if (relayForceFreshChat) return true;
   if (envNewChatEachTurn) return true;
   if (!relaySessionInitialized) return true;
-  if (relayNewChat && !repairStage) return true;
   if (repairStage && repairReplayUsed) return true;
   return false;
 }
@@ -3033,7 +3032,7 @@ function isRecoverableLongContinuationFailure(error, promptLen, phase) {
 }
 
 function isRepairStageLabel(stageLabel) {
-  return stageLabel === "repair1" || stageLabel === "repair2";
+  return stageLabel === "repair1" || stageLabel === "repair2" || stageLabel === "repair3";
 }
 
 function bridgeResponseTimeoutMs(stageLabel, probeMode) {

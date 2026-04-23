@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { shouldStartNewChatForRequest } from "./copilot_server.js";
 
-test("shouldStartNewChatForRequest opens a new chat only for fresh or explicit fresh-chat cases", () => {
+test("shouldStartNewChatForRequest opens a new chat only for uninitialized or forced fresh-chat cases", () => {
   assert.equal(
     shouldStartNewChatForRequest({
       relaySessionInitialized: false,
@@ -32,7 +32,7 @@ test("shouldStartNewChatForRequest opens a new chat only for fresh or explicit f
   );
 });
 
-test("shouldStartNewChatForRequest ignores relayNewChat for an initialized repair turn until replay is needed", () => {
+test("shouldStartNewChatForRequest ignores relayNewChat once a session is initialized", () => {
   assert.equal(
     shouldStartNewChatForRequest({
       relayNewChat: true,
@@ -48,7 +48,7 @@ test("shouldStartNewChatForRequest ignores relayNewChat for an initialized repai
       relaySessionInitialized: true,
       repairStage: false,
     }),
-    true,
+    false,
   );
   assert.equal(
     shouldStartNewChatForRequest({

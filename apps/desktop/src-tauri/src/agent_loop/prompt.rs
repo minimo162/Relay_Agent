@@ -545,9 +545,58 @@ pub(crate) fn cdp_messages_for_flavor(
             }
         }
         CdpPromptFlavor::Repair => {
-            messages_from_latest_user(messages).unwrap_or_else(|| messages.to_vec())
+            messages_for_repair_flavor(messages).unwrap_or_else(|| messages.to_vec())
         }
     }
+}
+
+fn messages_for_repair_flavor(
+    messages: &[ConversationMessage],
+) -> Option<Vec<ConversationMessage>> {
+    let repair_user_index = messages
+        .iter()
+        .rposition(|message| message.role == MessageRole::User)?;
+    let mut selected = Vec::new();
+
+    if !messages[repair_user_index..]
+        .iter()
+        .any(message_has_tool_result)
+    {
+        let previous_user_index = messages[..repair_user_index]
+            .iter()
+            .rposition(|message| message.role == MessageRole::User);
+        let evidence_start = previous_user_index.map_or(0, |index| index + 1);
+        let mut evidence = messages[evidence_start..repair_user_index]
+            .iter()
+            .filter(|message| message_has_tool_use_or_result(message))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !evidence.is_empty() {
+            if let Some(index) = previous_user_index {
+                selected.push(messages[index].clone());
+            }
+            selected.append(&mut evidence);
+        }
+    }
+
+    selected.extend_from_slice(&messages[repair_user_index..]);
+    Some(selected)
+}
+
+fn message_has_tool_use_or_result(message: &ConversationMessage) -> bool {
+    message.blocks.iter().any(|block| {
+        matches!(
+            block,
+            ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+        )
+    })
+}
+
+fn message_has_tool_result(message: &ConversationMessage) -> bool {
+    message
+        .blocks
+        .iter()
+        .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
 }
 
 fn has_successful_tool_result(messages: &[ConversationMessage]) -> bool {

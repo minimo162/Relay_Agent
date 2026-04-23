@@ -42,7 +42,10 @@ export function startProcess(command, args, options = {}) {
 
 export function findAvailableDisplay() {
   for (let value = 99; value < 130; value += 1) {
-    if (!fs.existsSync(`/tmp/.X${value}-lock`)) {
+    if (
+      !fs.existsSync(`/tmp/.X${value}-lock`) &&
+      !fs.existsSync(`/tmp/.X11-unix/X${value}`)
+    ) {
       return `:${value}`;
     }
   }

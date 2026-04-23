@@ -15,6 +15,51 @@
 
 ## Milestone Log
 
+### 2026-04-23 Opencode alignment Phase 1: repair thread continuity
+
+Implemented Phase 1 from `docs/OPENCODE_ALIGNMENT_PLAN.md` (P0 + P2) after
+the live M365 Copilot trace showed `office_search` evidence getting lost across
+repair/meta-nudge sends.
+
+Changes:
+
+- CDP follow-ups no longer request `relay_new_chat` just because successful
+  Relay Tool Result blocks exist. Fresh chat is now limited to the first clean
+  request of a fresh Relay session; restored/tool-result continuations preserve
+  the existing Copilot thread.
+- The Node CDP bridge now ignores `relayNewChat` once a Relay session is
+  initialized. New chat still happens for uninitialized sessions, probe mode,
+  explicit `relay_force_fresh_chat`, environment forced new-chat, and repair
+  replay recovery.
+- The bridge treats `repair3` as a repair stage for timeout/replay handling,
+  matching the Rust stage labels.
+- Repair prompt slicing now prepends same-turn Relay tool call/result evidence
+  that occurred immediately before the synthetic repair user message. This
+  closes the `tool_result_count=0` repair path where `office_search` results
+  were followed by a synthetic repair prompt and then omitted from the CDP
+  prompt.
+- While running acceptance, compat-harness parity tests were updated to the
+  current opencode-shaped tool schema (`filePath`, grep `include`, fixed content
+  output) so the workspace test gate reflects the live contracts.
+- The agent-loop smoke launcher now checks `/tmp/.X11-unix/X*` sockets as well
+  as Xvfb lock files when choosing a display, avoiding false selection of an
+  already-running display.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_prepends -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_result_followup_continues -- --nocapture`: passed, 1 passed.
+- `pnpm check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness --lib`: passed, 21 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`: passed.
+- `pnpm agent-loop:test`: initially failed because stale Xvfb socket state made the launcher pick `:99`; after the display probe fix, passed with status `ok`, display `:100`, 2 tool starts/results, retry recovery observed, final stop reason `completed`.
+- `pnpm smoke:windows`: passed as a non-Windows skip (`platform=linux`, `reason=Skipped on non-Windows platform.`).
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-23 stateless CDP follow-ups after tool results
 
 Reviewed the supplied `tauri:dev` trace against current
