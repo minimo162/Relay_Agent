@@ -1445,6 +1445,79 @@ fn cdp_catalog_specs_for_flavor(
     }
 }
 
+fn should_prefer_office_search_first(messages: &[ConversationMessage]) -> bool {
+    let Some(turn) = latest_actionable_user_turn(messages) else {
+        return false;
+    };
+    should_prefer_office_search_for_request(&turn.text)
+}
+
+fn should_prefer_office_search_for_request(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let filename_only = lower.contains("filename")
+        || lower.contains("file name")
+        || trimmed.contains("ファイル名")
+        || trimmed.contains("一覧")
+        || trimmed.contains("リスト");
+    if filename_only
+        && !(lower.contains("content")
+            || lower.contains("contents")
+            || lower.contains("relevant")
+            || lower.contains("related")
+            || lower.contains("required")
+            || lower.contains("needed")
+            || trimmed.contains("内容")
+            || trimmed.contains("関連")
+            || trimmed.contains("関係")
+            || trimmed.contains("必要"))
+    {
+        return false;
+    }
+    let office_corpus = lower.contains(".docx")
+        || lower.contains(".xlsx")
+        || lower.contains(".xlsm")
+        || lower.contains(".pptx")
+        || lower.contains(".pdf")
+        || lower.contains("excel")
+        || lower.contains("word")
+        || lower.contains("powerpoint")
+        || lower.contains("spreadsheet")
+        || lower.contains("cash flow")
+        || lower.contains("cashflow")
+        || lower.contains("cfs")
+        || trimmed.contains("PDF")
+        || trimmed.contains("Excel")
+        || trimmed.contains("エクセル")
+        || trimmed.contains("ワード")
+        || trimmed.contains("パワポ")
+        || trimmed.contains("パワーポイント")
+        || trimmed.contains("資料")
+        || trimmed.contains("帳票")
+        || trimmed.contains("計算書")
+        || trimmed.contains("精算表")
+        || (trimmed.contains("キャッシュ") && trimmed.contains("フロー"));
+    let relevance_or_content = lower.contains("content")
+        || lower.contains("contents")
+        || lower.contains("relevant")
+        || lower.contains("related")
+        || lower.contains("required")
+        || lower.contains("needed")
+        || lower.contains("which file")
+        || trimmed.contains("内容")
+        || trimmed.contains("関連")
+        || trimmed.contains("関係")
+        || trimmed.contains("必要")
+        || trimmed.contains("該当")
+        || trimmed.contains("候補")
+        || trimmed.contains("作成")
+        || trimmed.contains("どのファイル");
+    office_corpus && relevance_or_content
+}
+
 fn format_cdp_tool_arg_list(items: &[String]) -> String {
     if items.is_empty() {
         "none".to_string()
@@ -1630,7 +1703,27 @@ Example:
             )
         }
         CdpCatalogFlavor::LocalSearchOnly => {
-            let rendered_tools = catalog
+            let prefer_office_search = should_prefer_office_search_first(messages);
+            let mut ordered = catalog;
+            if prefer_office_search {
+                ordered.sort_by_key(|spec| match spec.name {
+                    "office_search" => 0,
+                    "read" => 1,
+                    "grep" => 2,
+                    "glob" => 3,
+                    _ => 4,
+                });
+            }
+            let routing_hint = if prefer_office_search {
+                concat!(
+                    "\n## Current request routing\n\n",
+                    "- Start with `office_search` (not `glob`) because the latest request asks for needed/related/relevant Office/PDF-style document evidence.\n",
+                    "- `glob` is filename-only discovery; it cannot prove document relevance. Use it only after content search if you still need filename-pattern discovery.\n"
+                )
+            } else {
+                ""
+            };
+            let rendered_tools = ordered
                 .iter()
                 .map(render_compact_cdp_tool_entry)
                 .collect::<Vec<_>>()
@@ -1653,6 +1746,8 @@ Do not use M365/Copilot search, web search, citations, uploaded files, Python/co
 - open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content with user-derived terms; after duplicate-search or search-budget notices, stop tools and summarize
 - truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query
 
+{routing_hint}
+
 {rendered_tools}
 
 ## Tool invocation protocol
@@ -1671,6 +1766,7 @@ Example:
 {{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"CFS|精算表","regex":true,"paths":["reports/**"],"include_ext":["xlsx","pdf"]}}}}
 ```
 "#,
+                routing_hint = routing_hint,
                 rendered_tools = rendered_tools,
             )
         }
@@ -4624,9 +4720,22 @@ mod cdp_copilot_tool_tests {
             .catalog_text
             .contains("Do not use M365/Copilot search"));
         assert!(bundle.catalog_text.contains("not Microsoft Copilot tools"));
+        assert!(bundle.catalog_text.contains("## Current request routing"));
+        assert!(bundle
+            .catalog_text
+            .contains("Start with `office_search` (not `glob`)"));
         assert!(bundle
             .catalog_text
             .contains("open-ended lookup => one `relay_tool` array with the useful"));
+        let office_index = bundle
+            .catalog_text
+            .find("### `office_search`")
+            .expect("office_search entry");
+        let glob_index = bundle.catalog_text.find("### `glob`").expect("glob entry");
+        assert!(
+            office_index < glob_index,
+            "office_search should be listed before filename-only glob for Office/PDF relevance lookups"
+        );
         assert!(bundle.catalog_text.contains("### `read`"));
         assert!(bundle.catalog_text.contains("### `glob`"));
         assert!(bundle.catalog_text.contains("### `grep`"));
@@ -4640,6 +4749,23 @@ mod cdp_copilot_tool_tests {
             "local search catalog should stay compact; got {} chars",
             bundle.catalog_chars()
         );
+    }
+
+    #[test]
+    fn simple_pdf_listing_initial_prompt_does_not_force_office_search_first() {
+        let messages = vec![ConversationMessage::user_text("PDFファイルを一覧にして")];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Standard,
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
+        assert!(!bundle.catalog_text.contains("## Current request routing"));
+        assert!(!bundle
+            .catalog_text
+            .contains("Start with `office_search` (not `glob`)"));
     }
 
     #[test]

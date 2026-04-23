@@ -50,6 +50,37 @@ Verification:
 - `node -e "...workflow trigger check..."`: passed (`pull_request` and
   `workflow_dispatch` present; `push` and `cargo clippy` absent).
 
+### 2026-04-23 Opencode alignment follow-up: first-turn Office search routing
+
+Reviewed current `anomalyco/opencode` HEAD
+`97300085437899af8af6c2bbf6ebc6bdab110174`. Its `glob` and `grep` tools keep
+short schemas and descriptions, return compact evidence, and let the provider
+choose tools in the same message series. The live Relay trace still showed a
+first-turn CDP prompt choosing filename-only `glob` for a CFS/Office relevance
+lookup, then requiring a later repair to request `office_search`.
+
+Changes:
+
+- The compact CDP local-search catalog now detects Office/PDF-style
+  relevance/needed-file requests and adds a request-specific routing hint:
+  start with `office_search`, not filename-only `glob`.
+- For those requests, `office_search` is listed before `glob` in the compact
+  catalog so Copilot sees the content-search adapter first.
+- Plain filename/listing requests such as "PDFファイルを一覧にして" keep the
+  normal opencode-like `glob` discovery path and do not receive the
+  Office-first hint.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_uses_compact_search_catalog -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml simple_pdf_listing_initial_prompt_does_not_force_office_search_first -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml first_local_search_repair_uses_local_search_catalog -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 8 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-23 Opencode alignment follow-up: remove search expansion repair
 
 Moved Office/PDF lookup behavior closer to OpenCode's normal tool-selection
