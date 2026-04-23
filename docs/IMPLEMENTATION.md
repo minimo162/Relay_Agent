@@ -15,6 +15,71 @@
 
 ## Milestone Log
 
+### 2026-04-23 compact Office search and CDP tail prompts
+
+Reviewed the live `tauri:dev` log from the M365 CDP path and current
+`anomalyco/opencode` HEAD `1026791076c6a4edf1d44422177e13d06c2930d6`.
+opencode keeps local search evidence small: `glob` lists up to 100 files,
+`grep` renders grouped matching lines, and `read` is used for deeper evidence.
+The Relay run still let the Relay-only `office_search` adapter return 100
+Office/PDF hits for a broad Copilot-generated pattern
+(`キャッシュフロー|...|BS|PL`), then pasted a 21k-character tool-result block
+back into Copilot.
+
+For the remaining CDP compaction failure, reviewed opencode's current
+`session/compaction.ts`: it selects recent tail by budget
+(`preserve_recent_tokens` / `tail_turns`) instead of preserving a fixed message
+count, can split a turn to fit the tail budget, and prunes older tool outputs.
+Relay's pre-CDP inline compaction was still fixed at
+`CompactionConfig::default().preserve_recent_messages = 5`, so a large recent
+tail could remain above the 120,000-character CDP composer limit forever.
+
+Changes:
+
+- Reduced the default `office_search` result budget from 100 to 30, matching the
+  existing repair-generated payload and keeping the Relay-only Office adapter
+  closer to opencode's compact search loop.
+- CDP follow-up rendering for `office_search` now shows at most 30 hits and
+  caps each preview before the general prompt truncation layer.
+- Tool catalog and CDP routing guidance now tell Copilot to use concrete
+  user-derived search terms and not add broad accounting/domain expansions such
+  as `BS` / `PL` unless the user explicitly named them.
+- CDP inline pre-send compaction now shrinks the preserved recent tail when the
+  fixed default tail still exceeds the inline character/token budget: after a
+  failed fit it retries with 4, 3, 2, 1, then 0 preserved recent messages. This
+  mirrors opencode's budgeted tail selection while keeping Relay's existing
+  deterministic summary compactor.
+- Repair-generated `grep` calls now use only opencode's advertised
+  `pattern` / optional `path` shape. The old Relay-only `output_mode`, `-n`,
+  `-i`, `head_limit`, and `max_count` fields are no longer injected by the
+  repair prompt builder.
+- Hand-written CDP tool examples now use opencode's `filePath` for `read` and
+  `write`; `path` / `file_path` remain executor compatibility aliases but are
+  no longer shown as the preferred form.
+
+Verification:
+
+- `cargo fmt --all`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_default_result_limit_is_compact -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml compact -- --nocapture`: passed, 14 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_followup_summary_limits_result_count -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_catalog -- --nocapture`: passed, 3 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_result_is_bounded_for_cdp_prompt -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml inline_cdp_prompt_compacts_request_messages_when_prompt_is_too_large -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml inline_cdp_prompt_reduces_recent_tail_when_fixed_tail_still_exceeds_limit -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 8 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml grep_repair_uses_opencode_shape_only -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml no_relay_tool_call_for_local_lookup_repairs_to_grep -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml repeated_generic_prose_before_tool_repairs_to_grep -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_uses_compact_search_catalog -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_tool_catalog_uses_opencode_file_path_examples -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_catalog -- --nocapture`: passed, 3 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_file_schema_matches_opencode_shape -- --nocapture`: passed, 1 passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-22 reduce Relay-specific search catalog logic
 
 Reviewed current `anomalyco/opencode` HEAD

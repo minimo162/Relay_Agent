@@ -595,7 +595,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "edit" => "Use after reading the file when you need a targeted text replacement.",
         "glob" => "Use when you need to find files by name patterns such as `**/*.js` or `src/**/*.ts`. You may call multiple useful search tools in one response.",
         "grep" => "Use when you need to find files containing a regex pattern. Filter files with `include` such as `*.js` or `*.{ts,tsx}`.",
-        "office_search" => "Use only where opencode grep/read would be blocked by Office/PDF containers; keep inputs concrete with a pattern plus optional paths/include_ext.",
+        "office_search" => "Use only where opencode grep/read would be blocked by Office/PDF containers; keep inputs concrete with user-derived pattern terms plus optional paths/include_ext.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
@@ -621,7 +621,7 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "edit" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
         "glob" => "Avoid for content search; use grep for plaintext/code contents.",
         "grep" => "Avoid for identifying/counting match totals across files; use bash with rg directly when that exact count is required.",
-        "office_search" => "Avoid for plaintext/code files; use grep there. Do not use it as semantic ranking without a concrete search pattern.",
+        "office_search" => "Avoid for plaintext/code files; use grep there. Do not use it as semantic ranking, and do not add generic domain terms such as BS/PL unless the user named them.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
@@ -830,7 +830,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "office_search",
-            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use this before answering local Office/PDF lookup requests, including questions about needed, related, relevant, or available files. Defaults to literal substring search; set regex=true for regex patterns or small alternations such as `CFS|精算表`. No semantic ranking. Results include path, anchor, match offsets, preview, and truncation metadata. Extraction omits unsupported embedded image/chart/SmartArt text.",
+            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use only where opencode-style grep/read cannot inspect Office/PDF containers. Keep patterns concrete and derived from the user's words; do not add generic domain expansions such as BS/PL unless the user asked for them. Defaults to literal substring search; set regex=true for small user-term alternations such as `CFS|精算表`. No semantic ranking. Results include path, anchor, match offsets, preview, and truncation metadata. Extraction omits unsupported embedded image/chart/SmartArt text.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

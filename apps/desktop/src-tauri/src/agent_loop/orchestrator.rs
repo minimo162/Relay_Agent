@@ -21,9 +21,11 @@ const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
 const CDP_INLINE_PROMPT_MAX_CHARS: usize = 120_000;
-const CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS: usize = 12_000;
+const CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS: usize = 8_000;
 const CDP_READ_FILE_TOOL_RESULT_MAX_CHARS: usize = 32_000;
 const CDP_LARGE_TOOL_RESULT_MAX_CHARS: usize = 24_000;
+const CDP_OFFICE_SEARCH_FOLLOWUP_RESULT_LIMIT: usize = 30;
+const CDP_OFFICE_SEARCH_PREVIEW_MAX_CHARS: usize = 800;
 const COPILOT_UI_PROGRESS_POLL_MS: u64 = 350;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
@@ -1378,7 +1380,7 @@ When the user needs **accurate numbers/tables** and **layout-oriented text** for
 2. **Structured data (source of truth for Excel):** batch-read **`Range.Value2`** into a PowerShell array and emit **`ConvertTo-Json -Compress`** (or `Export-Csv` for a defined range to a temp path). **Never** per-cell COM loops.
 3. **Layout PDF:** COM **`ExportAsFixedFormat`** (Excel/Word) or the presentation export equivalent for PowerPoint; use **`OpenAfterPublish=$false`** / **`OpenAfterExport=$false`**. Write to a **unique path** under **`$env:TEMP\RelayAgent\office-layout\`** (create the folder; use a new GUID in the filename). **`Quit()`** hosts in `finally`.
 4. Print **one JSON object** to stdout with at least **`structured`** (or embed 2D data inline) and **`pdfPath`** (absolute path to the temp PDF). Optionally **`csvPath`** if you exported CSV.
-5. In the **same** `relay_tool` fence, include a second tool: **`read`** with **`path`** = `pdfPath` (and optional `pages` for large PDFs). **Two tools in one array** is intentional; still avoid splitting **one workbook** across many separate PowerShell invocations in one turn.
+5. In the **same** `relay_tool` fence, include a second tool: **`read`** with **`filePath`** = `pdfPath` (and optional `pages` for large PDFs). **Two tools in one array** is intentional; still avoid splitting **one workbook** across many separate PowerShell invocations in one turn.
 6. **Excel:** treat **LiteParse text from the PDF** as **layout hints only**; **numeric truth** is **`Value2` / CSV**. Scope PDF export to **one sheet or a defined print area** when workbooks are large (PDF parse timeouts and size limits apply).
 7. After use, you may **`Remove-Item`** the temp PDF (and CSV) if policy allows; otherwise rely on `%TEMP%` cleanup.
 
@@ -1535,11 +1537,11 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Exact path:** If the latest user message gives an exact file path, prefer `read` directly.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `office_search`.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob` for file name patterns, `grep` for plaintext/code content regex search, and `office_search` only where opencode-style grep/read cannot inspect Office/PDF containers. You may call multiple useful search tools in one `relay_tool` array.
+- **Search tool selection:** Use `glob` for file name patterns, `grep` for plaintext/code content regex search, and `office_search` only where opencode-style grep/read cannot inspect Office/PDF containers. Search for concrete terms from the user request; do not add broad domain expansions such as BS/PL or generic accounting checklists unless the user named those terms. You may call multiple useful search tools in one `relay_tool` array.
 - **Evidence expansion before judgments:** Search snippets are discovery evidence. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read` on the relevant path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
 - **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
-- **Search iteration:** Follow opencode's simple loop: use concrete `glob` / `grep` calls for discovery, batch obviously useful searches when helpful, then `read` the best candidate(s). Use the Relay-only `office_search` extension only for Office/PDF content. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
+- **Search iteration:** Follow opencode's simple loop: use concrete `glob` / `grep` calls for discovery, batch obviously useful searches when helpful, then `read` the best candidate(s). Use the Relay-only `office_search` extension only for Office/PDF content, and keep its pattern narrow rather than expanding into inferred domain prerequisites. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
@@ -1587,7 +1589,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write`
 - local file lookup / needed files / related files => `glob` / `grep` / `office_search`; for Office/PDF relevance, prefer `office_search` over a broad filename glob; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
-- open-ended search => follow opencode's `glob` / `grep` discovery style; batch obviously useful searches in one `relay_tool` array, then `read` top candidates; use `office_search` only for Office/PDF content
+- open-ended search => follow opencode's `glob` / `grep` discovery style; batch obviously useful searches in one `relay_tool` array, then `read` top candidates; use `office_search` only for Office/PDF content with user-derived terms
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -1611,7 +1613,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 Example:
 
 ```relay_tool
-{{"name":"read","relay_tool_call":true,"input":{{"path":"README.md"}}}}
+{{"name":"read","relay_tool_call":true,"input":{{"filePath":"README.md"}}}}
 ```
 "#,
                 rendered_tools = rendered_tools,
@@ -1639,7 +1641,7 @@ Do not use M365/Copilot search, web search, citations, uploaded files, Python/co
 - filename/path lookup => `glob`
 - plaintext/code content lookup => `grep`
 - Office/PDF content lookup => `office_search`
-- open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content; after duplicate-search or search-budget notices, stop tools and summarize
+- open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content with user-derived terms; after duplicate-search or search-budget notices, stop tools and summarize
 
 {rendered_tools}
 
@@ -1690,7 +1692,7 @@ Output exactly one fenced `relay_tool` block with JSON only.
 Example:
 
 ```relay_tool
-{{"name":"write","relay_tool_call":true,"input":{{"path":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
+{{"name":"write","relay_tool_call":true,"input":{{"filePath":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
 ```
 "#
             )
@@ -2769,6 +2771,8 @@ fn compact_request_messages_for_inline_cdp_with_flavor(
     let mut messages = cdp_messages_for_flavor(request.messages, flavor);
     let mut compaction_rounds = 0;
     let mut removed_message_count = 0;
+    let mut preserve_recent_messages =
+        runtime::CompactionConfig::default().preserve_recent_messages;
 
     loop {
         let prompt_bundle = build_cdp_prompt_bundle_from_messages(
@@ -2786,9 +2790,27 @@ fn compact_request_messages_for_inline_cdp_with_flavor(
         }
 
         let mut session = RuntimeSession::new();
-        session.messages = messages;
-        let result = runtime::compact_session(&session, runtime::CompactionConfig::default());
+        session.messages = messages.clone();
+        let applied_preserve_recent_messages = preserve_recent_messages;
+        let result = runtime::compact_session(
+            &session,
+            runtime::CompactionConfig {
+                preserve_recent_messages: applied_preserve_recent_messages,
+                ..runtime::CompactionConfig::default()
+            },
+        );
         if result.removed_message_count == 0 {
+            if preserve_recent_messages > 0 {
+                preserve_recent_messages -= 1;
+                tracing::info!(
+                    "[CdpApiClient] inline prompt still exceeds delivery limit; reducing preserved recent tail (next_preserve_recent_messages={}, est_tokens_before={}, chars_before={}, flavor={:?})",
+                    preserve_recent_messages,
+                    estimated_tokens,
+                    prompt_chars,
+                    flavor
+                );
+                continue;
+            }
             return Err(RuntimeError::new(format!(
                 "Copilot inline prompt remains above the inline delivery limit after compaction (estimated {estimated_tokens} tokens, {prompt_chars} chars; limits {CDP_INLINE_PROMPT_MAX_TOKENS} tokens, {CDP_INLINE_PROMPT_MAX_CHARS} chars)"
             )));
@@ -2797,10 +2819,13 @@ fn compact_request_messages_for_inline_cdp_with_flavor(
         messages = result.compacted_session.messages;
         removed_message_count += result.removed_message_count;
         compaction_rounds += 1;
+        preserve_recent_messages = preserve_recent_messages.saturating_sub(1);
         tracing::info!(
-            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, est_tokens_before={}, chars_before={}, flavor={:?})",
+            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, preserve_recent_messages={}, next_preserve_recent_messages={}, est_tokens_before={}, chars_before={}, flavor={:?})",
             compaction_rounds,
             result.removed_message_count,
+            applied_preserve_recent_messages,
+            preserve_recent_messages,
             estimated_tokens,
             prompt_chars,
             flavor
@@ -3222,12 +3247,18 @@ fn summarize_office_search_tool_result(output: &str) -> Option<String> {
         return Some(lines.join("\n"));
     }
 
+    let shown = results.len().min(CDP_OFFICE_SEARCH_FOLLOWUP_RESULT_LIMIT);
+    let hidden = results.len().saturating_sub(shown);
     let mut lines = vec![format!(
         "Found {} Office/PDF matches{}",
         results.len(),
-        if truncated { " (truncated)" } else { "" }
+        if truncated || hidden > 0 {
+            " (showing first results)"
+        } else {
+            ""
+        }
     )];
-    for result in results.iter().take(100) {
+    for result in results.iter().take(CDP_OFFICE_SEARCH_FOLLOWUP_RESULT_LIMIT) {
         let path = result
             .get("path")
             .and_then(Value::as_str)
@@ -3240,6 +3271,7 @@ fn summarize_office_search_tool_result(output: &str) -> Option<String> {
             .get("preview")
             .and_then(Value::as_str)
             .map(collapse_inline_whitespace)
+            .map(|text| truncate_inline_chars(&text, CDP_OFFICE_SEARCH_PREVIEW_MAX_CHARS))
             .unwrap_or_default();
         if preview.is_empty() {
             lines.push(format!("{path}:{anchor}"));
@@ -3247,7 +3279,30 @@ fn summarize_office_search_tool_result(output: &str) -> Option<String> {
             lines.push(format!("{path}:{anchor}: {preview}"));
         }
     }
+    if hidden > 0 || truncated {
+        lines.push(String::new());
+        lines.push(format!(
+            "(Results truncated: showing {} of {} matches{}. Use a narrower pattern/path or read the best candidate paths.)",
+            shown,
+            results.len(),
+            if hidden > 0 {
+                format!(", {hidden} hidden")
+            } else {
+                String::new()
+            }
+        ));
+    }
     Some(lines.join("\n"))
+}
+
+fn truncate_inline_chars(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
 }
 
 fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
@@ -4574,6 +4629,28 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn cdp_tool_catalog_uses_opencode_file_path_examples() {
+        let messages = vec![ConversationMessage::user_text(
+            "README.md を読んで tetris.html を作成して".to_string(),
+        )];
+        let standard_catalog = cdp_tool_catalog_section_for_flavor(
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+            &messages,
+        );
+        let write_repair_catalog = cdp_tool_catalog_section_for_flavor(
+            CdpPromptFlavor::Repair,
+            CdpCatalogFlavor::RepairWriteFileOnly,
+            &messages,
+        );
+
+        assert!(standard_catalog.contains(r#""filePath":"README.md""#));
+        assert!(!standard_catalog.contains(r#""path":"README.md""#));
+        assert!(write_repair_catalog.contains(r#""filePath":"tetris.html""#));
+        assert!(!write_repair_catalog.contains(r#""path":"tetris.html""#));
+    }
+
+    #[test]
     fn local_search_tool_results_add_continuation_guard() {
         let messages = vec![
             ConversationMessage::user_text(
@@ -4957,8 +5034,31 @@ mod cdp_copilot_tool_tests {
         let rendered = format_cdp_tool_result("office_search", &output, false);
         assert!(rendered.contains("Found 1 Office/PDF matches"));
         assert!(rendered.contains("/workspace/report.xlsx:Sheet1!A1"));
-        assert!(rendered.contains("truncated for M365 Copilot CDP prompt"));
-        assert!(rendered.len() < CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS + 1_000);
+        assert!(rendered.contains("xxx..."));
+        assert!(!rendered.contains("truncated for M365 Copilot CDP prompt"));
+        assert!(rendered.len() < 2_000);
+    }
+
+    #[test]
+    fn office_search_followup_summary_limits_result_count() {
+        let output = serde_json::to_string(&json!({
+            "results": (0..35)
+                .map(|i| json!({
+                    "path": format!("/workspace/report-{i}.xlsx"),
+                    "anchor": "Sheet1!A1",
+                    "preview": "キャッシュフロー計算書"
+                }))
+                .collect::<Vec<_>>(),
+            "files_truncated": true,
+            "results_truncated": true
+        }))
+        .expect("serialize search output");
+
+        let rendered = format_cdp_tool_result("office_search", &output, false);
+        assert!(rendered.contains("Found 35 Office/PDF matches (showing first results)"));
+        assert!(rendered.contains("/workspace/report-29.xlsx:Sheet1!A1"));
+        assert!(!rendered.contains("/workspace/report-30.xlsx:Sheet1!A1"));
+        assert!(rendered.contains("Results truncated: showing 30 of 35 matches, 5 hidden"));
     }
 
     #[test]
@@ -5369,7 +5469,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn inline_cdp_prompt_errors_when_recent_tail_still_exceeds_limit() {
+    fn inline_cdp_prompt_reduces_recent_tail_when_fixed_tail_still_exceeds_limit() {
         let huge = "x".repeat(120_000);
         let messages = (0..6)
             .map(|_| ConversationMessage::user_text(huge.clone()))
@@ -5379,9 +5479,15 @@ mod cdp_copilot_tool_tests {
             system_prompt: &system,
             messages: &messages,
         };
-        let err = compact_request_messages_for_inline_cdp(&request)
-            .expect_err("should fail when preserved tail remains too large");
-        assert!(err.to_string().contains("remains above the"));
+        let (compacted_messages, estimated_tokens, removed_message_count) =
+            compact_request_messages_for_inline_cdp(&request)
+                .expect("compaction should keep shrinking the tail until it fits");
+        let prompt = build_cdp_prompt_from_messages(&system, &compacted_messages);
+
+        assert!(estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS);
+        assert!(prompt.len() <= CDP_INLINE_PROMPT_MAX_CHARS);
+        assert!(removed_message_count > 0);
+        assert!(prompt.contains("This session is being continued from a previous conversation"));
     }
 
     #[test]

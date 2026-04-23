@@ -1053,20 +1053,6 @@ fn build_grep_tool_call(pattern: &str, path: Option<&str>) -> Value {
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
         input.insert("path".to_string(), Value::String(path.trim().to_string()));
     }
-    input.insert(
-        "output_mode".to_string(),
-        Value::String("content".to_string()),
-    );
-    input.insert("-n".to_string(), Value::Bool(true));
-    input.insert("-i".to_string(), Value::Bool(true));
-    input.insert(
-        "head_limit".to_string(),
-        Value::Number(serde_json::Number::from(100)),
-    );
-    input.insert(
-        "max_count".to_string(),
-        Value::Number(serde_json::Number::from(20)),
-    );
     json!({
         "name": "grep",
         "relay_tool_call": true,
@@ -1981,6 +1967,23 @@ mod tests {
         assert_eq!(
             office_search_paths_for_repair("CFS", Some("reports/**/*.xlsx")),
             vec![json!("reports/**/*.xlsx")]
+        );
+    }
+
+    #[test]
+    fn grep_repair_uses_opencode_shape_only() {
+        let payload = build_grep_tool_call("TODO", Some("src"));
+        let input = payload
+            .get("input")
+            .and_then(Value::as_object)
+            .expect("grep input");
+
+        assert_eq!(payload.get("name").and_then(Value::as_str), Some("grep"));
+        assert_eq!(input.get("pattern"), Some(&json!("TODO")));
+        assert_eq!(input.get("path"), Some(&json!("src")));
+        assert_eq!(
+            input.keys().cloned().collect::<Vec<_>>(),
+            vec!["path".to_string(), "pattern".to_string()]
         );
     }
 }

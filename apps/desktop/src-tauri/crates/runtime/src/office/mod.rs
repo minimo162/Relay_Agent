@@ -699,7 +699,7 @@ struct CandidateExpansion {
 pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput> {
     let regex = compile_office_search_regex(input)?;
     let include_ext = normalize_include_ext(input.include_ext.as_ref())?;
-    let max_results = input.max_results.unwrap_or(100).clamp(1, 1_000);
+    let max_results = input.max_results.unwrap_or(30).clamp(1, 1_000);
     let max_files = input.max_files.unwrap_or(50).clamp(1, 1_000);
     let context = input.context.unwrap_or(80).min(MAX_OFFICE_SEARCH_CONTEXT);
     let started = Instant::now();
@@ -1927,6 +1927,37 @@ mod tests {
             fs::canonicalize(&old_relevant).unwrap().to_string_lossy()
         );
         assert_eq!(output.results[0].anchor, "path");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn office_search_default_result_limit_is_compact() {
+        let root = test_dir();
+        for index in 0..35 {
+            fs::write(
+                root.join(format!("target-{index:02}.xlsx")),
+                b"not a real workbook",
+            )
+            .expect("write candidate");
+        }
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+
+        let output = office_search(&OfficeSearchInput {
+            pattern: "target".to_string(),
+            paths: vec![pattern],
+            regex: None,
+            include_ext: Some(vec![String::from("xlsx")]),
+            case_insensitive: None,
+            context: None,
+            max_results: None,
+            max_files: Some(100),
+        })
+        .expect("office search");
+
+        assert_eq!(output.max_results, 30);
+        assert_eq!(output.results.len(), 30);
+        assert!(output.results_truncated);
 
         let _ = fs::remove_dir_all(root);
     }
