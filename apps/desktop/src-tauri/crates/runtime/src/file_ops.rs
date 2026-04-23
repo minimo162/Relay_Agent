@@ -112,35 +112,11 @@ pub struct GlobSearchOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct GrepSearchInput {
     pub pattern: String,
     pub path: Option<String>,
-    #[serde(alias = "include")]
-    pub glob: Option<String>,
-    #[serde(rename = "output_mode")]
-    pub output_mode: Option<String>,
-    #[serde(rename = "-B")]
-    pub before: Option<usize>,
-    #[serde(rename = "-A")]
-    pub after: Option<usize>,
-    #[serde(rename = "-C")]
-    pub context_short: Option<usize>,
-    pub context: Option<usize>,
-    #[serde(rename = "-n")]
-    pub line_numbers: Option<bool>,
-    #[serde(rename = "-i")]
-    pub case_insensitive: Option<bool>,
-    #[serde(rename = "type")]
-    pub file_type: Option<String>,
-    pub head_limit: Option<usize>,
-    pub offset: Option<usize>,
-    pub multiline: Option<bool>,
-    pub follow: Option<bool>,
-    #[serde(rename = "max_depth", alias = "maxDepth")]
-    pub max_depth: Option<usize>,
-    pub hidden: Option<bool>,
-    #[serde(rename = "max_count", alias = "maxCount")]
-    pub max_count: Option<usize>,
+    pub include: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -832,41 +808,24 @@ pub fn grep(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
     validate_grep_pattern(input)?;
 
     let base_path = normalize_optional_search_path(input.path.as_deref())?;
-    let output_mode = input
-        .output_mode
-        .clone()
-        .unwrap_or_else(|| String::from("content"));
 
-    if let Some(output) = grep_with_rg(input, &base_path, &output_mode)? {
+    if let Some(output) = grep_with_rg(input, &base_path)? {
         return Ok(output);
     }
 
-    grep_fallback(input, &base_path, &output_mode)
+    grep_fallback(input, &base_path)
 }
 
 fn validate_grep_pattern(input: &GrepSearchInput) -> io::Result<()> {
     RegexBuilder::new(&input.pattern)
-        .case_insensitive(input.case_insensitive.unwrap_or(false))
-        .dot_matches_new_line(input.multiline.unwrap_or(false))
         .build()
         .map(|_| ())
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
 }
 
-fn grep_with_rg(
-    input: &GrepSearchInput,
-    base_path: &Path,
-    output_mode: &str,
-) -> io::Result<Option<GrepSearchOutput>> {
-    if input.case_insensitive.unwrap_or(false)
-        || input.multiline.unwrap_or(false)
-        || input.file_type.is_some()
-        || output_mode == "count"
-    {
-        return Ok(None);
-    }
+fn grep_with_rg(input: &GrepSearchInput, base_path: &Path) -> io::Result<Option<GrepSearchOutput>> {
     let globs = input
-        .glob
+        .include
         .as_ref()
         .map(|glob| vec![glob.clone()])
         .unwrap_or_default();
@@ -889,10 +848,6 @@ fn grep_with_rg(
         search_root,
         search_backend::RgSearchOptions {
             files: files.as_deref(),
-            follow: input.follow.unwrap_or(false),
-            max_depth: input.max_depth,
-            hidden: input.hidden.unwrap_or(true),
-            max_count: input.max_count,
             ..search_backend::RgSearchOptions::new(&input.pattern, &globs)
         },
     )?
@@ -913,55 +868,27 @@ fn grep_with_rg(
             filenames.push(item.path.to_string_lossy().into_owned());
         }
     }
-    if output_mode == "content" {
-        let lines = matches
-            .iter()
-            .map(|item| {
-                format!(
-                    "{}:{}:{}",
-                    item.path.to_string_lossy(),
-                    item.line_number,
-                    truncate_grep_line(item.line.trim_end_matches(['\r', '\n']))
-                )
-            })
-            .collect::<Vec<_>>();
-        let (lines, limit, offset) =
-            apply_limit(lines, Some(input.head_limit.unwrap_or(100)), input.offset);
-        let output = GrepSearchOutput {
-            mode: Some(output_mode.to_string()),
-            num_files: filenames.len(),
-            filenames,
-            content: Some(lines.join("\n")),
-            num_lines: Some(lines.len()),
-            num_matches: None,
-            applied_limit: limit,
-            applied_offset: offset,
-        };
-        tracing::info!(
-            target: "relay.runtime.search",
-            tool = "grep",
-            backend = "rg",
-            mode = ?output.mode,
-            num_files = output.num_files,
-            num_lines = output.num_lines.unwrap_or(0),
-            partial = result.partial,
-            applied_limit = output.applied_limit.unwrap_or(0),
-            applied_offset = output.applied_offset.unwrap_or(0),
-            "grep completed"
-        );
-        return Ok(Some(output));
-    }
-    let (filenames, applied_limit, applied_offset) =
-        apply_limit(filenames, input.head_limit, input.offset);
+    let lines = matches
+        .iter()
+        .take(100)
+        .map(|item| {
+            format!(
+                "{}:{}:{}",
+                item.path.to_string_lossy(),
+                item.line_number,
+                truncate_grep_line(item.line.trim_end_matches(['\r', '\n']))
+            )
+        })
+        .collect::<Vec<_>>();
     let output = GrepSearchOutput {
-        mode: Some(output_mode.to_string()),
+        mode: Some(String::from("content")),
         num_files: filenames.len(),
         filenames,
-        content: None,
-        num_lines: None,
+        content: Some(lines.join("\n")),
+        num_lines: Some(lines.len()),
         num_matches: None,
-        applied_limit,
-        applied_offset,
+        applied_limit: Some(100),
+        applied_offset: Some(0),
     };
     tracing::info!(
         target: "relay.runtime.search",
@@ -969,6 +896,7 @@ fn grep_with_rg(
         backend = "rg",
         mode = ?output.mode,
         num_files = output.num_files,
+        num_lines = output.num_lines.unwrap_or(0),
         partial = result.partial,
         applied_limit = output.applied_limit.unwrap_or(0),
         applied_offset = output.applied_offset.unwrap_or(0),
@@ -977,35 +905,26 @@ fn grep_with_rg(
     Ok(Some(output))
 }
 
-fn grep_fallback(
-    input: &GrepSearchInput,
-    base_path: &Path,
-    output_mode: &str,
-) -> io::Result<GrepSearchOutput> {
+fn grep_fallback(input: &GrepSearchInput, base_path: &Path) -> io::Result<GrepSearchOutput> {
     let regex = RegexBuilder::new(&input.pattern)
-        .case_insensitive(input.case_insensitive.unwrap_or(false))
-        .dot_matches_new_line(input.multiline.unwrap_or(false))
         .build()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
 
     let glob_filter = input
-        .glob
+        .include
         .as_deref()
         .map(Pattern::new)
         .transpose()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-    let file_type = input.file_type.as_deref();
-    let context = input.context.or(input.context_short).unwrap_or(0);
 
     let mut filenames = Vec::new();
     let mut content_lines = Vec::new();
-    let mut total_matches = 0usize;
 
     let mut search_files = collect_search_files(base_path, input)?;
     sort_paths_by_modified_desc(&mut search_files);
 
     for file_path in search_files {
-        if !matches_optional_filters(&file_path, glob_filter.as_ref(), file_type) {
+        if !matches_optional_filters(&file_path, glob_filter.as_ref()) {
             continue;
         }
 
@@ -1013,30 +932,11 @@ fn grep_fallback(
             continue;
         };
 
-        if output_mode == "count" {
-            let count = match input.max_count {
-                Some(max_count) => regex.find_iter(&file_contents).take(max_count).count(),
-                None => regex.find_iter(&file_contents).count(),
-            };
-            if count > 0 {
-                filenames.push(file_path.to_string_lossy().into_owned());
-                total_matches += count;
-            }
-            continue;
-        }
-
         let lines: Vec<&str> = file_contents.lines().collect();
         let mut matched_lines = Vec::new();
         for (index, line) in lines.iter().enumerate() {
             if regex.is_match(line) {
-                total_matches += 1;
                 matched_lines.push(index);
-                if input
-                    .max_count
-                    .is_some_and(|max_count| matched_lines.len() >= max_count)
-                {
-                    break;
-                }
             }
         }
 
@@ -1045,62 +945,25 @@ fn grep_fallback(
         }
 
         filenames.push(file_path.to_string_lossy().into_owned());
-        if output_mode == "content" {
-            for index in matched_lines {
-                let start = index.saturating_sub(input.before.unwrap_or(context));
-                let end = (index + input.after.unwrap_or(context) + 1).min(lines.len());
-                for (current, line) in lines.iter().enumerate().take(end).skip(start) {
-                    let prefix = if input.line_numbers.unwrap_or(true) {
-                        format!("{}:{}:", file_path.to_string_lossy(), current + 1)
-                    } else {
-                        format!("{}:", file_path.to_string_lossy())
-                    };
-                    content_lines.push(format!("{prefix}{}", truncate_grep_line(line)));
-                }
-            }
+        for index in matched_lines {
+            content_lines.push(format!(
+                "{}:{}:{}",
+                file_path.to_string_lossy(),
+                index + 1,
+                truncate_grep_line(lines[index])
+            ));
         }
     }
 
-    let (filenames, applied_limit, applied_offset) =
-        apply_limit(filenames, input.head_limit, input.offset);
-    let content_output = if output_mode == "content" {
-        let (lines, limit, offset) = apply_limit(
-            content_lines,
-            Some(input.head_limit.unwrap_or(100)),
-            input.offset,
-        );
-        let output = GrepSearchOutput {
-            mode: Some(output_mode.to_string()),
-            num_files: filenames.len(),
-            filenames,
-            num_lines: Some(lines.len()),
-            content: Some(lines.join("\n")),
-            num_matches: None,
-            applied_limit: limit,
-            applied_offset: offset,
-        };
-        tracing::info!(
-            target: "relay.runtime.search",
-            tool = "grep",
-            mode = ?output.mode,
-            num_files = output.num_files,
-            num_lines = output.num_lines.unwrap_or(0),
-            applied_limit = output.applied_limit.unwrap_or(0),
-            applied_offset = output.applied_offset.unwrap_or(0),
-            "grep completed"
-        );
-        return Ok(output);
-    } else {
-        None
-    };
-
+    let (content_lines, applied_limit, applied_offset) =
+        apply_limit(content_lines, Some(100), Some(0));
     let output = GrepSearchOutput {
-        mode: Some(output_mode.to_string()),
+        mode: Some(String::from("content")),
         num_files: filenames.len(),
         filenames,
-        content: content_output,
-        num_lines: None,
-        num_matches: (output_mode == "count").then_some(total_matches),
+        content: Some(content_lines.join("\n")),
+        num_lines: Some(content_lines.len()),
+        num_matches: None,
         applied_limit,
         applied_offset,
     };
@@ -1109,7 +972,7 @@ fn grep_fallback(
         tool = "grep",
         mode = ?output.mode,
         num_files = output.num_files,
-        num_matches = output.num_matches.unwrap_or(0),
+        num_lines = output.num_lines.unwrap_or(0),
         applied_limit = output.applied_limit.unwrap_or(0),
         applied_offset = output.applied_offset.unwrap_or(0),
         "grep completed"
@@ -1136,32 +999,25 @@ fn collect_search_files(base_path: &Path, input: &GrepSearchInput) -> io::Result
     }
 
     let globs = input
-        .glob
+        .include
         .as_ref()
         .map(|glob| vec![glob.clone()])
         .unwrap_or_default();
-    let mut rg_options = search_backend::RgFilesOptions::new(&globs, usize::MAX);
-    rg_options.hidden = input.hidden.unwrap_or(true);
-    rg_options.follow = input.follow.unwrap_or(false);
-    rg_options.max_depth = input.max_depth;
-    if let Some(result) = search_backend::rg_files(base_path, rg_options)? {
+    if let Some(result) = search_backend::rg_files(
+        base_path,
+        search_backend::RgFilesOptions::new(&globs, usize::MAX),
+    )? {
         return Ok(result.files);
     }
 
     let mut files = Vec::new();
-    let mut walker = WalkDir::new(base_path).follow_links(input.follow.unwrap_or(false));
-    if let Some(max_depth) = input.max_depth {
-        walker = walker.max_depth(max_depth);
-    }
+    let walker = WalkDir::new(base_path);
     for entry in walker.into_iter().filter_entry(|entry| {
         let path = entry.path();
         !is_ignored_search_path(path)
-            && (input.hidden.unwrap_or(true) || !is_hidden_search_path(base_path, path))
     }) {
         let entry = entry.map_err(|error| io::Error::other(error.to_string()))?;
-        if entry.file_type().is_file()
-            && (input.hidden.unwrap_or(true) || !is_hidden_search_path(base_path, entry.path()))
-        {
+        if entry.file_type().is_file() {
             files.push(entry.path().to_path_buf());
         }
     }
@@ -1212,11 +1068,7 @@ fn truncate_grep_line(line: &str) -> String {
     format!("{}...", &line[..end])
 }
 
-fn matches_optional_filters(
-    path: &Path,
-    glob_filter: Option<&Pattern>,
-    file_type: Option<&str>,
-) -> bool {
+fn matches_optional_filters(path: &Path, glob_filter: Option<&Pattern>) -> bool {
     if let Some(glob_filter) = glob_filter {
         let path_string = path.to_string_lossy();
         let filename_matches = path
@@ -1227,13 +1079,6 @@ fn matches_optional_filters(
             && !glob_filter.matches_path(path)
             && !filename_matches
         {
-            return false;
-        }
-    }
-
-    if let Some(file_type) = file_type {
-        let extension = path.extension().and_then(|extension| extension.to_str());
-        if extension != Some(file_type) {
             return false;
         }
     }
@@ -1502,22 +1347,7 @@ mod tests {
         let grep_output = grep(&GrepSearchInput {
             pattern: String::from("hello"),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("**/*.rs")),
-            output_mode: Some(String::from("content")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: Some(String::from("**/*.rs")),
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
@@ -1588,11 +1418,20 @@ mod tests {
     }
 
     #[test]
-    fn grep_accepts_opencode_include_alias() {
+    fn grep_accepts_opencode_include() {
         let input: GrepSearchInput =
             serde_json::from_str(r#"{"pattern":"hello","path":"src","include":"*.rs"}"#)
-                .expect("include alias should deserialize");
-        assert_eq!(input.glob.as_deref(), Some("*.rs"));
+                .expect("include should deserialize");
+        assert_eq!(input.include.as_deref(), Some("*.rs"));
+    }
+
+    #[test]
+    fn grep_rejects_legacy_compatibility_fields() {
+        let error = serde_json::from_str::<GrepSearchInput>(
+            r#"{"pattern":"hello","path":"src","glob":"*.rs","output_mode":"count","-i":true}"#,
+        )
+        .expect_err("legacy compatibility fields should be rejected");
+        assert!(error.to_string().contains("unknown field"));
     }
 
     #[test]
@@ -1621,22 +1460,7 @@ mod tests {
         let output = grep(&GrepSearchInput {
             pattern: String::from("needle"),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("*.txt")),
-            output_mode: None,
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: None,
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: Some(String::from("*.txt")),
         })
         .expect("grep should succeed");
 
@@ -1661,22 +1485,7 @@ mod tests {
         let output = grep(&GrepSearchInput {
             pattern: String::from("needle"),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("*.txt")),
-            output_mode: Some(String::from("files_with_matches")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: Some(String::from("*.txt")),
         })
         .expect("grep should succeed");
 
@@ -1697,22 +1506,7 @@ mod tests {
         let output = grep(&GrepSearchInput {
             pattern: String::from("needle"),
             path: Some(wanted.to_string_lossy().into_owned()),
-            glob: None,
-            output_mode: Some(String::from("content")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: None,
         })
         .expect("grep should succeed");
 
@@ -1724,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn grep_rg_options_support_hidden_max_depth_and_max_count() {
+    fn grep_uses_opencode_fixed_content_behavior() {
         let dir = temp_path("grep-rg-options");
         let nested = dir.join("nested");
         std::fs::create_dir_all(&nested).expect("nested directory should be created");
@@ -1735,30 +1529,15 @@ mod tests {
         let output = grep(&GrepSearchInput {
             pattern: String::from("needle"),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("**/*.txt")),
-            output_mode: Some(String::from("content")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: Some(1),
-            hidden: Some(false),
-            max_count: Some(1),
+            include: Some(String::from("**/*.txt")),
         })
         .expect("grep should succeed");
 
         let content = output.content.expect("content output");
         assert!(content.contains("root.txt:1:needle one"));
-        assert!(!content.contains("needle two"));
-        assert!(!content.contains("nested.txt"));
-        assert!(!content.contains(".hidden.txt"));
+        assert!(content.contains("needle two"));
+        assert!(content.contains("nested.txt"));
+        assert!(content.contains(".hidden.txt"));
     }
 
     #[test]
@@ -1778,22 +1557,7 @@ mod tests {
         let grep_output = grep(&GrepSearchInput {
             pattern: String::from("needle"),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("*.txt")),
-            output_mode: Some(String::from("files_with_matches")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: Some(String::from("*.txt")),
         })
         .expect("grep should succeed");
         assert_eq!(grep_output.filenames.len(), 1);
@@ -1813,22 +1577,7 @@ mod tests {
         let err = grep(&GrepSearchInput {
             pattern: String::new(),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("*.txt")),
-            output_mode: Some(String::from("files_with_matches")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: Some(String::from("*.txt")),
         })
         .expect_err("empty pattern should be rejected");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -1845,22 +1594,7 @@ mod tests {
         let output = grep(&GrepSearchInput {
             pattern: String::from("needle"),
             path: Some(dir.to_string_lossy().into_owned()),
-            glob: Some(String::from("*.txt")),
-            output_mode: Some(String::from("content")),
-            before: None,
-            after: None,
-            context_short: None,
-            context: None,
-            line_numbers: Some(true),
-            case_insensitive: Some(false),
-            file_type: None,
-            head_limit: Some(10),
-            offset: Some(0),
-            multiline: Some(false),
-            follow: None,
-            max_depth: None,
-            hidden: None,
-            max_count: None,
+            include: Some(String::from("*.txt")),
         })
         .expect("grep should succeed");
 

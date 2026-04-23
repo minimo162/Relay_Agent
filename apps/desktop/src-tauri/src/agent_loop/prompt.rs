@@ -23,6 +23,7 @@ Relay already executed local search tools for this turn. Do not keep issuing `gl
 - If the user gives an exact file path, prefer `read` directly.
 - If the Tool Results contain matches, paths, anchors, previews, or errors, summarize those existing results for simple locate/list requests. For important conclusions, reviews, edits, comparisons, or recommendations, call `read` on the relevant top candidate(s) first; search snippets identify candidates but are not a substitute for file inspection.
 - A `glob` result with 0 files only means that filename pattern did not match. It does not negate content matches from `grep` or Office/PDF content matches from `office_search`.
+- If an `office_search` Tool Result already exists, do not emit another `office_search` just to vary spelling, wildcard, path, or `include_ext`. Summarize the existing Office/PDF matches, or call `read` on the best candidate(s) if deeper evidence is needed.
 - If search snippets and `read` content conflict, treat `read` as authoritative evidence.
 - After `read`, final answers for file judgments should cite the evidence path and line anchor or startLine when available.
 - If every search result is empty, at most one additional non-overlapping search batch is allowed; otherwise stop searching and answer from the evidence above.

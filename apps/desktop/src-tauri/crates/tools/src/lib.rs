@@ -142,7 +142,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "write" => ToolMetadata {
             approval_title: Some("Create or overwrite a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
-            risky_fields: &["filePath", "path"],
+            risky_fields: &["filePath"],
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
@@ -150,7 +150,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "edit" => ToolMetadata {
             approval_title: Some("Edit a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
-            risky_fields: &["filePath", "path", "replaceAll", "replace_all"],
+            risky_fields: &["filePath", "replaceAll"],
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
@@ -286,11 +286,7 @@ impl ToolCatalog {
                 .iter()
                 .map(|spec| ToolManifestEntry {
                     name: spec.name.to_string(),
-                    source: if matches!(spec.name, "EnterPlanMode" | "ExitPlanMode") {
-                        ToolSource::Conditional
-                    } else {
-                        ToolSource::Base
-                    },
+                    source: ToolSource::Base,
                 })
                 .collect(),
         );
@@ -325,15 +321,9 @@ impl ToolCatalog {
 }
 
 static BASE_TOOL_CATALOG: OnceLock<ToolCatalog> = OnceLock::new();
-static COMPAT_TOOL_CATALOG: OnceLock<ToolCatalog> = OnceLock::new();
-
 #[must_use]
 fn tool_catalog() -> &'static ToolCatalog {
-    if compat_tool_surface_enabled() {
-        COMPAT_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_mvp_tool_specs(true)))
-    } else {
-        BASE_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_mvp_tool_specs(false)))
-    }
+    BASE_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_mvp_tool_specs()))
 }
 
 #[must_use]
@@ -480,15 +470,13 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
                 .filter(|key| {
                     !matches!(
                         key.as_str(),
-                        "dangerously_disable_sandbox"
-                            | "dangerouslyDisableSandbox"
+                        "dangerouslyDisableSandbox"
                             | "backgroundedBy"
                             | "namespaceRestrictions"
                             | "isolateNetwork"
                             | "allowedMounts"
                             | "serverName"
                             | "task_id"
-                            | "file_path"
                     )
                 })
                 .cloned()
@@ -698,21 +686,8 @@ impl ToolSpec {
 }
 
 #[must_use]
-fn compat_tool_surface_enabled() -> bool {
-    matches!(
-        std::env::var("RELAY_COMPAT_MODE")
-            .ok()
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("1" | "true" | "on" | "yes" | "compat")
-    )
-}
-
-#[must_use]
 #[allow(clippy::too_many_lines)]
-fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
+fn build_mvp_tool_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         ToolSpec {
             name: "invalid",
@@ -740,7 +715,6 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                     "run_in_background": { "type": "boolean" },
                     "backgroundedBy": { "type": "string", "enum": ["user", "assistant", "system"] },
                     "dangerouslyDisableSandbox": { "type": "boolean" },
-                    "dangerously_disable_sandbox": { "type": "boolean", "description": "Claw-style alias (stripped before execution in Relay for security)" },
                     "namespaceRestrictions": { "type": "boolean" },
                     "isolateNetwork": { "type": "boolean" },
                     "filesystemMode": { "type": "string", "enum": ["off", "workspace-only", "allow-list"] },
@@ -838,7 +812,6 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Concrete file paths or glob patterns such as reports/**/*.xlsx" },
                     "regex": { "type": "boolean", "description": "When true, treat pattern as a regex. Defaults to false literal substring search." },
                     "include_ext": { "type": "array", "items": { "type": "string", "enum": ["docx", "xlsx", "xlsm", "pptx", "pdf", ".docx", ".xlsx", ".xlsm", ".pptx", ".pdf"] } },
-                    "-i": { "type": "boolean" },
                     "context": { "type": "integer", "minimum": 0 },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
                     "max_files": { "type": "integer", "minimum": 1, "maximum": 1000 }
@@ -1557,30 +1530,6 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
     ]);
-    if compat_mode {
-        specs.extend(vec![
-            ToolSpec {
-                name: "EnterPlanMode",
-                description: "Compat hook only. Relay sessions stay in one standard posture; continue in the current chat.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                required_permission: PermissionMode::WorkspaceWrite,
-            },
-            ToolSpec {
-                name: "ExitPlanMode",
-                description: "Compat hook only. Relay sessions stay in one standard posture; continue in the current chat.",
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-                required_permission: PermissionMode::WorkspaceWrite,
-            },
-        ]);
-    }
     specs
 }
 
@@ -1590,17 +1539,6 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
 }
 
 pub use approval::approval_display_for_tool;
-
-/// JSON for claw-style `EnterPlanMode` / `ExitPlanMode` when session posture cannot change mid-loop.
-#[must_use]
-pub fn plan_mode_tool_json(entering: bool) -> Value {
-    json!({
-        "ok": false,
-        "entering": entering,
-        "error": "Relay: session posture is fixed for the current chat. Continue in the same conversation.",
-        "errorJa": "Relay: 現在の会話ではセッション姿勢は固定です。同じ会話を続けてください。"
-    })
-}
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     match name {
@@ -1626,12 +1564,6 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
         "SendUserMessage" | "Brief" => from_value::<BriefInput>(input).and_then(run_brief),
         "Config" => from_value::<ConfigInput>(input).and_then(run_config),
-        "EnterPlanMode" => {
-            serde_json::to_string_pretty(&plan_mode_tool_json(true)).map_err(|e| e.to_string())
-        }
-        "ExitPlanMode" => {
-            serde_json::to_string_pretty(&plan_mode_tool_json(false)).map_err(|e| e.to_string())
-        }
         "StructuredOutput" => {
             from_value::<StructuredOutputInput>(input).and_then(run_structured_output)
         }
@@ -1720,12 +1652,9 @@ fn run_bash(input: BashCommandInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_read(input: ReadFileInput) -> Result<String, String> {
-    let path = input
-        .file_path
-        .ok_or_else(|| String::from("read requires filePath"))?;
     to_pretty_json(
         read(
-            &path,
+            &input.file_path,
             input.offset,
             input.limit,
             input.pages.as_deref(),
@@ -1760,11 +1689,7 @@ fn run_glob(input: GlobSearchInputValue) -> Result<String, String> {
         glob_with_options(
             &input.pattern,
             input.path.as_deref(),
-            &GlobSearchOptions {
-                follow: input.follow,
-                max_depth: input.max_depth,
-                hidden: input.hidden,
-            },
+            &GlobSearchOptions::default(),
         )
         .map_err(io_to_string)?,
     )
@@ -2020,9 +1945,10 @@ fn io_to_string(error: std::io::Error) -> String {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReadFileInput {
-    #[serde(default, rename = "filePath", alias = "path", alias = "file_path")]
-    file_path: Option<String>,
+    #[serde(rename = "filePath")]
+    file_path: String,
     #[serde(default)]
     offset: Option<usize>,
     limit: Option<usize>,
@@ -2032,8 +1958,9 @@ struct ReadFileInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WriteFileInput {
-    #[serde(rename = "filePath", alias = "path", alias = "file_path")]
+    #[serde(rename = "filePath")]
     file_path: String,
     content: String,
 }
@@ -2057,25 +1984,23 @@ struct PdfSplitInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EditFileInput {
-    #[serde(rename = "filePath", alias = "path", alias = "file_path")]
+    #[serde(rename = "filePath")]
     file_path: String,
-    #[serde(rename = "oldString", alias = "old_string")]
+    #[serde(rename = "oldString")]
     old_string: String,
-    #[serde(rename = "newString", alias = "new_string")]
+    #[serde(rename = "newString")]
     new_string: String,
-    #[serde(rename = "replaceAll", alias = "replace_all")]
+    #[serde(rename = "replaceAll")]
     replace_all: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GlobSearchInputValue {
     pattern: String,
     path: Option<String>,
-    follow: Option<bool>,
-    #[serde(rename = "max_depth", alias = "maxDepth")]
-    max_depth: Option<usize>,
-    hidden: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4064,9 +3989,6 @@ mod tests {
 
     #[test]
     fn exposes_mvp_tools() {
-        let _guard = env_lock().lock().expect("env lock");
-        let original = std::env::var("RELAY_COMPAT_MODE").ok();
-        std::env::remove_var("RELAY_COMPAT_MODE");
         let names = mvp_tool_specs()
             .into_iter()
             .map(|spec| spec.name)
@@ -4103,9 +4025,6 @@ mod tests {
         assert!(names.contains(&"PowerShell"));
         #[cfg(not(windows))]
         assert!(!names.contains(&"PowerShell"));
-        if let Some(value) = original {
-            std::env::set_var("RELAY_COMPAT_MODE", value);
-        }
     }
 
     #[test]
@@ -4122,7 +4041,7 @@ mod tests {
 
         let write = tool_metadata("write");
         assert_eq!(write.approval_title, Some("Create or overwrite a file?"));
-        assert_eq!(write.risky_fields, &["filePath", "path"]);
+        assert_eq!(write.risky_fields, &["filePath"]);
         assert!(!write.tool_search_visible);
         assert_eq!(write.cdp_visibility, CdpToolVisibility::Core);
 
@@ -4396,55 +4315,18 @@ mod tests {
     }
 
     #[test]
-    fn exposes_plan_mode_tools_in_compat_mode() {
-        let _guard = env_lock().lock().expect("env lock");
-        let original = std::env::var("RELAY_COMPAT_MODE").ok();
-        std::env::set_var("RELAY_COMPAT_MODE", "1");
-        let names = mvp_tool_specs()
-            .into_iter()
-            .map(|spec| spec.name)
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"EnterPlanMode"));
-        assert!(names.contains(&"ExitPlanMode"));
-        if let Some(value) = original {
-            std::env::set_var("RELAY_COMPAT_MODE", value);
-        } else {
-            std::env::remove_var("RELAY_COMPAT_MODE");
-        }
-    }
-
-    #[test]
-    fn cached_tool_registry_marks_conditional_entries() {
-        let _guard = env_lock().lock().expect("env lock");
-        let original = std::env::var("RELAY_COMPAT_MODE").ok();
-        std::env::set_var("RELAY_COMPAT_MODE", "1");
-
+    fn cached_tool_registry_uses_base_entries_only() {
         let registry = tool_registry();
         let entries = registry.entries();
 
-        let enter_plan = entries
-            .iter()
-            .find(|entry| entry.name == "EnterPlanMode")
-            .expect("EnterPlanMode entry");
-        assert_eq!(enter_plan.source, ToolSource::Conditional);
-
-        let exit_plan = entries
-            .iter()
-            .find(|entry| entry.name == "ExitPlanMode")
-            .expect("ExitPlanMode entry");
-        assert_eq!(exit_plan.source, ToolSource::Conditional);
+        assert!(!entries.iter().any(|entry| entry.name == "EnterPlanMode"));
+        assert!(!entries.iter().any(|entry| entry.name == "ExitPlanMode"));
 
         let bash = entries
             .iter()
             .find(|entry| entry.name == "bash")
             .expect("bash entry");
         assert_eq!(bash.source, ToolSource::Base);
-
-        if let Some(value) = original {
-            std::env::set_var("RELAY_COMPAT_MODE", value);
-        } else {
-            std::env::remove_var("RELAY_COMPAT_MODE");
-        }
     }
 
     #[test]
@@ -5331,7 +5213,7 @@ mod tests {
 
         let write_create = execute_tool(
             "write",
-            &json!({ "path": "nested/demo.txt", "content": "alpha\nbeta\nalpha\n" }),
+            &json!({ "filePath": "nested/demo.txt", "content": "alpha\nbeta\nalpha\n" }),
         )
         .expect("write create should succeed");
         let write_create_output: serde_json::Value =
@@ -5349,40 +5231,39 @@ mod tests {
         assert_eq!(write_update_output["type"], "update");
         assert_eq!(write_update_output["originalFile"], "alpha\nbeta\nalpha\n");
 
-        let read_full = execute_tool("read", &json!({ "path": "nested/demo.txt" }))
+        let read_full = execute_tool("read", &json!({ "filePath": "nested/demo.txt" }))
             .expect("read full should succeed");
         let read_full_output: serde_json::Value = serde_json::from_str(&read_full).expect("json");
         assert_eq!(read_full_output["file"]["content"], "alpha\nbeta\ngamma");
         assert_eq!(read_full_output["file"]["startLine"], 1);
 
-        let read_via_file_path = execute_tool(
+        let read_legacy_file_path = execute_tool(
             "read",
             &json!({ "file_path": "nested/demo.txt", "offset": 0, "limit": 2 }),
         )
-        .expect("read via file_path should succeed");
-        let read_via_file_path_output: serde_json::Value =
-            serde_json::from_str(&read_via_file_path).expect("json");
-        assert_eq!(read_via_file_path_output["file"]["content"], "alpha\nbeta");
-        assert_eq!(read_via_file_path_output["file"]["startLine"], 1);
+        .expect_err("read should reject file_path compatibility input");
+        assert!(read_legacy_file_path.contains("unknown field"));
 
         let read_slice = execute_tool(
             "read",
-            &json!({ "path": "nested/demo.txt", "offset": 1, "limit": 1 }),
+            &json!({ "filePath": "nested/demo.txt", "offset": 1, "limit": 1 }),
         )
         .expect("read slice should succeed");
         let read_slice_output: serde_json::Value = serde_json::from_str(&read_slice).expect("json");
         assert_eq!(read_slice_output["file"]["content"], "beta");
         assert_eq!(read_slice_output["file"]["startLine"], 2);
 
-        let read_past_end =
-            execute_tool("read", &json!({ "path": "nested/demo.txt", "offset": 50 }))
-                .expect("read past EOF should succeed");
+        let read_past_end = execute_tool(
+            "read",
+            &json!({ "filePath": "nested/demo.txt", "offset": 50 }),
+        )
+        .expect("read past EOF should succeed");
         let read_past_end_output: serde_json::Value =
             serde_json::from_str(&read_past_end).expect("json");
         assert_eq!(read_past_end_output["file"]["content"], "");
         assert_eq!(read_past_end_output["file"]["startLine"], 4);
 
-        let read_error = execute_tool("read", &json!({ "path": "missing.txt" }))
+        let read_error = execute_tool("read", &json!({ "filePath": "missing.txt" }))
             .expect_err("missing file should fail");
         assert!(read_error.contains("No such file or directory"));
         assert!(read_error.contains("resolved path:"));
@@ -5402,7 +5283,7 @@ mod tests {
 
         execute_tool(
             "write",
-            &json!({ "path": "nested/demo.txt", "content": "alpha\nbeta\nalpha\n" }),
+            &json!({ "filePath": "nested/demo.txt", "content": "alpha\nbeta\nalpha\n" }),
         )
         .expect("reset file");
         let edit_all = execute_tool(
@@ -5424,14 +5305,14 @@ mod tests {
 
         let edit_same = execute_tool(
             "edit",
-            &json!({ "path": "nested/demo.txt", "old_string": "omega", "new_string": "omega" }),
+            &json!({ "filePath": "nested/demo.txt", "oldString": "omega", "newString": "omega" }),
         )
         .expect_err("identical old/new should fail");
         assert!(edit_same.contains("must differ"));
 
         let edit_missing = execute_tool(
             "edit",
-            &json!({ "path": "nested/demo.txt", "old_string": "missing", "new_string": "omega" }),
+            &json!({ "filePath": "nested/demo.txt", "oldString": "missing", "newString": "omega" }),
         )
         .expect_err("missing substring should fail");
         assert!(edit_missing.contains("old_string not found"));
@@ -5478,31 +5359,26 @@ mod tests {
             &json!({
                 "pattern": "alpha",
                 "path": "nested",
-                "glob": "*.rs",
-                "output_mode": "content",
-                "-n": true,
-                "head_limit": 1,
-                "offset": 1
+                "include": "*.rs"
             }),
         )
         .expect("grep content should succeed");
         let grep_content_output: serde_json::Value =
             serde_json::from_str(&grep_content).expect("json");
         assert_eq!(grep_content_output["numFiles"], 1);
-        assert!(grep_content_output["appliedLimit"].is_null());
-        assert_eq!(grep_content_output["appliedOffset"], 1);
+        assert_eq!(grep_content_output["appliedLimit"], 100);
+        assert_eq!(grep_content_output["appliedOffset"], 0);
         assert!(grep_content_output["content"]
             .as_str()
             .expect("content")
-            .contains("let alpha = 2;"));
+            .contains("let alpha = 1;"));
 
-        let grep_count = execute_tool(
+        let grep_legacy_mode = execute_tool(
             "grep",
             &json!({ "pattern": "alpha", "path": "nested", "output_mode": "count" }),
         )
-        .expect("grep count should succeed");
-        let grep_count_output: serde_json::Value = serde_json::from_str(&grep_count).expect("json");
-        assert_eq!(grep_count_output["numMatches"], 3);
+        .expect_err("grep should reject legacy output_mode input");
+        assert!(grep_legacy_mode.contains("unknown field"));
 
         let grep_error = execute_tool("grep", &json!({ "pattern": "(alpha", "path": "nested" }))
             .expect_err("invalid regex should fail");

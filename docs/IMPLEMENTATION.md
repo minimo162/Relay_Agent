@@ -15,6 +15,49 @@
 
 ## Milestone Log
 
+### 2026-04-23 opencode-aligned Office search retry suppression
+
+Reviewed the follow-up `tauri:dev` log from the M365 CDP path against
+`anomalyco/opencode` HEAD `1026791076c6a4edf1d44422177e13d06c2930d6`.
+The remaining divergence was a Relay-only Office/PDF search retry: Copilot first
+emitted `office_search` with `include_ext` containing unsupported legacy `xls`,
+then received a short tool result and retried with a near-identical
+`office_search` call without `xls`. opencode's loop keeps tool inputs small and
+continues from tool evidence instead of repeatedly refining search tool calls.
+
+Changes:
+
+- `office_search` now tolerates mixed supported/unsupported `include_ext`
+  values by keeping supported extensions and dropping unsupported ones. A filter
+  containing only unsupported entries still errors, so unsupported legacy `.xls`
+  is not silently treated as readable.
+- The CDP local-search continuation guard now explicitly says that once an
+  `office_search` result exists, Copilot should summarize existing Office/PDF
+  matches or `read` top candidates instead of varying spelling, wildcard, path,
+  or `include_ext`.
+- The post-turn loop now detects a valid repeated `office_search` tool request
+  after a successful `office_search` result and converts it to a tool-result
+  summary repair, matching opencode's evidence-first fallback instead of
+  continuing Relay-specific search churn.
+- `office_search` candidate ordering now stays modification-time-first, matching
+  opencode `glob` / `grep` output ordering. The previous Relay-only
+  path-relevance resort could lift old files above newer candidates before the
+  `max_files` cutoff.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_prefers_recent_candidates_before_max_files_cutoff -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml sort_candidates_by_modified_desc_prefers_recent_over_path_relevance -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates_orders_by_modified_time_desc -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_ -- --nocapture`: passed, 7 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml repeated_office_search_after_results_escalates_to_summary_repair -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_results_add_continuation_guard -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 8 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-23 compact Office search and CDP tail prompts
 
 Reviewed the live `tauri:dev` log from the M365 CDP path and current
@@ -8874,6 +8917,51 @@ Results:
 - `cargo test ... tools required_permission_for_surface_preserves_current_policy`: passed, 1 passed.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
 - `git diff --check`: passed.
+
+## 2026-04-23 - OpenCode-shaped tool inputs and compatibility removal
+
+Aligned local tool inputs more closely with OpenCode-style shapes and removed
+Relay compatibility receptacles that could hide invalid model output.
+
+- `read` / `write` / `edit` execution now accepts only canonical camelCase
+  file-tool inputs (`filePath`, `oldString`, `newString`, `replaceAll`) and
+  rejects `path`, `file_path`, `old_string`, `new_string`, and `replace_all`
+  through strict serde input structs.
+- `grep` now exposes and executes the compact OpenCode shape only:
+  `pattern`, optional `path`, and optional `include`. Relay-only knobs such as
+  `glob`, `output_mode`, line/context flags, case-insensitive flags,
+  `max_depth`, `hidden`, and `max_count` were removed from the tool input.
+- `office_search` no longer accepts the `-i` compatibility flag; matching is
+  deterministic and candidate ordering remains modified-time-first.
+- Removed execution/catalog compatibility hooks for `RELAY_COMPAT_MODE`,
+  `EnterPlanMode`, and `ExitPlanMode`.
+- Removed MCP legacy qualified-name aliases; MCP calls now resolve only through
+  the hashed canonical `mcp__...` names.
+- Removed path/key alias normalization from CDP duplicate detection,
+  workspace-path enforcement, read-path tracking, approval display, and
+  turn-level dedup keys.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture
+cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture
+cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+pnpm check
+```
+
+Results so far:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 45 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 169 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 184 passed, 1 ignored; doctor CLI 5 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
 
 ## 2026-04-20 - Local search budget summary repair
 

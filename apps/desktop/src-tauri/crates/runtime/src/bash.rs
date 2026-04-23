@@ -20,6 +20,7 @@ use crate::tool_hard_denylist::validate_bash_hard_deny;
 use crate::{ConfigLoader, ResolvedPermissionMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct BashCommandInput {
     pub command: String,
     pub timeout: Option<u64>,
@@ -28,10 +29,7 @@ pub struct BashCommandInput {
     pub run_in_background: Option<bool>,
     #[serde(rename = "backgroundedBy")]
     pub backgrounded_by: Option<BackgroundedBy>,
-    #[serde(
-        rename = "dangerouslyDisableSandbox",
-        alias = "dangerously_disable_sandbox"
-    )]
+    #[serde(rename = "dangerouslyDisableSandbox")]
     pub dangerously_disable_sandbox: Option<bool>,
     #[serde(rename = "namespaceRestrictions")]
     pub namespace_restrictions: Option<bool>,

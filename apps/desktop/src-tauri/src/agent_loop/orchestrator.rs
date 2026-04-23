@@ -1087,13 +1087,13 @@ fn fake_smoke_tool_reply(scenario: &FakeSmokeScenario) -> Result<String, Runtime
         {
             "name": "read",
             "input": {
-                "path": scenario.source_path,
+                "filePath": scenario.source_path,
             }
         },
         {
             "name": "write",
             "input": {
-                "path": scenario.output_path,
+                "filePath": scenario.output_path,
                 "content": scenario.expected_output,
             }
         }
@@ -1518,7 +1518,7 @@ fn compact_standard_cdp_system_prompt(system_prompt: &[String]) -> String {
 const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Agent's model
 
 - User messages are sent from the **Relay Agent** Tauri desktop app through Microsoft Edge (M365 Copilot over CDP). Your reply returns to that same Relay session.
-- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object; Relay requires that sentinel by default and only relaxes it when explicitly configured for compatibility.
+- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object; Relay requires that sentinel.
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
 - **Do not use M365 Copilot built-in actions as the execution path:** no Copilot enterprise/web search, citations such as `turn1search` or `cite`, Python/code execution, Pages, file uploads, or hidden Agent/sub-agent tools. For workspace files, Office/PDF documents, and local searches, the only valid execution path is a parsed Relay tool call from this reply.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
@@ -1822,7 +1822,7 @@ fn salvage_generated_write_from_reply(text: &str) -> Option<(String, (String, St
         "name": "write",
         "relay_tool_call": true,
         "input": {
-            "path": path,
+            "filePath": path,
             "content": content,
         }
     });
@@ -2252,44 +2252,8 @@ fn sort_json_value_for_dedup(v: Value) -> Value {
 
 /// Clone of tool `input` used only for duplicate detection (does not change executed payloads).
 fn normalize_tool_input_for_dedup_key(tool_name: &str, input: &Value) -> Value {
-    let mut v = input.clone();
-    if matches!(tool_name, "read") {
-        if let Some(obj) = v.as_object_mut() {
-            let merged_path = obj
-                .get("filePath")
-                .cloned()
-                .or_else(|| obj.get("path").cloned())
-                .or_else(|| obj.get("file_path").cloned());
-            if let Some(p) = merged_path {
-                obj.remove("filePath");
-                obj.remove("file_path");
-                obj.insert("path".to_string(), p);
-            }
-        }
-    } else if matches!(tool_name, "write" | "edit") {
-        if let Some(obj) = v.as_object_mut() {
-            let merged_path = obj
-                .get("filePath")
-                .cloned()
-                .or_else(|| obj.get("path").cloned())
-                .or_else(|| obj.get("file_path").cloned());
-            if let Some(p) = merged_path {
-                obj.remove("filePath");
-                obj.remove("file_path");
-                obj.insert("path".to_string(), p);
-            }
-            if let Some(old) = obj.remove("old_string") {
-                obj.entry("oldString".to_string()).or_insert(old);
-            }
-            if let Some(new) = obj.remove("new_string") {
-                obj.entry("newString".to_string()).or_insert(new);
-            }
-            if let Some(replace_all) = obj.remove("replace_all") {
-                obj.entry("replaceAll".to_string()).or_insert(replace_all);
-            }
-        }
-    }
-    sort_json_value_for_dedup(v)
+    let _ = tool_name;
+    sort_json_value_for_dedup(input.clone())
 }
 
 /// Drop repeated tool calls that would trigger redundant approvals (same tool + same normalized input).
@@ -2667,14 +2631,12 @@ fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
     };
     let is_html_path = obj
         .get("filePath")
-        .or_else(|| obj.get("path"))
-        .or_else(|| obj.get("file_path"))
         .and_then(Value::as_str)
         .is_some_and(is_html_file_path);
     if !is_html_path {
         return;
     }
-    for key in ["content", "newString", "new_string"] {
+    for key in ["content", "newString"] {
         let Some(current) = obj.get(key).and_then(Value::as_str) else {
             continue;
         };
@@ -2862,10 +2824,7 @@ fn summarize_read_tool_result(output: &str) -> Option<String> {
     let kind = object.get("type").and_then(Value::as_str).unwrap_or("file");
     let file = object.get("file")?.as_object()?;
     let content = file.get("content").and_then(Value::as_str)?;
-    let file_path = file
-        .get("filePath")
-        .and_then(Value::as_str)
-        .or_else(|| file.get("file_path").and_then(Value::as_str));
+    let file_path = file.get("filePath").and_then(Value::as_str);
 
     let mut lines = Vec::new();
     if let Some(path) = file_path {
@@ -2956,12 +2915,8 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
         vec!["CDP follow-up summary: local file mutation already executed.".to_string()];
     lines.push(format!("tool: {tool_name}"));
     lines.push("status: ok".to_string());
-    if let Some(path) = object
-        .get("filePath")
-        .or_else(|| object.get("file_path"))
-        .and_then(Value::as_str)
-    {
-        lines.push(format!("file_path: {path}"));
+    if let Some(path) = object.get("filePath").and_then(Value::as_str) {
+        lines.push(format!("filePath: {path}"));
     }
     if let Some(kind) = object
         .get("type")
@@ -2970,19 +2925,14 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     {
         lines.push(format!("kind: {kind}"));
     }
-    if let Some(replace_all) = object
-        .get("replaceAll")
-        .or_else(|| object.get("replace_all"))
-        .and_then(Value::as_bool)
-    {
-        lines.push(format!("replace_all: {replace_all}"));
+    if let Some(replace_all) = object.get("replaceAll").and_then(Value::as_bool) {
+        lines.push(format!("replaceAll: {replace_all}"));
     }
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         lines.push(format!("content_chars: {}", content.len()));
         if matches!(tool_name, "write")
             && object
                 .get("filePath")
-                .or_else(|| object.get("file_path"))
                 .and_then(Value::as_str)
                 .is_some_and(is_html_file_path)
             && looks_like_decoded_html_document(content)
@@ -3462,14 +3412,13 @@ fn enforce_workspace_tool_paths(
 
     match tool_name {
         "read" => {
-            for key in ["filePath", "path", "file_path"] {
-                normalize_key(obj, key)?;
-            }
+            normalize_key(obj, "filePath")?;
         }
-        "write" | "edit" | "LSP" => {
-            for key in ["filePath", "path", "file_path"] {
-                normalize_key(obj, key)?;
-            }
+        "write" | "edit" => {
+            normalize_key(obj, "filePath")?;
+        }
+        "LSP" => {
+            normalize_key(obj, "path")?;
         }
         "glob" | "grep" | "git_status" | "git_diff" => {
             let has_path = obj
@@ -3647,12 +3596,6 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
             return r;
         }
 
-        if tool_name == "EnterPlanMode" || tool_name == "ExitPlanMode" {
-            let body = tools::plan_mode_tool_json(tool_name == "EnterPlanMode");
-            return serde_json::to_string_pretty(&body)
-                .map_err(|e| runtime::ToolError::new(e.to_string()));
-        }
-
         if tool_name == "AskUserQuestion" {
             return execute_ask_user_question_tool(
                 &self.app,
@@ -3723,7 +3666,7 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
         let mut input_value: Value =
             serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
         let original_read_path = if matches!(tool_name, "read") {
-            extract_path_like_input(&input_value, &["filePath", "path", "file_path"])
+            extract_path_like_input(&input_value, &["filePath"])
         } else {
             None
         };
@@ -3743,7 +3686,6 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
         if tool_name == "bash" {
             if let Some(obj) = input_value.as_object_mut() {
                 obj.remove("dangerouslyDisableSandbox");
-                obj.remove("dangerously_disable_sandbox");
             }
             // Fix #4 — prepend cwd to bash commands instead of mutating process-global CWD
             if let Some(ref cwd) = self.cwd {
@@ -3766,7 +3708,7 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
             }
         }
         let resolved_read_path = if matches!(tool_name, "read") {
-            extract_path_like_input(&input_value, &["filePath", "path", "file_path"])
+            extract_path_like_input(&input_value, &["filePath"])
         } else {
             None
         };
@@ -4816,11 +4758,9 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("### `bash`"));
         assert!(s.contains("### `WebFetch`"));
         assert!(s.contains("### `WebSearch`"));
-        assert!(
-            s.contains("purpose: Read local text, PDF, or Office content as grounded evidence.")
-        );
+        assert!(s.contains("purpose: Read a file or directory from the local filesystem."));
         assert!(s.contains(
-            "use_when: Use for grounded inspection, PDF/Office reading, or before editing an existing file."
+            "use_when: Use an absolute filePath. If unsure of the path, use glob first."
         ));
         assert!(!s.contains("### `Agent`"));
         assert!(s.contains("Relay Agent tools"));
@@ -4918,7 +4858,7 @@ mod cdp_copilot_tool_tests {
     fn write_success_is_summarized_for_cdp_followup() {
         let output = serde_json::json!({
             "kind": "create",
-            "file_path": "/root/Relay_Agent/tetris.html",
+            "filePath": "/root/Relay_Agent/tetris.html",
             "content": "<!doctype html>\n<html>".to_string() + &"<body></body></html>".repeat(20),
             "structured_patch": [{ "op": "add", "path": "/0", "value": "x".repeat(64) }],
             "original_file": null,
@@ -4928,7 +4868,7 @@ mod cdp_copilot_tool_tests {
 
         let rendered = format_cdp_tool_result("write", &output, false);
         assert!(rendered.contains("CDP follow-up summary"));
-        assert!(rendered.contains("file_path: /root/Relay_Agent/tetris.html"));
+        assert!(rendered.contains("filePath: /root/Relay_Agent/tetris.html"));
         assert!(rendered.contains("content_chars:"));
         assert!(rendered.contains("html_document: already_valid_local_html"));
         assert!(rendered.contains("task_status: local_html_create_request_already_satisfied"));
@@ -5502,14 +5442,14 @@ mod cdp_copilot_tool_tests {
         let raw = r#"了解。read-only で確認します。
 
 ```json
-{"name":"read","relay_tool_call":true,"input":{"path":"C:\\Users\\x\\Downloads\\テトリス.html"}}
+{"name":"read","relay_tool_call":true,"input":{"filePath":"C:\\Users\\x\\Downloads\\テトリス.html"}}
 ```
 "#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read");
         assert!(tools[0].2.contains("テトリス.html"));
-        assert!(!vis.contains("read"));
+        assert!(!vis.contains(r#""name":"read""#));
         assert!(!vis.contains("```json"));
     }
 
@@ -5668,7 +5608,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
                 "  \"name\": \"write\",\n",
                 "  \"relay_tool_call\": true,\n",
                 "  \"input\": {{\n",
-                "    \"path\": \"tetris.html\",\n",
+                "    \"filePath\": \"tetris.html\",\n",
                 "    \"content\": \"{content}\"\n",
                 "  }}\n",
                 "}}"
@@ -5685,7 +5625,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
-            input.get("path").and_then(Value::as_str),
+            input.get("filePath").and_then(Value::as_str),
             Some("tetris.html")
         );
         assert_eq!(
@@ -5721,7 +5661,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
-            input.get("path").and_then(Value::as_str),
+            input.get("filePath").and_then(Value::as_str),
             Some("tetris.html")
         );
         let content = input
@@ -5759,7 +5699,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
-            input.get("path").and_then(Value::as_str),
+            input.get("filePath").and_then(Value::as_str),
             Some("tetris.html")
         );
     }
@@ -5797,7 +5737,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     fn parse_initial_repairs_unbalanced_relay_tool_fence_json() {
         let raw = concat!(
             "```relay_tool\n",
-            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n",
+            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"filePath\": \"README.md\" }\n",
             "```"
         );
         let (_vis, tools) = parse_initial(raw);
@@ -5805,24 +5745,30 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(tools[0].1, "read");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+        assert_eq!(
+            input.get("filePath").and_then(Value::as_str),
+            Some("README.md")
+        );
     }
 
     #[test]
     fn parse_retry_repairs_unbalanced_unfenced_tool_json() {
         let raw =
-            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
+            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"filePath\": \"README.md\" }\n";
         let (_vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+        assert_eq!(
+            input.get("filePath").and_then(Value::as_str),
+            Some("README.md")
+        );
     }
 
     #[test]
     fn parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key() {
-        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
+        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob", "relay_tool_call": true }, { "input": { "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
         let (vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].1, "glob");
@@ -5836,13 +5782,16 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     // RetryRepair.
     #[test]
     fn parse_initial_accepts_unfenced_read_with_sentinel() {
-        let raw = r#"{"name":"read","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+        let raw = r#"{"name":"read","relay_tool_call":true,"input":{"filePath":"README.md"}}"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+        assert_eq!(
+            input.get("filePath").and_then(Value::as_str),
+            Some("README.md")
+        );
     }
 
     #[test]
@@ -5861,17 +5810,14 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
 
     #[test]
     fn parse_initial_accepts_unfenced_grep_with_sentinel() {
-        let raw = r#"{"name":"grep","relay_tool_call":true,"input":{"path":"README.md","pattern":"TODO","output_mode":"count"}}"#;
+        let raw = r#"{"name":"grep","relay_tool_call":true,"input":{"path":"README.md","pattern":"TODO","include":"*.md"}}"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "grep");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("pattern").and_then(Value::as_str), Some("TODO"));
-        assert_eq!(
-            input.get("output_mode").and_then(Value::as_str),
-            Some("count")
-        );
+        assert_eq!(input.get("include").and_then(Value::as_str), Some("*.md"));
     }
 
     #[test]
@@ -6081,7 +6027,7 @@ I will inspect the file.
     }
 
     #[test]
-    fn parse_dedupes_read_path_aliases() {
+    fn parse_keeps_different_read_input_shapes_distinct() {
         let raw = r#"```relay_tool
 {"name":"read","input":{"path":"README.md"}}
 ```
@@ -6089,7 +6035,7 @@ I will inspect the file.
 {"name":"read","input":{"file_path":"README.md"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
     }
 
     #[test]
@@ -6635,7 +6581,7 @@ mod loop_controller_tests {
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains("Create ./tetris.html"));
         assert!(next_input.contains(r#""name": "write""#));
-        assert!(next_input.contains(r#""path": "./tetris.html""#));
+        assert!(next_input.contains(r#""filePath": "./tetris.html""#));
     }
 
     #[test]
@@ -6662,7 +6608,7 @@ mod loop_controller_tests {
             panic!("expected targeted read repair");
         };
         assert!(next_input.contains(r#""name": "read""#));
-        assert!(next_input.contains(r#""path": "src/main.rs""#));
+        assert!(next_input.contains(r#""filePath": "src/main.rs""#));
         assert!(next_input.contains("Inspect src/main.rs and fix the import ordering."));
     }
 
@@ -6961,7 +6907,7 @@ mod loop_controller_tests {
                 ContentBlock::ToolUse {
                     id: "tool-1".to_string(),
                     name: "read".to_string(),
-                    input: r#"{"file_path":"README.md"}"#.to_string(),
+                    input: r#"{"filePath":"README.md"}"#.to_string(),
                 },
             ])],
             tool_results: Vec::new(),
@@ -6975,7 +6921,7 @@ mod loop_controller_tests {
         assert_eq!(signature.tool_keys.len(), 1);
         assert_eq!(
             signature.tool_keys[0],
-            tool_use_key("read", r#"{"path":"README.md"}"#)
+            tool_use_key("read", r#"{"filePath":"README.md"}"#)
         );
     }
 
@@ -7422,7 +7368,7 @@ mod loop_controller_tests {
 
     #[test]
     fn malformed_office_search_tool_json_after_results_escalates_to_summary_repair() {
-        let malformed = r#"[ { "name": "glob", "relay_tool_call": true, "input": { "pattern": "**/*キャッシュ*フロー*" } , }, "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" } ]"#;
+        let malformed = r#"[ { "name": "glob", "relay_tool_call": true, "input": { "pattern": "**/*キャッシュ*フロー*" } , }, "input": { "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" } ]"#;
         assert!(is_tool_protocol_confusion_text(malformed));
 
         let s = summary(
@@ -7453,6 +7399,39 @@ mod loop_controller_tests {
         assert!(next_input.contains("Use the prior tool results already present"));
         assert!(!next_input.contains("Expected JSON for the next reply"));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
+    }
+
+    #[test]
+    fn repeated_office_search_after_results_escalates_to_summary_repair() {
+        let repeated = r#"```relay_tool
+{"name":"office_search","relay_tool_call":true,"input":{"paths":["H:\\shr1\\05_経理部\\03_連結財務G\\**"],"pattern":"CFS|キャッシュ.?フロー|CF.?精算|連結CFS|CFS精算表","regex":true,"include_ext":["xlsx","xlsm","pdf"]}}
+```"#;
+        let s = summary(
+            repeated,
+            vec![tool_success_result(
+                "office_search",
+                r#"{"results":[{"path":"H:\\shr1\\05_経理部\\03_連結財務G\\開示T\\開示Tの業務分担表.xlsx","anchor":"Sheet1!A1","preview":"連結CF精算表作成"}],"errors":[],"filesScanned":50}"#,
+            )],
+            runtime::TurnOutcome::Completed,
+        );
+
+        let decision = decide_loop_after_success(
+            "キャッシュフロー計算書関連ファイルを検索して",
+            "キャッシュフロー計算書関連ファイルを検索して",
+            1,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected repeated office_search to request result summary repair");
+        };
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Tool result summary repair."));
+        assert!(next_input.contains("Local search tools are disabled"));
+        assert!(next_input.contains("Do not emit any `relay_tool` fence"));
+        assert!(!next_input.contains("Expected JSON for the next reply"));
     }
 
     #[test]
@@ -7610,7 +7589,7 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains(r#""name": "write""#));
-        assert!(next_input.contains(r#""path": "./tetris.html""#));
+        assert!(next_input.contains(r#""filePath": "./tetris.html""#));
     }
 
     #[test]
@@ -7664,7 +7643,7 @@ mod loop_controller_tests {
             panic!("expected targeted write repair for pathless html tetris request");
         };
         assert!(next_input.contains(r#""name": "write""#));
-        assert!(next_input.contains(r#""path": "tetris.html""#));
+        assert!(next_input.contains(r#""filePath": "tetris.html""#));
         assert!(
             next_input.contains("Do not spend another turn choosing or explaining the filename")
         );
@@ -7986,7 +7965,7 @@ mod loop_controller_tests {
                 "write",
                 serde_json::json!({
                     "kind": "create",
-                    "file_path": "/root/Relay_Agent/tetris.html",
+                    "filePath": "/root/Relay_Agent/tetris.html",
                     "content": "<html>demo</html>",
                     "structured_patch": [{ "op": "add", "path": "/0", "value": "demo" }],
                     "original_file": null,

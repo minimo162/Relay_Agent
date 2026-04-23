@@ -50,7 +50,6 @@ fn extract_approval_target(
         ApprovalTargetExtractor::PathLike => input
             .get("filePath")
             .or_else(|| input.get("path"))
-            .or_else(|| input.get("file_path"))
             .or_else(|| input.get("notebook_path"))
             .or_else(|| input.get("input_path"))
             .or_else(|| input.get("output_path"))

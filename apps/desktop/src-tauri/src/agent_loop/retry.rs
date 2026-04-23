@@ -1090,7 +1090,6 @@ fn build_office_search_tool_call(latest_request: &str, path: Option<&str>) -> Va
             "pattern": pattern,
             "paths": office_search_paths_for_repair(latest_request, path),
             "regex": regex,
-            "-i": true,
             "include_ext": include_ext,
             "max_files": 80,
             "max_results": 30,
@@ -1313,7 +1312,7 @@ pub(crate) fn build_best_tool_protocol_repair_input(
                 "write",
                 &requested_path,
                 &json!({
-                    "path": requested_path.clone(),
+                    "filePath": requested_path.clone(),
                     "content": "<full file content here>"
                 }),
                 &build_write_repair_action_instruction(attempt_index, &requested_path, false),
@@ -1327,7 +1326,7 @@ pub(crate) fn build_best_tool_protocol_repair_input(
                 "write",
                 &inferred_path,
                 &json!({
-                    "path": inferred_path.clone(),
+                    "filePath": inferred_path.clone(),
                     "content": "<full file content here>"
                 }),
                 &build_write_repair_action_instruction(attempt_index, &inferred_path, true),
@@ -1345,7 +1344,7 @@ pub(crate) fn build_best_tool_protocol_repair_input(
             "read",
             &requested_path,
             &json!({
-                "path": requested_path.clone()
+                "filePath": requested_path.clone()
             }),
             "Emit exactly one `read` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
         );
@@ -1417,8 +1416,7 @@ fn latest_read_tool_error(summary: &runtime::TurnSummary) -> Option<ReadToolErro
             ContentBlock::ToolUse { name, input, .. } if matches!(name.as_str(), "read") => {
                 serde_json::from_str::<Value>(input).ok().and_then(|value| {
                     value
-                        .get("path")
-                        .or_else(|| value.get("file_path"))
+                        .get("filePath")
                         .and_then(Value::as_str)
                         .map(ToString::to_string)
                 })
@@ -1465,6 +1463,33 @@ fn local_search_tool_result_names(summary: &runtime::TurnSummary) -> BTreeSet<St
 fn local_office_lookup_needs_content_search(summary: &runtime::TurnSummary) -> bool {
     let names = local_search_tool_result_names(summary);
     names.contains("glob") && !names.contains("grep") && !names.contains("office_search")
+}
+
+fn has_successful_office_search_tool_result(summary: &runtime::TurnSummary) -> bool {
+    summary.tool_results.iter().any(|message| {
+        message.blocks.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult {
+                    tool_name,
+                    is_error,
+                    ..
+                } if tool_name == "office_search" && !*is_error
+            )
+        })
+    })
+}
+
+fn assistant_emits_relay_tool_named(text: &str, tool_name: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty()
+        || !(trimmed.contains("```relay_tool") || trimmed.contains("\"relay_tool_call\""))
+    {
+        return false;
+    }
+    trimmed.contains("\"name\"")
+        && trimmed.contains("\"input\"")
+        && trimmed.contains(&format!("\"{tool_name}\""))
 }
 
 fn local_search_output_has_hits(tool_name: &str, output: &str) -> bool {
@@ -1712,6 +1737,8 @@ pub(crate) fn decide_loop_after_success(
             || assistant_text.contains("\"name\"")
             || assistant_text.contains("\"input\"")
             || assistant_text.contains("```relay_tool"));
+    let is_repeated_office_search_after_results = has_successful_office_search_tool_result(summary)
+        && assistant_emits_relay_tool_named(assistant_text, "office_search");
     let is_copilot_search_leak_after_local_search =
         has_local_search_tool_result(summary) && is_copilot_search_leak_text(assistant_text);
     let is_empty_local_search_false_evidence_claim = local_search_results_are_empty(summary)
@@ -1773,6 +1800,16 @@ pub(crate) fn decide_loop_after_success(
             path_repair_used,
             truncate_for_log(assistant_text, 240)
         );
+    } else if is_repeated_office_search_after_results {
+        tracing::info!(
+            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} repeated_office_search_after_results=true assistant_excerpt={:?}",
+            summary.outcome,
+            summary.iterations,
+            meta_stall_nudges_used,
+            meta_stall_nudge_limit,
+            path_repair_used,
+            truncate_for_log(assistant_text, 240)
+        );
     } else if is_empty_local_search_false_evidence_claim {
         tracing::info!(
             "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} empty_local_search_false_evidence_claim=true assistant_excerpt={:?}",
@@ -1827,6 +1864,20 @@ pub(crate) fn decide_loop_after_success(
     }
 
     if is_tool_result_summary_needed {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            return LoopDecision::Continue {
+                next_input: build_tool_result_summary_repair_input(
+                    goal,
+                    latest_turn_input,
+                    assistant_text,
+                ),
+                kind: LoopContinueKind::MetaNudge,
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
+    }
+
+    if is_repeated_office_search_after_results {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: build_tool_result_summary_repair_input(

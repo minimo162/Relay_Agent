@@ -618,14 +618,13 @@ fn slide_number_from_anchor(anchor: &str) -> Option<u32> {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OfficeSearchInput {
     pub pattern: String,
     pub paths: Vec<String>,
     pub regex: Option<bool>,
     #[serde(rename = "include_ext")]
     pub include_ext: Option<Vec<String>>,
-    #[serde(rename = "-i")]
-    pub case_insensitive: Option<bool>,
     pub context: Option<usize>,
     #[serde(rename = "max_results")]
     pub max_results: Option<usize>,
@@ -714,7 +713,6 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     )?;
     let mut candidates = expansion.candidates;
     let discovered_candidate_count = candidates.len();
-    sort_candidates_by_path_relevance(&mut candidates, &regex);
     let mut files_truncated = expansion.files_truncated;
     if candidates.len() > max_files {
         files_truncated = true;
@@ -951,7 +949,7 @@ fn compile_office_search_regex(input: &OfficeSearchInput) -> io::Result<Regex> {
         regex::escape(&input.pattern)
     };
     RegexBuilder::new(&pattern)
-        .case_insensitive(input.case_insensitive.unwrap_or(false))
+        .case_insensitive(false)
         .size_limit(REGEX_SIZE_LIMIT_BYTES)
         .build()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
@@ -1049,21 +1047,32 @@ fn normalize_include_ext(input: Option<&Vec<String>>) -> io::Result<BTreeSet<Str
         .into_iter()
         .map(String::from)
         .collect::<BTreeSet<_>>();
-    let values = input
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| item.trim_start_matches('.').to_ascii_lowercase())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or(allowed.clone());
-    if let Some(invalid) = values.iter().find(|value| !allowed.contains(*value)) {
+    let Some(items) = input else {
+        return Ok(allowed);
+    };
+
+    let mut values = BTreeSet::new();
+    let mut unsupported = Vec::new();
+    for item in items {
+        let value = item.trim_start_matches('.').to_ascii_lowercase();
+        if allowed.contains(&value) {
+            values.insert(value);
+        } else {
+            unsupported.push(value);
+        }
+    }
+
+    if !values.is_empty() {
+        return Ok(values);
+    }
+
+    if let Some(invalid) = unsupported.into_iter().find(|value| !value.is_empty()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("unsupported include_ext entry: {invalid}"),
         ));
     }
-    Ok(values)
+    Ok(allowed)
 }
 
 fn expand_office_candidates(
@@ -1270,21 +1279,6 @@ fn sort_candidates_by_modified_desc(paths: &mut [PathBuf]) {
     paths.sort_by(|left, right| {
         Reverse(candidate_modified_ms(left))
             .cmp(&Reverse(candidate_modified_ms(right)))
-            .then_with(|| left.cmp(right))
-    });
-}
-
-fn sort_candidates_by_path_relevance(paths: &mut [PathBuf], regex: &Regex) {
-    paths.sort_by(|left, right| {
-        let left_text = left.to_string_lossy();
-        let right_text = right.to_string_lossy();
-        let left_matches = regex.find_iter(&left_text).count();
-        let right_matches = regex.find_iter(&right_text).count();
-        right_matches
-            .cmp(&left_matches)
-            .then_with(|| {
-                Reverse(candidate_modified_ms(left)).cmp(&Reverse(candidate_modified_ms(right)))
-            })
             .then_with(|| left.cmp(right))
     });
 }
@@ -1783,7 +1777,6 @@ mod tests {
             paths: vec![String::from("unused")],
             regex: None,
             include_ext: None,
-            case_insensitive: None,
             context: None,
             max_results: None,
             max_files: None,
@@ -1797,6 +1790,27 @@ mod tests {
 
         assert!(regex.is_match("prefix Q1.2026 (draft) A+B suffix"));
         assert!(!regex.is_match("Q1x2026 draft AAAB"));
+    }
+
+    #[test]
+    fn office_search_ignores_unsupported_include_ext_when_supported_exts_remain() {
+        let include_ext = vec!["xlsx".to_string(), "xls".to_string(), "pdf".to_string()];
+        let normalized =
+            normalize_include_ext(Some(&include_ext)).expect("mixed include_ext should normalize");
+
+        assert!(normalized.contains("xlsx"));
+        assert!(normalized.contains("pdf"));
+        assert!(!normalized.contains("xls"));
+    }
+
+    #[test]
+    fn office_search_rejects_include_ext_when_none_are_supported() {
+        let include_ext = vec!["xls".to_string()];
+        let error = normalize_include_ext(Some(&include_ext)).expect_err("xls is unsupported");
+
+        assert!(error
+            .to_string()
+            .contains("unsupported include_ext entry: xls"));
     }
 
     #[test]
@@ -1878,7 +1892,7 @@ mod tests {
     }
 
     #[test]
-    fn sort_candidates_by_path_relevance_prefers_relevant_then_recent() {
+    fn sort_candidates_by_modified_desc_prefers_recent_over_path_relevance() {
         let root = test_dir();
         let old_relevant = root.join("old_予算精算表.xlsx");
         let new_irrelevant = root.join("new_report.xlsx");
@@ -1886,18 +1900,17 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         fs::write(&new_irrelevant, b"new irrelevant").expect("write new irrelevant");
         let mut candidates = vec![new_irrelevant.clone(), old_relevant.clone()];
-        let regex = Regex::new("予算|精算表").expect("regex");
 
-        sort_candidates_by_path_relevance(&mut candidates, &regex);
+        sort_candidates_by_modified_desc(&mut candidates);
 
-        assert_eq!(candidates[0], old_relevant);
-        assert_eq!(candidates[1], new_irrelevant);
+        assert_eq!(candidates[0], new_irrelevant);
+        assert_eq!(candidates[1], old_relevant);
 
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn office_search_ranks_path_relevance_before_max_files_cutoff() {
+    fn office_search_prefers_recent_candidates_before_max_files_cutoff() {
         let root = test_dir();
         let old_relevant = root.join("old_target_report.xlsx");
         let new_irrelevant = root.join("new_report.xlsx");
@@ -1911,7 +1924,6 @@ mod tests {
             paths: vec![pattern],
             regex: None,
             include_ext: Some(vec![String::from("xlsx")]),
-            case_insensitive: None,
             context: Some(20),
             max_results: Some(1),
             max_files: Some(1),
@@ -1920,13 +1932,17 @@ mod tests {
 
         assert!(output.files_truncated);
         assert_eq!(output.candidate_count, 2);
-        assert_eq!(output.files_scanned, 0);
-        assert_eq!(output.results.len(), 1);
         assert_eq!(
-            output.results[0].path,
-            fs::canonicalize(&old_relevant).unwrap().to_string_lossy()
+            output.candidate_sample[0],
+            fs::canonicalize(&new_irrelevant)
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
         );
-        assert_eq!(output.results[0].anchor, "path");
+        assert_eq!(output.files_scanned, 1);
+        assert!(output.results.is_empty());
+        assert_eq!(output.errors.len(), 1);
+        assert!(output.errors[0].path.ends_with("new_report.xlsx"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1948,7 +1964,6 @@ mod tests {
             paths: vec![pattern],
             regex: None,
             include_ext: Some(vec![String::from("xlsx")]),
-            case_insensitive: None,
             context: None,
             max_results: None,
             max_files: Some(100),
