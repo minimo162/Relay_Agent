@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  copilotDomGeneratingIifeExpression,
+} from "./copilot_dom_poll.mjs";
+
+import {
   assistantReplyAddsOnlySuggestionSuffix,
   assistantReplyHasStrongCompletionSignal,
   normalizeCopilotVisibleText,
@@ -9,6 +13,128 @@ import {
   resolveAssistantReplyForReturn,
   waitForDomResponse,
 } from "./copilot_wait_dom_response.mjs";
+
+class FakeElement {
+  constructor(tagName, attrs = {}, children = []) {
+    this.nodeType = 1;
+    this.tagName = tagName.toUpperCase();
+    this.attrs = { ...attrs };
+    this.children = children;
+    this.shadowRoot = null;
+    this.offsetParent = {};
+    this.disabled = attrs.disabled === true;
+    this.className = attrs.class || "";
+  }
+
+  getAttribute(name) {
+    return this.attrs[name] ?? null;
+  }
+
+  hasAttribute(name) {
+    return Object.hasOwn(this.attrs, name);
+  }
+
+  getBoundingClientRect() {
+    return { width: 40, height: 40, top: 10, left: 10, right: 50, bottom: 50 };
+  }
+
+  matches(selector) {
+    return selector.split(",").some((part) => this.matchesOne(part.trim()));
+  }
+
+  matchesOne(selector) {
+    if (!selector) return false;
+    if (selector === "button") return this.tagName === "BUTTON";
+    if (selector === ".fai-SendButton") return this.className.split(/\s+/).includes("fai-SendButton");
+    if (/^\[role=['"]button['"]\]$/.test(selector)) return this.getAttribute("role") === "button";
+    if (/^\[role=['"]menuitem['"]\]$/.test(selector)) return this.getAttribute("role") === "menuitem";
+    const ariaContains = selector.match(/^button\[aria-label\*=["'](.+)["']\]$/);
+    if (ariaContains) {
+      return this.tagName === "BUTTON" && String(this.getAttribute("aria-label") || "").includes(ariaContains[1]);
+    }
+    const dataTestIdEquals = selector.match(/^button\[data-testid=["'](.+)["']\]$/);
+    if (dataTestIdEquals) {
+      return this.tagName === "BUTTON" && this.getAttribute("data-testid") === dataTestIdEquals[1];
+    }
+    const dataTestIdContains = selector.match(/^\[data-testid\*=["'](.+)["']\]$/);
+    if (dataTestIdContains) {
+      return String(this.getAttribute("data-testid") || "").includes(dataTestIdContains[1]);
+    }
+    const classContains = selector.match(/^\[class\*=["'](.+)["']\]$/);
+    if (classContains) {
+      return this.className.includes(classContains[1]);
+    }
+    return false;
+  }
+
+  querySelector(selector) {
+    const stack = [...this.children];
+    while (stack.length) {
+      const el = stack.shift();
+      if (el.matches(selector)) return el;
+      stack.unshift(...el.children);
+    }
+    return null;
+  }
+}
+
+function evaluateGeneratingWithRoot(root) {
+  const previous = {
+    document: globalThis.document,
+    getComputedStyle: globalThis.getComputedStyle,
+    innerHeight: globalThis.innerHeight,
+    innerWidth: globalThis.innerWidth,
+  };
+  try {
+    globalThis.document = {
+      nodeType: 9,
+      documentElement: root,
+      body: root,
+      querySelectorAll(selector) {
+        return selector === "iframe" ? [] : [];
+      },
+    };
+    globalThis.getComputedStyle = () => ({ visibility: "visible", display: "block", opacity: "1" });
+    globalThis.innerHeight = 900;
+    globalThis.innerWidth = 1200;
+    return Function(`return ${copilotDomGeneratingIifeExpression()}`)();
+  } finally {
+    globalThis.document = previous.document;
+    globalThis.getComputedStyle = previous.getComputedStyle;
+    globalThis.innerHeight = previous.innerHeight;
+    globalThis.innerWidth = previous.innerWidth;
+  }
+}
+
+test("copilotDomGeneratingIifeExpression ignores idle send button stopBackground", () => {
+  const root = new FakeElement("main", {}, [
+    new FakeElement("button", { "aria-label": "Send", class: "fai-SendButton" }, [
+      new FakeElement("span", { class: "fai-SendButton__stopBackground" }),
+    ]),
+  ]);
+
+  assert.equal(evaluateGeneratingWithRoot(root), false);
+});
+
+test("copilotDomGeneratingIifeExpression ignores disabled send button with only stopBackground", () => {
+  const root = new FakeElement("main", {}, [
+    new FakeElement("button", { "aria-label": "Send", class: "fai-SendButton", disabled: true }, [
+      new FakeElement("span", { class: "fai-SendButton__stopBackground" }),
+    ]),
+  ]);
+
+  assert.equal(evaluateGeneratingWithRoot(root), false);
+});
+
+test("copilotDomGeneratingIifeExpression detects semantic stop generating button", () => {
+  const root = new FakeElement("main", {}, [
+    new FakeElement("button", { "aria-label": "Stop generating", class: "fai-SendButton" }, [
+      new FakeElement("span", { class: "fai-SendButton__stopBackground" }),
+    ]),
+  ]);
+
+  assert.equal(evaluateGeneratingWithRoot(root), true);
+});
 
 test("normalizeProgressTextForUi suppresses an unchanged baseline reply", () => {
   assert.equal(normalizeProgressTextForUi("HTMLでテトリスを作成します！", "HTMLでテトリスを作成します！"), "");
@@ -869,6 +995,62 @@ test("waitForDomResponse finalizes long HTML replies after phantom generating wi
   assert.equal(response, fullReply);
   assert.equal(finalizationMode, "stable_strong_signal");
   assert.ok(pollIndex >= 12);
+});
+
+test("waitForDomResponse does not ignore a structural stop-button generating signal", async () => {
+  const partialReply = "検索結果を整理しています。";
+  const finalReply = "検索結果を整理しました。対象ファイルは 3 件です。";
+  const snapshots = [
+    {
+      generating: false,
+      strongGeneratingSignal: false,
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    ...Array.from({ length: 15 }, () => ({
+      generating: true,
+      strongGeneratingSignal: true,
+      reply: partialReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+    ...Array.from({ length: 4 }, () => ({
+      generating: false,
+      strongGeneratingSignal: false,
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: finalReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 12_000,
+  });
+
+  assert.equal(response, finalReply);
+  assert.ok(pollIndex >= 16);
 });
 
 test("waitForDomResponse finalizes from strict extraction when loose stalled reply is still truncated", async () => {

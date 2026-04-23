@@ -51,7 +51,6 @@ const COMPOSER_SELECTORS = [
 ];
 
 const SEND_SELECTORS = [
-  ".fai-SendButton:not([disabled])",
   'button[data-testid="sendButton"]:not([disabled])',
   'button[data-testid^="send"]:not([disabled])',
   'button[aria-label*="Send"]:not([disabled])',

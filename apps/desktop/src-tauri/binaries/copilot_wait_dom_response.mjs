@@ -512,6 +512,7 @@ async function pollCopilotGeneratingAndReply(session) {
       : !!normalizeCopilotVisibleText(reply);
   return {
     generating: gen,
+    strongGeneratingSignal: v?.strongGeneratingSignal === true,
     reply,
     progressOnly,
     hasVisibleAssistantChat,
@@ -1149,6 +1150,7 @@ async function waitForDomResponse(
     await sleep(RESPONSE_POLL_INTERVAL_MS);
     const {
       generating: generatingRaw,
+      strongGeneratingSignal,
       reply: replyRaw,
       progressOnly,
       hasVisibleAssistantChat,
@@ -1173,7 +1175,8 @@ async function waitForDomResponse(
     } else {
       genStreak = 0;
     }
-    const ignorePhantomStop = genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS;
+    const ignorePhantomStop =
+      genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS && strongGeneratingSignal !== true;
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
     const reasoningDisclosurePlaceholder = replyIsOnlyReasoningDisclosurePlaceholder(reply);
     const generating =

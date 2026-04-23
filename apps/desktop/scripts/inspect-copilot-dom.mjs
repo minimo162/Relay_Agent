@@ -18,6 +18,7 @@ import {
 } from "../src-tauri/binaries/copilot_wait_dom_response.mjs";
 
 const CDP = process.env.CDP_HTTP || "http://127.0.0.1:9360";
+const CDP_CONNECT_TIMEOUT_MS = Number.parseInt(process.env.CDP_CONNECT_TIMEOUT_MS || "120000", 10);
 
 const PROBE_JS = `(() => {
   function walk(root, visit, depth = 0) {
@@ -73,6 +74,45 @@ const PROBE_JS = `(() => {
   const replyDivs = queryDeepAll('[data-testid="copilot-message-reply-div"]', document).filter(
     (e) => e.offsetParent !== null,
   );
+  function buttonSemanticName(el) {
+    return [
+      el.getAttribute?.("aria-label") || "",
+      el.getAttribute?.("title") || "",
+      el.getAttribute?.("data-testid") || "",
+      el.className ? String(el.className) : "",
+    ].join(" ").replace(/\\s+/g, " ").trim();
+  }
+  function buttonText(el) {
+    return (el.innerText || el.textContent || "").trim().replace(/\\s+/g, " ");
+  }
+  function isDisabled(el) {
+    return !!(
+      el.disabled ||
+      el.getAttribute?.("aria-disabled") === "true" ||
+      el.hasAttribute?.("disabled")
+    );
+  }
+  const composerButtons = queryDeepAll(
+    '.fai-SendButton, button, [role="button"]',
+    document,
+  ).filter((e) => {
+    if (!e.offsetParent) return false;
+    const name = buttonSemanticName(e);
+    return /send|reply|stop|生成|停止|送信|応答|fai-SendButton|stopGenerating/i.test(name);
+  }).slice(-20).map((e) => {
+    const name = buttonSemanticName(e);
+    return {
+      tag: e.tagName?.toLowerCase?.() || "",
+      name,
+      text: buttonText(e).slice(0, 160),
+      disabled: isDisabled(e),
+      hasStopChild: !!e.querySelector?.('.fai-SendButton__stopBackground, [data-testid*="stop"], [class*="StopGenerating"], [class*="stopGenerating"]'),
+      rect: (() => {
+        const r = e.getBoundingClientRect();
+        return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+      })(),
+    };
+  });
   const lastReplySample =
     replyDivs.length > 0
       ? sampleText(replyDivs[replyDivs.length - 1], 240)
@@ -86,6 +126,7 @@ const PROBE_JS = `(() => {
     cib,
     copilotMessageReplyDivCount: replyDivs.length,
     lastCopilotReplySample: lastReplySample,
+    composerButtons,
   };
 })()`;
 
@@ -102,7 +143,7 @@ function relaySessionAdapter(page) {
 async function main() {
   let browser;
   try {
-    browser = await chromium.connectOverCDP(CDP);
+    browser = await chromium.connectOverCDP(CDP, { timeout: CDP_CONNECT_TIMEOUT_MS });
   } catch (e) {
     console.error("connectOverCDP failed:", e.message);
     console.error("Start Edge with: --remote-debugging-port=9360 (or set CDP_HTTP) and open M365 Copilot chat.");

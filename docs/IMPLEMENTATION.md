@@ -8638,6 +8638,90 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-23 - Copilot streaming completion signal hardening
+
+Investigated a live M365 Copilot run after a reported mid-stream cutoff. The
+first attempt through the normal Relay `tauri:dev` Edge CDP path started the
+app and bridge, but this local Linux/Xvfb Edge process crashed or exposed stale
+M365 targets whose Runtime DOM evaluated to `about:blank`. To get a real
+browser observation, launched Microsoft Edge through Playwright with the same
+`/root/RelayAgentEdgeProfile` profile. That profile was signed in, loaded
+`https://m365.cloud.microsoft/chat/`, accepted text in
+`#m365-chat-editor-target-element`, and completed a real prompt.
+
+Live observation showed the actual button transition:
+
+- idle composer: `button.fai-SendButton[aria-label="Send"]`, enabled, with a
+  `.fai-SendButton__stopBackground` child already present;
+- generating: the same `.fai-SendButton` changes to
+  `aria-label="Stop generating"` and `progressCount=1`;
+- after content finishes: the stop button disappears, the reply text stabilizes,
+  and the trailing `Generating response` placeholder is removed a few seconds
+  later.
+
+The bridge therefore no longer treats `.fai-SendButton__stopBackground` by
+itself as a generation signal. Instead it derives `strongGeneratingSignal` from
+semantic button state (`aria-label` / `title` / `data-testid` / class), primarily
+the observed `aria-label="Stop generating"` state or a disabled send button that
+contains named stop-generation visuals. A follow-up review tightened this so a
+disabled `Send` button with only the always-present
+`.fai-SendButton__stopBackground` child is not treated as strong evidence.
+Strong stop-button evidence is no longer downgraded by the phantom-stop
+fallback; weak generic stop selectors can still be ignored after the existing
+stuck-stop threshold. The Copilot DOM inspection script also records composer
+send/stop button state and supports a longer CDP connection timeout for live
+debugging. A follow-up automation review also narrowed send-button fallbacks so
+`.fai-SendButton` is no longer clicked blindly: controls whose name indicates
+`Stop generating` / stop / cancel are excluded before DOM or CDP mouse click
+submission, and the live response probe no longer uses `.fai-SendButton` as a
+standalone send selector.
+
+Verification commands run locally:
+
+```bash
+DISPLAY=:99 pnpm --filter @relay-agent/desktop tauri:dev
+DISPLAY=:99 CDP_HTTP=http://127.0.0.1:9360 CDP_CONNECT_TIMEOUT_MS=120000 node apps/desktop/scripts/inspect-copilot-dom.mjs
+curl -sS --max-time 240 http://127.0.0.1:18080/v1/chat/completions ...
+RELAY_EDGE_PROFILE=/root/RelayAgentEdgeProfile RELAY_CHECK_URL=https://m365.cloud.microsoft/chat/ node /tmp/relay-playwright-edge-check.mjs
+node /tmp/relay-m365-live-send-observe2.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs apps/desktop/src-tauri/binaries/copilot_server.test.mjs apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs
+git diff --check
+```
+
+Results:
+
+- `DISPLAY=:99 pnpm --filter @relay-agent/desktop tauri:dev`: app and bridge started; Copilot warmup reported Ready.
+- `inspect-copilot-dom.mjs`: Playwright `connectOverCDP` reached the browser WebSocket but timed out during initialization in this environment.
+- Direct CDP probing and `POST /v1/chat/completions`: target list showed M365 URLs, but Runtime DOM was `about:blank`; request failed before paste with `Copilot composer not found or not visible`.
+- `RELAY_EDGE_PROFILE=/root/RelayAgentEdgeProfile ... relay-playwright-edge-check.mjs`: M365 Copilot loaded signed in; DOM contained `#m365-chat-editor-target-element` and composer controls.
+- `node /tmp/relay-m365-live-send-observe2.mjs`: real prompt sent to M365 Copilot. Observed `Stop generating` button from send through streaming, then final reply ending in `確認完了`.
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed, 38 passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs apps/desktop/src-tauri/binaries/copilot_server.test.mjs apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs`: passed, 42 passed.
+- `git diff --check`: passed.
+
+## 2026-04-23 - Streaming feed flicker reduction
+
+Fixed a frontend remount issue in the desktop message feed. Streaming assistant
+updates replace the latest assistant `UiChunk` object on every text delta; the
+old `<For>` rendering keyed by object identity treated each replacement as a
+new item, remounting `MessageBubble` and replaying the bubble entry animation
+while the sanitized markdown HTML was replaced. `MessageFeed` now renders feed
+items with Solid's index-stable `<Index>` and a small `FeedChunk` dispatcher, so
+the same visible row updates in place as streaming text changes.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+```
+
+Results:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

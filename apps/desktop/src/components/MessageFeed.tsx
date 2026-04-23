@@ -1,6 +1,8 @@
 import {
-  For,
+  Index,
   Show,
+  Switch,
+  Match,
   createEffect,
   createMemo,
   createSignal,
@@ -23,6 +25,86 @@ import type { ApprovalActionHandler, SessionStatusSnapshot } from "./shell-types
 
 /** Pixels from bottom to treat as "following" the stream (sticky scroll). */
 const NEAR_BOTTOM_PX = 80;
+
+function FeedChunk(props: {
+  chunk: () => UiChunk;
+  onApproveOnce: ApprovalActionHandler;
+  onApproveForSession: ApprovalActionHandler;
+  onApproveForWorkspace: ApprovalActionHandler;
+  onReject: ApprovalActionHandler;
+  onSubmitUserQuestion: (sessionId: string, questionId: string, answer: string) => void;
+  onCancelUserQuestion: (sessionId: string, questionId: string) => void;
+}): JSX.Element {
+  const toolChunk = createMemo(() =>
+    props.chunk().kind === "tool_call"
+      ? (props.chunk() as Extract<UiChunk, { kind: "tool_call" }>)
+      : null,
+  );
+  const approvalChunk = createMemo(() =>
+    props.chunk().kind === "approval_request"
+      ? (props.chunk() as Extract<UiChunk, { kind: "approval_request" }>)
+      : null,
+  );
+  const questionChunk = createMemo(() =>
+    props.chunk().kind === "user_question"
+      ? (props.chunk() as Extract<UiChunk, { kind: "user_question" }>)
+      : null,
+  );
+  const messageChunk = createMemo(() =>
+    props.chunk().kind === "user" || props.chunk().kind === "assistant"
+      ? (props.chunk() as Extract<UiChunk, { kind: "user" | "assistant" }>)
+      : null,
+  );
+  const messageRole = createMemo(() => messageChunk()?.kind ?? "assistant");
+  const messageText = createMemo(() => messageChunk()?.text ?? "");
+  const messageStreaming = createMemo(() => {
+    const chunk = messageChunk();
+    return chunk?.kind === "assistant" ? Boolean(chunk.streaming) : false;
+  });
+
+  return (
+    <Switch>
+      <Match when={toolChunk()}>
+        {(chunk) => (
+          <ToolCallRow
+            toolUseId={chunk().toolUseId}
+            toolName={chunk().toolName}
+            input={chunk().input}
+            status={chunk().status}
+            result={chunk().result}
+          />
+        )}
+      </Match>
+      <Match when={approvalChunk()}>
+        {(chunk) => (
+          <InlineApprovalCard
+            chunk={chunk()}
+            onApproveOnce={props.onApproveOnce}
+            onApproveForSession={props.onApproveForSession}
+            onApproveForWorkspace={props.onApproveForWorkspace}
+            onReject={props.onReject}
+          />
+        )}
+      </Match>
+      <Match when={questionChunk()}>
+        {(chunk) => (
+          <InlineQuestionCard
+            chunk={chunk()}
+            onSubmit={props.onSubmitUserQuestion}
+            onCancel={props.onCancelUserQuestion}
+          />
+        )}
+      </Match>
+      <Match when={messageChunk() != null}>
+        <MessageBubble
+          role={messageRole()}
+          text={messageText()}
+          streaming={messageStreaming()}
+        />
+      </Match>
+    </Switch>
+  );
+}
 
 export function MessageFeed(props: {
   chunks: UiChunk[];
@@ -199,48 +281,19 @@ export function MessageFeed(props: {
           />
         </Show>
       </Show>
-      <For each={feedChunks()}>
-        {(chunk) => {
-          if (chunk.kind === "tool_call") {
-            return (
-              <ToolCallRow
-                toolUseId={chunk.toolUseId}
-                toolName={chunk.toolName}
-                input={chunk.input}
-                status={chunk.status}
-                result={chunk.result}
-              />
-            );
-          }
-          if (chunk.kind === "approval_request") {
-            return (
-              <InlineApprovalCard
-                chunk={chunk}
-                onApproveOnce={props.onApproveOnce}
-                onApproveForSession={props.onApproveForSession}
-                onApproveForWorkspace={props.onApproveForWorkspace}
-                onReject={props.onReject}
-              />
-            );
-          }
-          if (chunk.kind === "user_question") {
-            return (
-              <InlineQuestionCard
-                chunk={chunk}
-                onSubmit={props.onSubmitUserQuestion}
-                onCancel={props.onCancelUserQuestion}
-              />
-            );
-          }
-          return (
-            <MessageBubble
-              role={chunk.kind}
-              text={chunk.text}
-              streaming={chunk.kind === "assistant" ? Boolean(chunk.streaming) : false}
-            />
-          );
-        }}
-      </For>
+      <Index each={feedChunks()}>
+        {(chunk) => (
+          <FeedChunk
+            chunk={chunk}
+            onApproveOnce={props.onApproveOnce}
+            onApproveForSession={props.onApproveForSession}
+            onApproveForWorkspace={props.onApproveForWorkspace}
+            onReject={props.onReject}
+            onSubmitUserQuestion={props.onSubmitUserQuestion}
+            onCancelUserQuestion={props.onCancelUserQuestion}
+          />
+        )}
+      </Index>
 
       <Show when={statusLine()}>
         <div

@@ -5,7 +5,6 @@ export const COMPOSER_ANCESTOR_CLOSEST =
   '#m365-chat-editor-target-element, [data-lexical-editor="true"], [role="textbox"][aria-label*="メッセージを送信"], [role="textbox"][aria-label*="Send a message"], [role="textbox"][aria-label*="Message"], [role="textbox"][aria-label*="message"], [role="textbox"][aria-label*="Copilot"]';
 
 export const STREAMING_STOP_SELECTORS = [
-  ".fai-SendButton__stopBackground",
   'button[aria-label*="生成を停止"]',
   'button[aria-label*="Stop generating"]',
   'button[aria-label*="Stop response"]',
@@ -285,7 +284,56 @@ function copilotDomGeneratingIifeExpression() {
       });
       return out;
     }
+    function buttonSemanticName(el) {
+      if (!el) return "";
+      return [
+        el.getAttribute?.("aria-label") || "",
+        el.getAttribute?.("title") || "",
+        el.getAttribute?.("data-testid") || "",
+        el.className ? String(el.className) : "",
+      ].join(" ").replace(/\\s+/g, " ").trim();
+    }
+    function buttonDisabled(el) {
+      return !!(
+        el &&
+        (el.disabled ||
+          el.hasAttribute?.("disabled") ||
+          el.getAttribute?.("aria-disabled") === "true")
+      );
+    }
+    function composerButtonStateInDoc(doc) {
+      const buttons = queryDeepAll('.fai-SendButton, button, [role="button"]', doc).filter(reallyVisible);
+      let hasStopButton = false;
+      let hasReadySendButton = false;
+      let hasDisabledSendButton = false;
+      let hasStopVisualInDisabledSendButton = false;
+      for (const button of buttons) {
+        const name = buttonSemanticName(button).toLowerCase();
+        const disabled = buttonDisabled(button);
+        const isSend =
+          /\\bsend\\b|\\breply\\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
+          button.matches?.('.fai-SendButton');
+        const stopByName =
+          /stopgenerating|stop generating|stop response|\\bstop\\b|生成を停止|停止|中断/i.test(name) &&
+          /generat|response|応答|生成|回答|作成|stop|停止|中断/i.test(name);
+        const namedStopChild = !!button.querySelector?.(
+          '[data-testid*="stop"], [class*="StopGenerating"], [class*="stopGenerating"]',
+        );
+        if (stopByName) hasStopButton = true;
+        if (isSend && disabled) hasDisabledSendButton = true;
+        if (isSend && !disabled && !stopByName) hasReadySendButton = true;
+        if (isSend && disabled && namedStopChild) hasStopVisualInDisabledSendButton = true;
+      }
+      return {
+        hasStopButton,
+        hasReadySendButton,
+        hasDisabledSendButton,
+        hasStopVisualInDisabledSendButton,
+      };
+    }
     function isGeneratingInDoc(doc) {
+      const buttonState = composerButtonStateInDoc(doc);
+      if (buttonState.hasStopButton || buttonState.hasStopVisualInDisabledSendButton) return true;
       const sels = ${JSON.stringify(STREAMING_STOP_SELECTORS)};
       for (const s of sels) {
         for (const el of queryDeepAll(s, doc)) {
@@ -854,6 +902,55 @@ function copilotDomPollGeneratingAndReplyExpression() {
     function nodeText(el) {
       return (el && (el.innerText || el.textContent) ? (el.innerText || el.textContent) : "").trim();
     }
+    function buttonSemanticName(el) {
+      if (!el) return "";
+      return [
+        el.getAttribute?.("aria-label") || "",
+        el.getAttribute?.("title") || "",
+        el.getAttribute?.("data-testid") || "",
+        el.className ? String(el.className) : "",
+      ].join(" ").replace(/\\s+/g, " ").trim();
+    }
+    function buttonDisabled(el) {
+      return !!(
+        el &&
+        (el.disabled ||
+          el.hasAttribute?.("disabled") ||
+          el.getAttribute?.("aria-disabled") === "true")
+      );
+    }
+    function composerButtonState(doc) {
+      const buttons = queryDeepAll('.fai-SendButton, button, [role="button"]', doc).filter(
+        (el) => visible(el) && !inUserTurn(el),
+      );
+      let hasStopButton = false;
+      let hasReadySendButton = false;
+      let hasDisabledSendButton = false;
+      let hasStopVisualInDisabledSendButton = false;
+      for (const button of buttons) {
+        const name = buttonSemanticName(button).toLowerCase();
+        const disabled = buttonDisabled(button);
+        const isSend =
+          /\\bsend\\b|\\breply\\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
+          button.matches?.('.fai-SendButton');
+        const stopByName =
+          /stopgenerating|stop generating|stop response|\\bstop\\b|生成を停止|停止|中断/i.test(name) &&
+          /generat|response|応答|生成|回答|作成|stop|停止|中断/i.test(name);
+        const namedStopChild = !!button.querySelector?.(
+          '[data-testid*="stop"], [class*="StopGenerating"], [class*="stopGenerating"]',
+        );
+        if (stopByName) hasStopButton = true;
+        if (isSend && disabled) hasDisabledSendButton = true;
+        if (isSend && !disabled && !stopByName) hasReadySendButton = true;
+        if (isSend && disabled && namedStopChild) hasStopVisualInDisabledSendButton = true;
+      }
+      return {
+        hasStopButton,
+        hasReadySendButton,
+        hasDisabledSendButton,
+        hasStopVisualInDisabledSendButton,
+      };
+    }
     function matchesShowMoreControl(el) {
       const text = [
         nodeText(el),
@@ -906,9 +1003,12 @@ function copilotDomPollGeneratingAndReplyExpression() {
       };
     }
     const generating = ${copilotDomGeneratingIifeExpression()};
+    const buttonState = composerButtonState(document);
+    const strongGeneratingSignal =
+      buttonState.hasStopButton || buttonState.hasStopVisualInDisabledSendButton;
     const turnState = assistantTurnState(lastAssistantTurn(document));
     const replyRaw = turnState.structuredReply || ${copilotDomReplyExtractIifeExpression()};
-    return { generating, reply: replyRaw, ...turnState };
+    return { generating, strongGeneratingSignal, composerButtonState: buttonState, reply: replyRaw, ...turnState };
   })()`;
 }
 

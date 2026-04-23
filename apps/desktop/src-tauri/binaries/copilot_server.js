@@ -320,8 +320,8 @@ var NEW_CHAT_A11Y_EXCLUDE = [
   "support",
   "サポート",
 ];
-/** Any visible “stop generating” control (M365 UI varies by locale/build). */
-var SEND_BUTTON_ANY_SELECTOR = '.fai-SendButton, button[aria-label*="Send"], button[aria-label*="\u9001\u4FE1"], button[aria-label="Reply"], button[data-testid="sendButton"]';
+/** Last-resort send selector; keep it narrow so a generating stop control is never clicked as Send. */
+var SEND_BUTTON_ANY_SELECTOR = 'button[aria-label*="Send"], button[aria-label*="\u9001\u4FE1"], button[aria-label="Reply"], button[data-testid="sendButton"]';
 /** Kiroku / M365: reveal upload UI before file input appears. */
 var PLUS_BUTTON_SELECTORS = [
   '[data-testid="PlusMenuButton"]',
@@ -2686,8 +2686,20 @@ async function findSendButtonCenter(session) {
       if (!label) return true;
       return /send feedback|送信する場所|settings|設定|share|共有/i.test(label);
     }
+    function controlName(el) {
+      return [
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("title") || "",
+        el.textContent || "",
+      ].join(" ").replace(/\s+/g, " ").trim();
+    }
+    function isStopOrCancelControl(el) {
+      const label = controlName(el);
+      return /stop\s+generating|stop\s+response|\bstop\b|cancel\s+response|生成を停止|停止|中断/i.test(label);
+    }
     function tryEl(el) {
       if (!clickable(el)) return null;
+      if (isStopOrCancelControl(el)) return null;
       const rect = el.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     }
@@ -2743,6 +2755,17 @@ async function clickSendViaDom(session) {
       if (!label) return true;
       return /send feedback|送信する場所|settings|設定/i.test(label);
     }
+    function controlName(el) {
+      return [
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("title") || "",
+        el.textContent || "",
+      ].join(" ").replace(/\s+/g, " ").trim();
+    }
+    function isStopOrCancelControl(el) {
+      const label = controlName(el);
+      return /stop\s+generating|stop\s+response|\bstop\b|cancel\s+response|生成を停止|停止|中断/i.test(label);
+    }
     const bySelector = [
       'button[data-testid="sendButton"]',
       'button[data-testid^="send"]',
@@ -2751,6 +2774,7 @@ async function clickSendViaDom(session) {
     ];
     for (const sel of bySelector) {
       for (const el of document.querySelectorAll(sel)) {
+        if (isStopOrCancelControl(el)) continue;
         if (clickable(el)) {
           el.click();
           return true;
