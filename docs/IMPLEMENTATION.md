@@ -15,19 +15,59 @@
 
 ## Milestone Log
 
-### 2026-04-23 Plan: Office/PDF as grep/read backend capability
+### 2026-04-23 Implementation: Office/PDF glob-read correction
+
+Revisited the previous "Office/PDF as grep backend" implementation against
+`anomalyco/opencode`'s current tool shape. The hidden backend under `grep` was
+still too Relay-specific: it made a normal-looking grep call perform an
+expensive document-corpus scan, produced surprising latency, and let Copilot
+claim document relevance from filename candidates. This entry supersedes the
+earlier same-day backend direction below.
+
+Changes:
+
+- `grep` is now plaintext/code search only. If `path` or `include` targets
+  `.docx`, `.xlsx`, `.xlsm`, `.pptx`, or `.pdf`, runtime returns
+  `InvalidInput` with guidance to use `glob` then exact `read`.
+- CDP tool descriptions and prompts now describe Office/PDF handling as
+  opencode-like low-level flow: `glob` for candidate discovery, `read` exact
+  Office/PDF paths for extracted text.
+- Local lookup repair no longer generates `grep` with Office/PDF include
+  filters. Office/PDF document lookup repairs to `glob`; exact Office/PDF paths
+  repair directly to `read`.
+- If a turn has only `glob` Office/PDF candidates and Copilot tries to answer
+  an evidence/relevance request from those filenames, the loop continues with a
+  targeted `read` of the top candidate before allowing a final judgment.
+- `office_search` remains as a hidden compatibility/runtime helper for older
+  transcripts and non-CDP callers, but it is no longer the intended
+  model-facing path.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime grep -- --nocapture`: passed, 10 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp -- --nocapture`: passed, 8 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop agent_loop::retry::tests -- --nocapture`: passed, 4 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop cdp_copilot_tool_tests -- --nocapture`: passed, 98 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop loop_controller_tests -- --nocapture`: passed, 62 passed, 1 ignored.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-23 Plan: Office/PDF as glob/read flow
 
 Revisited the Office/PDF search design after reviewing whether wrapping it as a
 dedicated model-facing tool was itself causing bugs. The conclusion is that the
 Office/PDF parsing value should remain, but `office_search` should move out of
-the CDP-visible tool surface and become an internal backend behind opencode-like
-`grep` / `read`.
+the CDP-visible tool surface and CDP should use opencode-like `glob` / exact
+`read` for Office/PDF handling.
 
 Artifacts:
 
 - Updated `docs/OPENCODE_ALIGNMENT_PLAN.md` with the revised migration plan:
-  model-facing tools are `read`, `glob`, and `grep`; Office/PDF extraction
-  becomes an internal grep/read backend capability.
+  model-facing tools are `read`, `glob`, and `grep`; Office/PDF extraction is
+  reached through exact-file `read` after `glob` candidate discovery.
 - Updated `PLANS.md` with Phase 6 so the scope change is reflected in the
   repository source-of-truth plan.
 
@@ -35,12 +75,15 @@ Verification:
 
 - Documentation-only planning change; no runtime verification required.
 
-### 2026-04-23 Implementation: opencode-like grep surface for Office/PDF
+### 2026-04-23 Implementation: opencode-like grep surface for Office/PDF (superseded)
 
 Implemented the revised Office/PDF search direction from
 `docs/OPENCODE_ALIGNMENT_PLAN.md`: model-facing local search is now the compact
 opencode-like `read` / `glob` / `grep` surface, while Office/PDF parsing remains
 an internal backend capability.
+
+Superseded by the later "Office/PDF glob-read correction" entry above: `grep`
+no longer dispatches Office/PDF candidates to a hidden extracted-text backend.
 
 Changes:
 

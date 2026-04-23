@@ -3,14 +3,17 @@
 Date: 2026-04-20 (rev 15: nine follow-ups to rev 14, accumulated over three review rounds. Core changes: (1) POSIX snapshot replaces the shared-`File` scheme for xlsx preflight+parse; (2) DOCX row anchors become `p{n}:tbl{j}:row{i}` for citation round-trip; (3) the dispatch loop keeps only the rendezvous-channel mode, retracting the "small-bounded channel" wording. Review-round-2 cleanup: (4) the preflight procedure is rewritten end-to-end so step 1 slurps bytes into the snapshot instead of opening a long-lived `File`; (5) Windows `FILE_SHARE_*` constants gain an explicit dep-or-local-const choice in the dependency section; (6) open-questions item 28 is re-labelled **superseded by item 31** rather than **resolved**; (7) `RELAY_OFFICE_XLSX_ARCHIVE_MAX_BYTES` gets an explicit unit-test checklist entry; (8) cache keys move from `to_string_lossy()` to OS-native bytes, with a new open-questions item 32 on tool-boundary display. Review-round-3 cleanup: (9) the cache record schema is made concrete about the OS-native source form — a new `source_encoding` field (one of `unix-bytes-b64` / `windows-wide-b64` / `utf8`) pairs with a base64-or-utf8 `source` payload; the lookup step switches to byte-exact `&[u8]` comparison; `schema_version` bumps to `3` with an explicit pre-ship-folding rule; the "archive cap above decompressed cap is redundant" claim is retracted as factually wrong (archive bytes and decompressed bytes are independent); all `RELAY_OFFICE_*` env-parse errors fall back to the default with a one-shot diagnostic rather than surfacing `InvalidInput`, since env vars are process-level config and failing every extraction on one bad value is worse than the default.)
 
 2026-04-23 update: the extraction/cache design remains active, but the
-model-facing search surface changed. Office/PDF content search is now exposed to
-CDP as an internal backend of opencode-like `grep` (with `include` filters such
-as `*.{xlsx,pdf}`), not as a dedicated model-facing `office_search` tool.
-`office_search` remains as a hidden compatibility/runtime helper.
+model-facing search surface changed. Office/PDF content is no longer searched
+through a hidden `grep` backend or a dedicated model-facing `office_search`
+tool. CDP should use opencode-like low-level tools: `glob` to discover candidate
+Office/PDF paths, then `read` exact `.docx`, `.xlsx`, `.xlsm`, `.pptx`, or
+`.pdf` files for extracted text. `office_search` remains as a hidden
+compatibility/runtime helper.
 
 Previous rev: 2026-04-20 (rev 14), 2026-04-20 (rev 13), 2026-04-19 (rev 12)
-Status: Implemented in source for extraction/search backend; CDP-facing search
-now routes through `grep` / `read` per `docs/OPENCODE_ALIGNMENT_PLAN.md`.
+Status: Implemented in source for extraction and exact-file reads; CDP-facing
+Office/PDF handling routes through `glob` / `read` per
+`docs/OPENCODE_ALIGNMENT_PLAN.md`.
 
 ## Goal
 
@@ -21,7 +24,7 @@ Let the agent search the contents of Office files (`.docx`, `.xlsx`, `.pptx`) an
 **In scope**
 - Text extraction from `.docx`, `.xlsx`, `.pptx`, `.pdf`
 - A shared extraction cache with path-indexed lookup and content-hash invalidation (see **Cache** for the key schema — earlier drafts said "keyed by content hash"; that was revised)
-- An internal Office/PDF extracted-text search backend used by `grep`
+- A hidden compatibility Office/PDF extracted-text search helper
 - Transparent plaintext return from the existing `read_file` tool for Office extensions (matching today's PDF behavior)
 
 **Out of scope (Phase A)**
@@ -37,10 +40,10 @@ Let the agent search the contents of Office files (`.docx`, `.xlsx`, `.pptx`) an
 Raw grep reads file bytes. `.docx/.xlsx/.pptx` are zipped XML, so matching
 against the file bytes finds compressed/container noise, not document content.
 The blocker for agentic search over Office files is **parsing**, not ranking.
-Once text is extracted, iterative LLM querying over BM25/regex already covers
-most practical retrieval — synonyms/paraphrase cases are the only place semantic
-search meaningfully wins. Relay now keeps the model-facing tool as `grep`, but
-routes Office/PDF targets through the extracted-text backend before matching.
+Once text is extracted, iterative LLM querying over exact file reads covers the
+most reliable path for the current desktop agent. Relay keeps model-facing
+search close to opencode: `grep` is for plaintext/code, while Office/PDF uses
+`glob` for candidate filenames and `read` for exact extracted text.
 
 ## Existing constraints to respect
 

@@ -13,8 +13,9 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
 - When the user already gave a **concrete path** and action (read / improve / edit), the **first** substantive reply should include **`relay_tool`** (or accepted JSON fence) as required by the session bundle—not only prose.
 - When the user gave an **exact path**, prefer **`read` directly**.
 - For vague local lookup, use low-level search tools: `glob` for path
-  discovery, `grep` for plaintext/code content, and `office_search` for
-  Office/PDF content. Treat snippets/previews as candidate discovery only.
+  discovery and `grep` for plaintext/code content. For Office/PDF, use
+  `glob` to find candidate files and then `read` exact paths for extracted
+  text. Treat snippets/previews as candidate discovery only.
 - For important conclusions, reviews, edits, comparisons, or recommendations
   after search results, the model must call `read` on the relevant path(s)
   before final prose.
@@ -43,8 +44,8 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
   `ignored_by_gitignore`, `binary`, `max_bytes`, `outside_workspace`, and
   `sensitive_path`; sensitive paths should be redacted.
 - Large repos or budgets should surface truncation explicitly in tool output.
-- Office/PDF discovery should flow through `office_search` previews/anchors,
-  followed by `read` for grounded conclusions.
+- Office/PDF discovery should flow through `glob`, followed by exact-file
+  `read` before grounded conclusions.
 
 ## Failure examples (treat as regression signals)
 

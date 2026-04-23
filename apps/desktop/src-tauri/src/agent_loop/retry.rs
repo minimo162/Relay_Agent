@@ -169,6 +169,24 @@ fn is_required_or_related_file_lookup(text: &str) -> bool {
     mentions_file && lookup_marker
 }
 
+fn is_document_evidence_lookup_request(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    is_required_or_related_file_lookup(trimmed)
+        || lower.contains("evidence")
+        || lower.contains("supporting document")
+        || lower.contains("source document")
+        || lower.contains("source file")
+        || lower.contains("basis")
+        || trimmed.contains("根拠")
+        || trimmed.contains("証憑")
+        || trimmed.contains("証拠")
+        || trimmed.contains("エビデンス")
+}
+
 fn is_concrete_local_write_body_without_tools(
     latest_turn_input: &str,
     assistant_text: &str,
@@ -721,42 +739,6 @@ fn infer_document_search_pattern_for_request(text: &str) -> Option<String> {
     expanded_search_terms_for_request(text).into_iter().next()
 }
 
-fn document_include_ext_for_search_request(text: &str) -> Vec<&'static str> {
-    let trimmed = text.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    let wants_docx =
-        lower.contains(".docx") || lower.contains("word") || trimmed.contains("ワード");
-    let wants_xlsx = lower.contains(".xlsx")
-        || lower.contains(".xlsm")
-        || lower.contains("excel")
-        || lower.contains("spreadsheet")
-        || trimmed.contains("Excel")
-        || trimmed.contains("エクセル");
-    let wants_pptx = lower.contains(".pptx")
-        || lower.contains("powerpoint")
-        || trimmed.contains("パワポ")
-        || trimmed.contains("パワーポイント");
-    let wants_pdf = lower.contains(".pdf") || lower.contains("pdf") || trimmed.contains("PDF");
-    let mut out = Vec::new();
-    if wants_docx {
-        out.push("docx");
-    }
-    if wants_xlsx {
-        out.push("xlsx");
-    }
-    if wants_pptx {
-        out.push("pptx");
-    }
-    if wants_pdf {
-        out.push("pdf");
-    }
-    if out.is_empty() {
-        vec!["docx", "xlsx", "xlsm", "pptx", "pdf"]
-    } else {
-        out
-    }
-}
-
 fn expanded_search_terms_for_request(text: &str) -> Vec<String> {
     let mut terms = Vec::new();
     let mut seen = BTreeSet::new();
@@ -979,24 +961,10 @@ fn build_glob_tool_call(pattern: &str, path: Option<&str>) -> Value {
 }
 
 fn build_grep_tool_call(pattern: &str, path: Option<&str>) -> Value {
-    build_grep_tool_call_with_include(pattern, path, None)
-}
-
-fn build_grep_tool_call_with_include(
-    pattern: &str,
-    path: Option<&str>,
-    include: Option<&str>,
-) -> Value {
     let mut input = serde_json::Map::new();
     input.insert("pattern".to_string(), Value::String(pattern.to_string()));
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
         input.insert("path".to_string(), Value::String(path.trim().to_string()));
-    }
-    if let Some(include) = include.filter(|include| !include.trim().is_empty()) {
-        input.insert(
-            "include".to_string(),
-            Value::String(include.trim().to_string()),
-        );
     }
     json!({
         "name": "grep",
@@ -1005,13 +973,21 @@ fn build_grep_tool_call_with_include(
     })
 }
 
-fn office_grep_include_for_search_request(text: &str) -> String {
-    let exts = document_include_ext_for_search_request(text);
-    if exts.len() == 1 {
-        format!("*.{}", exts[0])
-    } else {
-        format!("*.{{{}}}", exts.join(","))
-    }
+fn build_read_tool_call(path: &str) -> Value {
+    json!({
+        "name": "read",
+        "relay_tool_call": true,
+        "input": {
+            "filePath": path.trim(),
+        },
+    })
+}
+
+fn is_office_or_pdf_path_str(path: &str) -> bool {
+    let lower = path.trim().to_ascii_lowercase();
+    [".docx", ".xlsx", ".xlsm", ".pptx", ".pdf"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 fn build_search_tool_payload(
@@ -1022,12 +998,11 @@ fn build_search_tool_payload(
 ) -> Value {
     let search_term = infer_document_search_pattern_for_request(latest_request)
         .unwrap_or_else(|| pattern.to_string());
+    if let Some(path) = path.filter(|path| is_office_or_pdf_path_str(path)) {
+        return build_read_tool_call(path);
+    }
     if is_office_content_search_request(latest_request) {
-        return build_grep_tool_call_with_include(
-            &search_term,
-            path,
-            Some(&office_grep_include_for_search_request(latest_request)),
-        );
+        return build_glob_tool_call(pattern, path);
     }
     if !search_term.trim().is_empty() {
         return build_grep_tool_call(&search_term, path);
@@ -1085,7 +1060,7 @@ fn build_search_tool_protocol_repair_input(
     let expected_payload = build_search_tool_payload(latest_request, pattern, path, true);
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
-    let search_instruction = "This is a local file/document search request. Emit exactly one Relay local search tool call now: use `glob` for filenames or `grep` for content. For Office/PDF contents, still use `grep` with an `include` filter such as `*.{xlsx,pdf,docx,pptx}`.";
+    let search_instruction = "This is a local file/document search request. Emit exactly one Relay local search tool call now: use `glob` for filename/path discovery or `grep` for plaintext/code content. For Office/PDF documents, use `glob` to find candidate files first; read exact files after candidates are known.";
     format!(
         concat!(
             "Tool protocol repair.\n",
@@ -1095,7 +1070,7 @@ fn build_search_tool_protocol_repair_input(
             "Do not answer with a plan, summary, or sentence that says you will search later.\n",
             "{escalation}",
             "{search_instruction}\n",
-            "Use the JSON skeleton below exactly unless the latest request clearly requires a smaller glob pattern, a narrower path, or a narrower include filter.\n",
+            "Use the JSON skeleton below exactly unless the latest request clearly requires a smaller glob pattern, a narrower path, or an exact-path `read`.\n",
             "Do not use `read` for a directory or workspace search.\n\n",
             "Expected JSON for the next reply:\n",
             "```json\n{expected_json}\n```\n\n",
@@ -1135,8 +1110,8 @@ fn build_targeted_tool_protocol_repair_input(
             "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
             "{escalation}",
             "{action_instruction}\n",
-            "Use the exact path anchor below without rewriting it to another directory or prior-turn variant.\n\n",
-            "Exact path anchor from the latest user turn:\n",
+            "Use the exact path below without rewriting it to another directory or prior-turn variant.\n\n",
+            "Exact path or candidate:\n",
             "```text\n{requested_path}\n```\n\n",
             "The JSON skeleton below shows structure only. Replace any example content string with the real final file body.\n",
             "Expected JSON skeleton for the next reply:\n",
@@ -1355,6 +1330,21 @@ fn has_successful_office_search_tool_result(summary: &runtime::TurnSummary) -> b
     })
 }
 
+fn has_successful_read_tool_result(summary: &runtime::TurnSummary) -> bool {
+    summary.tool_results.iter().any(|message| {
+        message.blocks.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult {
+                    tool_name,
+                    is_error,
+                    ..
+                } if tool_name == "read" && !*is_error
+            )
+        })
+    })
+}
+
 fn assistant_emits_relay_tool_named(text: &str, tool_name: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty()
@@ -1365,6 +1355,39 @@ fn assistant_emits_relay_tool_named(text: &str, tool_name: &str) -> bool {
     trimmed.contains("\"name\"")
         && trimmed.contains("\"input\"")
         && trimmed.contains(&format!("\"{tool_name}\""))
+}
+
+fn first_glob_office_candidate(summary: &runtime::TurnSummary) -> Option<String> {
+    for message in &summary.tool_results {
+        for block in &message.blocks {
+            let ContentBlock::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            if tool_name != "glob" || *is_error {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(output) else {
+                continue;
+            };
+            let Some(filenames) = value.get("filenames").and_then(Value::as_array) else {
+                continue;
+            };
+            if let Some(candidate) = filenames
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|path| is_office_or_pdf_path_str(path))
+            {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn local_search_output_has_hits(tool_name: &str, output: &str) -> bool {
@@ -1503,6 +1526,7 @@ fn claims_local_search_found_evidence(text: &str) -> bool {
         || lower.contains("confirmed from")
         || trimmed.contains("検索結果に基づ")
         || trimmed.contains("検索結果から")
+        || trimmed.contains("検索結果を踏ま")
         || trimmed.contains("検索で確認")
         || trimmed.contains("確認できます")
         || trimmed.contains("確認できました")
@@ -1614,6 +1638,11 @@ pub(crate) fn decide_loop_after_success(
             || assistant_text.contains("```relay_tool"));
     let is_repeated_office_search_after_results = has_successful_office_search_tool_result(summary)
         && assistant_emits_relay_tool_named(assistant_text, "office_search");
+    let glob_office_candidate_needs_read = is_document_evidence_lookup_request(latest_turn_input)
+        && !has_successful_read_tool_result(summary)
+        && !has_successful_office_search_tool_result(summary)
+        && claims_local_search_found_evidence(assistant_text)
+        && first_glob_office_candidate(summary).is_some();
     let is_copilot_search_leak_after_local_search =
         has_local_search_tool_result(summary) && is_copilot_search_leak_text(assistant_text);
     let is_empty_local_search_false_evidence_claim = local_search_results_are_empty(summary)
@@ -1691,6 +1720,37 @@ pub(crate) fn decide_loop_after_success(
             path_repair_used,
             truncate_for_log(assistant_text, 240)
         );
+    } else if glob_office_candidate_needs_read {
+        tracing::info!(
+            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} glob_office_candidate_needs_read=true assistant_excerpt={:?}",
+            summary.outcome,
+            summary.iterations,
+            meta_stall_nudges_used,
+            meta_stall_nudge_limit,
+            path_repair_used,
+            truncate_for_log(assistant_text, 240)
+        );
+    }
+
+    if glob_office_candidate_needs_read {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            let candidate = first_glob_office_candidate(summary).unwrap_or_default();
+            return LoopDecision::Continue {
+                next_input: build_targeted_tool_protocol_repair_input(
+                    goal,
+                    latest_turn_input,
+                    meta_stall_nudges_used,
+                    "read",
+                    &candidate,
+                    &json!({
+                        "filePath": candidate.clone()
+                    }),
+                    "Relay has only filename candidates for this Office/PDF lookup. Before claiming the file is required, related, or evidence, emit exactly one `read` Relay tool call for the best candidate so Relay can inspect extracted document text.",
+                ),
+                kind: LoopContinueKind::MetaNudge,
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
     if is_copilot_search_leak_after_local_search || is_empty_local_search_false_evidence_claim {
@@ -1824,7 +1884,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn document_search_repair_uses_grep_include_filter() {
+    fn document_search_repair_uses_glob_discovery() {
         let payload = build_search_tool_payload(
             "キャッシュフロー計算書 関連資料",
             "**/*キャッシュフロー計算書*",
@@ -1834,48 +1894,46 @@ mod tests {
         let input = payload
             .get("input")
             .and_then(Value::as_object)
-            .expect("grep input");
+            .expect("glob input");
 
-        assert_eq!(payload.get("name").and_then(Value::as_str), Some("grep"));
-        assert_eq!(input.get("pattern"), Some(&json!("キャッシュフロー計算書")));
+        assert_eq!(payload.get("name").and_then(Value::as_str), Some("glob"));
         assert_eq!(
-            input.get("include"),
-            Some(&json!("*.{docx,xlsx,xlsm,pptx,pdf}"))
+            input.get("pattern"),
+            Some(&json!("**/*キャッシュフロー計算書*"))
         );
         assert!(input.get("paths").is_none());
+        assert!(input.get("path").is_none());
+        assert!(input.get("include").is_none());
         assert!(input.get("include_ext").is_none());
     }
 
     #[test]
-    fn document_search_repair_keeps_directory_path_for_grep() {
+    fn document_search_repair_keeps_directory_path_for_glob() {
         let payload =
             build_search_tool_payload("CFS 関連ファイル", "**/*CFS*", Some("reports"), true);
         let input = payload
             .get("input")
             .and_then(Value::as_object)
-            .expect("grep input");
+            .expect("glob input");
 
-        assert_eq!(payload.get("name").and_then(Value::as_str), Some("grep"));
+        assert_eq!(payload.get("name").and_then(Value::as_str), Some("glob"));
         assert_eq!(input.get("path"), Some(&json!("reports")));
-        assert_eq!(input.get("pattern"), Some(&json!("CFS")));
-        assert_eq!(
-            input.get("include"),
-            Some(&json!("*.{docx,xlsx,xlsm,pptx,pdf}"))
-        );
+        assert_eq!(input.get("pattern"), Some(&json!("**/*CFS*")));
+        assert!(input.get("include").is_none());
     }
 
     #[test]
-    fn document_search_repair_preserves_explicit_file_path_for_grep() {
+    fn document_search_repair_reads_explicit_office_file_path() {
         let payload =
             build_search_tool_payload("CFS", "**/*CFS*", Some("reports/fy160.xlsm"), true);
         let input = payload
             .get("input")
             .and_then(Value::as_object)
-            .expect("grep input");
+            .expect("read input");
 
-        assert_eq!(payload.get("name").and_then(Value::as_str), Some("grep"));
-        assert_eq!(input.get("path"), Some(&json!("reports/fy160.xlsm")));
-        assert_eq!(input.get("pattern"), Some(&json!("CFS")));
+        assert_eq!(payload.get("name").and_then(Value::as_str), Some("read"));
+        assert_eq!(input.get("filePath"), Some(&json!("reports/fy160.xlsm")));
+        assert!(input.get("pattern").is_none());
     }
 
     #[test]

@@ -51,7 +51,8 @@ Relay-specific areas remain:
 
 Relay keeps claw-compatible JSON where possible and avoids Relay-only search
 abstractions in the active CDP tool surface. Local search is expressed through
-low-level `glob`, `grep`, and `office_search` calls.
+low-level `glob`, `grep`, and `read` calls; Office/PDF handling uses `glob`
+candidate discovery followed by exact `read` extraction.
 - `bash` accepts claw sandbox fields (`namespaceRestrictions`, `isolateNetwork`, `filesystemMode`, `allowedMounts`).
 - `Task*` accepts claw-style aliases such as `task_id` and `prompt`.
 - `AskUserQuestion` accepts claw’s single `question` + `options` shape and normalizes to Relay’s UI contract.

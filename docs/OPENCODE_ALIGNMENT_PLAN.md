@@ -8,13 +8,14 @@ Scope: Agent loop / Copilot CDP bridge / repair pipeline
 
 `PLANS.md` / `AGENTS.md` / `docs/IMPLEMENTATION.md` / `docs/CLAW_CODE_ALIGNMENT.md` の補助ドキュメントとして位置付け、本プラン単独でスコープを広げない。各フェーズ完了時は `docs/IMPLEMENTATION.md` に検証ログを追記する。
 
-## 0. 2026-04-23 改訂方針: Office/PDF は専用 model-facing tool ではなく backend capability にする
+## 0. 2026-04-23 改訂方針: Office/PDF は `glob` -> `read` に寄せる
 
 その後の設計レビューで、`office_search` を LLM へ直接公開すること自体が
 バグと遅延を増やしていると判断した。Office/PDF 本文探索の価値は残すが、
 opencode に寄せる核心は **model-facing tool surface を `read` / `glob` /
-`grep` に戻し、Office/PDF パーサーは `grep` / `read` の内部 backend として
-扱う**ことである。
+`grep` に戻し、Office/PDF は `glob` で候補を見つけ、`read` で exact path の
+抽出テキストを読む**ことである。`grep` の裏で Office/PDF corpus search を
+隠し実行しない。
 
 この改訂方針は、下記旧 P1/P3/P4 の「`office_search` repair を改善する」
 方向を置き換える。`office_search` の runtime 実装は当面互換用に残すが、
@@ -23,7 +24,9 @@ CDP catalog / repair / parser whitelist から段階的に外す。
 ### 0.1 目標
 
 - LLM に見える検索 tool は opencode に近い `glob`, `grep`, `read` に寄せる。
-- Office/PDF は `grep` が扱える検索 backend の一種として統合する。
+- `grep` は plaintext/code search に限定する。
+- Office/PDF は `glob` で filename/path discovery し、`read` で exact file の
+  extracted text を取得する。
 - `read` は既存どおり `.pdf` / `.docx` / `.xlsx` / `.xlsm` / `.pptx` を
   plaintext extraction で読める model-facing tool として残す。
 - `office_search` 特有の prompt 文言、repair 分岐、duplicate-loop 分岐、
@@ -59,56 +62,48 @@ compat/internal-only:
   office_search runtime function
 ```
 
-`grep` が受け取った path / glob / include filter から候補を分ける。
+Routing:
 
-- plaintext/code files -> existing rg/fallback grep
-- `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` -> Office/PDF backend
-- mixed trees -> both backends execute, results are normalized into one grep-like
-  output
+- plaintext/code content -> `grep`
+- filename/path discovery, including Office/PDF -> `glob`
+- exact Office/PDF content extraction -> `read`
+- legacy callers only -> `office_search`
 
 ### 0.4 Result contract
 
-`grep` output に Office/PDF 固有の別 contract を混ぜすぎない。
+`grep` output に Office/PDF 固有の別 contract を混ぜない。
 
 - plaintext result: `path`, `line`, `preview`, `match`
-- Office/PDF result: `path`, `anchor`, `preview`, `match`
-- 共通 metadata: `filesScanned`, `resultsTruncated`, `filesTruncated`,
-  `backend: "text" | "office"`
+- Office/PDF result: `read` output from exact file paths, with existing
+  extracted-text anchors/slices.
 
 重要な区別:
 
 - filename / candidate discovery は `glob` の責務。
-- 本文一致だけが `grep` result。
-- Office/PDF 抽出エラーは `errors` に出すが、候補を本文 evidence として扱わない。
+- plaintext/code 本文一致だけが `grep` result。
+- Office/PDF 候補を本文 evidence として扱わない。重要な判断の前に `read` する。
 - `read` が読めた本文は、snippet より強い evidence とする。
 
 ### 0.5 Performance policy
 
-- 初回 broad scan は compact に保つ。Office/PDF backend の default candidate
-  budget は小さく、caller が明示した場合だけ広げる。
-- `grep` は candidate planning を先に行い、Office/PDF 抽出は必要な拡張子に
-  だけ走らせる。
-- result 上限到達時は未開始候補を即停止する。in-flight extraction は既存の
-  timeout / semaphore に従って回収する。
-- process-local extracted-doc cache と disk cache を `read` / `grep` で共有する。
-- short regex alternatives など recall より false-positive が大きい入力は、
-  internal planner で警告または compact fallback にする。ただし model prompt で
-  domain term を足さない。
+- 初回 broad scan は compact な `glob` に保つ。
+- Office/PDF 抽出は exact `read` に限定し、候補全体を暗黙に全文検索しない。
+- `read` は既存の process-local extracted-doc cache と disk cache を使う。
+- model prompt で domain term を足さない。
 
 ### 0.6 Migration phases
 
 Status on 2026-04-23:
 
-- Phase A is implemented in `runtime::file_ops::grep`: Office/PDF targets are
-  routed to the extracted-text backend and returned through the regular
-  grep-style output shape.
+- Phase A is superseded: `runtime::file_ops::grep` now rejects Office/PDF
+  targets instead of routing them to a hidden extracted-text backend.
 - Phase B is implemented for CDP: `office_search` is hidden from the catalog and
-  active whitelist, while `grep` documents the internal Office/PDF backend.
+  active whitelist, while prompts document Office/PDF as `glob` -> `read`.
 - Phase C is implemented for local lookup repair: generated repair payloads use
   `grep` / `glob` only, and the old cash-flow/CFS-specific repair expansion was
   removed.
 - Phase D is partial: legacy `office_search` execution and result summarization
-  remain for compatibility with older transcripts and non-CDP callers.
+  remain only for compatibility with older transcripts and non-CDP callers.
 
 #### Phase A: `grep` backend integration
 
@@ -120,18 +115,18 @@ Change targets:
 
 Tasks:
 
-1. `GrepSearchInput` の既存 schema を壊さず、Office/PDF candidate を検出できる
-   include/glob/path handling を整理する。
-2. `grep` 実行時に Office/PDF 候補を internal backend へ分配する。
-3. `office_search` result を grep-like result へ正規化する adapter を追加する。
-4. `office_search` runtime function は deprecated internal helper として残す。
+1. `GrepSearchInput` の既存 schema は opencode 互換のまま維持し、
+   Office/PDF container target を拒否する。
+2. 拒否メッセージは `glob` で候補発見し、exact `read` で抽出テキストを読む
+   次アクションを明示する。
+3. `office_search` runtime function は deprecated internal helper として残す。
 
 Acceptance:
 
-- `.txt` と `.xlsx` / `.pdf` が混在する fixture で、1 回の `grep` が両方の
-  本文一致を返す。
-- filename-only match は grep result にならない。
-- `read` after `grep` が extraction cache を再利用する。
+- `grep` accepts plaintext/code include filters such as `*.rs`.
+- `grep` rejects `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` path/include
+  targets and points to `glob` -> `read`.
+- filename-only Office/PDF matches are candidates, not grep content evidence.
 
 #### Phase B: CDP catalog simplification
 
@@ -143,8 +138,8 @@ Change targets:
 Tasks:
 
 1. CDP compact / local-search catalog から `office_search` entry を外す。
-2. `grep` の description を「plaintext/code plus extracted Office/PDF text when
-   filters include those containers」程度に短くする。
+2. `grep` の description を plaintext/code content search に限定し、Office/PDF
+   は `glob` -> exact `read` と明記する。
 3. `cdp_active_tool_names_for_flavor` から `office_search` を外し、parser whitelist
    でも hidden `office_search` call を拒否する。
 4. system prompt から `office_search` 優先・Office/PDF 特例文言を削る。
@@ -174,7 +169,10 @@ Tasks:
 
 Acceptance:
 
-- local lookup without tools repairs to `grep` or `glob`, never `office_search`.
+- local lookup without tools repairs to `grep`, `glob`, or exact `read`, never
+  `office_search`.
+- Office/PDF evidence lookup repairs to `glob` first; glob-only evidence claims
+  continue to a targeted `read`.
 - malformed `office_search` JSON after results escalates to summary-only or is ignored
   as hidden unsupported tool.
 - search-budget and duplicate messages name only active model-facing tools.
@@ -190,12 +188,12 @@ Change targets:
 
 Tasks:
 
-1. Document that Office/PDF search is a `grep` backend capability.
+1. Document that Office/PDF search is a `glob` -> exact `read` flow.
 2. Keep `office_search` callable internally for one release window if UI/IPC still
    references it, but mark it hidden from CDP.
 3. Remove obsolete prompt tests expecting `### office_search`.
-4. Add regression tests for mixed backend grep, cache reuse, result evidence
-   distinction, and no `office_search` repair.
+4. Add regression tests for plaintext-only grep, glob-only Office/PDF evidence
+   read follow-up, result evidence distinction, and no `office_search` repair.
 
 Acceptance:
 
@@ -207,12 +205,13 @@ Acceptance:
 
 ### 0.7 Rollback plan
 
-If mixed-backend `grep` causes unacceptable latency or recall regressions:
+If the `glob` -> `read` flow causes unacceptable recall regressions:
 
 1. Keep model-facing catalog on `read` / `glob` / `grep`.
-2. Disable Office/PDF backend behind `RELAY_GREP_OFFICE_BACKEND=0`.
+2. Keep `office_search` hidden from CDP and improve candidate ranking/read
+   follow-up rather than reintroducing a model-facing Office tool.
 3. Surface a concise grep error telling the model/user that Office/PDF content
-   search is disabled, while filename `glob` and exact-path `read` still work.
+   search requires filename `glob` and exact-path `read`.
 
 ---
 

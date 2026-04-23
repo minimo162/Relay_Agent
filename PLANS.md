@@ -179,11 +179,13 @@ Acceptance criteria:
 - Risky actions are explained through inline approval requests instead of a separate mode or permission matrix.
 - Root `pnpm check` passes and Playwright coverage confirms first-run gating plus the simplified shell labels.
 
-### Phase 6: Opencode-Like Search Surface With Office/PDF Backends
+### Phase 6: Opencode-Like Office/PDF Glob-Read Flow
 
 Goal: keep Office/PDF shared-document search as a Relay capability while moving
 the model-facing tool surface back toward opencode's simple `read` / `glob` /
-`grep` shape.
+`grep` shape. Office/PDF files are not searched through a hidden `grep`
+content backend; the model discovers candidate paths with `glob` and inspects
+exact documents with `read`.
 
 Change targets:
 
@@ -197,25 +199,28 @@ Change targets:
 
 Acceptance criteria:
 
-- `grep` can search mixed plaintext and Office/PDF candidates through internal
-  backends while returning one grep-like evidence shape.
-- `read` remains the model-facing path for exact Office/PDF files.
+- `grep` searches plaintext/code files only and rejects `.docx`, `.xlsx`,
+  `.xlsm`, `.pptx`, and `.pdf` targets with guidance to use `glob` then `read`.
+- `read` is the model-facing path for exact Office/PDF files and returns
+  extracted plaintext.
 - `office_search` is hidden from CDP catalogs and repair prompts; it remains
   only as an internal compatibility helper until callers are migrated.
 - Local lookup repair generates only active model-facing tools: `read`, `glob`,
   and `grep`.
-- Office/PDF filename discovery stays a `glob` responsibility; only extracted
-  text matches become content evidence.
+- Office/PDF filename discovery stays a `glob` responsibility; candidate
+  filenames are not treated as content evidence until `read` inspects a file.
 - Root verification follows the repository acceptance policy, with focused
-  runtime and agent-loop regressions covering mixed-backend grep and no
-  `office_search` repair.
+  runtime and agent-loop regressions covering plaintext-only grep, glob-read
+  Office/PDF repair, and no `office_search` repair.
 
 Status 2026-04-23:
 
-- Implemented for the CDP agent loop. `grep` now delegates Office/PDF targets to
-  the extracted-text backend internally, CDP local-search catalogs expose only
-  `read` / `glob` / `grep`, and local lookup repair no longer generates
-  `office_search`.
+- Implemented for the CDP agent loop. `grep` now rejects Office/PDF container
+  targets, CDP local-search catalogs expose only `read` / `glob` / `grep`, and
+  local lookup repair no longer generates `office_search`.
+- Office/PDF evidence lookup repair now starts with `glob`; if Copilot tries to
+  summarize a `glob` candidate as evidence, the loop continues with a targeted
+  `read` of the top Office/PDF candidate.
 - `office_search` remains present as a hidden compatibility/internal execution
   path until all non-CDP callers and legacy transcript handling are migrated.
 
@@ -279,8 +284,8 @@ Acceptance criteria:
 - Extraction cache records are path-indexed, content-hash invalidated, schema-versioned, and store OS-native path bytes.
 - Office extraction enforces zip/XML/output limits, xlsx snapshot preflight, per-file timeout, per-path in-flight guarding, and a process-wide extraction cap.
 - `office_search` remains a runtime/internal compatibility helper; CDP-facing
-  tool catalog and Copilot prompt guidance expose Office/PDF search through
-  opencode-like `grep` / `read` instead.
+  tool catalog and Copilot prompt guidance expose Office/PDF handling through
+  opencode-like `glob` / `read` instead.
 
 ### Cross-Cutting Feature: Agentic Workspace Search
 
@@ -301,12 +306,12 @@ Change targets:
 Acceptance criteria:
 
 - The active search surface stays close to opencode-style low-level tools:
-  `glob` for path discovery, `grep` for plaintext/code plus extracted
-  Office/PDF text, and `read` for exact file inspection.
+  `glob` for path discovery, `grep` for plaintext/code content, and `read` for
+  exact file inspection including extracted Office/PDF text.
 - Standard ignore directories such as `.git`, `node_modules`, and `target`,
   plus `.gitignore` patterns, are skipped by default, and
   large/plainly unreadable/binary files do not bloat results.
-- `glob`, `grep`, and `office_search` emit baseline
+- `glob`, `grep`, and hidden compatibility `office_search` emit baseline
   search telemetry for counts, elapsed time, truncation, and failure surfaces.
 - Search roots are constrained to the current workspace; paths or symlink
   resolutions that escape the workspace are not read.
