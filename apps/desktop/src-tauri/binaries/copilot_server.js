@@ -270,7 +270,6 @@ export function shouldStartNewChatForRequest({
   if (relayForceFreshChat) return true;
   if (envNewChatEachTurn) return true;
   if (!relaySessionInitialized) return true;
-  if (repairStage && repairReplayUsed) return true;
   return false;
 }
 
@@ -1277,11 +1276,11 @@ class CopilotSession {
                   ? "env_each_turn"
                   : !relaySession.initialized
                     ? "session_uninitialized"
-                    : repairStage && repairReplayUsed
-                      ? "repair_replay_retry"
-                      : params.relayNewChat === true
-                        ? "ignored_relay_new_chat_for_existing_session"
-                        : "continue_existing_session",
+                      : repairStage && repairReplayUsed
+                        ? "repair_replay_same_thread"
+                        : params.relayNewChat === true
+                          ? "ignored_relay_new_chat_for_existing_session"
+                          : "continue_existing_session",
           );
           if (wantNewChat) {
             console.error("[copilot:describe] starting new chat...");
@@ -1442,7 +1441,7 @@ class CopilotSession {
           this.lastBridgeFailure = attachFailureMeta(error, trace, { message }).relayFailureMeta;
           this._recordRepairStageTrace(trace, false);
           repairReplayUsed = true;
-          logDescribeTrace("[copilot:describe] repair replay continuing with forced new chat", trace, {
+          logDescribeTrace("[copilot:describe] repair replay continuing in same chat", trace, {
             classified_reason: error.repairReplayReason,
           });
           await sleep(750);
@@ -1464,7 +1463,7 @@ class CopilotSession {
         ) {
           repairReplayUsed = true;
           console.error(
-            "[copilot:describe] repair stage forcing fresh-chat replay after classified failure=",
+            "[copilot:describe] repair stage retrying in same chat after classified failure=",
             trace.failureClass,
           );
           await sleep(750);

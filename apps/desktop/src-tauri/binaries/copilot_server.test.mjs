@@ -32,7 +32,7 @@ test("shouldStartNewChatForRequest opens a new chat only for uninitialized or fo
   );
 });
 
-test("shouldStartNewChatForRequest ignores relayNewChat once a session is initialized", () => {
+test("shouldStartNewChatForRequest keeps initialized sessions on the same chat", () => {
   assert.equal(
     shouldStartNewChatForRequest({
       relayNewChat: true,
@@ -56,6 +56,6 @@ test("shouldStartNewChatForRequest ignores relayNewChat once a session is initia
       repairStage: true,
       repairReplayUsed: true,
     }),
-    true,
+    false,
   );
 });

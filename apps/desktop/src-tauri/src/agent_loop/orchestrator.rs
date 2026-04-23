@@ -1522,6 +1522,21 @@ fn should_use_office_search_catalog_for_request(text: &str) -> bool {
     document_corpus && relevance_or_content
 }
 
+fn cdp_active_catalog_specs_for_flavor(
+    prompt_flavor: CdpPromptFlavor,
+    catalog_flavor: CdpCatalogFlavor,
+    messages: &[ConversationMessage],
+) -> Vec<tools::CdpPromptToolSpec> {
+    let specs = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
+    match catalog_flavor {
+        CdpCatalogFlavor::LocalSearchOnly if should_use_office_search_catalog(messages) => specs
+            .into_iter()
+            .filter(|spec| matches!(spec.name, "read" | "office_search"))
+            .collect(),
+        _ => specs,
+    }
+}
+
 fn format_cdp_tool_arg_list(items: &[String]) -> String {
     if items.is_empty() {
         "none".to_string()
@@ -1649,7 +1664,7 @@ fn cdp_tool_catalog_section_for_flavor(
     catalog_flavor: CdpCatalogFlavor,
     messages: &[ConversationMessage],
 ) -> String {
-    let catalog = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
+    let catalog = cdp_active_catalog_specs_for_flavor(prompt_flavor, catalog_flavor, messages);
     match catalog_flavor {
         CdpCatalogFlavor::StandardFull => {
             let win_addon = if should_include_windows_office_catalog_addon(messages) {
@@ -1708,15 +1723,7 @@ Example:
         }
         CdpCatalogFlavor::LocalSearchOnly => {
             let office_search_catalog = should_use_office_search_catalog(messages);
-            let active_catalog = if office_search_catalog {
-                catalog
-                    .into_iter()
-                    .filter(|spec| matches!(spec.name, "read" | "office_search"))
-                    .collect::<Vec<_>>()
-            } else {
-                catalog
-            };
-            let rendered_tools = active_catalog
+            let rendered_tools = catalog
                 .iter()
                 .map(render_compact_cdp_tool_entry)
                 .collect::<Vec<_>>()
@@ -1869,15 +1876,7 @@ fn cdp_active_tool_names_for_flavor(
     catalog_flavor: CdpCatalogFlavor,
     messages: &[ConversationMessage],
 ) -> HashSet<String> {
-    let specs = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
-    let active_specs = match catalog_flavor {
-        CdpCatalogFlavor::LocalSearchOnly if should_use_office_search_catalog(messages) => specs
-            .into_iter()
-            .filter(|spec| matches!(spec.name, "read" | "office_search"))
-            .collect::<Vec<_>>(),
-        _ => specs,
-    };
-    active_specs
+    cdp_active_catalog_specs_for_flavor(prompt_flavor, catalog_flavor, messages)
         .into_iter()
         .filter(|spec| spec.name != "invalid")
         .map(|spec| spec.name.to_string())

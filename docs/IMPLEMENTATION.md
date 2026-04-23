@@ -50,6 +50,36 @@ Verification:
 - `node -e "...workflow trigger check..."`: passed (`pull_request` and
   `workflow_dispatch` present; `push` and `cargo clippy` absent).
 
+### 2026-04-23 Opencode alignment follow-up: same-thread repair replay
+
+Checked current `anomalyco/opencode` HEAD
+`871789ce64f179d5efa3031afbce3789e27e99b5`. The relevant alignment point is
+that tool repair/continuation happens in the same message series; opencode does
+not start a new provider conversation to recover a malformed tool turn.
+
+Changes:
+
+- The Copilot bridge no longer starts a new M365 chat solely because a repair
+  replay is in progress. Probe mode, explicit `relay_force_fresh_chat`,
+  environment-forced new-chat mode, and uninitialized sessions still open a new
+  chat.
+- Updated repair replay logging from "forced fresh chat" wording to
+  same-thread retry wording, so logs match the actual lifecycle.
+- Consolidated CDP active catalog selection into one helper used by both prompt
+  rendering and parser whitelisting. This keeps the advertised tools and
+  executable tools in one source of truth.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_relevance_lookup_active_catalog_excludes_filename_tools -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_relevance_active_whitelist_rejects_hidden_glob_call -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pending_new_chat_fires_once_for_fresh_session -- --nocapture`: passed, 1 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-23 Opencode alignment follow-up: request-scoped active search catalog
 
 Reviewed current `anomalyco/opencode` HEAD
