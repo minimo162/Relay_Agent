@@ -50,6 +50,45 @@ Verification:
 - `node -e "...workflow trigger check..."`: passed (`pull_request` and
   `workflow_dispatch` present; `push` and `cargo clippy` absent).
 
+### 2026-04-23 Opencode alignment follow-up: Office search as content grep
+
+Reviewed the 2026-04-23 06:15 live CDP log. The first turn now selected
+`office_search`, but the implicit runtime defaults let a broad Office/PDF query
+expand to 4000 network-share candidates and spend about 17 minutes in candidate
+discovery before returning path-level matches. That is still too far from
+opencode's compact `glob` / `grep` search loop.
+
+Changes:
+
+- Removed filename/path matches from `office_search.results`. `office_search`
+  now behaves like an Office/PDF content grep adapter: `results` require
+  extracted document text matches, while file discovery remains represented by
+  `candidate_count` / `candidate_sample` metadata and should not be treated as
+  evidence.
+- Updated CDP follow-up summaries so candidate files with no content hits are
+  reported as "No Office/PDF content matches found" rather than "Found
+  Office/PDF matches".
+- Lowered the implicit `office_search` file budget from 1000 to 100 files.
+  Callers can still explicitly request a larger `max_files` up to the schema
+  maximum, but the default first pass is now compact.
+- Reduced the default candidate expansion cap from `max_files * 4` to the
+  active `max_files`, so broad directory roots no longer enumerate thousands of
+  Office/PDF candidates before the first result pass.
+- Updated the CDP catalog text and tool description to describe compact Office
+  search defaults rather than implying schema-maximum scans.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office_search_does_not_return_filename_matches_as_content_matches -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office_search_default_file_scan_limit_is_compact_for_broad_scan -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_candidates_without_hits_are_not_labeled_as_matches -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml empty_office_search_result_is_summarized_for_cdp_followup -- --nocapture`: passed, 1 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office_search -- --nocapture`: passed, 9 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-23 Opencode alignment follow-up: same-thread repair replay
 
 Checked current `anomalyco/opencode` HEAD

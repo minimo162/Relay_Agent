@@ -1773,7 +1773,7 @@ For the initial lookup reply, output exactly one fenced `relay_tool` or `json` b
 - No prose after the fence.
 - Do not write `はい、...を検索します`.
 - Prefer one JSON array when two complementary searches are useful.
-- In follow-ups after truncated search results, prefer narrowing over raising `max_files`; Relay already uses the schema-maximum default Office/PDF scan budget while keeping visible results compact.
+- In follow-ups after truncated search results, prefer narrowing over raising `max_files`; Relay keeps the default Office/PDF scan budget compact and only widens when explicitly requested.
 
 Example:
 
@@ -3381,8 +3381,13 @@ fn summarize_office_search_tool_result(output: &str) -> Option<String> {
             })
             .filter(|text| !text.is_empty())
             .unwrap_or_else(|| "(unknown)".to_string());
+        let headline = if candidate_count > 0 {
+            "No Office/PDF content matches found"
+        } else {
+            "No Office/PDF candidate files found"
+        };
         let mut lines = vec![
-            "No files found".to_string(),
+            headline.to_string(),
             format!("pattern: {pattern}"),
             format!("paths: {paths}"),
             format!("candidate_count: {candidate_count}"),
@@ -5550,11 +5555,40 @@ mod cdp_copilot_tool_tests {
         .expect("serialize office search output");
 
         let rendered = format_cdp_tool_result("office_search", &output, false);
-        assert!(rendered.contains("No files found"));
+        assert!(rendered.contains("No Office/PDF candidate files found"));
         assert!(rendered.contains("pattern: キャッシュフロー"));
         assert!(rendered.contains("candidate_count: 0"));
         assert!(rendered.contains("errors: 1"));
         assert!(!rendered.contains(r#""relay_tool_call""#));
+    }
+
+    #[test]
+    fn office_search_candidates_without_hits_are_not_labeled_as_matches() {
+        let output = serde_json::to_string(&json!({
+            "results": [],
+            "errors": [],
+            "filesScanned": 10,
+            "pattern": "キャッシュフロー",
+            "paths": [r"H:\shr1\05_経理部\03_連結財務G"],
+            "regex": false,
+            "include_ext": ["xlsx", "xlsm", "pptx", "pdf", "docx"],
+            "candidate_count": 100,
+            "candidate_sample": [r"H:\shr1\05_経理部\03_連結財務G\FY160_CFS.xlsx"],
+            "max_files": 100,
+            "max_results": 30,
+            "expansion_candidate_cap": 100,
+            "files_truncated": true,
+            "results_truncated": false,
+            "wall_clock_truncated": false
+        }))
+        .expect("serialize office search output");
+
+        let rendered = format_cdp_tool_result("office_search", &output, false);
+        assert!(rendered.contains("No Office/PDF content matches found"));
+        assert!(rendered.contains("candidate_count: 100"));
+        assert!(rendered.contains("files_scanned: 10"));
+        assert!(!rendered.contains("Found 100 Office/PDF matches"));
+        assert!(!rendered.contains("FY160_CFS.xlsx:path"));
     }
 
     #[test]

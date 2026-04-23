@@ -804,7 +804,7 @@ fn build_mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "office_search",
-            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use only where opencode-style grep/read cannot inspect Office/PDF containers. Keep patterns concrete and derived from the user's words; do not add generic domain expansions such as BS/PL unless the user asked for them. Defaults to literal substring search; set regex=true for small user-term alternations such as `CFS|精算表`. No semantic ranking. Results include path, anchor, match offsets, preview, and truncation metadata. Extraction omits unsupported embedded image/chart/SmartArt text.",
+            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use only where opencode-style grep/read cannot inspect Office/PDF containers. Keep patterns concrete and derived from the user's words; do not add generic domain expansions such as BS/PL unless the user asked for them. Defaults to literal substring search and a compact file budget; set regex=true only for small user-term alternations. No semantic ranking. Results include path, anchor, match offsets, preview, and truncation metadata. Extraction omits unsupported embedded image/chart/SmartArt text.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

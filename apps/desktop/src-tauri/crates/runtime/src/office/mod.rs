@@ -685,6 +685,10 @@ pub const MAX_OFFICE_SEARCH_CONTEXT: usize = 1024;
 /// Soft cap on regex memory use during compilation, mirroring the `regex` crate's
 /// default but pinning the value so future bumps don't silently widen the surface.
 const REGEX_SIZE_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+/// Keep default Office/PDF discovery close to opencode's compact search loop.
+/// Callers can still opt into a wider scan with `max_files`, but the implicit
+/// first pass should not enumerate thousands of network-share candidates.
+const DEFAULT_OFFICE_SEARCH_MAX_FILES: usize = 100;
 
 #[derive(Debug)]
 struct CandidateExpansion {
@@ -699,7 +703,10 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     let regex = compile_office_search_regex(input)?;
     let include_ext = normalize_include_ext(input.include_ext.as_ref())?;
     let max_results = input.max_results.unwrap_or(30).clamp(1, 1_000);
-    let max_files = input.max_files.unwrap_or(1_000).clamp(1, 1_000);
+    let max_files = input
+        .max_files
+        .unwrap_or(DEFAULT_OFFICE_SEARCH_MAX_FILES)
+        .clamp(1, 1_000);
     let context = input.context.unwrap_or(80).min(MAX_OFFICE_SEARCH_CONTEXT);
     let started = Instant::now();
     let wall = Duration::from_secs(env_u64("RELAY_OFFICE_SEARCH_MAX_WALL_SECS", 600, 10, 3600));
@@ -729,55 +736,6 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
 
     let mut results = Vec::new();
     let mut results_truncated = false;
-    for candidate in &candidates {
-        if fold_office_path_result(&regex, context, max_results, candidate, &mut results) {
-            results_truncated = true;
-            break;
-        }
-    }
-
-    if results_truncated {
-        let output = OfficeSearchOutput {
-            results,
-            errors,
-            files_scanned: 0,
-            pattern: input.pattern.clone(),
-            paths: input.paths.clone(),
-            regex: input.regex.unwrap_or(false),
-            include_ext: include_ext.iter().cloned().collect(),
-            candidate_count,
-            candidate_sample,
-            max_files,
-            max_results,
-            expansion_candidate_cap,
-            files_truncated,
-            results_truncated,
-            wall_clock_truncated,
-        };
-        tracing::info!(
-            target: "relay.runtime.search",
-            tool = "office_search",
-            pattern = %output.pattern,
-            paths = ?output.paths,
-            regex = output.regex,
-            include_ext = ?output.include_ext,
-            candidate_count = output.candidate_count,
-            candidate_sample = ?output.candidate_sample,
-            max_files = output.max_files,
-            max_results = output.max_results,
-            expansion_candidate_cap = output.expansion_candidate_cap,
-            files_scanned = output.files_scanned,
-            results = output.results.len(),
-            errors = output.errors.len(),
-            files_truncated = output.files_truncated,
-            results_truncated = output.results_truncated,
-            wall_clock_truncated = output.wall_clock_truncated,
-            elapsed_ms = started.elapsed().as_millis(),
-            "office_search completed"
-        );
-        return Ok(output);
-    }
-
     let parse_timeout = parse_timeout();
     let worker_count = candidates.len().min(max_concurrent_extractions()).max(1);
     let (work_tx, work_rx) = mpsc::sync_channel::<(usize, PathBuf)>(0);
@@ -1037,38 +995,6 @@ fn fold_office_search_result(
     false
 }
 
-fn fold_office_path_result(
-    regex: &Regex,
-    context: usize,
-    max_results: usize,
-    path: &Path,
-    results: &mut Vec<OfficeSearchHit>,
-) -> bool {
-    if results.len() >= max_results {
-        return true;
-    }
-    let display = path.to_string_lossy();
-    for mat in regex.find_iter(&display) {
-        if results.len() >= max_results {
-            return true;
-        }
-        let start = mat.start().saturating_sub(context);
-        let end = (mat.end() + context).min(display.len());
-        results.push(OfficeSearchHit {
-            path: display.to_string(),
-            anchor: String::from("path"),
-            matched: mat.as_str().to_string(),
-            preview: safe_preview(&display, start, end),
-            match_start: mat.start(),
-            match_end: mat.end(),
-        });
-        if results.len() >= max_results {
-            return true;
-        }
-    }
-    false
-}
-
 fn safe_preview(text: &str, requested_start: usize, requested_end: usize) -> String {
     let mut start = requested_start.min(text.len());
     while start > 0 && !text.is_char_boundary(start) {
@@ -1130,7 +1056,7 @@ fn expand_office_candidates(
 }
 
 fn office_candidate_expansion_cap(max_files: usize) -> usize {
-    let default = max_files.saturating_mul(4).max(max_files + 1).max(200);
+    let default = max_files.max(DEFAULT_OFFICE_SEARCH_MAX_FILES);
     env_usize(
         "RELAY_OFFICE_SEARCH_EXPANSION_CANDIDATE_CAP",
         default,
@@ -1911,27 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_office_path_result_records_filename_match() {
-        let regex = Regex::new(r"予算|精算表").expect("regex");
-        let path = Path::new(
-            "/tmp/999連結/999期-9Q/連結決算/02精算表/ツール/FY999-9Q_連結予算精算表(リンク).xlsx",
-        );
-        let mut results = Vec::new();
-
-        let truncated = fold_office_path_result(&regex, 12, 10, path, &mut results);
-
-        assert!(!truncated);
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0].anchor, "path");
-        assert_eq!(results[0].matched, "精算表");
-        assert!(results[0].preview.contains("02精算表"));
-        assert!(results
-            .iter()
-            .any(|hit| hit.preview.contains("連結予算精算表")));
-    }
-
-    #[test]
-    fn office_search_returns_path_matches_before_expensive_extraction() {
+    fn office_search_does_not_return_filename_matches_as_content_matches() {
         let root = test_dir();
         for index in 0..3 {
             fs::write(
@@ -1953,11 +1859,14 @@ mod tests {
         })
         .expect("office search");
 
-        assert_eq!(output.files_scanned, 0);
-        assert_eq!(output.results.len(), 2);
-        assert!(output.results.iter().all(|hit| hit.anchor == "path"));
-        assert!(output.results_truncated);
-        assert!(output.errors.is_empty());
+        assert_eq!(output.files_scanned, 3);
+        assert!(output.results.is_empty());
+        assert!(!output.results_truncated);
+        assert_eq!(output.errors.len(), 3);
+        assert!(output
+            .errors
+            .iter()
+            .all(|error| error.path.contains("needle-report")));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -2019,7 +1928,7 @@ mod tests {
     }
 
     #[test]
-    fn office_search_default_result_limit_is_compact() {
+    fn office_search_default_result_limit_metadata_is_compact() {
         let root = test_dir();
         for index in 0..35 {
             fs::write(
@@ -2042,16 +1951,17 @@ mod tests {
         .expect("office search");
 
         assert_eq!(output.max_results, 30);
-        assert_eq!(output.results.len(), 30);
-        assert!(output.results_truncated);
+        assert!(output.results.is_empty());
+        assert!(!output.results_truncated);
+        assert_eq!(output.errors.len(), 35);
 
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn office_search_default_file_scan_limit_uses_schema_max_for_broad_scan() {
+    fn office_search_default_file_scan_limit_is_compact_for_broad_scan() {
         let root = test_dir();
-        for index in 0..1005 {
+        for index in 0..105 {
             fs::write(
                 root.join(format!("target-{index:03}.xlsx")),
                 b"not a real workbook",
@@ -2071,10 +1981,14 @@ mod tests {
         })
         .expect("office search");
 
-        assert_eq!(output.max_files, 1_000);
-        assert_eq!(output.files_scanned, 1_000);
+        assert_eq!(output.max_files, DEFAULT_OFFICE_SEARCH_MAX_FILES);
+        assert_eq!(output.files_scanned, DEFAULT_OFFICE_SEARCH_MAX_FILES);
         assert!(output.files_truncated);
-        assert_eq!(output.candidate_count, 1005);
+        assert_eq!(
+            output.expansion_candidate_cap,
+            DEFAULT_OFFICE_SEARCH_MAX_FILES
+        );
+        assert_eq!(output.candidate_count, DEFAULT_OFFICE_SEARCH_MAX_FILES);
 
         let _ = fs::remove_dir_all(root);
     }
