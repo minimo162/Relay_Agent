@@ -35,6 +35,26 @@ Changes:
   into the CDP message block. This mirrors opencode's budgeted tail selection:
   keep the current task, tool call, and tool evidence; avoid resending older
   assistant/user turns into M365 when Relay already owns the session transcript.
+- Tool Result follow-ups now use a compact follow-up system prompt and advertise
+  only `read` as an optional next tool. Broad search tools (`glob`, `grep`,
+  `office_search`) are not re-advertised after successful search evidence,
+  matching opencode's search-then-read-then-answer loop and reducing the logged
+  fixed CDP overhead from the previous full desktop system plus local-search
+  catalog.
+- Follow-up correction after live logs showed `office_search` only scanned
+  `max_files=50` of `candidate_count=200`: opencode `grep` searches broadly and
+  truncates visible output to 100 matches. Relay's Office/PDF adapter now
+  separates scan breadth from visible result compactness by defaulting
+  `max_files` to the existing schema maximum of 1000 while keeping
+  `max_results=30`. If a Tool Result explicitly reports truncation
+  (`files_truncated`, `results_truncated`, `wall_clock_truncated`, or
+  `Results truncated`) the follow-up keeps the compact search catalog available
+  for one narrowed follow-up search instead of forcing `read` only.
+- Additional Office/PDF extraction-cost improvement: `office_search` now applies
+  path/filename matching across the full candidate list before starting worker
+  extraction. If path matches already fill `max_results`, Relay returns those
+  hits with `files_scanned=0`, mirroring opencode's cheap rg-backed discovery
+  before expensive content inspection.
 - Repair stages keep the existing bridge-specific fresh-chat policy, so tool
   protocol recovery does not get an extra reset unless the recovery path already
   requests it.
@@ -47,6 +67,11 @@ Verification:
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml tool_result_followup_requests_fresh_chat_for_stateless_cdp_prompt -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml pending_new_chat_fires_once_for_fresh_session -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml standard_tool_result_followup_keeps_latest_turn_tail_only -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml standard_tool_result_followup_uses_compact_read_only_prompt -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml truncated_search_followup_keeps_compact_search_catalog_for_narrowing -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_default_file_scan_limit_uses_schema_max_for_broad_scan -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_returns_path_matches_before_expensive_extraction -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search_ -- --nocapture`: passed, 9 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_excludes_older_turns_but_keeps_messages_after_synthetic_repair_user -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 9 passed.
 - `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 2 passed.

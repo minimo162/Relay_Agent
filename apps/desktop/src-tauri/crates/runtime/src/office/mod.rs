@@ -699,7 +699,7 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     let regex = compile_office_search_regex(input)?;
     let include_ext = normalize_include_ext(input.include_ext.as_ref())?;
     let max_results = input.max_results.unwrap_or(30).clamp(1, 1_000);
-    let max_files = input.max_files.unwrap_or(50).clamp(1, 1_000);
+    let max_files = input.max_files.unwrap_or(1_000).clamp(1, 1_000);
     let context = input.context.unwrap_or(80).min(MAX_OFFICE_SEARCH_CONTEXT);
     let started = Instant::now();
     let wall = Duration::from_secs(env_u64("RELAY_OFFICE_SEARCH_MAX_WALL_SECS", 600, 10, 3600));
@@ -727,6 +727,57 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     let mut errors = expansion.errors;
     let mut wall_clock_truncated = expansion.wall_clock_truncated;
 
+    let mut results = Vec::new();
+    let mut results_truncated = false;
+    for candidate in &candidates {
+        if fold_office_path_result(&regex, context, max_results, candidate, &mut results) {
+            results_truncated = true;
+            break;
+        }
+    }
+
+    if results_truncated {
+        let output = OfficeSearchOutput {
+            results,
+            errors,
+            files_scanned: 0,
+            pattern: input.pattern.clone(),
+            paths: input.paths.clone(),
+            regex: input.regex.unwrap_or(false),
+            include_ext: include_ext.iter().cloned().collect(),
+            candidate_count,
+            candidate_sample,
+            max_files,
+            max_results,
+            expansion_candidate_cap,
+            files_truncated,
+            results_truncated,
+            wall_clock_truncated,
+        };
+        tracing::info!(
+            target: "relay.runtime.search",
+            tool = "office_search",
+            pattern = %output.pattern,
+            paths = ?output.paths,
+            regex = output.regex,
+            include_ext = ?output.include_ext,
+            candidate_count = output.candidate_count,
+            candidate_sample = ?output.candidate_sample,
+            max_files = output.max_files,
+            max_results = output.max_results,
+            expansion_candidate_cap = output.expansion_candidate_cap,
+            files_scanned = output.files_scanned,
+            results = output.results.len(),
+            errors = output.errors.len(),
+            files_truncated = output.files_truncated,
+            results_truncated = output.results_truncated,
+            wall_clock_truncated = output.wall_clock_truncated,
+            elapsed_ms = started.elapsed().as_millis(),
+            "office_search completed"
+        );
+        return Ok(output);
+    }
+
     let parse_timeout = parse_timeout();
     let worker_count = candidates.len().min(max_concurrent_extractions()).max(1);
     let (work_tx, work_rx) = mpsc::sync_channel::<(usize, PathBuf)>(0);
@@ -753,12 +804,10 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     }
     drop(result_tx);
 
-    let mut results = Vec::new();
     let mut ready = std::collections::BTreeMap::new();
     let mut next_to_fold = 0usize;
     let mut cursor = 0usize;
     let mut outstanding = 0usize;
-    let mut results_truncated = false;
 
     let fold_ready =
         |ready: &mut std::collections::BTreeMap<usize, (PathBuf, io::Result<ParsedDoc>)>,
@@ -799,16 +848,6 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         }
 
         if cursor < candidates.len() && outstanding < worker_count {
-            if fold_office_path_result(
-                &regex,
-                context,
-                max_results,
-                &candidates[cursor],
-                &mut results,
-            ) {
-                results_truncated = true;
-                break;
-            }
             if work_tx.send((cursor, candidates[cursor].clone())).is_err() {
                 break;
             }
@@ -1892,6 +1931,38 @@ mod tests {
     }
 
     #[test]
+    fn office_search_returns_path_matches_before_expensive_extraction() {
+        let root = test_dir();
+        for index in 0..3 {
+            fs::write(
+                root.join(format!("needle-report-{index}.xlsx")),
+                b"not a real workbook",
+            )
+            .expect("write candidate");
+        }
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+
+        let output = office_search(&OfficeSearchInput {
+            pattern: "needle".to_string(),
+            paths: vec![pattern],
+            regex: None,
+            include_ext: Some(vec![String::from("xlsx")]),
+            context: Some(20),
+            max_results: Some(2),
+            max_files: None,
+        })
+        .expect("office search");
+
+        assert_eq!(output.files_scanned, 0);
+        assert_eq!(output.results.len(), 2);
+        assert!(output.results.iter().all(|hit| hit.anchor == "path"));
+        assert!(output.results_truncated);
+        assert!(output.errors.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sort_candidates_by_modified_desc_prefers_recent_over_path_relevance() {
         let root = test_dir();
         let old_relevant = root.join("old_予算精算表.xlsx");
@@ -1973,6 +2044,37 @@ mod tests {
         assert_eq!(output.max_results, 30);
         assert_eq!(output.results.len(), 30);
         assert!(output.results_truncated);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn office_search_default_file_scan_limit_uses_schema_max_for_broad_scan() {
+        let root = test_dir();
+        for index in 0..1005 {
+            fs::write(
+                root.join(format!("target-{index:03}.xlsx")),
+                b"not a real workbook",
+            )
+            .expect("write candidate");
+        }
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+
+        let output = office_search(&OfficeSearchInput {
+            pattern: "needle-not-in-filename".to_string(),
+            paths: vec![pattern],
+            regex: None,
+            include_ext: Some(vec![String::from("xlsx")]),
+            context: None,
+            max_results: Some(1),
+            max_files: None,
+        })
+        .expect("office search");
+
+        assert_eq!(output.max_files, 1_000);
+        assert_eq!(output.files_scanned, 1_000);
+        assert!(output.files_truncated);
+        assert_eq!(output.candidate_count, 1005);
 
         let _ = fs::remove_dir_all(root);
     }

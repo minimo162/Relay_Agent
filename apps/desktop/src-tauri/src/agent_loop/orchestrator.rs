@@ -1434,6 +1434,10 @@ fn cdp_catalog_specs_for_flavor(
             .into_iter()
             .filter(|spec| matches!(spec.name, "read" | "glob" | "grep" | "office_search"))
             .collect(),
+        CdpCatalogFlavor::ToolResultReadOnly => specs
+            .into_iter()
+            .filter(|spec| spec.name == "read")
+            .collect(),
         CdpCatalogFlavor::RepairWriteFileOnly => specs
             .into_iter()
             .filter(|spec| spec.name == "write")
@@ -1647,6 +1651,7 @@ Do not use M365/Copilot search, web search, citations, uploaded files, Python/co
 - plaintext/code content lookup => `grep`
 - Office/PDF content lookup => `office_search`
 - open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content with user-derived terms; after duplicate-search or search-budget notices, stop tools and summarize
+- truncated follow-up => if prior Tool Results explicitly report truncation, issue at most one narrowed follow-up search with a more specific pattern or subpath; never repeat the same broad query
 
 {rendered_tools}
 
@@ -1658,11 +1663,44 @@ For the initial lookup reply, output exactly one fenced `relay_tool` or `json` b
 - No prose after the fence.
 - Do not write `はい、...を検索します`.
 - Prefer one JSON array when two complementary searches are useful.
+- In follow-ups after truncated search results, prefer narrowing over raising `max_files`; Relay already uses the schema-maximum default Office/PDF scan budget while keeping visible results compact.
 
 Example:
 
 ```relay_tool
 {{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"CFS|精算表","regex":true,"paths":["reports/**"],"include_ext":["xlsx","pdf"]}}}}
+```
+"#,
+                rendered_tools = rendered_tools,
+            )
+        }
+        CdpCatalogFlavor::ToolResultReadOnly => {
+            let rendered_tools = catalog
+                .iter()
+                .map(render_compact_cdp_tool_entry)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!(
+                r#"## CDP follow-up tools
+
+Relay already ran the search or mutation tools for this turn. Answer from the Tool Results when enough evidence is present.
+
+Use the single follow-up tool below only when you must inspect a specific candidate file before making an important claim.
+
+{rendered_tools}
+
+## Tool invocation protocol
+
+If `read` is required, output exactly one fenced `relay_tool` or `json` block with JSON only.
+
+- No more `glob`, `grep`, or `office_search` in this follow-up.
+- No prose before or after the fence when calling `read`.
+- If `read` is not required, answer normally in plain text and do not include a tool fence.
+
+Example:
+
+```relay_tool
+{{"name":"read","relay_tool_call":true,"input":{{"filePath":"reports/cfs.xlsx"}}}}
 ```
 "#,
                 rendered_tools = rendered_tools,
@@ -4798,6 +4836,74 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn standard_tool_result_followup_uses_compact_read_only_prompt() {
+        let messages = vec![
+            ConversationMessage::user_text("Find CFS files under H:/shr1".to_string()),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "office_search".to_string(),
+                input: r#"{"pattern":"CFS","paths":["H:/shr1/**"]}"#.to_string(),
+            }]),
+            ConversationMessage::tool_result("tool-1", "office_search", "Found 1 match", false),
+        ];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &["Very long desktop system prompt that should not be reused here.".repeat(200)],
+            &messages,
+            CdpPromptFlavor::Standard,
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::ToolResultReadOnly);
+        assert!(bundle.grounding_text.contains("CDP tool-result follow-up"));
+        assert!(bundle.system_text.contains("Relay follow-up mode"));
+        assert!(!bundle
+            .system_text
+            .contains("Very long desktop system prompt"));
+        assert!(bundle.catalog_text.contains("### `read`"));
+        assert!(!bundle.catalog_text.contains("### `office_search`"));
+        assert!(!bundle.catalog_text.contains("### `grep`"));
+        assert!(!bundle.catalog_text.contains("### `glob`"));
+        assert!(bundle.catalog_chars() < 1_500);
+        assert!(bundle.system_chars() < 1_000);
+    }
+
+    #[test]
+    fn truncated_search_followup_keeps_compact_search_catalog_for_narrowing() {
+        let output = serde_json::to_string(&json!({
+            "results": [],
+            "files_truncated": true,
+            "results_truncated": false,
+            "wall_clock_truncated": false,
+            "candidate_count": 400,
+            "filesScanned": 100
+        }))
+        .expect("serialize office_search output");
+        let messages = vec![
+            ConversationMessage::user_text("Find CFS files under H:/shr1".to_string()),
+            ConversationMessage::tool_result("tool-1", "office_search", output, false),
+        ];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &["Very long desktop system prompt that should not be reused here.".repeat(200)],
+            &messages,
+            CdpPromptFlavor::Standard,
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
+        assert!(bundle.grounding_text.contains("CDP tool-result follow-up"));
+        assert!(bundle.system_text.contains("Relay follow-up mode"));
+        assert!(!bundle
+            .system_text
+            .contains("Very long desktop system prompt"));
+        assert!(bundle.catalog_text.contains("### `read`"));
+        assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(bundle.catalog_text.contains("truncated follow-up"));
+        assert!(bundle
+            .prompt
+            .contains("at most one narrowed follow-up search"));
+    }
+
+    #[test]
     fn standard_catalog_lists_full_build_tooling() {
         let s = cdp_tool_catalog_section_for_flavor(
             CdpPromptFlavor::Standard,
@@ -5285,7 +5391,7 @@ mod cdp_copilot_tool_tests {
         }
     }
 
-    /// CDP bundle must include the grounding block and verbatim `read` tool output.
+    /// CDP tool-result follow-up bundle must include follow-up grounding and verbatim `read` output.
     #[test]
     fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
         let html = include_str!("../../../../../tests/fixtures/tetris_grounding.html");
@@ -5313,20 +5419,20 @@ mod cdp_copilot_tool_tests {
         };
         let out = build_cdp_prompt(&request);
         assert!(
-            out.contains("CDP bundle (read before you reply)"),
-            "grounding header missing from bundle"
+            out.contains("CDP tool-result follow-up"),
+            "follow-up grounding header missing from bundle"
         );
         assert!(
-            out.contains("Only local Relay tools in the catalog below are available."),
-            "grounding tool-catalog rule missing from bundle"
+            out.contains("Relay already ran local tools for this turn"),
+            "follow-up evidence rule missing from bundle"
         );
         assert!(
-            out.contains("fenced `relay_tool` JSON block only"),
-            "grounding relay_tool rule missing from bundle"
+            out.contains("If deeper evidence is required, use only the follow-up tool catalog"),
+            "follow-up tool-catalog rule missing from bundle"
         );
         assert!(
-            out.contains("Do not invent unavailable tools or Microsoft-native actions."),
-            "grounding anti-invent rule missing from bundle"
+            out.contains("Do not run another broad search"),
+            "follow-up anti-search rule missing from bundle"
         );
         assert!(
             out.contains("RELAY_GROUNDING_FIXTURE"),
