@@ -15,6 +15,44 @@
 
 ## Milestone Log
 
+### 2026-04-23 stateless CDP follow-ups after tool results
+
+Reviewed the supplied `tauri:dev` trace against current
+`anomalyco/opencode` HEAD `1026791076c6a4edf1d44422177e13d06c2930d6`.
+The log showed Relay sending a full CDP prompt bundle for the original request,
+then after `office_search` sending another full bundle with tool evidence into
+the same M365 Copilot conversation. That left M365 with hidden prior pasted
+bundles in its browser-thread context even though Relay already supplies the
+complete current context, which diverges from opencode's stateless provider
+message loop.
+
+Changes:
+
+- CDP model calls now request a fresh Copilot chat for normal follow-ups that
+  include successful Relay Tool Result blocks. The first fresh-session request
+  behavior is unchanged.
+- Those normal Tool Result follow-ups now render only the latest user turn tail
+  into the CDP message block. This mirrors opencode's budgeted tail selection:
+  keep the current task, tool call, and tool evidence; avoid resending older
+  assistant/user turns into M365 when Relay already owns the session transcript.
+- Repair stages keep the existing bridge-specific fresh-chat policy, so tool
+  protocol recovery does not get an extra reset unless the recovery path already
+  requests it.
+- The intent is to make broad Office/PDF search flows continue from the compact
+  Relay-rendered evidence only, avoiding repeated M365 exposure to earlier
+  10k-20k character prompt bundles.
+
+Verification:
+
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml tool_result_followup_requests_fresh_chat_for_stateless_cdp_prompt -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml pending_new_chat_fires_once_for_fresh_session -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml standard_tool_result_followup_keeps_latest_turn_tail_only -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_excludes_older_turns_but_keeps_messages_after_synthetic_repair_user -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt -- --nocapture`: passed, 9 passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 2 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-23 opencode-aligned Office search retry suppression
 
 Reviewed the follow-up `tauri:dev` log from the M365 CDP path against

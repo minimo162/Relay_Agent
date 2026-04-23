@@ -973,8 +973,9 @@ pub struct CdpApiClient<R: Runtime> {
     registry: Option<SessionRegistry>,
     session_id: Option<String>,
     /// Consumed on the first `send_prompt` to request a fresh Copilot chat
-    /// thread. Swapped to `false` after that one use so subsequent requests
-    /// (retries, later turns within the same session) continue the thread.
+    /// thread. Tool-result follow-ups also request a fresh Copilot chat so M365
+    /// sees Relay's current CDP prompt bundle without hidden prior pasted
+    /// bundles from the same browser conversation.
     pending_new_chat: Arc<AtomicBool>,
 }
 
@@ -1244,7 +1245,11 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                     } else {
                         None
                     };
-                    let new_chat = self.pending_new_chat.swap(false, Ordering::SeqCst);
+                    let new_chat = cdp_should_request_new_chat(
+                        &self.pending_new_chat,
+                        request.messages,
+                        stage_label,
+                    );
                     let result = rt.block_on(async {
                         let relay_force_fresh_chat = cdp_force_fresh_chat(request.messages);
                         let response = srv
@@ -2182,6 +2187,29 @@ fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
         Some(_) => "repair3",
         None => "original",
     }
+}
+
+fn cdp_has_tool_result(messages: &[ConversationMessage]) -> bool {
+    messages.iter().any(|message| {
+        message.blocks.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult {
+                    is_error: false,
+                    ..
+                }
+            )
+        })
+    })
+}
+
+fn cdp_should_request_new_chat(
+    pending_new_chat: &AtomicBool,
+    messages: &[ConversationMessage],
+    stage_label: &str,
+) -> bool {
+    let first_request = pending_new_chat.swap(false, Ordering::SeqCst);
+    first_request || (stage_label == "original" && cdp_has_tool_result(messages))
 }
 
 fn cdp_force_fresh_chat(messages: &[ConversationMessage]) -> bool {
@@ -4738,6 +4766,34 @@ mod cdp_copilot_tool_tests {
         let rendered = render_cdp_messages(&sliced);
         assert!(rendered.contains("Repair follow-up"));
         assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">"));
+        assert!(!rendered.contains("Older assistant text"));
+    }
+
+    #[test]
+    fn standard_tool_result_followup_keeps_latest_turn_tail_only() {
+        let messages = vec![
+            ConversationMessage::user_text("Older request".to_string()),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "Older assistant text that should not be resent to CDP.".to_string(),
+            }]),
+            ConversationMessage::user_text("Find CFS files under H:/shr1".to_string()),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "office_search".to_string(),
+                input: r#"{"pattern":"CFS","paths":["H:/shr1/**"]}"#.to_string(),
+            }]),
+            ConversationMessage::tool_result("tool-1", "office_search", "Found 1 match", false),
+        ];
+
+        let sliced = cdp_messages_for_flavor(&messages, CdpPromptFlavor::Standard);
+        let rendered = render_cdp_messages(&sliced);
+
+        assert_eq!(sliced.len(), 3);
+        assert!(matches!(sliced[0].role, MessageRole::User));
+        assert!(rendered.contains("Find CFS files under H:/shr1"));
+        assert!(rendered.contains("[Tool Call: office_search]"));
+        assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"office_search\" status=\"ok\">"));
+        assert!(!rendered.contains("Older request"));
         assert!(!rendered.contains("Older assistant text"));
     }
 
@@ -7697,24 +7753,34 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn pending_new_chat_fires_once_for_fresh_session_and_never_for_continuation() {
-        // Mirrors the `self.pending_new_chat.swap(false, Ordering::SeqCst)` call
-        // in CdpApiClient::stream. A fresh session flips `new_chat: true` exactly
-        // once; continuation sessions never fire it.
+    fn pending_new_chat_fires_once_for_fresh_session() {
+        // Mirrors `cdp_should_request_new_chat` in CdpApiClient::stream.
+        // A fresh session flips `new_chat: true` exactly once.
         let fresh = Arc::new(AtomicBool::new(true));
         assert!(
-            fresh.swap(false, Ordering::SeqCst),
+            cdp_should_request_new_chat(&fresh, &[], "original"),
             "first send on a fresh session must request new_chat"
         );
         assert!(
-            !fresh.swap(false, Ordering::SeqCst),
-            "later sends within the same agent-loop invocation must not re-fire new_chat"
+            !cdp_should_request_new_chat(&fresh, &[], "original"),
+            "plain later sends within the same agent-loop invocation must not re-fire new_chat"
         );
+    }
 
+    #[test]
+    fn tool_result_followup_requests_fresh_chat_for_stateless_cdp_prompt() {
         let continuation = Arc::new(AtomicBool::new(false));
+        let messages = vec![
+            ConversationMessage::user_text("Find files"),
+            ConversationMessage::tool_result("tool-1", "office_search", "Found 1 match", false),
+        ];
         assert!(
-            !continuation.swap(false, Ordering::SeqCst),
-            "continuation sessions must never request new_chat"
+            cdp_should_request_new_chat(&continuation, &messages, "original"),
+            "tool-result follow-ups paste a complete Relay prompt bundle and should not inherit the prior M365 thread"
+        );
+        assert!(
+            !cdp_should_request_new_chat(&continuation, &messages, "repair1"),
+            "repair stages keep their existing bridge-specific fresh-chat policy"
         );
     }
 

@@ -509,11 +509,31 @@ pub(crate) fn cdp_messages_for_flavor(
     flavor: CdpPromptFlavor,
 ) -> Vec<ConversationMessage> {
     match flavor {
-        CdpPromptFlavor::Standard => messages.to_vec(),
+        CdpPromptFlavor::Standard => {
+            if has_successful_tool_result(messages) {
+                messages_from_latest_user(messages).unwrap_or_else(|| messages.to_vec())
+            } else {
+                messages.to_vec()
+            }
+        }
         CdpPromptFlavor::Repair => {
             messages_from_latest_user(messages).unwrap_or_else(|| messages.to_vec())
         }
     }
+}
+
+fn has_successful_tool_result(messages: &[ConversationMessage]) -> bool {
+    messages.iter().any(|message| {
+        message.blocks.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult {
+                    is_error: false,
+                    ..
+                }
+            )
+        })
+    })
 }
 
 fn messages_from_latest_user(messages: &[ConversationMessage]) -> Option<Vec<ConversationMessage>> {
