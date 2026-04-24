@@ -177,9 +177,7 @@ fn handle_connection(stream: &mut TcpStream, mode: StatusMode, expected_boot_tok
         body.len(),
         body
     );
-    stream
-        .write_all(response.as_bytes())
-        .expect("write response");
+    let _ = stream.write_all(response.as_bytes());
 }
 
 fn run_doctor(
