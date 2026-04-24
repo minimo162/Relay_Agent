@@ -1,11 +1,12 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use desktop_core::doctor::{
-    failed_check, ok_check, report_from_checks as core_report_from_checks, warn_check,
+    failed_check, ok_check, report_from_checks as core_report_from_checks, runtime_assets_check,
+    warn_check, workspace_config_check, RELAY_MAX_TEXT_FILE_READ_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
@@ -22,7 +23,6 @@ use crate::models::{
     RelayDiagnostics, RelayDoctorCheck, RelayDoctorReport,
 };
 use crate::registry::SessionRegistry;
-use runtime::{ConfigLoader, MAX_TEXT_FILE_READ_BYTES};
 
 const DEFAULT_BROWSER_TIMEOUT_MS: u32 = 120_000;
 const DOCTOR_BRIDGE_URL_ENV: &str = "RELAY_DOCTOR_BRIDGE_URL";
@@ -267,7 +267,8 @@ pub fn run_copilot_warmup_blocking(
 }
 
 pub async fn get_relay_diagnostics(bridge: Arc<CopilotBridgeManager>) -> RelayDiagnostics {
-    tokio::task::spawn_blocking(move || relay_diagnostics_blocking(bridge))
+    let opencode_snapshot = crate::opencode_runtime::snapshot().await;
+    let mut diagnostics = tokio::task::spawn_blocking(move || relay_diagnostics_blocking(bridge))
         .await
         .unwrap_or_else(|error| {
             let mut diagnostics = relay_diagnostics_base();
@@ -275,7 +276,11 @@ pub async fn get_relay_diagnostics(bridge: Arc<CopilotBridgeManager>) -> RelayDi
                 .doctor_hints
                 .push(format!("Copilot bridge diagnostics task failed: {error}"));
             diagnostics
-        })
+        });
+    diagnostics.opencode_runtime_url = opencode_snapshot.url;
+    diagnostics.opencode_runtime_running = Some(opencode_snapshot.running);
+    diagnostics.opencode_runtime_message = Some(opencode_snapshot.message);
+    diagnostics
 }
 
 pub fn relay_diagnostics_blocking(bridge: Arc<CopilotBridgeManager>) -> RelayDiagnostics {
@@ -364,8 +369,9 @@ pub fn run_doctor_blocking(options: RelayDoctorOptions) -> RelayDoctorReport {
         .expect("doctor runtime");
 
     let mut checks = Vec::new();
-    checks.push(check_workspace(options.workspace.as_deref()));
-    checks.push(check_runtime_assets());
+    checks.push(workspace_config_check(options.workspace.as_deref()));
+    checks.push(runtime_assets_check());
+    checks.push(runtime.block_on(check_opencode_runtime()));
 
     if options.auto_launch_edge {
         run_doctor_with_auto_launch(&runtime, &browser_settings, &mut checks);
@@ -629,10 +635,10 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_node_bridge_port: crate::tauri_bridge::COPILOT_HTTP_PORT,
         default_edge_cdp_port: crate::tauri_bridge::COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
-        architecture_notes: "Copilot path uses the bundled Node bridge on copilot_node_bridge_port; Edge CDP defaults to default_edge_cdp_port (see scripts/start-relay-edge-cdp.sh).".to_string(),
+        architecture_notes: "Relay is the desktop UX and adapter between M365 Copilot CDP and OpenCode/OpenWork execution. Copilot controls the turn; OpenCode/OpenWork owns tool execution state.".to_string(),
         process_cwd,
         claw_config_home_display,
-        max_text_file_read_bytes: MAX_TEXT_FILE_READ_BYTES,
+        max_text_file_read_bytes: RELAY_MAX_TEXT_FILE_READ_BYTES,
         doctor_hints: relay_doctor_hints(),
         predictability_notes: relay_predictability_notes(),
         copilot_bridge_running: None,
@@ -643,6 +649,10 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_boot_token_present: None,
         last_copilot_bridge_failure: None,
         copilot_repair_stage_stats: Vec::new(),
+        execution_backend: Some(crate::opencode_runtime::execution_backend_name()),
+        opencode_runtime_url: crate::opencode_runtime::external_runtime_url(),
+        opencode_runtime_running: None,
+        opencode_runtime_message: None,
     }
 }
 
@@ -659,103 +669,27 @@ fn doctor_bridge_override_from_env() -> Option<DoctorBridgeOverride> {
     Some(DoctorBridgeOverride { url, boot_token })
 }
 
-fn default_config_home() -> PathBuf {
-    std::env::var_os("CLAW_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claw")))
-        .unwrap_or_else(|| PathBuf::from(".claw"))
-}
-
-fn check_workspace(workspace: Option<&Path>) -> RelayDoctorCheck {
-    let Some(workspace) = workspace else {
-        return warn_check(
-            "workspace_config",
-            "Workspace path was not provided; project .claw discovery was skipped.",
-            None,
-        );
-    };
-    if !workspace.exists() {
-        return failed_check(
-            "workspace_config",
-            format!("Workspace path does not exist: {}", workspace.display()),
-            None,
-        );
-    }
-    if !workspace.is_dir() {
-        return failed_check(
-            "workspace_config",
-            format!("Workspace path is not a directory: {}", workspace.display()),
-            None,
-        );
-    }
-
-    let loader = ConfigLoader::default_for(workspace);
-    let discovered: Vec<String> = loader
-        .discover()
-        .into_iter()
-        .map(|entry| entry.path.display().to_string())
-        .collect();
-    match loader.load() {
-        Ok(config) => {
-            let loaded_entries: Vec<String> = config
-                .loaded_entries()
-                .iter()
-                .map(|entry| entry.path.display().to_string())
-                .collect();
-            if loaded_entries.is_empty() {
-                warn_check(
-                    "workspace_config",
-                    "Workspace exists, but no .claw config files were discovered.",
-                    Some(json!({
-                        "workspace": workspace.display().to_string(),
-                        "configHome": default_config_home().display().to_string(),
-                        "discoveredCandidates": discovered,
-                    })),
-                )
-            } else {
-                ok_check(
-                    "workspace_config",
-                    "Workspace and .claw configuration were discovered successfully.",
-                    Some(json!({
-                        "workspace": workspace.display().to_string(),
-                        "configHome": default_config_home().display().to_string(),
-                        "discoveredCandidates": discovered,
-                        "loadedEntries": loaded_entries,
-                    })),
-                )
-            }
-        }
-        Err(error) => failed_check(
-            "workspace_config",
-            format!("Failed to load .claw configuration: {error}"),
+async fn check_opencode_runtime() -> RelayDoctorCheck {
+    let snapshot = crate::opencode_runtime::snapshot().await;
+    if snapshot.running {
+        ok_check(
+            "opencode_runtime",
+            snapshot.message,
             Some(json!({
-                "workspace": workspace.display().to_string(),
-                "configHome": default_config_home().display().to_string(),
-                "discoveredCandidates": discovered,
+                "backend": crate::opencode_runtime::execution_backend_name(),
+                "url": snapshot.url,
             })),
-        ),
-    }
-}
-
-fn check_runtime_assets() -> RelayDoctorCheck {
-    match runtime::resolve_liteparse_paths() {
-        Ok(paths) => ok_check(
-            "runtime_assets",
-            "Relay runtime assets for LiteParse and Node are available.",
+        )
+    } else {
+        warn_check(
+            "opencode_runtime",
+            snapshot.message,
             Some(json!({
-                "runner": paths.runner.display().to_string(),
-                "parseMjs": paths.parse_mjs.display().to_string(),
-                "node": paths.node.display().to_string(),
+                "backend": crate::opencode_runtime::execution_backend_name(),
+                "url": snapshot.url,
+                "urlEnv": "RELAY_OPENCODE_TOOL_RUNTIME_URL",
             })),
-        ),
-        Err(error) => failed_check(
-            "runtime_assets",
-            error.to_string(),
-            Some(json!({
-                "bundledNodeEnv": std::env::var("RELAY_BUNDLED_NODE").ok(),
-                "liteparseRunnerEnv": std::env::var("RELAY_LITEPARSE_RUNNER_ROOT").ok(),
-            })),
-        ),
+        )
     }
 }
 

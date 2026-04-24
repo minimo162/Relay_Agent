@@ -3,11 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use chrono::Utc;
-use runtime::Session as RuntimeSession;
 
 use crate::copilot_persistence::PersistedSessionConfig;
 use crate::error::AgentLoopError;
-use crate::session_write_undo::WriteUndoStacks;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRunState {
@@ -29,7 +27,6 @@ pub struct PendingUserQuestion {
 }
 
 pub struct SessionState {
-    pub session: RuntimeSession,
     pub running: bool,
     pub run_state: SessionRunState,
     pub loop_epoch: u64,
@@ -49,9 +46,8 @@ pub struct SessionState {
 
 impl SessionState {
     #[must_use]
-    pub fn new(session: RuntimeSession, session_config: PersistedSessionConfig) -> Self {
+    pub fn new(session_config: PersistedSessionConfig) -> Self {
         Self {
-            session,
             running: true,
             run_state: SessionRunState::Running,
             loop_epoch: 1,
@@ -71,8 +67,8 @@ impl SessionState {
     }
 
     #[must_use]
-    pub fn new_idle(session: RuntimeSession, session_config: PersistedSessionConfig) -> Self {
-        let mut state = Self::new(session, session_config);
+    pub fn new_idle(session_config: PersistedSessionConfig) -> Self {
+        let mut state = Self::new(session_config);
         state.running = false;
         state.run_state = SessionRunState::Finished;
         state.cancelled.store(true, Ordering::SeqCst);
@@ -103,7 +99,6 @@ pub struct SessionHandle {
     approvals: Mutex<HashMap<String, PendingApproval>>,
     user_questions: Mutex<HashMap<String, PendingUserQuestion>>,
     auto_allowed_tools: Mutex<HashSet<String>>,
-    write_undo: Mutex<WriteUndoStacks>,
 }
 
 impl SessionHandle {
@@ -114,7 +109,6 @@ impl SessionHandle {
             approvals: Mutex::new(HashMap::new()),
             user_questions: Mutex::new(HashMap::new()),
             auto_allowed_tools: Mutex::new(auto_allowed_tools),
-            write_undo: Mutex::new(WriteUndoStacks::default()),
         }
     }
 
@@ -232,17 +226,6 @@ impl SessionHandle {
             .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(questions.drain().map(|(_, p)| p.tx).collect())
-    }
-
-    pub fn with_write_undo<F, R>(&self, f: F) -> Result<R, AgentLoopError>
-    where
-        F: FnOnce(&mut WriteUndoStacks) -> R,
-    {
-        let mut stack = self
-            .write_undo
-            .lock()
-            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
-        Ok(f(&mut stack))
     }
 }
 
@@ -391,7 +374,7 @@ mod tests {
             .insert(
                 "s1".to_string(),
                 SessionHandle::new(
-                    SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default()),
+                    SessionState::new(PersistedSessionConfig::default()),
                     HashSet::new(),
                 ),
             )
@@ -400,7 +383,7 @@ mod tests {
             .insert(
                 "s2".to_string(),
                 SessionHandle::new(
-                    SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default()),
+                    SessionState::new(PersistedSessionConfig::default()),
                     HashSet::new(),
                 ),
             )
@@ -445,11 +428,11 @@ mod tests {
     fn remove_stale_sessions_only_evicts_expired_finished_sessions() {
         let registry = SessionRegistry::new();
 
-        let mut stale = SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default());
+        let mut stale = SessionState::new(PersistedSessionConfig::default());
         stale.mark_finished();
         stale.finished_at = Some(Utc::now().timestamp() - 120);
 
-        let mut fresh = SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default());
+        let mut fresh = SessionState::new(PersistedSessionConfig::default());
         fresh.mark_finished();
         fresh.finished_at = Some(Utc::now().timestamp());
 

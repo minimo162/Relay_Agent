@@ -1,6 +1,6 @@
 //! Windows: bind the current process to a Job Object with
 //! `KILL_ON_JOB_CLOSE` so sidecar children (`relay-node.exe`, `relay-rg.exe`,
-//! WebView2 helpers, etc.) die with us.
+//! `WebView2` helpers, etc.) die with us.
 //!
 //! Why: if the Tauri dev app is force-killed, orphaned children keep
 //! `target\debug\relay-node.exe` locked, and the next `tauri dev` panics in

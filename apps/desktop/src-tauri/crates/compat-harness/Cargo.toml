@@ -5,24 +5,8 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[dependencies]
-tools = { path = "../tools" }
-runtime = { path = "../runtime" }
-
-[features]
-legacy-compat-tests = []
-
 [dev-dependencies]
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "time"] }
-
-# `relay-agent-desktop` is a Tauri cdylib that pulls in WebView2 / Win32
-# runtime symbols. On the GitHub-hosted Windows runners those DLLs are
-# missing, so the compat-harness test binary fails to load with
-# STATUS_ENTRYPOINT_NOT_FOUND before any test runs. The single test that
-# depends on it (`agent_loop_smoke_*`) is already gated to non-Windows.
-[target.'cfg(not(windows))'.dev-dependencies]
-relay_agent_desktop_lib = { package = "relay-agent-desktop", path = "../.." }
 
 [lints]
 workspace = true

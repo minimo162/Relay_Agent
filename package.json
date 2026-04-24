@@ -6,10 +6,9 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "pnpm typecheck && pnpm --filter @relay-agent/desktop build",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm --filter @relay-agent/desktop build",
     "doctor": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-agent-doctor --",
     "launch:test": "pnpm --filter @relay-agent/desktop launch:test",
-    "agent-loop:test": "pnpm --filter @relay-agent/desktop agent-loop:test",
     "smoke:windows": "pnpm --filter @relay-agent/desktop smoke:windows",
     "live:m365:desktop-smoke": "pnpm --filter @relay-agent/desktop live:m365:desktop-smoke",
     "live:m365:tetris-html": "pnpm --filter @relay-agent/desktop live:m365:tetris-html",

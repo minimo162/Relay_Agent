@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ts_rs::TS;
 
-use crate::agent_loop::{
+use crate::agent_projection::{
     AgentApprovalNeededEvent, AgentErrorEvent, AgentSessionHistoryResponse,
     AgentSessionStatusEvent, AgentTextDeltaEvent, AgentToolResultEvent, AgentToolStartEvent,
     AgentTurnCompleteEvent, AgentUserQuestionNeededEvent, MessageContent, RelayMessage,
@@ -82,7 +82,7 @@ pub fn render_ipc_generated_ts() -> String {
     ];
 
     format!(
-        "// Generated from Rust IPC source types via ts-rs.\n// Source: apps/desktop/src-tauri/src/models.rs, agent_loop/events, tauri_bridge.rs\n\n{}\n",
+        "// Generated from Rust IPC source types via ts-rs.\n// Source: apps/desktop/src-tauri/src/models.rs, agent_projection.rs, tauri_bridge.rs\n\n{}\n",
         sections.join("\n\n")
     )
 }
@@ -122,7 +122,7 @@ mod tests {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let ipc_source_files = [
             manifest_dir.join("src/tauri_bridge.rs"),
-            manifest_dir.join("src/agent_loop/events.rs"),
+            manifest_dir.join("src/agent_projection.rs"),
             manifest_dir.join("crates/desktop-core/src/models.rs"),
             manifest_dir.join("crates/desktop-core/src/workspace_surfaces.rs"),
         ];

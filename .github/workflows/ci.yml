@@ -89,19 +89,12 @@ jobs:
       - name: cargo test --test doctor_cli
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
 
-      - name: cargo test -p compat-harness
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
-
       - name: pnpm check
         run: pnpm check
 
       - name: pnpm launch:test
         if: matrix.run_launch_smokes
         run: pnpm launch:test
-
-      - name: pnpm agent-loop:test
-        if: matrix.run_launch_smokes
-        run: pnpm agent-loop:test
 
       - name: pnpm smoke:windows
         if: matrix.run_windows_smoke

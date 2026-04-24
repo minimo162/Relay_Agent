@@ -123,6 +123,7 @@ fn handle_connection(stream: &mut TcpStream, mode: StatusMode, expected_boot_tok
             })
             .to_string(),
         ),
+        "/path" => ("HTTP/1.1 200 OK", serde_json::json!([]).to_string()),
         "/status" if boot_token.as_deref() == Some(expected_boot_token) => match mode {
             StatusMode::Ready => (
                 "HTTP/1.1 200 OK",
@@ -212,11 +213,21 @@ fn doctor_cli_reports_ready_status_json() {
     let workspace = create_workspace();
     let server = start_mock_server(StatusMode::Ready, "token-1");
 
-    let (status, report) = run_doctor(&workspace, &server, Some("token-1"), &[]);
+    let (status, report) = run_doctor(
+        &workspace,
+        &server,
+        Some("token-1"),
+        &[("RELAY_OPENCODE_TOOL_RUNTIME_URL", &server.url)],
+    );
 
     assert!(status.success(), "{report}");
     assert_eq!(report.get("status").and_then(Value::as_str), Some("ok"));
-    assert_eq!(report["checks"][4]["id"].as_str(), Some("bridge_status"));
+    assert!(report["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .any(|check| check["id"].as_str() == Some("bridge_status")
+            && check["status"].as_str() == Some("ok")));
 }
 
 #[test]

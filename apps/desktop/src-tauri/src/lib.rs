@@ -1,5 +1,4 @@
-mod agent_loop;
-mod agent_loop_smoke;
+mod agent_projection;
 mod app_services;
 mod cdp_copilot;
 mod commands;
@@ -9,15 +8,15 @@ mod copilot_port_reclaim;
 mod copilot_server;
 mod dev_control;
 pub mod doctor;
-mod error;
+mod hard_cut_agent;
 mod ipc_codegen;
 mod liteparse_env;
 mod lsp_probe;
 pub mod models;
 mod opencode_runtime;
 mod registry;
-mod session_write_undo;
 mod tauri_bridge;
+#[cfg(test)]
 pub mod test_support;
 mod windows_job;
 mod workspace_allowlist;
@@ -49,7 +48,6 @@ fn relay_apply_webview2_cdp_from_env() {}
 pub fn run() {
     windows_job::install_kill_on_close();
     relay_apply_webview2_cdp_from_env();
-    agent_loop_smoke::apply_test_app_local_data_dir_override();
 
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -72,7 +70,6 @@ pub fn run() {
             }
             app.manage(AppServices::new());
             dev_control::spawn(app.handle());
-            agent_loop_smoke::spawn_if_configured(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

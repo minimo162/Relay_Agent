@@ -7,7 +7,10 @@ Date: 2026-04-14
 Relay_Agent is a **conversation-first Tauri desktop agent** under `apps/desktop/`.
 
 - Frontend: SolidJS + Vite desktop shell.
-- Backend: Rust in `apps/desktop/src-tauri/`, with internal crates under `crates/{api,desktop-core,runtime,tools,commands,compat-harness}`.
+- Backend: Rust in `apps/desktop/src-tauri/`, with active internal crates under
+  `crates/{desktop-core,compat-harness}`. Historical `runtime` / `tools` crates
+  remain excluded from the workspace while the OpenCode/OpenWork hard cut is
+  completed.
 - Primary execution path: M365 Copilot via Edge CDP and the Relay Node bridge.
 - Contract source of truth: Rust IPC types and command signatures; generated frontend bindings live in `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` kept thin.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
@@ -27,21 +30,46 @@ Planning and implementation references are ordered as follows:
 Additional rules:
 
 - Rust crate types and IPC signatures in `apps/desktop/src-tauri/` are canonical.
-- `runtime::CompactionConfig::default()` is the canonical source for compaction defaults.
+- OpenCode/OpenWork session state is the canonical source for execution
+  transcript and runtime behavior. Relay-specific defaults live in the desktop
+  adapter/config modules.
 - `.taskmaster/tasks/tasks.json` must reflect real artifact state, not historical intent.
 
 ## Delivery Priorities
 
-- Priority A: keep the agent loop, Copilot bridge, and M365 Copilot via CDP working end to end.
-- Priority B: harden MCP integration, approval flow, diagnostics, deterministic parity coverage, and session management.
-- Priority C: expand browser automation and context-aware execution without weakening the boundary between Relay-specific code and claw-aligned behavior.
+- Priority A: keep M365 Copilot via Edge CDP as the primary LLM controller.
+- Priority B: replace Relay's bespoke execution runtime with OpenCode/OpenWork
+  as the external OSS execution substrate for sessions, tools, permissions,
+  events, MCP, plugins, skills, and workspace runtime behavior.
+- Priority C: keep Relay-specific code focused on desktop UX, Copilot CDP
+  transport, prompt adaptation, and diagnostics.
+
+## Strategic Reset: Copilot-Controlled OpenCode/OpenWork Execution
+
+The active architecture direction is a hard cut, not a compatibility migration:
+Relay_Agent becomes the adapter between M365 Copilot CDP and OpenCode/OpenWork.
+OpenCode/OpenWork owns execution; Copilot owns LLM control; Relay owns the
+desktop UX and transport bridge.
+
+Detailed plan: `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`.
+
+Implications:
+
+- Do not add new production features to the Relay-owned Rust execution runtime.
+- Do not preserve legacy tool/runtime/session contracts for compatibility.
+- Do not reintroduce `office_search` as a model-facing tool.
+- Do not treat the Copilot browser thread as the execution source of truth.
+- New runtime work should target OpenCode/OpenWork APIs or extension points.
 
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.
-- Preserve the current desktop architecture; avoid broad backend decomposition unless required for a concrete milestone.
-- Keep Relay-specific code focused on desktop UI, Tauri IPC, M365 Copilot, and CDP orchestration.
-- Tool shapes, permission posture, `.claw` config handling, docs map, and parity coverage should stay aligned with claw-code where practical.
+- Preserve the desktop UX and Copilot CDP product focus, but do not preserve
+  Relay's bespoke execution runtime.
+- Keep Relay-specific code focused on desktop UI, Tauri IPC, M365 Copilot,
+  CDP orchestration, prompt adaptation, and diagnostics.
+- Tool shapes, permission posture, session state, plugins, MCP, skills, and
+  workspace config should come from OpenCode/OpenWork wherever practical.
 - Do not implement arbitrary code execution, unrestricted shell access, VBA, or uncontrolled external network execution outside agent-managed tools.
 
 ## Verification Policy
@@ -53,14 +81,12 @@ pnpm check
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
 ```
 
 Acceptance and smoke commands:
 
 ```bash
 pnpm launch:test
-pnpm agent-loop:test
 pnpm smoke:windows
 pnpm doctor -- --json
 ```
@@ -95,7 +121,8 @@ Acceptance criteria:
 - Workspace license metadata matches `LICENSE`.
 - The workspace manifest no longer points at removed packages.
 - Live docs all describe the same current desktop product.
-- Compaction defaults are documented only from `runtime::CompactionConfig::default()`.
+- Active runtime behavior is documented as OpenCode/OpenWork-owned rather than
+  Relay runtime-owned.
 - Root `pnpm check` is the documented frontend gate.
 
 ### Phase 2: Headless Doctor
@@ -118,24 +145,26 @@ Acceptance criteria:
 - Existing IPC warmup/diagnostics commands delegate to the shared doctor service.
 - Integration tests cover ready, login-required, auth-failure, missing-workspace, and missing-runtime-asset paths.
 
-### Phase 3: Deterministic Parity And Session Harness
+### Phase 3: Deterministic Parity And OpenCode Session Harness
 
-Goal: keep parity-style tool tests and add deterministic full-session desktop coverage for the remaining claw scenarios.
+Goal: keep parity-style tool tests and verify full-session execution through the OpenCode-backed hard-cut path.
 
 Change targets:
 
-- `apps/desktop/src-tauri/src/test_support.rs`
-- `apps/desktop/src-tauri/src/agent_loop_smoke.rs`
-- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
+- `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `apps/desktop/src-tauri/src/tauri_bridge.rs`
 - `apps/desktop/src-tauri/crates/compat-harness/**`
 - `docs/CLAW_CODE_ALIGNMENT.md`
 
 Acceptance criteria:
 
-- `agent_loop_smoke.rs` is a thin wrapper over shared desktop harness support.
-- `compat-harness` reuses desktop test support rather than a separate smoke-only path.
-- Deterministic tests cover `streaming_text`, `plugin_tool_roundtrip`, `auto_compact_triggered`, and `token_cost_reporting`.
+- The hard-cut smoke starts the bundled OpenCode runtime and verifies linked
+  OpenCode transcript writes.
+- `compat-harness` remains a lightweight fixture manifest check and does not
+  link the old Relay runtime/tools crates or desktop smoke helpers.
+- Deterministic tests cover the active OpenCode-backed hard-cut adapter path;
+  old runtime-level parity scenarios are not compatibility requirements.
 - Alignment docs name the exact test covering each claw-style scenario.
 - Copilot tool-call parser tolerance is widened from mutation-only to any MVP-whitelisted tool for unfenced sentinel-bearing JSON on Initial parse (see `docs/IMPLEMENTATION.md` 2026-04-18 milestone).
 
@@ -153,8 +182,8 @@ Change targets:
 Acceptance criteria:
 
 - Main CI runs on `ubuntu-latest` and `windows-latest`.
-- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`.
-- Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
+- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm launch:test`.
+- Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm smoke:windows`.
 - CI also guards the live docs map against stale removed-package or spreadsheet-era references.
 
 ### Phase 5: First-Use UI Simplification
@@ -192,7 +221,8 @@ Change targets:
 - `apps/desktop/src-tauri/crates/runtime/src/file_ops.rs`
 - `apps/desktop/src-tauri/crates/runtime/src/office/mod.rs`
 - `apps/desktop/src-tauri/crates/tools/src/lib.rs`
-- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `docs/OPENCODE_ALIGNMENT_PLAN.md`
 - `docs/OFFICE_SEARCH_DESIGN.md`
 - `docs/IMPLEMENTATION.md`
@@ -210,12 +240,13 @@ Acceptance criteria:
 - Office/PDF filename discovery stays a `glob` responsibility; candidate
   filenames are not treated as content evidence until `read` inspects a file.
 - Root verification follows the repository acceptance policy, with focused
-  runtime and agent-loop regressions covering plaintext-only grep, glob-read
-  Office/PDF repair, and no `office_search` repair.
+  runtime, desktop-core parser, and hard-cut adapter regressions covering
+  plaintext-only grep, glob-read Office/PDF repair, and no `office_search`
+  repair.
 
 Status 2026-04-23:
 
-- Implemented for the CDP agent loop. `grep` now rejects Office/PDF container
+- Implemented for the CDP adapter path. `grep` now rejects Office/PDF container
   targets, CDP local-search catalogs expose only `read` / `glob` / `grep`, and
   local lookup repair no longer generates `office_search`.
 - Office/PDF evidence lookup repair now starts with `glob`; if Copilot tries to
@@ -244,15 +275,17 @@ Acceptance criteria:
 - Mutating the allowlist refuses to overwrite a corrupt store.
 - Rust regression tests cover corrupt-store warning and non-destructive failure handling.
 
-### Cross-Cutting Hardening: Bash Policy And Agent-Loop Maintainability
+### Cross-Cutting Hardening: Bash Policy And Legacy Loop Removal
 
-Goal: reduce reliance on regex-only shell blocking and trim one self-contained responsibility out of the desktop orchestrator.
+Goal: reduce reliance on regex-only shell blocking and keep the old desktop
+orchestrator removed.
 
 Change targets:
 
 - `apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs`
 - `apps/desktop/src-tauri/crates/runtime/Cargo.toml`
-- `apps/desktop/src-tauri/src/agent_loop/{orchestrator.rs,permission.rs}`
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `docs/IMPLEMENTATION.md`
 
 Acceptance criteria:
@@ -260,7 +293,9 @@ Acceptance criteria:
 - Bash deny decisions use shell-fragment/token inspection before regex fallback.
 - Wrapper forms such as `env ...`, `command ...`, `nice ...`, and mixed-case blocked verbs are covered by regression tests.
 - Runtime regression coverage includes property-style tests for blocked bash mutations and allowed git inspection commands.
-- Desktop agent-loop permission explanation helpers, approval prompting, prompt/path-repair helpers, CDP prompt-bundle/message rendering helpers, retry/repair helpers, success/error-decision application, doom-loop guard application, session-state helpers, event payload/emission helpers, and unfenced/fenced tool-JSON fallback parsing live outside the main `orchestrator.rs` turn loop.
+- The deleted desktop `agent_loop/**` tree is not reintroduced; adapter logic
+  stays in `hard_cut_agent.rs`, UI/IPC payloads stay in `agent_projection.rs`,
+  and deterministic parser/prompt helpers stay in `desktop-core`.
 
 ### Cross-Cutting Feature: Office File Search
 
@@ -272,7 +307,8 @@ Change targets:
 - `apps/desktop/src-tauri/crates/runtime/src/{file_ops,pdf_liteparse,lib}.rs`
 - `apps/desktop/src-tauri/crates/runtime/Cargo.toml`
 - `apps/desktop/src-tauri/crates/tools/src/lib.rs`
-- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `AGENTS.md`
 - `docs/IMPLEMENTATION.md`
 
@@ -299,7 +335,8 @@ Change targets:
 
 - `apps/desktop/src-tauri/crates/runtime/src/{file_ops,lib}.rs`
 - `apps/desktop/src-tauri/crates/tools/src/lib.rs`
-- `apps/desktop/src-tauri/src/agent_loop/{orchestrator,prompt,retry}.rs`
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/crates/compat-harness/src/lib.rs`
 - `docs/IMPLEMENTATION.md`
 

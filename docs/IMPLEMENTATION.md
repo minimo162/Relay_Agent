@@ -15,6 +15,911 @@
 
 ## Milestone Log
 
+### 2026-04-24 Implementation: Runtime/tools workspace quarantine
+
+Removed the old Relay-owned `runtime` and `tools` crates from the normal Cargo
+workspace path.
+
+Changes:
+
+- Removed `apps/desktop/src-tauri/crates/runtime` and
+  `apps/desktop/src-tauri/crates/tools` from root workspace members.
+- Added both paths to root workspace `exclude` so they remain historical
+  source only, not default workspace build/test targets.
+- Updated README and planning docs so CI and local verification no longer list
+  the old compat/runtime parity path as a separate acceptance lane.
+- Extended the hard-cut guard to require the workspace exclusion and reject the
+  old contiguous runtime/tools/compat workspace member set.
+
+Verification:
+`cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1`;
+`node scripts/check-hard-cut-guard.mjs`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Compat harness runtime parity removal
+
+Removed the old Relay-owned runtime/tools parity harness from `compat-harness`.
+
+Changes:
+
+- Deleted the runtime-dependent parity, full-session, MCP, auto-compaction, and
+  token-usage tests from `compat-harness`.
+- Removed `runtime`, `tools`, `tokio`, and desktop Tauri test-library
+  dependencies from the crate.
+- Kept only the vendored mock parity manifest readability/order check while the
+  remaining historical claw-code docs are archived or rewritten.
+- Removed the redundant explicit CI compat-harness step; the workspace Rust
+  test step still covers the crate.
+- Extended the hard-cut guard to reject reintroducing direct `runtime`/`tools`
+  dependencies or imports into `compat-harness`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness -- --nocapture`;
+`cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness -e normal | rg "compat-harness|runtime|tools"`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop-core tools dependency removal
+
+Removed the remaining direct `tools` crate dependency from `desktop-core`.
+
+Changes:
+
+- Replaced `desktop_core::opencode_tools::catalog` calls into the `tools` crate
+  with a static OpenCode-facing catalog DTO table.
+- Removed `tools = { path = "../tools" }` from `desktop-core`.
+- Preserved the Copilot adapter's CDP prompt catalog, MVP tool whitelist, and
+  desktop permission table through local DTOs.
+- Kept `tools` execution delegated from the app-level `opencode_runtime` to the
+  bundled/external OpenCode runtime HTTP API.
+- Extended the hard-cut guard to reject direct `tools` dependency or `tools::`
+  references from `desktop-core`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core -e normal | rg "desktop-core|tools|runtime"`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core opencode_tools -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: OpenCode execution delegate moved out of desktop-core
+
+Removed tool execution from the desktop-core OpenCode boundary.
+
+Changes:
+
+- Removed `opencode_tools::execution` from `desktop-core`; `desktop-core` now
+  keeps only OpenCode catalog DTOs for Copilot prompt construction.
+- Added app-level `opencode_runtime::OpencodeToolExecutionContext` and
+  `execute_tool_with_context`, delegating directly to the bundled/external
+  OpenCode runtime `/experimental/tool/execute` endpoint.
+- Updated hard-cut tool execution and runtime warmup to call
+  `opencode_runtime` directly instead of `desktop_core::opencode_tools`.
+- Kept output rendering behavior compatible with the previous OpenCode HTTP
+  delegate and added unit coverage for rendered output and tool errors.
+- Extended the hard-cut guard to reject reintroducing execution APIs into
+  `desktop-core::opencode_tools`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core opencode_tools -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: OpenCode tool catalog/execution split
+
+Separated the desktop-core OpenCode tool boundary into catalog and execution
+surfaces.
+
+Changes:
+
+- Split `desktop_core::opencode_tools` into `catalog` and `execution`
+  submodules.
+- Updated `copilot_adapter` to import only `opencode_tools::catalog` DTOs and
+  catalog helpers.
+- Updated the hard-cut controller and OpenCode runtime warmup to call only
+  `opencode_tools::execution`.
+- Kept `tools` crate conversion details inside the boundary submodules.
+- Extended the hard-cut guard to require catalog/execution imports and reject
+  root-level execution calls or execution types from the Copilot adapter.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core opencode_tools -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: OpenCode tool DTO boundary tightening
+
+Reduced `desktop-core` exposure of `tools` crate types.
+
+Changes:
+
+- Replaced the `CdpPromptToolSpec = tools::CdpPromptToolSpec` type alias with
+  a local `desktop_core::opencode_tools::CdpPromptToolSpec` DTO.
+- Converted tool-catalog specs at the `opencode_tools` boundary before
+  `copilot_adapter` renders CDP prompts.
+- Removed the public `From<OpencodeToolExecutionContext> for
+  tools::ToolExecutionContext` implementation and kept execution-context
+  conversion private to the boundary module.
+- Added `opencode_tools` tests for local prompt-catalog DTOs and permission
+  DTO labels.
+- Extended the hard-cut guard to reject reintroducing public `tools` catalog
+  type aliases or public execution-context conversions.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core opencode_tools -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop-core runtime dependency removal
+
+Removed the direct `runtime` crate dependency from `desktop-core`.
+
+Changes:
+
+- Deleted the `desktop_core::relay_runtime` boundary module.
+- Removed `runtime = { path = "../runtime" }` from `desktop-core`.
+- Moved workspace `.claw` config discovery and LiteParse/Node asset discovery
+  into `desktop_core::doctor` as local diagnostic helpers.
+- Kept `RELAY_MAX_TEXT_FILE_READ_BYTES` as a desktop-core diagnostic constant
+  instead of importing it from the legacy runtime crate.
+- Added doctor tests for local workspace config discovery and invalid JSON
+  rejection.
+- Extended the hard-cut guard to reject reintroducing `relay_runtime` or a
+  direct `desktop-core` dependency on the legacy runtime crate.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core doctor -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core -e normal | rg "runtime|desktop-core|tools"`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop-core runtime error DTO split
+
+Removed `runtime::RuntimeError` from the desktop-core adapter boundary.
+
+Changes:
+
+- Added `error::DesktopCoreError` as the local desktop-core error DTO.
+- Updated `relay_runtime` to return `DesktopCoreError` and expose
+  `MAX_TEXT_FILE_READ_BYTES` as a local constant instead of re-exporting
+  runtime types.
+- Updated Copilot session persistence to use `DesktopCoreError`.
+- Updated the Copilot adapter forced-compaction error helper to depend on the
+  local desktop-core error type.
+- Extended the hard-cut guard to reject `RuntimeError` reintroduction in the
+  Copilot adapter boundary files.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core error -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core doctor -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Copilot adapter permission DTO split
+
+Removed runtime permission policy re-exports from the desktop-core Copilot
+adapter boundary.
+
+Changes:
+
+- Added `opencode_tools::OpencodeToolPermissionMode` as the desktop-core
+  permission mode used by OpenCode tool catalog metadata.
+- Added `copilot_adapter::DesktopPermissionPolicy` for the deterministic CDP
+  prompt permission table.
+- Updated `copilot_adapter` to use the local permission policy instead of
+  `runtime::PermissionPolicy`.
+- Updated `opencode_tools` to convert tools-crate permission values at the
+  boundary and stop importing permission types through `relay_runtime`.
+- Removed `PermissionMode` and `PermissionPolicy` from
+  `desktop_core::relay_runtime` re-exports.
+- Extended the hard-cut guard to reject reintroducing runtime permission
+  re-exports or imports.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core doctor -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Copilot adapter message DTO split
+
+Removed runtime conversation and turn-summary type re-exports from the
+desktop-core Copilot adapter boundary.
+
+Changes:
+
+- Added Copilot-adapter local `ConversationMessage`, `ContentBlock`, and
+  `MessageRole` DTOs.
+- Added local `CdpTurnSummary` and `TurnOutcome` DTOs for the deterministic
+  post-turn decision tests.
+- Updated prompt rendering and repair-decision tests to use the local adapter
+  DTOs instead of runtime conversation types.
+- Removed `ConversationMessage`, `ContentBlock`, `MessageRole`, `TurnSummary`,
+  `TurnOutcome`, and `TokenUsage` from `desktop_core::relay_runtime`
+  re-exports.
+- Extended the hard-cut guard to reject reintroducing those runtime prompt
+  conversation types into `relay_runtime`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Copilot prompt request DTO split
+
+Removed the first runtime prompt type re-export from the desktop-core Copilot
+adapter boundary.
+
+Changes:
+
+- Added `desktop_core::copilot_adapter::CdpPromptRequest` as the prompt-builder
+  input DTO.
+- Changed `build_cdp_prompt` to accept `CdpPromptRequest` instead of
+  `runtime::ApiRequest`.
+- Updated Copilot adapter prompt tests to use the desktop-core DTO.
+- Removed `ApiRequest` from `desktop_core::relay_runtime` re-exports.
+- Extended the hard-cut guard to reject reintroducing `ApiRequest` into
+  `relay_runtime` or `copilot_adapter`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop-core runtime boundary isolation
+
+Introduced a single `desktop_core::relay_runtime` boundary for the remaining
+desktop-core uses of the legacy `runtime` crate.
+
+Changes:
+
+- Added `desktop_core::relay_runtime` to re-export the Copilot prompt data
+  types still used by the deterministic Copilot adapter.
+- Moved workspace config discovery, LiteParse runtime asset resolution, and
+  max text read byte access behind the runtime boundary.
+- Updated doctor, session persistence, OpenCode tool metadata, and Copilot
+  adapter code to import runtime-facing types through `desktop_core` instead of
+  directly from the `runtime` crate.
+- Renamed Copilot adapter qualified type references from `runtime::...` to
+  `relay_runtime::...` so the remaining dependency direction is explicit.
+- Extended the hard-cut guard to keep direct runtime config/assets/error/type
+  imports from leaking back into desktop-core modules outside the boundary.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core doctor -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture` passed on rerun after an initial parallel OpenCode runtime SQLite/WAL startup collision;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop-core tools boundary isolation
+
+Isolated `desktop-core`'s remaining `tools` dependency behind the
+`opencode_tools` module.
+
+Changes:
+
+- Expanded `desktop_core::opencode_tools` from an execution-only shim into the
+  single desktop-core boundary for OpenCode tool catalog and execution access.
+- Moved Copilot prompt/catalog lookups, MVP tool name queries, CDP JSON-fence
+  whitelist names, and desktop permission requirements behind
+  `desktop_core::opencode_tools`.
+- Removed direct `tools::` calls from `desktop_core::copilot_adapter`; the
+  Copilot adapter now depends on the OpenCode tool boundary instead of the
+  legacy tools crate API.
+- Extended the hard-cut guard to keep `copilot_adapter` from reintroducing
+  direct `tools` catalog calls.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop tools direct dependency removal
+
+Removed the desktop app crate's direct dependency on the `tools` crate.
+
+Changes:
+
+- Removed `tools = { path = "crates/tools" }` from the Tauri app crate.
+- Added `desktop_core::opencode_tools` as the narrow app-facing tool execution
+  boundary.
+- Updated hard-cut tool delegation and bundled OpenCode runtime warmup to call
+  the desktop-core OpenCode tool adapter instead of importing `tools` directly.
+- Extended the hard-cut guard to reject direct app `tools` dependency and
+  direct app `tools::ToolExecutionContext` / `tools::execute_tool_with_context`
+  reintroduction.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -e normal | rg "commands|runtime|desktop-core|tools"` showed no `commands` and no direct app `runtime` or `tools` edge;
+`node scripts/check-hard-cut-guard.mjs`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop runtime direct dependency removal
+
+Removed the desktop app crate's direct dependency on the legacy `runtime`
+crate.
+
+Changes:
+
+- Removed `runtime = { path = "crates/runtime" }` from the Tauri app crate.
+- Moved workspace config and runtime asset doctor checks behind
+  `desktop_core::doctor`.
+- Exposed `RELAY_MAX_TEXT_FILE_READ_BYTES` from `desktop_core::doctor` so app
+  diagnostics do not import `runtime` directly.
+- Updated app doctor and Tauri diagnostics to use the desktop-core doctor
+  wrappers.
+- Updated the doctor CLI ready-status mock to satisfy the OpenCode runtime
+  health probe.
+- Extended the hard-cut guard to reject direct app runtime imports and direct
+  app runtime dependency reintroduction.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core doctor -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core registry -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml relay_owned_on_hard_cut_path -- --nocapture`;
+`cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -e normal | rg "commands|runtime|desktop-core|tools"` showed no `commands` and no direct app `runtime` edge;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Commands crate removal from desktop path
+
+Removed the unused legacy `commands` crate from the active workspace and
+desktop app dependency graph.
+
+Changes:
+
+- Removed the `relay_commands` direct dependency from the Tauri app crate.
+- Removed `apps/desktop/src-tauri/crates/commands` from the root workspace and
+  deleted the crate source.
+- Removed the obsolete `agent_projection::msg_to_relay` helper that projected
+  legacy `runtime::ConversationMessage` values.
+- Cleaned lockfiles so the `commands` package no longer appears in the active
+  dependency graph.
+- Extended the hard-cut guard to reject reintroducing the commands crate,
+  `relay_commands`, or runtime-message projection in `agent_projection`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core registry -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml relay_owned_on_hard_cut_path -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -e normal | rg "commands|runtime|desktop-core|tools"`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Registry metadata-only sessions
+
+Removed the remaining Relay transcript and undo-stack storage from
+`desktop-core::registry`.
+
+Changes:
+
+- `SessionState` no longer stores `runtime::Session`; it now carries run state,
+  cancellation/status fields, and `PersistedSessionConfig`.
+- `SessionState::new` and `new_idle` now take only session metadata config.
+- Removed `SessionHandle`'s `WriteUndoStacks` field and `with_write_undo`.
+- Removed the `desktop-core::session_write_undo` export and source file.
+- Updated hard-cut controller and Tauri bridge tests to use metadata-only
+  session handles.
+- Extended the hard-cut guard to reject reintroducing `SessionState.session`,
+  `RuntimeSession`, `with_write_undo`, `WriteUndoStacks`, and desktop-core
+  `session_write_undo`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core registry -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml relay_owned_on_hard_cut_path -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml get_session_history_rejects_relay_only_sessions -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Relay session operation disablement
+
+Disabled legacy Relay-owned session operations on the hard-cut path.
+
+Changes:
+
+- `compact_agent_session` no longer runs `relay_commands::handle_slash_command`
+  over Relay session messages; it now reports that compaction belongs in
+  OpenCode/OpenWork.
+- `undo_session_write` and `redo_session_write` no longer touch Relay
+  `WriteUndoStacks`; they return explicit unsupported errors.
+- `get_session_write_undo_status` is now status-only and always reports no
+  Relay-owned undo/redo actions.
+- Removed the app crate's unused `session_write_undo` re-export shim.
+- Added tests for unsupported compact and undo/redo behavior.
+- Extended the hard-cut guard to reject reintroducing Relay compact, undo-stack,
+  or app-level `session_write_undo` wiring.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml compact_session_is_not_relay_owned_on_hard_cut_path -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml write_undo_redo_are_not_relay_owned_on_hard_cut_path -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml get_session_history_rejects_relay_only_sessions -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Hard-cut message mirror removal
+
+Removed the remaining Relay-side transcript mirror from the hard-cut
+controller.
+
+Changes:
+
+- `start_agent` and `continue_agent_session` no longer push user messages into
+  `runtime::Session.messages`.
+- Copilot assistant text and tool events are emitted to the UI and mirrored to
+  OpenCode only; they are no longer copied into Relay session messages.
+- `turn_complete.messageCount` is fixed at `0` on the hard-cut path because
+  Relay no longer owns transcript counts.
+- Dev-control session state now reports status-only message/tool summary fields
+  instead of deriving them from Relay messages.
+- Hard-cut smoke and resume tests now assert the registry message list remains
+  empty while OpenCode transcript/history still contains the conversation.
+- The hard-cut guard now rejects reintroducing hard-cut message pushes or
+  dev-control message summarization.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml get_session_history_rejects_relay_only_sessions -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Session persistence metadata-only
+
+Shrank saved Relay session state so OpenCode remains the transcript source of
+truth.
+
+Changes:
+
+- `copilot_persistence::save_session` now writes only `sessionId`, metadata
+  version, and `PersistedSessionConfig`.
+- `load_session` now returns `LoadedSessionMetadata`; it no longer reconstructs
+  a Relay `runtime::Session`.
+- Legacy saved `messages` arrays are still accepted on read, but ignored.
+- `hard_cut_agent::finish_session` persists config only, not the in-memory Relay
+  message list.
+- Added persistence tests proving saved files omit Relay transcript data and
+  legacy transcript messages do not affect loaded metadata.
+- Extended the hard-cut guard to reject reintroducing `LoadedSession.session`,
+  `PersistedMessage`, or `PersistedContentBlock`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_persistence -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml get_session_history_rejects_relay_only_sessions -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: OpenCode-backed continue resume
+
+Made `continue_agent_session` resumable from saved OpenCode session metadata
+when the in-memory Relay registry no longer has the session.
+
+Changes:
+
+- Added `ensure_continuable_session` for the hard-cut controller.
+- When a session is missing from the registry, continue now loads the saved
+  session config, requires `opencode_session_id`, and rebuilds a runtime handle
+  with an empty Relay message list.
+- Saved Relay messages are deliberately ignored during resume; OpenCode
+  transcript remains the history source of truth.
+- Relay-only saved sessions are rejected instead of being continued through the
+  old Relay-owned state path.
+- Extended the hard-cut guard so the resume path and the ban on
+  `loaded.session` in `hard_cut_agent.rs` stay in place.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml get_session_history_rejects_relay_only_sessions -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: OpenCode transcript-only session history
+
+Removed the Relay-owned session-message fallback from the desktop history
+endpoint.
+
+Changes:
+
+- `get_session_history` now projects history from the linked OpenCode session
+  transcript only.
+- Relay-only sessions and OpenCode transcript read failures now return explicit
+  errors instead of silently falling back to saved Relay messages.
+- The hard-cut smoke now verifies that the public history endpoint is backed by
+  the OpenCode transcript projection.
+- The hard-cut guard now rejects reintroducing the old `msg_to_relay` history
+  fallback in `tauri_bridge.rs`.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml get_session_history_rejects_relay_only_sessions -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Desktop-core Copilot adapter rename
+
+Renamed the remaining deterministic Copilot parser/prompt helper module so it
+no longer looks like an execution loop.
+
+Changes:
+
+- Renamed `desktop-core/src/agent_loop.rs` to
+  `desktop-core/src/copilot_adapter.rs`.
+- Updated `desktop_core` exports and the hard-cut controller to call
+  `desktop_core::copilot_adapter`.
+- Updated current planning/dev docs and the hard-cut guard so the old
+  desktop-core `agent_loop` module cannot be reintroduced.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Agent projection split
+
+Moved the UI/IPC projection surface out of the legacy Relay agent loop.
+
+Changes:
+
+- Added `agent_projection.rs` for agent event payloads, session-history
+  message projection, status phase names, and IPC binding generation.
+- Updated hard-cut OpenCode execution, OpenCode history mapping, dev control,
+  Tauri bridge cancellation/status responses, and IPC codegen to use
+  `agent_projection` instead of `agent_loop`.
+- Gated the old `agent_loop` module and its error shim behind `#[cfg(test)]`,
+  so normal builds no longer compile the legacy Relay loop body.
+- Extended the hard-cut guard to keep production codegen and hard-cut modules
+  from importing the old loop event surface.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Legacy agent-loop module removal
+
+Removed the remaining test-only copy of the legacy Relay agent loop from the
+desktop crate.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/agent_loop/**`, `agent_loop_smoke.rs`,
+  and the desktop crate's old `error.rs` shim.
+- Removed `mod agent_loop` from the app crate entirely; the hard-cut path now
+  uses `agent_projection` for UI/IPC types and `desktop_core::copilot_adapter`
+  only for deterministic Copilot tool parsing/prompt helpers.
+- Updated README architecture text so current docs no longer point at the
+  deleted desktop orchestrator or `agent_loop/events`.
+- Tightened the hard-cut guard so the legacy loop directory, smoke runner, and
+  `mod agent_loop` cannot reappear.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core copilot_adapter -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`pnpm check`;
+`git diff --check` — passed.
+
+### 2026-04-24 Implementation: Copilot-to-OpenCode hard-cut entrypoint
+
+Started the hard-cut migration where Relay is the desktop UX and Copilot CDP
+adapter, while OpenCode/OpenWork is the execution substrate.
+
+Changes:
+
+- Added `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md` and updated `PLANS.md` so the
+  active direction is no longer compatibility with Relay's bespoke runtime.
+- Added `scripts/check-hard-cut-guard.mjs` and wired it into `pnpm check` to
+  keep the active plan from drifting back to the legacy runtime-preservation
+  language.
+- Added OpenCode runtime diagnostics to `RelayDiagnostics` and CLI doctor,
+  including backend name, runtime URL, runtime reachability, and probe message.
+- Added a new `hard_cut_agent` controller and routed `start_agent` /
+  `continue_agent_session` to it as the default hard-cut backend.
+- The new controller creates an OpenCode session, asks Copilot for low-level
+  OpenCode/OpenWork-compatible tool calls, executes parsed tool calls through
+  the delegated OpenCode runtime endpoint, renders tool events in the existing
+  UI event shape, and asks Copilot for a final summary grounded in the tool
+  results.
+- Persisted Relay session config now stores the linked `opencodeSessionId` so
+  the OpenCode session can become the execution source of truth in the next
+  phase.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`: passed, 2 passed.
+- `pnpm typecheck`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-24 Implementation: OpenCode-only agent entrypoints
+
+Removed the remaining backend switch from the production agent entrypoints.
+
+Changes:
+
+- `start_agent` and `continue_agent_session` now route directly to
+  `hard_cut_agent`; they no longer check an environment-selected backend or
+  fall back to `tauri_bridge::*_inner`.
+- The dev-control direct start/continue endpoints now use the same hard-cut
+  controller as normal IPC.
+- `execution_backend_name()` is now a fixed diagnostic value, `opencode`, not
+  an environment-driven router.
+- The hard-cut plan and guard now reject the old backend-selection environment
+  knob and reject legacy agent-loop helper imports from the agent IPC command
+  module.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`: passed, 1 passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-24 Implementation: Legacy loop smoke isolation
+
+Removed the old Relay agent-loop smoke harness from normal application builds.
+
+Changes:
+
+- `agent_loop_smoke` and `test_support` are now compiled only for Rust tests.
+- The app no longer applies smoke-only local-data-dir overrides or starts the
+  old agent-loop smoke runner during normal startup.
+- Old `tauri_bridge::start_agent_inner` / `continue_agent_session_inner` and
+  their direct `run_agent_loop_impl` launch path are now test-only helpers.
+- The hard-cut guard now rejects re-adding the old smoke autorun hooks to
+  `lib.rs`.
+- Removed the smoke test that executed the old Relay loop end to end; the
+  remaining tests cover only the smoke config and summary data shape until an
+  OpenCode-backed smoke is added.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop_smoke -- --nocapture`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`: passed, 1 passed.
+
+### 2026-04-24 Implementation: OpenCode-backed hard-cut smoke
+
+Added a replacement smoke path for the hard-cut controller.
+
+Changes:
+
+- Added a `hard_cut_agent` smoke test that starts the bundled OpenCode runtime
+  process, fixes Copilot replies with `RELAY_HARD_CUT_COPILOT_REPLY` /
+  `RELAY_HARD_CUT_COPILOT_FINAL_REPLY`, runs a real `read` tool call through
+  OpenCode, and verifies the linked OpenCode session contains the user message,
+  tool result, and final assistant text.
+- Updated the hard-cut prompt's `read` example from `path` to OpenCode's
+  delegated `filePath` input shape.
+- Moved delegated OpenCode tool execution onto `tokio::task::spawn_blocking`
+  so the blocking HTTP client is not constructed and dropped on a Tokio worker.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent::tests::smoke_uses_bundled_opencode_runtime_and_fixture_copilot -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`: passed, 3 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`: passed, 2 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+
+### 2026-04-24 Implementation: Legacy agent-loop smoke removal
+
+Removed the old Relay-owned agent-loop smoke path after adding the OpenCode-backed
+hard-cut smoke.
+
+Changes:
+
+- Deleted the launched-app `agent-loop:test` script and its desktop package
+  entry.
+- Removed the old compat-harness full-session module that depended on
+  `run_agent_loop_smoke`.
+- Removed the legacy compat feature module that still called Relay tools
+  directly instead of going through the OpenCode tool runtime.
+- Removed the smoke-only CDP fake provider and autorun environment switch from
+  the legacy orchestrator.
+- Removed old `tauri_bridge` tests for deleted direct loop helpers.
+- Extended the hard-cut guard so the old smoke env hook and package scripts
+  cannot be reintroduced.
+
+Verification:
+`cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`;
+`node scripts/check-hard-cut-guard.mjs`;
+`node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`;
+`git diff --check`;
+`pnpm check` — passed.
+
+### 2026-04-24 Implementation: OpenCode session-history source-of-truth path
+
+Moved session-history read and write paths toward OpenCode as the execution
+source of truth.
+
+Changes:
+
+- Added an OpenCode runtime client for `GET /session/:sessionID/message`.
+- Added a minimal OpenCode message/part mapper into the existing Relay UI
+  message shape, including text parts and completed/error tool parts.
+- Updated `get_session_history` so linked `opencodeSessionId` sessions prefer
+  OpenCode messages when present, with Relay's in-memory state remaining as a
+  UI projection and startup fallback.
+- Added a bundled runtime endpoint,
+  `/experimental/relay/session/:sessionID/transcript`, that appends
+  Copilot-controlled transcript messages to OpenCode sessions through
+  OpenCode's `session.updateMessage` / `session.updatePart` path without
+  invoking OpenCode's model loop.
+- Updated the hard-cut controller to mirror user messages, assistant text, and
+  tool results into the linked OpenCode session, and to pass the OpenCode
+  session ID into delegated tool execution.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --check apps/desktop/src-tauri/resources/opencode-runtime/server.js`: passed.
+- Bundled runtime smoke test: created an OpenCode session, appended Relay user,
+  assistant text, and completed tool messages through
+  `/experimental/relay/session/:sessionID/transcript`, then confirmed
+  `GET /session/:sessionID/message` returned those parts.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`: passed, 2 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-23 Implementation: Office/PDF glob-read correction
 
 Revisited the previous "Office/PDF as grep backend" implementation against

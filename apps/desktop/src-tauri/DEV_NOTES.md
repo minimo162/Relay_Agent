@@ -37,8 +37,8 @@ cargo check
 - **Packaged app:** `lib.rs` `liteparse_env` sets `RELAY_LITEPARSE_RUNNER_ROOT` (bundle resources), `RELAY_BUNDLED_NODE`, and `RELAY_BUNDLED_RIPGREP` (sidecars next to the executable). Run `pnpm run prep:tauri-bundle` before invoking raw `tauri build`; the package `tauri:build` script and release CI do this explicitly. Tauri `beforeBuildCommand` only runs the Vite build.
 - **Tuning:** `RELAY_PDF_PARSE_TIMEOUT_SECS` (default 120), `RELAY_LITEPARSE_MAX_PAGES` (passed to the runner).
 
-## Windows Office hybrid read (COM + temp PDF + `read_file`)
+## Windows Office hybrid read (COM + temp PDF + `read`)
 
-- **Prompts:** `agent_loop` CDP catalog and desktop system prompt describe **one `PowerShell`** command (COM: `Value2`/CSV + `ExportAsFixedFormat`) → stdout JSON with **`pdfPath`** → second tool **`read_file`** on `pdfPath` in the **same** `relay_tool` array.
-- **Sample:** `apps/desktop/scripts/office-hybrid-read-sample.ps1` — run on a Windows machine with Office, e.g. `pwsh -File scripts/office-hybrid-read-sample.ps1 -Path C:\path\book.xlsx -Mode Excel`, then `read_file` the printed `pdfPath` inside Relay (requires `prep:liteparse-runner` / bundled Node for PDF).
+- **Prompts:** Copilot adapter prompts describe Office/PDF handling through the OpenCode-like `glob` / exact `read` path. Relay no longer owns a desktop `agent_loop` prompt surface.
+- **Sample:** `apps/desktop/scripts/office-hybrid-read-sample.ps1` — run on a Windows machine with Office, e.g. `pwsh -File scripts/office-hybrid-read-sample.ps1 -Path C:\path\book.xlsx -Mode Excel`, then `read` the printed `pdfPath` inside Relay (requires `prep:liteparse-runner` / bundled Node for PDF).
 - **Manual verification:** documented in `docs/FILE_OPS_E2E_VERIFICATION.md` (*Office hybrid read*).

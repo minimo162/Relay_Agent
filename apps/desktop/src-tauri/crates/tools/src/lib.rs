@@ -560,7 +560,9 @@ fn cdp_tool_example(name: &str) -> Value {
             json!({"name":"todowrite","relay_tool_call":true,"input":{"todos":[{"content":"Implement parser change","status":"in_progress","priority":"medium"}]}})
         }
         "skill" => json!({"name":"skill","relay_tool_call":true,"input":{"name":"openai-docs"}}),
-        "apply_patch" => json!({"name":"apply_patch","relay_tool_call":true,"input":{"patchText":"*** Begin Patch\n*** End Patch\n"}}),
+        "apply_patch" => {
+            json!({"name":"apply_patch","relay_tool_call":true,"input":{"patchText":"*** Begin Patch\n*** End Patch\n"}})
+        }
         "lsp" => {
             json!({"name":"lsp","relay_tool_call":true,"input":{"action":"diagnostics","path":"src/main.rs"}})
         }
@@ -1883,8 +1885,11 @@ mod opencode_runtime {
         input: &Value,
         context: &ToolExecutionContext,
     ) -> Result<String, String> {
-        let base = std::env::var(TOOL_RUNTIME_URL_ENV)
-            .map_err(|_| format!("{TOOL_RUNTIME_URL_ENV} is required; Relay tool execution is delegated to opencode"))?;
+        let base = std::env::var(TOOL_RUNTIME_URL_ENV).map_err(|_| {
+            format!(
+                "{TOOL_RUNTIME_URL_ENV} is required; Relay tool execution is delegated to opencode"
+            )
+        })?;
         let url = format!("{}/experimental/tool/execute", base.trim_end_matches('/'));
         let timeout = std::env::var(TOOL_RUNTIME_TIMEOUT_MS_ENV)
             .ok()
@@ -1896,16 +1901,13 @@ mod opencode_runtime {
             .build()
             .map_err(|error| format!("failed to create opencode tool runtime client: {error}"))?;
         let normalized_cwd = normalize_runtime_path(context.cwd.as_deref());
-        let normalized_worktree = context
-            .worktree
-            .as_deref()
-            .and_then(|worktree| {
-                let normalized = normalize_runtime_path(Some(worktree));
-                match (&normalized_cwd, &normalized) {
-                    (Some(cwd), Some(worktree)) if cwd == worktree => None,
-                    _ => normalized,
-                }
-            });
+        let normalized_worktree = context.worktree.as_deref().and_then(|worktree| {
+            let normalized = normalize_runtime_path(Some(worktree));
+            match (&normalized_cwd, &normalized) {
+                (Some(cwd), Some(worktree)) if cwd == worktree => None,
+                _ => normalized,
+            }
+        });
         let cwd = normalized_cwd.as_deref();
         let request = ExecuteRequest {
             tool: name,
@@ -1921,9 +1923,9 @@ mod opencode_runtime {
         if let Some(cwd) = cwd {
             builder = builder.header("x-opencode-directory", cwd);
         }
-        let response = builder
-            .send()
-            .map_err(|error| format!("opencode tool runtime request failed for `{name}`: {error}"))?;
+        let response = builder.send().map_err(|error| {
+            format!("opencode tool runtime request failed for `{name}`: {error}")
+        })?;
         let status = response.status();
         let body = response
             .text()
@@ -1933,8 +1935,9 @@ mod opencode_runtime {
                 "opencode tool runtime rejected `{name}` with HTTP {status}: {body}"
             ));
         }
-        let decoded: ExecuteResponse = serde_json::from_str(&body)
-            .map_err(|error| format!("invalid opencode tool runtime response for `{name}`: {error}; body={body}"))?;
+        let decoded: ExecuteResponse = serde_json::from_str(&body).map_err(|error| {
+            format!("invalid opencode tool runtime response for `{name}`: {error}; body={body}")
+        })?;
         if let Some(error) = decoded.error {
             return Err(error);
         }

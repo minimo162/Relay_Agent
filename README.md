@@ -23,8 +23,8 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 |-------|------------|
 | UI | SolidJS, Vite, TypeScript, Tailwind — conversation-first desktop shell in [`apps/desktop/src/index.css`](apps/desktop/src/index.css), aligned with [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md). Light theme uses warm `--ra-*` tokens, cream surfaces, and border-led cards; dark theme is the paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-14** warm-token realignment) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
-| Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
-| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; this is the production path. Direct Rust `cdp_*` commands remain diagnostics/manual helpers. The desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. Assistant streaming is live and rewrite-safe: if Copilot rewrites a draft mid-stream, the desktop replaces the active assistant bubble instead of blindly appending duplicate text. Final-response extraction now prefers the full visible assistant turn over narrow reply fragments so `relay_tool` fences and trailing explanation text are not truncated. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates require **`"relay_tool_call": true`** per tool object by default; opt out only with `RELAY_FALLBACK_SENTINEL_POLICY=observe` for compatibility ([`agent_loop/orchestrator.rs`](apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)) |
+| Agent / tools | Rust adapter (`apps/desktop/src-tauri/`) delegates execution to the bundled OpenCode runtime; Relay-owned Rust code is limited to desktop UX, IPC, diagnostics, Copilot CDP adaptation, and transcript projection |
+| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP remains the controller path. Relay prompts Copilot for OpenCode/OpenWork-compatible low-level tool calls, delegates those tool calls to the OpenCode runtime, and mirrors user/tool/assistant transcript parts into the linked OpenCode session. Direct Rust `cdp_*` commands remain diagnostics/manual helpers. Tool-call parsing lives in `desktop-core` for deterministic coverage; UI/IPC event payloads live in [`agent_projection.rs`](apps/desktop/src-tauri/src/agent_projection.rs). |
 
 ## What the app does
 
@@ -44,14 +44,14 @@ Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTA
 ## Architecture (high level)
 
 ```
-SolidJS (apps/desktop/src)  ←→  Tauri IPC  ←→  Rust (agent_loop, tools, IPC)
+SolidJS (apps/desktop/src)  ←→  Tauri IPC  ←→  Rust adapter + agent_projection
                                                       ↓
-                                      Node Copilot bridge + LiteParse runtime
+                         M365 Copilot CDP controller + OpenCode runtime executor
                                                       ↓
-                                    Edge + M365 Copilot (CDP)
+                                    Edge + M365 Copilot / local workspace tools
 ```
 
-Rust entry: `apps/desktop/src-tauri/src/lib.rs`. IPC source types live in Rust (`models.rs`, `agent_loop/events`) and generate `apps/desktop/src/lib/ipc.generated.ts`; `apps/desktop/src/lib/ipc.ts` stays as the thin invoke/listen wrapper plus UI helpers.
+Rust entry: `apps/desktop/src-tauri/src/lib.rs`. IPC source types live in Rust (`models.rs`, `agent_projection.rs`) and generate `apps/desktop/src/lib/ipc.generated.ts`; `apps/desktop/src/lib/ipc.ts` stays as the thin invoke/listen wrapper plus UI helpers.
 
 ## Repository layout
 
@@ -93,9 +93,9 @@ Bundle prerequisites are prepared explicitly with `pnpm --filter @relay-agent/de
 
 ## Configuration
 
-**Rust defaults** (`apps/desktop/src-tauri/src/config.rs`): e.g. `max_turns` (16), concurrency (4), session TTL (30 min). Compaction defaults are canonical in `runtime::CompactionConfig::default()` (`preserve_recent_messages = 5`, `max_estimated_tokens = 10000`).
+**Rust defaults** (`apps/desktop/src-tauri/src/config.rs`): e.g. `max_turns` (16), concurrency (4), and session TTL (30 min). Execution transcript state lives in the linked OpenCode session; Relay-specific defaults live in the desktop adapter/config modules.
 
-**Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) and runtime crate docs. The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. When `.claw` sets permission mode to **read-only**, the **bash** tool rejects commands that look mutating (e.g. `rm`, `git commit`, shell redirects); use file tools where applicable.
+**Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md). The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. Runtime behavior should come from OpenCode/OpenWork wherever practical.
 
 **Diagnostics:** `get_relay_diagnostics` still exists in IPC, the Settings modal exposes **Export diagnostics** for a text bundle, and the repo now ships a headless doctor entrypoint: `pnpm doctor -- --json`.
 
@@ -109,7 +109,6 @@ pnpm check
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 ```
 
@@ -133,7 +132,7 @@ RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 \
 
 Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs `original`, `repair1`, and `repair2` stage sends/replies. If it fails, the panic/log output now includes typed bridge metadata such as `failureClass`, `stageLabel`, and `requestChain`. Detailed prerequisites and failure meanings: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
-**Headless launched-app smokes:** `pnpm launch:test` verifies `tauri:dev` launch stability in Linux/Xvfb, and `pnpm agent-loop:test` runs the env-gated Rust autorun smoke that exercises retry recovery, approval handling, emitted `agent:*` events, the pushed `agent:status` phase sequence (`running` → `retrying` → `waiting_approval` → `idle:completed` minimum), and final `stopReason: "completed"` through the real desktop bridge.
+**Headless launched-app smoke:** `pnpm launch:test` verifies `tauri:dev` launch stability in Linux/Xvfb. The hard-cut OpenCode execution path is covered by the `hard_cut_agent` Rust smoke, which starts the bundled OpenCode runtime and verifies user, tool-result, and final assistant transcript writes in the linked OpenCode session.
 
 **Live desktop smoke:** `pnpm live:m365:desktop-smoke` drives the real desktop app against signed-in M365 Copilot and validates the end-to-end app launch plus desktop/Copilot bridge path before the narrower multiturn live scenarios below.
 
@@ -147,7 +146,7 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Doctor CLI integration:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli` covers doctor report shape and CLI-facing status handling.
 
-**Deterministic parity harness:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` covers claw-style parity scenarios, including the desktop full-session harness for `streaming_text`, `plugin_tool_roundtrip`, `auto_compact_triggered`, and `token_cost_reporting`.
+**Deterministic fixture harness:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` checks that the vendored historical mock parity manifest remains readable. It no longer links the old Relay runtime/tools parity harness.
 
 **E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.
 
@@ -155,7 +154,7 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Live Copilot response probe (real CDP):** `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --prompt "<prompt>" [--prompt "<prompt 2>"]` sends prompts through Playwright `connectOverCDP`, saves screenshots plus DOM/transcript artifacts under a temp directory, and records Relay-style DOM extracts next to the visible Copilot reply for mismatch analysis.
 
-**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes pnpm lockfile policy guard, bundled runtime prep (`relay-node`, `relay-rg`, LiteParse runner), Linux Tauri deps, docs truth guards, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs the same lockfile/runtime prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
+**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes pnpm lockfile policy guard, bundled runtime prep (`relay-node`, `relay-rg`, LiteParse runner), Linux Tauri deps, docs truth guards, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm launch:test`; `windows-latest` runs the same lockfile/runtime prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm smoke:windows`.
 
 ## License
 

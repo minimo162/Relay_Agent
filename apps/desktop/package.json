@@ -22,7 +22,6 @@
     "tauri:dev:cdp": "node ./scripts/tauri-dev-cdp.mjs",
     "tauri:build": "pnpm run prep:tauri-bundle && tauri build",
     "launch:test": "node ./scripts/launch_tauri_smoke.mjs",
-    "agent-loop:test": "node ./scripts/launch_agent_loop_smoke.mjs",
     "smoke:windows": "node ./scripts/e2e_windows_smoke.mjs",
     "live:m365:desktop-smoke": "node ./scripts/live_m365_desktop_smoke.mjs",
     "live:m365:tetris-html": "node ./scripts/live_m365_tetris_html_smoke.mjs",

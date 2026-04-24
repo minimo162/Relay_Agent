@@ -2,10 +2,11 @@
 members = [
     "apps/desktop/src-tauri",
     "apps/desktop/src-tauri/crates/desktop-core",
+    "apps/desktop/src-tauri/crates/compat-harness",
+]
+exclude = [
     "apps/desktop/src-tauri/crates/runtime",
     "apps/desktop/src-tauri/crates/tools",
-    "apps/desktop/src-tauri/crates/commands",
-    "apps/desktop/src-tauri/crates/compat-harness",
 ]
 resolver = "2"
 

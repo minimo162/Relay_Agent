@@ -1,4 +1,3 @@
-use crate::agent_loop::{msg_to_relay, MessageContent};
 use crate::app_services::AppServices;
 use crate::doctor::relay_diagnostics_blocking;
 use crate::models::{
@@ -6,10 +5,7 @@ use crate::models::{
     StartAgentRequest,
 };
 use crate::registry::SessionRunState;
-use crate::tauri_bridge::{
-    continue_agent_session_inner, respond_approval_inner, start_agent_inner,
-};
-use runtime::ConversationMessage;
+use crate::tauri_bridge::respond_approval_inner;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -339,11 +335,9 @@ fn handle_start_agent(
     };
 
     let services = app.state::<AppServices>();
-    let session_id = tauri::async_runtime::block_on(start_agent_inner(
+    let session_id = tauri::async_runtime::block_on(crate::hard_cut_agent::start_agent(
         app.clone(),
-        services.registry(),
-        services.agent_semaphore(),
-        services.config().clone(),
+        services,
         request,
     ))
     .map_err(|error| format!("start_agent failed: {error}"))?;
@@ -389,21 +383,19 @@ fn handle_first_run_send(
     }
     let event = DevFirstRunSendEvent { text };
     let services = app.state::<AppServices>();
-    let registry = services.registry();
     let latest_session_id = build_state_response(app)?.latest_session_id;
 
     if let Some(session_id) = latest_session_id {
-        let continued_session_id = tauri::async_runtime::block_on(continue_agent_session_inner(
-            app.clone(),
-            registry,
-            services.agent_semaphore(),
-            services.config().clone(),
-            ContinueAgentSessionRequest {
-                session_id,
-                message: event.text.clone(),
-            },
-        ))
-        .map_err(|error| format!("continue_agent_session failed: {error}"))?;
+        let continued_session_id =
+            tauri::async_runtime::block_on(crate::hard_cut_agent::continue_agent_session(
+                app.clone(),
+                services,
+                ContinueAgentSessionRequest {
+                    session_id,
+                    message: event.text.clone(),
+                },
+            ))
+            .map_err(|error| format!("continue_agent_session failed: {error}"))?;
 
         return write_json_response(
             stream,
@@ -422,24 +414,23 @@ fn handle_first_run_send(
         .map_err(|_| "dev automation config lock poisoned")?
         .clone();
     if let Some(config) = config {
-        let started_session_id = tauri::async_runtime::block_on(start_agent_inner(
-            app.clone(),
-            registry,
-            services.agent_semaphore(),
-            services.config().clone(),
-            StartAgentRequest {
-                goal: event.text.clone(),
-                files: Vec::new(),
-                cwd: config.workspace_path.map(|value| value.trim().to_string()),
-                browser_settings: Some(BrowserAutomationSettings {
-                    cdp_port: config.cdp_port.unwrap_or(9360),
-                    auto_launch_edge: config.auto_launch_edge.unwrap_or(false),
-                    timeout_ms: config.timeout_ms.unwrap_or(60_000),
-                }),
-                max_turns: config.max_turns.map(|value| value as usize),
-            },
-        ))
-        .map_err(|error| format!("start_agent failed: {error}"))?;
+        let started_session_id =
+            tauri::async_runtime::block_on(crate::hard_cut_agent::start_agent(
+                app.clone(),
+                services,
+                StartAgentRequest {
+                    goal: event.text.clone(),
+                    files: Vec::new(),
+                    cwd: config.workspace_path.map(|value| value.trim().to_string()),
+                    browser_settings: Some(BrowserAutomationSettings {
+                        cdp_port: config.cdp_port.unwrap_or(9360),
+                        auto_launch_edge: config.auto_launch_edge.unwrap_or(false),
+                        timeout_ms: config.timeout_ms.unwrap_or(60_000),
+                    }),
+                    max_turns: config.max_turns.map(|value| value as usize),
+                },
+            ))
+            .map_err(|error| format!("start_agent failed: {error}"))?;
 
         return write_json_response(
             stream,
@@ -531,14 +522,6 @@ fn build_session_state(
     state: &crate::registry::SessionState,
     pending_approvals: Vec<DevPendingApprovalState>,
 ) -> DevSessionState {
-    let (
-        message_count,
-        tool_use_counts,
-        tool_result_counts,
-        tool_error_counts,
-        last_assistant_text,
-    ) = summarize_session_messages(&state.session.messages);
-
     DevSessionState {
         session_id: session_id.to_string(),
         cwd: state.session_config.cwd.clone(),
@@ -546,73 +529,18 @@ fn build_session_state(
         run_state: run_state_label(state.run_state).to_string(),
         last_stop_reason: state.last_stop_reason.clone(),
         retry_count: state.retry_count,
-        message_count,
+        message_count: 0,
         pending_approvals,
-        tool_use_counts,
-        tool_result_counts,
-        tool_error_counts,
-        last_assistant_text,
+        tool_use_counts: BTreeMap::new(),
+        tool_result_counts: BTreeMap::new(),
+        tool_error_counts: BTreeMap::new(),
+        last_assistant_text: None,
         current_copilot_request_id: state.current_copilot_request_id.clone(),
         stream_delta_count: state.stream_delta_count,
         first_stream_at_ms: state.first_stream_at_ms,
         last_stream_at_ms: state.last_stream_at_ms,
         stream_preview_text: state.stream_preview_text.clone(),
     }
-}
-
-#[allow(clippy::type_complexity)]
-fn summarize_session_messages(
-    messages: &[ConversationMessage],
-) -> (
-    usize,
-    BTreeMap<String, usize>,
-    BTreeMap<String, usize>,
-    BTreeMap<String, usize>,
-    Option<String>,
-) {
-    let mut tool_use_names = BTreeMap::<String, String>::new();
-    let mut tool_use_counts = BTreeMap::<String, usize>::new();
-    let mut tool_result_counts = BTreeMap::<String, usize>::new();
-    let mut tool_error_counts = BTreeMap::<String, usize>::new();
-    let mut last_assistant_text = None;
-
-    for message in messages.iter().map(msg_to_relay) {
-        for content in message.content {
-            match content {
-                MessageContent::Text { text } if message.role == "assistant" => {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        last_assistant_text = Some(trimmed.to_string());
-                    }
-                }
-                MessageContent::ToolUse { id, name, .. } => {
-                    tool_use_names.insert(id, name.clone());
-                    *tool_use_counts.entry(name).or_insert(0) += 1;
-                }
-                MessageContent::ToolResult {
-                    tool_use_id,
-                    is_error,
-                    ..
-                } => {
-                    if let Some(name) = tool_use_names.get(&tool_use_id).cloned() {
-                        *tool_result_counts.entry(name.clone()).or_insert(0) += 1;
-                        if is_error {
-                            *tool_error_counts.entry(name).or_insert(0) += 1;
-                        }
-                    }
-                }
-                MessageContent::Text { .. } => {}
-            }
-        }
-    }
-
-    (
-        messages.len(),
-        tool_use_counts,
-        tool_result_counts,
-        tool_error_counts,
-        last_assistant_text,
-    )
 }
 
 fn run_state_label(state: SessionRunState) -> &'static str {

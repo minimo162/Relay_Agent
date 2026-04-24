@@ -85,6 +85,14 @@ pub struct RelayDiagnostics {
     pub last_copilot_bridge_failure: Option<CopilotBridgeFailureInfo>,
     #[serde(default)]
     pub copilot_repair_stage_stats: Vec<CopilotRepairStageStats>,
+    #[serde(default)]
+    pub execution_backend: Option<String>,
+    #[serde(default)]
+    pub opencode_runtime_url: Option<String>,
+    #[serde(default)]
+    pub opencode_runtime_running: Option<bool>,
+    #[serde(default)]
+    pub opencode_runtime_message: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, TS, PartialEq, Eq)]

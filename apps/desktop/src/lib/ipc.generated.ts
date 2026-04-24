@@ -1,5 +1,5 @@
 // Generated from Rust IPC source types via ts-rs.
-// Source: apps/desktop/src-tauri/src/models.rs, agent_loop/events, tauri_bridge.rs
+// Source: apps/desktop/src-tauri/src/models.rs, agent_projection.rs, tauri_bridge.rs
 
 export interface BrowserAutomationSettings {
   cdpPort: number;
@@ -96,6 +96,10 @@ export interface RelayDiagnostics {
   copilotBootTokenPresent?: boolean | null;
   lastCopilotBridgeFailure?: CopilotBridgeFailureInfo | null;
   copilotRepairStageStats: CopilotRepairStageStats[];
+  executionBackend?: string | null;
+  opencodeRuntimeUrl?: string | null;
+  opencodeRuntimeRunning?: boolean | null;
+  opencodeRuntimeMessage?: string | null;
 }
 
 export interface CancelAgentRequest {

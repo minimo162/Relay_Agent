@@ -2,7 +2,8 @@
 /// All magic numbers should live here and be adjustable via UI or config file in the future.
 ///
 /// Agent loop and session configuration.
-/// Conversation compaction defaults live in `runtime::CompactionConfig`.
+/// Hard-cut execution state lives in OpenCode/OpenWork; these values only tune
+/// Relay's adapter-side retries and in-memory status cleanup.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     /// Maximum number of agent turns per session.

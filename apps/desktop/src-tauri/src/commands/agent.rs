@@ -16,14 +16,7 @@ pub async fn start_agent(
     services: State<'_, AppServices>,
     request: StartAgentRequest,
 ) -> Result<String, String> {
-    tauri_bridge::start_agent_inner(
-        app,
-        services.registry(),
-        services.agent_semaphore(),
-        services.config().clone(),
-        request,
-    )
-    .await
+    crate::hard_cut_agent::start_agent(app, services, request).await
 }
 
 #[tauri::command]
@@ -32,14 +25,7 @@ pub async fn continue_agent_session(
     services: State<'_, AppServices>,
     request: ContinueAgentSessionRequest,
 ) -> Result<String, String> {
-    tauri_bridge::continue_agent_session_inner(
-        app,
-        services.registry(),
-        services.agent_semaphore(),
-        services.config().clone(),
-        request,
-    )
-    .await
+    crate::hard_cut_agent::continue_agent_session(app, services, request).await
 }
 
 #[tauri::command]

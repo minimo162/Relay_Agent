@@ -11,9 +11,6 @@ name = "desktop_core"
 workspace = true
 
 [dependencies]
-runtime = { path = "../runtime" }
-tools = { path = "../tools" }
-
 chrono = { version = "0.4", features = ["clock"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

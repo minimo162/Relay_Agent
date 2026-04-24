@@ -1,7 +1,6 @@
 #![allow(clippy::needless_pass_by_value, clippy::unused_async)]
 
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -13,20 +12,25 @@ use uuid::Uuid;
 
 use std::time::Duration;
 
+use desktop_core::doctor::RELAY_MAX_TEXT_FILE_READ_BYTES;
+
 use crate::app_services::{AppServices, CopilotBridgeManager, CopilotServerState};
 use crate::cdp_copilot;
-use crate::copilot_persistence::{self, PersistedSessionConfig};
+use crate::copilot_persistence;
+#[cfg(test)]
+use crate::copilot_persistence::PersistedSessionConfig;
 use crate::models::{
-    BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
-    GetAgentSessionHistoryRequest, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
-    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
-    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse,
-    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
-    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    BrowserAutomationSettings, CancelAgentRequest, GetAgentSessionHistoryRequest,
+    ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
+    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
+    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
+    SessionWriteUndoStatusResponse, WorkspaceAllowlistCwdRequest,
+    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
 };
-use crate::registry::{SessionHandle, SessionRegistry, SessionRunState, SessionState};
-use runtime::MAX_TEXT_FILE_READ_BYTES;
+#[cfg(test)]
+use crate::registry::{SessionHandle, SessionState};
+use crate::registry::{SessionRegistry, SessionRunState};
 
 /* ── Copilot Node bridge (copilot_server.js) ───────────────── *
  * Spawns Node + copilot_server.js, which attaches to Edge via *
@@ -416,325 +420,12 @@ fn log_warmup_result(result: &CopilotWarmupResult) {
     );
 }
 
-// Re-export registry and agent_loop types for external consumers
-pub(crate) use crate::agent_loop::{
+// Re-export registry and projection types for external consumers.
+pub(crate) use crate::agent_projection::{
     AgentErrorEvent, AgentSessionHistoryResponse, AgentSessionStatusEvent,
 };
 
-// What we need from agent_loop
-use crate::agent_loop::{msg_to_relay, run_agent_loop_impl};
-use crate::agent_loop::{AgentSessionPhase, E_ERROR, E_STATUS};
-
-fn normalize_optional_string(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-}
-
-fn start_request_session_config(request: &StartAgentRequest, goal: &str) -> PersistedSessionConfig {
-    PersistedSessionConfig {
-        goal: Some(goal.to_string()),
-        cwd: normalize_optional_string(request.cwd.as_deref()),
-        max_turns: request.max_turns,
-        browser_settings: request.browser_settings.clone(),
-    }
-}
-
-fn first_user_text(session: &runtime::Session) -> Option<String> {
-    session.messages.iter().find_map(|message| {
-        if message.role != runtime::MessageRole::User {
-            return None;
-        }
-        let text = message
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                runtime::ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_string();
-        (!text.is_empty()).then_some(text)
-    })
-}
-
-fn ensure_loaded_session_handle(
-    registry: &SessionRegistry,
-    session_id: &str,
-) -> Result<Arc<SessionHandle>, String> {
-    if let Some(handle) = registry.get_handle(session_id).map_err(|e| e.to_string())? {
-        return Ok(handle);
-    }
-
-    let loaded = copilot_persistence::load_session(session_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("session `{session_id}` not found"))?;
-    let auto_initial: HashSet<String> =
-        crate::workspace_allowlist::load_for_cwd(loaded.config.cwd.as_deref());
-    registry
-        .insert(
-            session_id.to_string(),
-            SessionHandle::new(
-                SessionState::new_idle(loaded.session, loaded.config),
-                auto_initial,
-            ),
-        )
-        .map_err(|e| e.to_string())?;
-    registry
-        .get_handle(session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("session `{session_id}` not found after load"))
-}
-
-fn prepare_session_continuation(
-    handle: &SessionHandle,
-    fallback_message: &str,
-) -> Result<(runtime::Session, PersistedSessionConfig, Arc<AtomicBool>), String> {
-    handle
-        .write_state(|state| -> Result<_, String> {
-            if state.running && !state.cancelled.load(Ordering::SeqCst) {
-                return Err("session is already running".to_string());
-            }
-
-            let goal = state
-                .session_config
-                .goal
-                .clone()
-                .filter(|value| !value.trim().is_empty())
-                .or_else(|| first_user_text(&state.session))
-                .unwrap_or_else(|| fallback_message.to_string());
-            state.session_config.goal = Some(goal);
-            state.running = true;
-            state.run_state = SessionRunState::Running;
-            state.loop_epoch = state.loop_epoch.saturating_add(1);
-            state.cancelled = Arc::new(AtomicBool::new(false));
-            state.finished_at = None;
-            state.retry_count = 0;
-            state.last_stop_reason = None;
-            state.last_error_summary = None;
-            state.terminal_status_emitted = false;
-            state.current_copilot_request_id = None;
-            state.reset_stream_metrics();
-
-            Ok((
-                state.session.clone(),
-                state.session_config.clone(),
-                Arc::clone(&state.cancelled),
-            ))
-        })
-        .map_err(|e| e.to_string())?
-}
-
-struct SessionLoopLaunch {
-    session_id: String,
-    conversation_goal: String,
-    turn_input: String,
-    session_config: PersistedSessionConfig,
-    initial_session: runtime::Session,
-    cancelled: Arc<AtomicBool>,
-    /// True only for the first turn of a brand-new session (from `start_agent`),
-    /// signalling that the first Copilot request should start a fresh chat
-    /// thread instead of continuing the previous one.
-    is_fresh_session: bool,
-}
-
-async fn spawn_session_loop<R: Runtime>(
-    app: AppHandle<R>,
-    registry: SessionRegistry,
-    agent_semaphore: Arc<tokio::sync::Semaphore>,
-    config: crate::config::AgentConfig,
-    launch: SessionLoopLaunch,
-) -> Result<String, String> {
-    let SessionLoopLaunch {
-        session_id,
-        conversation_goal,
-        turn_input,
-        session_config,
-        initial_session,
-        cancelled,
-        is_fresh_session,
-    } = launch;
-    let cwd = normalize_optional_string(session_config.cwd.as_deref());
-    let max_turns = session_config.max_turns;
-    let browser_settings = session_config.browser_settings.clone();
-
-    let ttl_seconds = i64::try_from(config.session_cleanup_ttl_minutes).unwrap_or(i64::MAX) * 60;
-    if let Err(e) = registry.remove_stale_sessions(ttl_seconds) {
-        tracing::warn!("[RelayAgent] stale session cleanup failed: {e}");
-    }
-
-    let permit = agent_semaphore
-        .acquire_owned()
-        .await
-        .map_err(|_| "agent concurrency limit reached — try again later".to_string())?;
-
-    let app_for_task = app.clone();
-    let sid_for_task = session_id.clone();
-    let reg_for_task = registry.clone();
-
-    tokio::task::spawn_blocking(move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_agent_loop_impl(
-                &app_for_task,
-                &reg_for_task,
-                &sid_for_task,
-                conversation_goal,
-                turn_input,
-                cwd,
-                max_turns,
-                browser_settings,
-                cancelled,
-                initial_session,
-                is_fresh_session,
-            )
-        }));
-
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                let evt = AgentErrorEvent {
-                    session_id: sid_for_task.clone(),
-                    error: err.to_string(),
-                    cancelled: false,
-                };
-                if let Err(e) = app_for_task.emit(E_ERROR, &evt) {
-                    tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
-                }
-            }
-            Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "agent loop panicked with unknown payload".to_string()
-                };
-                tracing::error!("[RelayAgent] agent loop panicked ({sid_for_task}): {msg}");
-                let evt = AgentErrorEvent {
-                    session_id: sid_for_task.clone(),
-                    error: format!("agent loop panicked: {msg}"),
-                    cancelled: false,
-                };
-                if let Err(e) = app_for_task.emit(E_ERROR, &evt) {
-                    tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
-                }
-            }
-        }
-
-        if let Ok(Some(handle)) = reg_for_task.get_handle(&sid_for_task) {
-            let _ignore = handle.write_state(SessionState::mark_finished);
-        }
-
-        drop(permit);
-    });
-
-    Ok(session_id)
-}
-
-pub async fn start_agent(
-    app: AppHandle,
-    services: State<'_, AppServices>,
-    request: StartAgentRequest,
-) -> Result<String, String> {
-    start_agent_inner(
-        app,
-        services.registry(),
-        services.agent_semaphore(),
-        services.config().clone(),
-        request,
-    )
-    .await
-}
-
-pub(crate) async fn start_agent_inner<R: Runtime>(
-    app: AppHandle<R>,
-    registry: SessionRegistry,
-    agent_semaphore: Arc<tokio::sync::Semaphore>,
-    config: crate::config::AgentConfig,
-    request: StartAgentRequest,
-) -> Result<String, String> {
-    let goal = request.goal.trim().to_string();
-    if goal.is_empty() {
-        return Err("goal must not be empty".into());
-    }
-
-    let session_id = format!("session-{}", Uuid::new_v4());
-    let session_config = start_request_session_config(&request, &goal);
-    let auto_initial: HashSet<String> =
-        crate::workspace_allowlist::load_for_cwd(session_config.cwd.as_deref());
-
-    let handle = SessionHandle::new(
-        SessionState::new(runtime::Session::new(), session_config.clone()),
-        auto_initial,
-    );
-    let cancelled = handle
-        .read_state(|state| Arc::clone(&state.cancelled))
-        .map_err(|e| e.to_string())?;
-    registry
-        .insert(session_id.clone(), handle)
-        .map_err(|e| e.to_string())?;
-    spawn_session_loop(
-        app,
-        registry,
-        agent_semaphore,
-        config,
-        SessionLoopLaunch {
-            session_id,
-            conversation_goal: goal.clone(),
-            turn_input: goal,
-            session_config,
-            initial_session: runtime::Session::new(),
-            cancelled,
-            is_fresh_session: true,
-        },
-    )
-    .await
-}
-
-pub(crate) async fn continue_agent_session_inner<R: Runtime>(
-    app: AppHandle<R>,
-    registry: SessionRegistry,
-    agent_semaphore: Arc<tokio::sync::Semaphore>,
-    config: crate::config::AgentConfig,
-    request: ContinueAgentSessionRequest,
-) -> Result<String, String> {
-    let message = request.message.trim().to_string();
-    if message.is_empty() {
-        return Err("message must not be empty".into());
-    }
-
-    let handle = ensure_loaded_session_handle(&registry, &request.session_id)?;
-    let _ = handle.drain_approvals();
-    let _ = handle.drain_user_questions();
-    let (initial_session, session_config, cancelled) =
-        prepare_session_continuation(&handle, &message)?;
-
-    let conversation_goal = session_config
-        .goal
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| message.clone());
-
-    spawn_session_loop(
-        app,
-        registry,
-        agent_semaphore,
-        config,
-        SessionLoopLaunch {
-            session_id: request.session_id,
-            conversation_goal,
-            turn_input: message,
-            session_config,
-            initial_session,
-            cancelled,
-            is_fresh_session: false,
-        },
-    )
-    .await
-}
+use crate::agent_projection::{AgentSessionPhase, E_ERROR, E_STATUS};
 
 pub async fn respond_approval(
     _app: AppHandle,
@@ -1011,44 +702,10 @@ fn classify_warmup_status_response(
 }
 
 pub async fn compact_agent_session(
-    services: State<'_, AppServices>,
-    request: CompactAgentSessionRequest,
+    _services: State<'_, AppServices>,
+    _request: CompactAgentSessionRequest,
 ) -> Result<CompactAgentSessionResponse, String> {
-    use relay_commands::handle_slash_command;
-    use runtime::CompactionConfig;
-
-    let handle = services
-        .registry()
-        .get_handle(&request.session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
-    let result = handle
-        .write_state(|state| {
-            let config = CompactionConfig {
-                preserve_recent_messages: 2,
-                max_estimated_tokens: 4000,
-            };
-
-            let cmd_result =
-                handle_slash_command("/compact", &state.session, config).ok_or_else(|| {
-                    "compact command is only available for existing sessions".to_string()
-                })?;
-
-            let removed_count = state
-                .session
-                .messages
-                .len()
-                .saturating_sub(cmd_result.session.messages.len());
-
-            state.session = cmd_result.session;
-            Ok::<CompactAgentSessionResponse, String>(CompactAgentSessionResponse {
-                message: cmd_result.message,
-                removed_message_count: removed_count,
-            })
-        })
-        .map_err(|e| e.to_string())??;
-
-    Ok(result)
+    Err("session compaction is owned by OpenCode/OpenWork and is not available through Relay session state".to_string())
 }
 
 pub async fn cancel_agent(
@@ -1194,7 +851,7 @@ pub async fn get_session_history(
     services: State<'_, AppServices>,
     request: GetAgentSessionHistoryRequest,
 ) -> Result<AgentSessionHistoryResponse, String> {
-    let maybe_loaded = if let Some(handle) = services
+    let maybe_runtime_state = if let Some(handle) = services
         .registry()
         .get_handle(&request.session_id)
         .map_err(|e| e.to_string())?
@@ -1203,12 +860,7 @@ pub async fn get_session_history(
             handle
                 .read_state(|state| {
                     let running = state.running && !state.cancelled.load(Ordering::SeqCst);
-                    let messages = state.session.messages.iter().map(msg_to_relay).collect();
-                    AgentSessionHistoryResponse {
-                        session_id: request.session_id.clone(),
-                        running,
-                        messages,
-                    }
+                    (running, state.session_config.opencode_session_id.clone())
                 })
                 .map_err(|e| e.to_string())?,
         )
@@ -1216,65 +868,72 @@ pub async fn get_session_history(
         None
     };
 
-    if let Some(history) = maybe_loaded {
-        return Ok(history);
+    if let Some((running, opencode_session_id)) = maybe_runtime_state {
+        return opencode_session_history(
+            &request.session_id,
+            opencode_session_id.as_deref(),
+            running,
+        )
+        .await;
     }
 
     let loaded = copilot_persistence::load_session(&request.session_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
-    let messages = loaded.session.messages.iter().map(msg_to_relay).collect();
+    opencode_session_history(
+        &request.session_id,
+        loaded.config.opencode_session_id.as_deref(),
+        false,
+    )
+    .await
+}
 
+async fn opencode_session_history(
+    relay_session_id: &str,
+    opencode_session_id: Option<&str>,
+    running: bool,
+) -> Result<AgentSessionHistoryResponse, String> {
+    let opencode_session_id = opencode_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("session `{relay_session_id}` is not linked to OpenCode"))?;
+    let messages = crate::opencode_runtime::session_messages(opencode_session_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to read OpenCode session history for {relay_session_id}/{opencode_session_id}: {error}"
+            )
+        })?;
     Ok(AgentSessionHistoryResponse {
-        session_id: request.session_id,
-        running: false,
-        messages,
+        session_id: relay_session_id.to_string(),
+        running,
+        messages: crate::opencode_runtime::messages_to_relay(&messages),
     })
 }
 
 pub fn undo_session_write(
-    services: State<'_, AppServices>,
-    request: SessionWriteUndoRequest,
+    _services: State<'_, AppServices>,
+    _request: SessionWriteUndoRequest,
 ) -> Result<(), String> {
-    let handle = services
-        .registry()
-        .get_handle(&request.session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Unknown session.".to_string())?;
-    handle
-        .with_write_undo(super::session_write_undo::WriteUndoStacks::undo)
-        .map_err(|e| e.to_string())?
+    Err("session write undo is owned by OpenCode/OpenWork and is not available through Relay session state".to_string())
 }
 
 pub fn redo_session_write(
-    services: State<'_, AppServices>,
-    request: SessionWriteUndoRequest,
+    _services: State<'_, AppServices>,
+    _request: SessionWriteUndoRequest,
 ) -> Result<(), String> {
-    let handle = services
-        .registry()
-        .get_handle(&request.session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Unknown session.".to_string())?;
-    handle
-        .with_write_undo(super::session_write_undo::WriteUndoStacks::redo)
-        .map_err(|e| e.to_string())?
+    Err("session write redo is owned by OpenCode/OpenWork and is not available through Relay session state".to_string())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 pub fn get_session_write_undo_status(
-    services: State<'_, AppServices>,
-    request: SessionWriteUndoRequest,
+    _services: State<'_, AppServices>,
+    _request: SessionWriteUndoRequest,
 ) -> Result<SessionWriteUndoStatusResponse, String> {
-    let handle = services
-        .registry()
-        .get_handle(&request.session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Unknown session.".to_string())?;
-    handle
-        .with_write_undo(|stack| SessionWriteUndoStatusResponse {
-            can_undo: stack.can_undo(),
-            can_redo: stack.can_redo(),
-        })
-        .map_err(|e| e.to_string())
+    Ok(SessionWriteUndoStatusResponse {
+        can_undo: false,
+        can_redo: false,
+    })
 }
 
 pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerProbeResponse {
@@ -1892,10 +1551,10 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_node_bridge_port: COPILOT_HTTP_PORT,
         default_edge_cdp_port: COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
-        architecture_notes: "Copilot path uses the bundled Node bridge on copilot_node_bridge_port; Edge CDP defaults to default_edge_cdp_port (see scripts/start-relay-edge-cdp.sh).".to_string(),
+        architecture_notes: "Relay is the desktop UX and adapter between M365 Copilot CDP and OpenCode/OpenWork execution. Copilot controls the turn; OpenCode/OpenWork owns tool execution state.".to_string(),
         process_cwd,
         claw_config_home_display,
-        max_text_file_read_bytes: MAX_TEXT_FILE_READ_BYTES,
+        max_text_file_read_bytes: RELAY_MAX_TEXT_FILE_READ_BYTES,
         doctor_hints: relay_doctor_hints(),
         predictability_notes: relay_predictability_notes(),
         copilot_bridge_running: None,
@@ -1906,12 +1565,20 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_boot_token_present: None,
         last_copilot_bridge_failure: None,
         copilot_repair_stage_stats: Vec::new(),
+        execution_backend: Some(crate::opencode_runtime::execution_backend_name()),
+        opencode_runtime_url: crate::opencode_runtime::external_runtime_url(),
+        opencode_runtime_running: None,
+        opencode_runtime_message: None,
     }
 }
 
 /// JSON-friendly runtime facts for bug reports (mirrors `OpenWork` debug export, reduced scope).
 pub async fn get_relay_diagnostics(services: State<'_, AppServices>) -> RelayDiagnostics {
     let mut diagnostics = relay_diagnostics_base();
+    let opencode_snapshot = crate::opencode_runtime::snapshot().await;
+    diagnostics.opencode_runtime_url = opencode_snapshot.url;
+    diagnostics.opencode_runtime_running = Some(opencode_snapshot.running);
+    diagnostics.opencode_runtime_message = Some(opencode_snapshot.message);
     let bridge = services.copilot_bridge();
     let server_arc = match bridge.lock() {
         Ok(slot) => slot.as_ref().map(|state| Arc::clone(&state.server)),
@@ -2042,9 +1709,10 @@ pub fn list_workspace_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
     use desktop_core::registry::PendingApproval;
-    use runtime::ConversationMessage;
-    use tempfile::TempDir;
+    use tauri::Manager;
 
     fn saved_session_config() -> PersistedSessionConfig {
         PersistedSessionConfig {
@@ -2056,79 +1724,37 @@ mod tests {
                 auto_launch_edge: false,
                 timeout_ms: 90_000,
             }),
+            opencode_session_id: None,
         }
     }
 
-    #[test]
-    fn prepare_session_continuation_reuses_history_and_goal() {
-        let mut session = runtime::Session::new();
-        session
-            .messages
-            .push(ConversationMessage::user_text("Original task"));
-        session
-            .messages
-            .push(ConversationMessage::assistant(vec![]));
-        let handle = SessionHandle::new(
-            SessionState::new_idle(session.clone(), saved_session_config()),
-            HashSet::new(),
+    #[tokio::test]
+    async fn get_session_history_rejects_relay_only_sessions() {
+        let app = crate::test_support::create_test_app();
+        let session_id = "session-relay-only-history";
+        app.state::<AppServices>()
+            .registry()
+            .insert(
+                session_id.to_string(),
+                SessionHandle::new(
+                    SessionState::new_idle(saved_session_config()),
+                    HashSet::new(),
+                ),
+            )
+            .expect("insert relay-only session");
+
+        let error = get_session_history(
+            app.state::<AppServices>(),
+            GetAgentSessionHistoryRequest {
+                session_id: session_id.to_string(),
+            },
+        )
+        .await
+        .expect_err("Relay-only session history must not be used as fallback");
+        assert!(
+            error.contains("not linked to OpenCode"),
+            "unexpected error: {error}"
         );
-
-        let (loaded, config, cancelled) =
-            prepare_session_continuation(&handle, "Follow-up request").expect("continue session");
-
-        assert_eq!(loaded.messages.len(), session.messages.len());
-        assert_eq!(config.goal.as_deref(), Some("Original task"));
-        assert!(!cancelled.load(Ordering::SeqCst));
-        let running = handle
-            .read_state(|state| state.running)
-            .expect("read state");
-        assert!(running);
-    }
-
-    #[test]
-    fn prepare_session_continuation_rejects_running_session() {
-        let handle = SessionHandle::new(
-            SessionState::new(runtime::Session::new(), saved_session_config()),
-            HashSet::new(),
-        );
-
-        let err =
-            prepare_session_continuation(&handle, "Follow-up request").expect_err("should reject");
-        assert!(err.contains("already running"));
-    }
-
-    #[test]
-    fn ensure_loaded_session_handle_hydrates_persisted_session() {
-        let temp = TempDir::new().expect("tempdir");
-        let previous_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", temp.path());
-
-        let mut session = runtime::Session::new();
-        session
-            .messages
-            .push(ConversationMessage::user_text("Persisted task"));
-        copilot_persistence::save_session("session-hydrated", &session, saved_session_config())
-            .expect("save session");
-
-        let registry = SessionRegistry::new();
-        let handle =
-            ensure_loaded_session_handle(&registry, "session-hydrated").expect("load handle");
-        let (message_count, config) = handle
-            .read_state(|state| (state.session.messages.len(), state.session_config.clone()))
-            .expect("read hydrated state");
-
-        assert_eq!(message_count, 1);
-        assert_eq!(config.goal.as_deref(), Some("Original task"));
-        assert_eq!(
-            config.browser_settings.as_ref().map(|v| v.cdp_port),
-            Some(9444)
-        );
-
-        if let Some(home) = previous_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
@@ -2198,6 +1824,53 @@ mod tests {
         assert!(!result.connected);
     }
 
+    #[tokio::test]
+    async fn compact_session_is_not_relay_owned_on_hard_cut_path() {
+        let app = crate::test_support::create_test_app();
+        let error = match compact_agent_session(
+            app.state::<AppServices>(),
+            CompactAgentSessionRequest {
+                session_id: "session-hard-cut".to_string(),
+            },
+        )
+        .await
+        {
+            Ok(_) => panic!("compact should be unsupported through Relay session state"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("OpenCode/OpenWork"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn write_undo_redo_are_not_relay_owned_on_hard_cut_path() {
+        let app = crate::test_support::create_test_app();
+        let request = SessionWriteUndoRequest {
+            session_id: "session-hard-cut".to_string(),
+        };
+
+        let status = get_session_write_undo_status(app.state::<AppServices>(), request.clone())
+            .expect("status-only response");
+        assert!(!status.can_undo);
+        assert!(!status.can_redo);
+
+        let undo_error = undo_session_write(app.state::<AppServices>(), request.clone())
+            .expect_err("undo should be unsupported through Relay session state");
+        assert!(
+            undo_error.contains("OpenCode/OpenWork"),
+            "unexpected error: {undo_error}"
+        );
+
+        let redo_error = redo_session_write(app.state::<AppServices>(), request)
+            .expect_err("redo should be unsupported through Relay session state");
+        assert!(
+            redo_error.contains("OpenCode/OpenWork"),
+            "unexpected error: {redo_error}"
+        );
+    }
+
     #[test]
     fn remember_for_session_auto_allows_write_and_edit_file_together() {
         let registry = SessionRegistry::new();
@@ -2206,7 +1879,7 @@ mod tests {
             .insert(
                 session_id.to_string(),
                 SessionHandle::new(
-                    SessionState::new_idle(runtime::Session::new(), saved_session_config()),
+                    SessionState::new_idle(saved_session_config()),
                     HashSet::new(),
                 ),
             )
@@ -2254,7 +1927,7 @@ mod tests {
             .insert(
                 session_id.to_string(),
                 SessionHandle::new(
-                    SessionState::new_idle(runtime::Session::new(), saved_session_config()),
+                    SessionState::new_idle(saved_session_config()),
                     HashSet::new(),
                 ),
             )
