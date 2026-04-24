@@ -18,6 +18,8 @@ use runtime::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+const TOOL_RUNTIME_URL_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_URL";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolManifestEntry {
     pub name: String,
@@ -354,6 +356,9 @@ pub fn is_tool_visible_in_surface(name: &str, surface: ToolSurface) -> bool {
 #[must_use]
 pub fn tool_specs_for_surface(surface: ToolSurface) -> Vec<ToolSpec> {
     let _ = surface;
+    if !opencode_tool_runtime_available_for_catalog() {
+        return Vec::new();
+    }
     tool_catalog().specs().to_vec()
 }
 
@@ -364,6 +369,9 @@ pub fn cdp_tool_visibility(name: &str) -> CdpToolVisibility {
 
 #[must_use]
 pub fn cdp_tool_specs_for_visibility(visibility: CdpToolVisibility) -> Vec<ToolSpec> {
+    if !opencode_tool_runtime_available_for_catalog() {
+        return Vec::new();
+    }
     let mut specs = tool_catalog()
         .specs()
         .iter()
@@ -376,6 +384,15 @@ pub fn cdp_tool_specs_for_visibility(visibility: CdpToolVisibility) -> Vec<ToolS
             .then_with(|| a.name.cmp(b.name))
     });
     specs
+}
+
+fn opencode_tool_runtime_available_for_catalog() -> bool {
+    #[cfg(test)]
+    if std::env::var_os("RELAY_TEST_REQUIRE_OPENCODE_RUNTIME_FOR_CATALOG").is_none() {
+        return true;
+    }
+
+    std::env::var(TOOL_RUNTIME_URL_ENV).is_ok_and(|url| !url.trim().is_empty())
 }
 
 fn cdp_catalog_sort_key(name: &str) -> usize {

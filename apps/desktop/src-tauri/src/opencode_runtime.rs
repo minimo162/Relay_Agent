@@ -11,6 +11,7 @@ use tauri::Manager;
 
 const TOOL_RUNTIME_URL_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_URL";
 const TOOL_RUNTIME_DIR_ENV: &str = "RELAY_OPENCODE_RUNTIME_DIR";
+const TOOL_RUNTIME_BUN_ENV: &str = "RELAY_OPENCODE_BUN";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
@@ -70,15 +71,18 @@ pub fn start(app: &tauri::App) -> Option<OpencodeRuntime> {
 
 fn start_inner(app: &tauri::App) -> Result<OpencodeRuntime, String> {
     let runtime_dir = runtime_dir(app)?;
-    let bun = runtime_dir.join(bun_name());
+    let bun = resolve_bun(&runtime_dir)?;
     let server = runtime_dir.join("server.js");
-    require_file(&bun)?;
     require_file(&server)?;
 
     #[cfg(unix)]
-    ensure_executable(&bun)?;
+    if bun.is_path() {
+        ensure_executable(bun.program_path())?;
+    }
 
-    let mut child = Command::new(&bun)
+    tracing::info!("starting bundled opencode runtime with {}", bun.display());
+
+    let mut child = Command::new(bun.program())
         .arg(&server)
         .arg("--hostname")
         .arg("127.0.0.1")
@@ -138,6 +142,77 @@ fn bun_name() -> &'static str {
     } else {
         "bun"
     }
+}
+
+#[derive(Debug)]
+enum BunProgram {
+    Path(PathBuf),
+    Command(String),
+}
+
+impl BunProgram {
+    fn program(&self) -> &std::ffi::OsStr {
+        match self {
+            Self::Path(path) => path.as_os_str(),
+            Self::Command(command) => std::ffi::OsStr::new(command),
+        }
+    }
+
+    fn display(&self) -> String {
+        match self {
+            Self::Path(path) => path.display().to_string(),
+            Self::Command(command) => format!("{command} from PATH"),
+        }
+    }
+
+    fn is_path(&self) -> bool {
+        matches!(self, Self::Path(_))
+    }
+
+    fn program_path(&self) -> &Path {
+        match self {
+            Self::Path(path) => path,
+            Self::Command(_) => unreachable!("PATH commands do not have a local file path"),
+        }
+    }
+}
+
+fn resolve_bun(runtime_dir: &Path) -> Result<BunProgram, String> {
+    if let Ok(raw) = std::env::var(TOOL_RUNTIME_BUN_ENV) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(format!("{TOOL_RUNTIME_BUN_ENV} is set but empty"));
+        }
+        let path = PathBuf::from(trimmed);
+        if path.is_file() {
+            return Ok(BunProgram::Path(path));
+        }
+        if path.components().count() == 1 {
+            return Ok(BunProgram::Command(trimmed.to_string()));
+        }
+        return Err(format!(
+            "{TOOL_RUNTIME_BUN_ENV} points to a missing Bun executable: {}",
+            path.display()
+        ));
+    }
+
+    let bundled = runtime_dir.join(bun_name());
+    if bundled.is_file() {
+        return Ok(BunProgram::Path(bundled));
+    }
+
+    if cfg!(debug_assertions) {
+        tracing::warn!(
+            "bundled opencode runtime bun missing at {}; trying `bun` from PATH for dev",
+            bundled.display()
+        );
+        return Ok(BunProgram::Command("bun".to_string()));
+    }
+
+    Err(format!(
+        "required opencode runtime file missing: {}. Set {TOOL_RUNTIME_BUN_ENV} to a Bun executable or {TOOL_RUNTIME_URL_ENV} to an already running runtime URL",
+        bundled.display()
+    ))
 }
 
 fn require_file(path: &Path) -> Result<(), String> {
