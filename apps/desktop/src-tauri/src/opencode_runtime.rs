@@ -253,27 +253,50 @@ pub async fn snapshot() -> OpencodeRuntimeSnapshot {
         };
     };
 
+    let client = reqwest::Client::new();
     let path_url = format!("{}/path", url.trim_end_matches('/'));
-    let result = reqwest::Client::new()
-        .get(&path_url)
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await;
-    match result {
-        Ok(response) if response.status().is_success() => OpencodeRuntimeSnapshot {
-            url: Some(url),
-            running: true,
-            message: "OpenCode runtime responded to /path".to_string(),
-        },
-        Ok(response) => OpencodeRuntimeSnapshot {
-            url: Some(url),
-            running: false,
-            message: format!("OpenCode runtime /path returned HTTP {}", response.status()),
-        },
-        Err(error) => OpencodeRuntimeSnapshot {
+    let mut last_error = None;
+
+    for attempt in 0..3 {
+        let result = client
+            .get(&path_url)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() => {
+                return OpencodeRuntimeSnapshot {
+                    url: Some(url),
+                    running: true,
+                    message: "OpenCode runtime responded to /path".to_string(),
+                };
+            }
+            Ok(response) => {
+                return OpencodeRuntimeSnapshot {
+                    url: Some(url),
+                    running: false,
+                    message: format!("OpenCode runtime /path returned HTTP {}", response.status()),
+                };
+            }
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < 2 {
+                    tokio::time::sleep(Duration::from_millis(75)).await;
+                }
+            }
+        }
+    }
+
+    match last_error {
+        Some(error) => OpencodeRuntimeSnapshot {
             url: Some(url),
             running: false,
             message: format!("OpenCode runtime probe failed: {error}"),
+        },
+        None => OpencodeRuntimeSnapshot {
+            url: Some(url),
+            running: false,
+            message: "OpenCode runtime probe failed before sending a request".to_string(),
         },
     }
 }
