@@ -1,6 +1,6 @@
 {
-  "generatedBy": "packages/opencode/script/relay-runtime-bundle.ts",
-  "opencodeRepository": "/root/opencode",
+  "generatedBy": "Relay checked-in opencode runtime artifact",
+  "source": "embedded",
   "server": "server.js",
   "bun": "bun",
   "migration": "migration/",
