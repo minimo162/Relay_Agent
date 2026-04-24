@@ -4,10 +4,6 @@ members = [
     "apps/desktop/src-tauri/crates/desktop-core",
     "apps/desktop/src-tauri/crates/compat-harness",
 ]
-exclude = [
-    "apps/desktop/src-tauri/crates/runtime",
-    "apps/desktop/src-tauri/crates/tools",
-]
 resolver = "2"
 
 [workspace.package]

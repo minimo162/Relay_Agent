@@ -15,6 +15,37 @@
 
 ## Milestone Log
 
+### 2026-04-24 Implementation: Runtime/tools physical deletion
+
+Physically deleted the old Relay-owned `runtime` and `tools` crates after their
+workspace quarantine.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/crates/runtime`.
+- Deleted `apps/desktop/src-tauri/crates/tools`.
+- Deleted the unused legacy `apps/desktop/src-tauri/crates/api` crate because
+  it depended on the removed `runtime` crate and was outside the active
+  workspace.
+- Removed the now-unneeded root workspace `exclude` entries.
+- Removed the stale nested `apps/desktop/src-tauri/Cargo.lock`; the root
+  workspace lockfile is the active Cargo lockfile.
+- Updated the hard-cut guard so those legacy crate directories must not exist.
+- Updated current planning docs to stop naming deleted runtime/tools files as
+  active change targets.
+
+Verification:
+`cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1`;
+`node scripts/check-hard-cut-guard.mjs`;
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`;
+`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml opencode_runtime -- --nocapture`;
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml hard_cut_agent -- --nocapture`;
+`pnpm check`;
+`git diff --check` — passed.
+
 ### 2026-04-24 Implementation: Runtime/tools workspace quarantine
 
 Removed the old Relay-owned `runtime` and `tools` crates from the normal Cargo

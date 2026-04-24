@@ -9,8 +9,8 @@ Relay_Agent is a **conversation-first Tauri desktop agent** under `apps/desktop/
 - Frontend: SolidJS + Vite desktop shell.
 - Backend: Rust in `apps/desktop/src-tauri/`, with active internal crates under
   `crates/{desktop-core,compat-harness}`. Historical `runtime` / `tools` crates
-  remain excluded from the workspace while the OpenCode/OpenWork hard cut is
-  completed.
+  and the unused legacy `api` crate have been physically removed as part of the
+  OpenCode/OpenWork hard cut.
 - Primary execution path: M365 Copilot via Edge CDP and the Relay Node bridge.
 - Contract source of truth: Rust IPC types and command signatures; generated frontend bindings live in `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` kept thin.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
@@ -218,11 +218,9 @@ exact documents with `read`.
 
 Change targets:
 
-- `apps/desktop/src-tauri/crates/runtime/src/file_ops.rs`
-- `apps/desktop/src-tauri/crates/runtime/src/office/mod.rs`
-- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
 - `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
+- `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `docs/OPENCODE_ALIGNMENT_PLAN.md`
 - `docs/OFFICE_SEARCH_DESIGN.md`
 - `docs/IMPLEMENTATION.md`
@@ -240,9 +238,9 @@ Acceptance criteria:
 - Office/PDF filename discovery stays a `glob` responsibility; candidate
   filenames are not treated as content evidence until `read` inspects a file.
 - Root verification follows the repository acceptance policy, with focused
-  runtime, desktop-core parser, and hard-cut adapter regressions covering
-  plaintext-only grep, glob-read Office/PDF repair, and no `office_search`
-  repair.
+  desktop-core parser, OpenCode runtime delegate, and hard-cut adapter
+  regressions covering plaintext-only grep, glob-read Office/PDF repair, and
+  no `office_search` repair.
 
 Status 2026-04-23:
 
@@ -282,17 +280,17 @@ orchestrator removed.
 
 Change targets:
 
-- `apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs`
-- `apps/desktop/src-tauri/crates/runtime/Cargo.toml`
 - `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
+- `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `docs/IMPLEMENTATION.md`
 
 Acceptance criteria:
 
 - Bash deny decisions use shell-fragment/token inspection before regex fallback.
 - Wrapper forms such as `env ...`, `command ...`, `nice ...`, and mixed-case blocked verbs are covered by regression tests.
-- Runtime regression coverage includes property-style tests for blocked bash mutations and allowed git inspection commands.
+- OpenCode-backed adapter regression coverage verifies that Relay does not
+  reintroduce the old shell policy engine.
 - The deleted desktop `agent_loop/**` tree is not reintroduced; adapter logic
   stays in `hard_cut_agent.rs`, UI/IPC payloads stay in `agent_projection.rs`,
   and deterministic parser/prompt helpers stay in `desktop-core`.
@@ -303,12 +301,9 @@ Goal: implement `docs/OFFICE_SEARCH_DESIGN.md` Phase A so the agent can extract 
 
 Change targets:
 
-- `apps/desktop/src-tauri/crates/runtime/src/office/**`
-- `apps/desktop/src-tauri/crates/runtime/src/{file_ops,pdf_liteparse,lib}.rs`
-- `apps/desktop/src-tauri/crates/runtime/Cargo.toml`
-- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
 - `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
+- `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `AGENTS.md`
 - `docs/IMPLEMENTATION.md`
 
@@ -316,12 +311,11 @@ Acceptance criteria:
 
 - `.docx`, `.xlsx`, `.xlsm`, and `.pptx` `read` calls return extracted plaintext through stable line serialization.
 - `.pdf` search uses `pdf_liteparse` payload-only extraction so the LiteParse banner is not indexed.
-- `office_search` accepts concrete paths or globs, validates `include_ext`, silently drops sensitive-path rejects, returns per-anchor hits, and reports parse failures in `errors`.
-- Extraction cache records are path-indexed, content-hash invalidated, schema-versioned, and store OS-native path bytes.
-- Office extraction enforces zip/XML/output limits, xlsx snapshot preflight, per-file timeout, per-path in-flight guarding, and a process-wide extraction cap.
-- `office_search` remains a runtime/internal compatibility helper; CDP-facing
-  tool catalog and Copilot prompt guidance expose Office/PDF handling through
-  opencode-like `glob` / `read` instead.
+- Relay does not reintroduce `office_search`; CDP-facing tool catalog and
+  Copilot prompt guidance expose Office/PDF handling through OpenCode-style
+  `glob` / `read` instead.
+- Office/PDF extraction behavior belongs in OpenCode/OpenWork or its extension
+  points, not in a Relay-owned Rust execution crate.
 
 ### Cross-Cutting Feature: Agentic Workspace Search
 
@@ -333,10 +327,9 @@ low-level tools.
 
 Change targets:
 
-- `apps/desktop/src-tauri/crates/runtime/src/{file_ops,lib}.rs`
-- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
 - `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
+- `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `apps/desktop/src-tauri/crates/compat-harness/src/lib.rs`
 - `docs/IMPLEMENTATION.md`
 

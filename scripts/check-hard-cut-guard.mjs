@@ -106,18 +106,6 @@ const required = [
     text: "The old Relay-owned runtime parity harness has been removed.",
   },
   {
-    path: "Cargo.toml",
-    text: "exclude = [",
-  },
-  {
-    path: "Cargo.toml",
-    text: "\"apps/desktop/src-tauri/crates/runtime\"",
-  },
-  {
-    path: "Cargo.toml",
-    text: "\"apps/desktop/src-tauri/crates/tools\"",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
     text: "pub struct DesktopCoreError",
   },
@@ -306,7 +294,15 @@ const forbidden = [
   },
   {
     path: "Cargo.toml",
-    text: "    \"apps/desktop/src-tauri/crates/runtime\",\n    \"apps/desktop/src-tauri/crates/tools\",\n    \"apps/desktop/src-tauri/crates/compat-harness\",",
+    text: "apps/desktop/src-tauri/crates/runtime",
+  },
+  {
+    path: "Cargo.toml",
+    text: "apps/desktop/src-tauri/crates/tools",
+  },
+  {
+    path: "Cargo.toml",
+    text: "apps/desktop/src-tauri/crates/api",
   },
   {
     path: "apps/desktop/src-tauri/Cargo.toml",
@@ -575,11 +571,15 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/src/agent_loop_smoke.rs",
   "apps/desktop/scripts/launch_agent_loop_smoke.mjs",
   "apps/desktop/src-tauri/src/error.rs",
+  "apps/desktop/src-tauri/Cargo.lock",
   "apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs",
   "apps/desktop/src-tauri/crates/desktop-core/src/relay_runtime.rs",
   "apps/desktop/src-tauri/src/session_write_undo.rs",
   "apps/desktop/src-tauri/crates/desktop-core/src/session_write_undo.rs",
   "apps/desktop/src-tauri/crates/commands",
+  "apps/desktop/src-tauri/crates/api",
+  "apps/desktop/src-tauri/crates/runtime",
+  "apps/desktop/src-tauri/crates/tools",
 ];
 
 const byPath = {

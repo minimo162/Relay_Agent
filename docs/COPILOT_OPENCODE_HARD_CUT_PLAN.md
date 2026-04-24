@@ -80,8 +80,8 @@ The hard cut should remove or quarantine these Relay-owned implementations:
 - `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` as the central
   execution loop.
 - `apps/desktop/src-tauri/src/agent_loop/retry.rs` as strategy-level repair.
-- Relay-owned file/search/bash/edit execution in `crates/runtime`.
-- Relay-owned tool catalog and metadata in `crates/tools/src/lib.rs`.
+- Relay-owned file/search/bash/edit execution in `crates/runtime` (deleted).
+- Relay-owned tool catalog and metadata in `crates/tools/src/lib.rs` (deleted).
 - `office_search` as any model-facing or compatibility execution path.
 - Relay-owned permission decision engine, except UI rendering and reply
   forwarding.
@@ -223,8 +223,8 @@ Implementation targets:
 
 - new `apps/desktop/src-tauri/src/opencode_runtime/tool_call.rs`
 - `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` replacement module
-- `apps/desktop/src-tauri/crates/runtime/**` deletion or quarantine
-- `apps/desktop/src-tauri/crates/tools/src/lib.rs` deletion or quarantine
+- `apps/desktop/src-tauri/crates/runtime/**` deletion
+- `apps/desktop/src-tauri/crates/tools/**` deletion
 
 Acceptance:
 
@@ -298,8 +298,8 @@ Goal: remove the old execution system after the hard-cut path is passing.
 
 Delete or archive:
 
-- `apps/desktop/src-tauri/crates/runtime`
-- `apps/desktop/src-tauri/crates/tools`
+- `apps/desktop/src-tauri/crates/runtime` (deleted)
+- `apps/desktop/src-tauri/crates/tools` (deleted)
 - Relay-owned `compat-harness` tests that assert old runtime behavior.
 - Agent-loop repair tests that only exist for Relay-owned execution quirks.
 - Docs that describe Relay's Rust runtime as the primary execution path.
