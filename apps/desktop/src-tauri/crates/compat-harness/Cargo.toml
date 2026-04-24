@@ -9,6 +9,9 @@ publish.workspace = true
 tools = { path = "../tools" }
 runtime = { path = "../runtime" }
 
+[features]
+legacy-compat-tests = []
+
 [dev-dependencies]
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "time"] }

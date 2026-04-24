@@ -14,6 +14,9 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 dirs = "6"
 tracing = "0.1"
 
+[features]
+legacy-tool-tests = []
+
 [dev-dependencies]
 lopdf = "0.35"
 

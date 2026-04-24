@@ -1,5 +1,4 @@
 * text=auto
-
 *.toml text eol=lf
 *.json text eol=lf
 *.yaml text eol=lf
@@ -11,7 +10,8 @@
 *.svelte text eol=lf
 *.rs text eol=lf
 *.sh text eol=lf
-
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+apps/desktop/src-tauri/resources/opencode-runtime/bun filter=lfs diff=lfs merge=lfs -text
+apps/desktop/src-tauri/resources/opencode-runtime/server.js -text -diff

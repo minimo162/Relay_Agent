@@ -11,10 +11,9 @@ mod electron_cdp;
 use reqwest::blocking::Client;
 use runtime::{
     edit, execute_bash, glob_with_options, grep, merge_pdfs, office_search,
-    pull_rust_diagnostics_blocking, read, read_background_task_output, reject_sensitive_file_path,
-    split_pdf, task_create, task_get, task_list, task_output, task_stop, task_update, write,
-    BackgroundTaskOutputInput, BashCommandInput, GlobSearchOptions, GrepSearchInput,
-    OfficeSearchInput, PdfSplitSegment, PermissionMode,
+    pull_rust_diagnostics_blocking, read, reject_sensitive_file_path, split_pdf, write,
+    BashCommandInput, GlobSearchOptions, GrepSearchInput, OfficeSearchInput, PdfSplitSegment,
+    PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -166,16 +165,16 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "WebFetch" => ToolMetadata {
+        "webfetch" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::UrlLike,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "WebSearch" => ToolMetadata {
+        "websearch" | "codesearch" => ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "TodoWrite" | "Skill" | "AskUserQuestion" | "LSP" | "NotebookEdit" => ToolMetadata {
+        "todowrite" | "skill" | "question" | "lsp" | "apply_patch" | "task" => ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
@@ -328,7 +327,7 @@ impl ToolCatalog {
 static BASE_TOOL_CATALOG: OnceLock<ToolCatalog> = OnceLock::new();
 #[must_use]
 fn tool_catalog() -> &'static ToolCatalog {
-    BASE_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_mvp_tool_specs()))
+    BASE_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_opencode_tool_specs()))
 }
 
 #[must_use]
@@ -393,11 +392,15 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
         "pdf_split" => 11,
         "WebFetch" => 20,
         "WebSearch" => 21,
-        "MCP" => 33,
-        "AskUserQuestion" => 40,
-        "TodoWrite" => 41,
-        "Skill" => 50,
-        "LSP" => 52,
+        "webfetch" => 20,
+        "websearch" => 21,
+        "codesearch" => 22,
+        "task" => 30,
+        "question" => 40,
+        "todowrite" => 41,
+        "skill" => 50,
+        "apply_patch" => 51,
+        "lsp" => 52,
         "NotebookEdit" => 53,
         "bash" => 90,
         "PowerShell" => 91,
@@ -447,10 +450,10 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "office_search" => vec!["paths", "regex", "include_ext"],
         "git_status" => vec!["path"],
         "git_diff" => vec!["path", "staged"],
-        "WebSearch" => vec!["allowed_domains", "blocked_domains"],
-        "WebFetch" => vec!["prompt"],
+        "websearch" => vec!["allowed_domains", "blocked_domains"],
+        "webfetch" => vec!["format", "timeout"],
         "edit" => vec!["replaceAll"],
-        "bash" => vec!["timeout", "description", "run_in_background"],
+        "bash" => vec!["timeout", "workdir"],
         "PowerShell" => vec!["timeout", "description", "run_in_background"],
         "MCP" => vec!["server", "name", "arguments"],
         "AskUserQuestion" => vec!["options"],
@@ -521,24 +524,28 @@ fn cdp_tool_example(name: &str) -> Value {
         "pdf_split" => {
             json!({"name":"pdf_split","relay_tool_call":true,"input":{"input_path":"report.pdf","segments":[{"output_path":"report-part1.pdf","pages":"1-3"}]}})
         }
-        "WebFetch" => {
-            json!({"name":"WebFetch","relay_tool_call":true,"input":{"url":"https://example.com","prompt":"Summarize the API surface."}})
+        "webfetch" => {
+            json!({"name":"webfetch","relay_tool_call":true,"input":{"url":"https://example.com","format":"markdown"}})
         }
-        "WebSearch" => {
-            json!({"name":"WebSearch","relay_tool_call":true,"input":{"query":"rust tauri latest stable release"}})
+        "websearch" => {
+            json!({"name":"websearch","relay_tool_call":true,"input":{"query":"rust tauri latest stable release"}})
+        }
+        "codesearch" => {
+            json!({"name":"codesearch","relay_tool_call":true,"input":{"query":"tool registry"}})
         }
         "MCP" => {
             json!({"name":"MCP","relay_tool_call":true,"input":{"action":"call_tool","name":"mcp__server__tool","arguments":{}}})
         }
-        "AskUserQuestion" => {
-            json!({"name":"AskUserQuestion","relay_tool_call":true,"input":{"question":"Which config file should I update?","options":["package.json","Cargo.toml"]}})
+        "question" => {
+            json!({"name":"question","relay_tool_call":true,"input":{"questions":[{"question":"Which config file should I update?","options":["package.json","Cargo.toml"]}]}})
         }
-        "TodoWrite" => {
-            json!({"name":"TodoWrite","relay_tool_call":true,"input":{"todos":[{"content":"Implement parser change","activeForm":"Implementing parser change","status":"in_progress"}]}})
+        "todowrite" => {
+            json!({"name":"todowrite","relay_tool_call":true,"input":{"todos":[{"content":"Implement parser change","status":"in_progress","priority":"medium"}]}})
         }
-        "Skill" => json!({"name":"Skill","relay_tool_call":true,"input":{"skill":"openai-docs"}}),
-        "LSP" => {
-            json!({"name":"LSP","relay_tool_call":true,"input":{"action":"diagnostics","path":"src/main.rs"}})
+        "skill" => json!({"name":"skill","relay_tool_call":true,"input":{"name":"openai-docs"}}),
+        "apply_patch" => json!({"name":"apply_patch","relay_tool_call":true,"input":{"patchText":"*** Begin Patch\n*** End Patch\n"}}),
+        "lsp" => {
+            json!({"name":"lsp","relay_tool_call":true,"input":{"action":"diagnostics","path":"src/main.rs"}})
         }
         "NotebookEdit" => {
             json!({"name":"NotebookEdit","relay_tool_call":true,"input":{"notebook_path":"analysis.ipynb","edit_mode":"replace","index":0,"new_source":"print('ok')","cell_type":"code"}})
@@ -567,15 +574,15 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
         "pdf_merge" => "Merge existing PDF files inside the workspace.",
         "pdf_split" => "Split one workspace PDF into multiple files.",
-        "WebFetch" => "Read one known URL and answer from its contents.",
-        "WebSearch" => "Look up current external information on the web.",
-        "MCP" => "Call a connected MCP integration tool.",
-        "AskUserQuestion" => {
-            "Ask the user for a required decision when local evidence is insufficient."
-        }
-        "TodoWrite" => "Track a multi-step task in the session todo list.",
-        "Skill" => "Load a local skill with specialized instructions.",
-        "LSP" => "Request supported language-server diagnostics.",
+        "webfetch" => "Read one known URL and return content through opencode.",
+        "websearch" => "Look up current external information on the web through opencode.",
+        "codesearch" => "Search code through opencode.",
+        "task" => "Delegate work to an opencode subagent.",
+        "question" => "Ask the user for a required decision through opencode.",
+        "todowrite" => "Track a multi-step task in the session todo list through opencode.",
+        "skill" => "Load a local skill with specialized instructions through opencode.",
+        "apply_patch" => "Apply a patch through opencode.",
+        "lsp" => "Request supported language-server diagnostics through opencode.",
         "NotebookEdit" => "Replace, insert, or delete a notebook cell.",
         "bash" => "Run a sandboxed shell command only when file or built-in tools do not apply.",
         "PowerShell" => "Run Windows PowerShell automation when the Windows-only path is required.",
@@ -595,13 +602,15 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
         "pdf_split" => "Use when the user explicitly wants pages extracted into separate PDF files.",
-        "WebFetch" => "Use when the user or local files already gave you a specific URL to inspect.",
-        "WebSearch" => "Use when the answer depends on current external information that is not in the workspace.",
-        "MCP" => "Use when a connected integration tool is clearly the right execution path.",
-        "AskUserQuestion" => "Use only when essential ambiguity remains after local inspection.",
-        "TodoWrite" => "Use to keep a real multi-step implementation organized while you keep taking action.",
-        "Skill" => "Use when the task matches a known local skill and its instructions will materially help.",
-        "LSP" => "Use when supported diagnostics are relevant to the current file.",
+        "webfetch" => "Use when the user or local files already gave you a specific URL to inspect.",
+        "websearch" => "Use when the answer depends on current external information that is not in the workspace.",
+        "codesearch" => "Use when semantic or remote code search is available in the opencode runtime.",
+        "task" => "Use for bounded subagent work that can run outside the main thread.",
+        "question" => "Use only when essential ambiguity remains after local inspection.",
+        "todowrite" => "Use to keep a real multi-step implementation organized while you keep taking action.",
+        "skill" => "Use when the task matches a known local skill and its instructions will materially help.",
+        "apply_patch" => "Use when the model provides a full patch and patch application is preferable to edit/write.",
+        "lsp" => "Use when supported diagnostics are relevant to the current file.",
         "NotebookEdit" => "Use when the target is a `.ipynb` cell rather than a plain text file.",
         "bash" => "Use for commands like tests, builds, or git inspection when a file tool does not apply.",
         "PowerShell" => "Use on Windows for Office COM automation or Windows-specific scripting.",
@@ -621,13 +630,15 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
         "pdf_split" => "Avoid using bash for PDF split when this dedicated tool applies.",
-        "WebFetch" => "Avoid for vague discovery tasks; use `WebSearch` if you do not already have a URL.",
-        "WebSearch" => "Avoid when the workspace or a known URL already contains the needed answer.",
-        "MCP" => "Avoid inventing integration calls when a local workspace tool already solves the task.",
-        "AskUserQuestion" => "Avoid asking the user to restate a task that is already concrete in the latest turn.",
-        "TodoWrite" => "Avoid using it as a substitute for taking the next concrete action.",
-        "Skill" => "Avoid loading unrelated skills just because they exist.",
-        "LSP" => "Avoid unsupported actions or generic code inspection that normal file tools already cover.",
+        "webfetch" => "Avoid for vague discovery tasks; use `websearch` if you do not already have a URL.",
+        "websearch" => "Avoid when the workspace or a known URL already contains the needed answer.",
+        "codesearch" => "Avoid when local grep/glob can answer more directly.",
+        "task" => "Avoid for immediate blocking work that should be done in the current thread.",
+        "question" => "Avoid asking the user to restate a task that is already concrete in the latest turn.",
+        "todowrite" => "Avoid using it as a substitute for taking the next concrete action.",
+        "skill" => "Avoid loading unrelated skills just because they exist.",
+        "apply_patch" => "Avoid for small targeted replacements where edit is clearer.",
+        "lsp" => "Avoid unsupported actions or generic code inspection that normal file tools already cover.",
         "NotebookEdit" => "Avoid for normal text files; use `read`, `write`, or `edit` instead.",
         "bash" => "Avoid for local file I/O when `read`, `write`, `edit`, or PDF tools apply.",
         "PowerShell" => "Avoid for non-Windows tasks or normal local file I/O that dedicated tools already cover.",
@@ -656,11 +667,254 @@ pub fn cdp_prompt_tool_specs() -> Vec<CdpPromptToolSpec> {
 
 #[must_use]
 pub fn required_permission_for_surface(spec: &ToolSpec) -> PermissionMode {
-    if spec.required_permission == PermissionMode::WorkspaceWrite {
-        PermissionMode::DangerFullAccess
-    } else {
-        spec.required_permission
-    }
+    let _ = spec;
+    PermissionMode::ReadOnly
+}
+
+#[must_use]
+fn build_opencode_tool_specs() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            name: "invalid",
+            description: "Internal tool used to report malformed or unknown tool calls.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "tool": { "type": "string" },
+                    "error": { "type": "string" }
+                },
+                "required": ["tool", "error"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "bash",
+            description: "Execute a shell command through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "The command to execute" },
+                    "timeout": { "type": "number", "description": "Optional timeout in milliseconds" },
+                    "workdir": { "type": "string", "description": "Working directory for the command" },
+                    "description": { "type": "string", "description": "Short description of what the command does" }
+                },
+                "required": ["command", "description"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "read",
+            description: "Read a file or directory through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "filePath": { "type": "string" },
+                    "offset": { "type": "number" },
+                    "limit": { "type": "number" }
+                },
+                "required": ["filePath"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "glob",
+            description: "Find files by glob pattern through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string" },
+                    "path": { "type": "string" }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "grep",
+            description: "Search file contents through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string" },
+                    "path": { "type": "string" },
+                    "include": { "type": "string" }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "edit",
+            description: "Replace text in a file through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "filePath": { "type": "string" },
+                    "oldString": { "type": "string" },
+                    "newString": { "type": "string" },
+                    "replaceAll": { "type": "boolean" }
+                },
+                "required": ["filePath", "oldString", "newString"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "write",
+            description: "Write a file through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "filePath": { "type": "string" },
+                    "content": { "type": "string" }
+                },
+                "required": ["filePath", "content"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "task",
+            description: "Launch a subagent task through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "description": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "subagent_type": { "type": "string" }
+                },
+                "required": ["description", "prompt"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "webfetch",
+            description: "Fetch a URL through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string" },
+                    "format": { "type": "string", "enum": ["text", "markdown", "html"] },
+                    "timeout": { "type": "number" }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "todowrite",
+            description: "Update the session todo list through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": { "type": "string" },
+                                "status": { "type": "string" },
+                                "priority": { "type": "string" }
+                            },
+                            "required": ["content", "status", "priority"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["todos"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "websearch",
+            description: "Search the web through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "allowed_domains": { "type": "array", "items": { "type": "string" } },
+                    "blocked_domains": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "codesearch",
+            description: "Search code using the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "skill",
+            description: "Load a skill through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "apply_patch",
+            description: "Apply a patch through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "patchText": { "type": "string" }
+                },
+                "required": ["patchText"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "question",
+            description: "Ask the user a question through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "questions": { "type": "array", "items": { "type": "object" } }
+                },
+                "required": ["questions"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "lsp",
+            description: "Query language-server diagnostics through the opencode tool runtime.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string" },
+                    "path": { "type": "string" }
+                },
+                "required": ["action", "path"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1547,68 +1801,125 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
 
 pub use approval::approval_display_for_tool;
 
+#[derive(Debug, Clone, Default)]
+pub struct ToolExecutionContext {
+    pub cwd: Option<String>,
+    pub worktree: Option<String>,
+    pub session_id: Option<String>,
+    pub message_id: Option<String>,
+    pub agent: Option<String>,
+}
+
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
-    match name {
-        "invalid" => run_invalid(input),
-        "bash" => from_value::<BashCommandInput>(input).and_then(run_bash),
-        "read" => from_value::<ReadFileInput>(input).and_then(run_read),
-        "write" => from_value::<WriteFileInput>(input).and_then(run_write),
-        "edit" => from_value::<EditFileInput>(input).and_then(run_edit),
-        "glob" => from_value::<GlobSearchInputValue>(input).and_then(run_glob),
-        "grep" => from_value::<GrepSearchInput>(input).and_then(run_grep),
-        "office_search" => from_value::<OfficeSearchInput>(input).and_then(run_office_search),
-        "git_status" => from_value::<GitCwdInput>(input).and_then(run_git_status),
-        "git_diff" => from_value::<GitDiffToolInput>(input).and_then(run_git_diff),
-        "pdf_merge" => from_value::<PdfMergeInput>(input).and_then(run_pdf_merge),
-        "pdf_split" => from_value::<PdfSplitInput>(input).and_then(run_pdf_split),
-        "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
-        "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
-        "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
-        "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
-        "Agent" => from_value::<AgentInput>(input).and_then(|i| run_agent(&i)),
-        "ToolSearch" => from_value::<ToolSearchInput>(input).and_then(run_tool_search),
-        "NotebookEdit" => from_value::<NotebookEditInput>(input).and_then(run_notebook_edit),
-        "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
-        "SendUserMessage" | "Brief" => from_value::<BriefInput>(input).and_then(run_brief),
-        "Config" => from_value::<ConfigInput>(input).and_then(run_config),
-        "StructuredOutput" => {
-            from_value::<StructuredOutputInput>(input).and_then(run_structured_output)
+    execute_tool_with_context(name, input, &ToolExecutionContext::default())
+}
+
+pub fn execute_tool_with_context(
+    name: &str,
+    input: &Value,
+    context: &ToolExecutionContext,
+) -> Result<String, String> {
+    opencode_runtime::execute_tool(name, input, context)
+}
+
+mod opencode_runtime {
+    use super::ToolExecutionContext;
+    use reqwest::blocking::Client;
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+    use std::time::Duration;
+
+    const TOOL_RUNTIME_URL_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_URL";
+    const TOOL_RUNTIME_TIMEOUT_MS_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_TIMEOUT_MS";
+
+    #[derive(Debug, Serialize)]
+    struct ExecuteRequest<'a> {
+        tool: &'a str,
+        input: &'a Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        directory: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree: Option<&'a str>,
+        #[serde(rename = "sessionID", skip_serializing_if = "Option::is_none")]
+        session_id: Option<&'a str>,
+        #[serde(rename = "messageID", skip_serializing_if = "Option::is_none")]
+        message_id: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent: Option<&'a str>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ExecuteResponse {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        output: Option<Value>,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    pub(super) fn execute_tool(
+        name: &str,
+        input: &Value,
+        context: &ToolExecutionContext,
+    ) -> Result<String, String> {
+        let base = std::env::var(TOOL_RUNTIME_URL_ENV)
+            .map_err(|_| format!("{TOOL_RUNTIME_URL_ENV} is required; Relay tool execution is delegated to opencode"))?;
+        let url = format!("{}/experimental/tool/execute", base.trim_end_matches('/'));
+        let timeout = std::env::var(TOOL_RUNTIME_TIMEOUT_MS_ENV)
+            .ok()
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .filter(|ms| *ms > 0)
+            .unwrap_or(120_000);
+        let client = Client::builder()
+            .timeout(Duration::from_millis(timeout))
+            .build()
+            .map_err(|error| format!("failed to create opencode tool runtime client: {error}"))?;
+        let cwd = context.cwd.as_deref();
+        let request = ExecuteRequest {
+            tool: name,
+            input,
+            cwd,
+            directory: cwd,
+            worktree: context.worktree.as_deref(),
+            session_id: context.session_id.as_deref(),
+            message_id: context.message_id.as_deref(),
+            agent: context.agent.as_deref(),
+        };
+        let mut builder = client.post(url).json(&request);
+        if let Some(cwd) = cwd {
+            builder = builder.header("x-opencode-directory", cwd);
         }
-        "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
-        #[cfg(windows)]
-        "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
-        // CLI Hub
-        "CliList" => to_pretty_json(cli_hub::cli_list()),
-        "CliDiscover" => to_pretty_json(cli_hub::cli_discover()),
-        "CliRegister" => from_value::<CliRegisterInput>(input).and_then(run_cli_register),
-        "CliUnregister" => from_value::<CliUnregisterInput>(input).and_then(run_cli_unregister),
-        "CliRun" => from_value::<CliRunInput>(input).and_then(run_cli_run),
-        // Electron CDP
-        "ElectronApps" => to_pretty_json(electron_cdp::electron_apps_status()),
-        "ElectronLaunch" => from_value::<ElectronLaunchInput>(input).and_then(run_electron_launch),
-        "ElectronEval" => from_value::<ElectronEvalInput>(input).and_then(run_electron_eval),
-        "ElectronGetText" => {
-            from_value::<ElectronGetTextInput>(input).and_then(run_electron_get_text)
+        let response = builder
+            .send()
+            .map_err(|error| format!("opencode tool runtime request failed for `{name}`: {error}"))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .map_err(|error| format!("failed to read opencode tool runtime response: {error}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "opencode tool runtime rejected `{name}` with HTTP {status}: {body}"
+            ));
         }
-        "ElectronClick" => from_value::<ElectronClickInput>(input).and_then(run_electron_click),
-        "ElectronTypeText" => {
-            from_value::<ElectronTypeTextInput>(input).and_then(run_electron_type_text)
+        let decoded: ExecuteResponse = serde_json::from_str(&body)
+            .map_err(|error| format!("invalid opencode tool runtime response for `{name}`: {error}; body={body}"))?;
+        if let Some(error) = decoded.error {
+            return Err(error);
         }
-        "ListMcpResources" | "ReadMcpResource" | "McpAuth" | "MCP" | "AskUserQuestion" => Err(
-            format!("{name} runs only in the Relay desktop agent (Tauri tool executor)"),
-        ),
-        "LSP" => run_lsp_tool(input),
-        "TaskCreate" => task_create(input),
-        "TaskGet" => task_get(input),
-        "TaskList" => task_list(),
-        "TaskStop" => task_stop(input),
-        "TaskUpdate" => task_update(input),
-        "TaskOutput" => task_output(input),
-        "BackgroundTaskOutput" => from_value::<BackgroundTaskOutputInput>(input).and_then(|req| {
-            let output = read_background_task_output(req).map_err(|e| e.to_string())?;
-            serde_json::to_string_pretty(&output).map_err(|e| e.to_string())
-        }),
-        _ => Err(format!("unsupported tool: {name}")),
+        let output = decoded.output.unwrap_or(Value::Null);
+        let rendered = match output {
+            Value::Null => String::new(),
+            Value::String(value) => value,
+            other => serde_json::to_string_pretty(&other)
+                .map_err(|error| format!("failed to render opencode tool output: {error}"))?,
+        };
+        Ok(match decoded.title {
+            Some(title) if !title.trim().is_empty() => format!("{title}\n\n{rendered}"),
+            _ => rendered,
+        })
     }
 }
 
@@ -3949,6 +4260,20 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+mod opencode_runtime_tests {
+    use serde_json::json;
+
+    #[test]
+    fn execute_tool_requires_opencode_runtime_url() {
+        std::env::remove_var("RELAY_OPENCODE_TOOL_RUNTIME_URL");
+        let error = super::execute_tool("read", &json!({"filePath": "Cargo.toml"}))
+            .expect_err("tool execution should require an opencode runtime URL");
+        assert!(error.contains("RELAY_OPENCODE_TOOL_RUNTIME_URL"));
+        assert!(error.contains("opencode"));
+    }
+}
+
+#[cfg(all(test, feature = "legacy-tool-tests"))]
 mod tests {
     use std::fs;
     use std::io::{Read, Write};

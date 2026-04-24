@@ -1,0 +1,8 @@
+{
+  "generatedBy": "packages/opencode/script/relay-runtime-bundle.ts",
+  "opencodeRepository": "/root/opencode",
+  "server": "server.js",
+  "bun": "bun",
+  "migration": "migration/",
+  "target": "bun"
+}

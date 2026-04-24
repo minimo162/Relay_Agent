@@ -14,6 +14,7 @@ mod ipc_codegen;
 mod liteparse_env;
 mod lsp_probe;
 pub mod models;
+mod opencode_runtime;
 mod registry;
 mod session_write_undo;
 mod tauri_bridge;
@@ -66,6 +67,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             liteparse_env::apply(app);
+            if let Some(runtime) = opencode_runtime::start(app) {
+                app.manage(runtime);
+            }
             app.manage(AppServices::new());
             dev_control::spawn(app.handle());
             agent_loop_smoke::spawn_if_configured(app.handle());

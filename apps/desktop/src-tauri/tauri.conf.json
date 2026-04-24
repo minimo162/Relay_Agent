@@ -29,7 +29,8 @@
     "externalBin": ["binaries/relay-node", "binaries/relay-rg"],
     "resources": {
       "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv",
-      "liteparse-runner/": "liteparse-runner/"
+      "liteparse-runner/": "liteparse-runner/",
+      "resources/opencode-runtime/": "opencode-runtime/"
     },
     "icon": [
       "icons/32x32.png",

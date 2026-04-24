@@ -134,20 +134,6 @@ async fn stream_copilot_progress_for_ui<R: Runtime>(
     }
 }
 
-/* ── POSIX shell escaping ─── */
-
-/// POSIX-compliant shell escaping for use in `sh -c` contexts.
-/// Wraps the string in single quotes, escaping embedded single quotes as `'\''`.
-/// Rejects null bytes and control characters (except tab 0x09).
-pub(crate) fn posix_shell_escape(s: &str) -> Result<String, String> {
-    if s.bytes()
-        .any(|b| b == 0 || (b < 0x20 && b != 0x09) || b == 0x7F)
-    {
-        return Err("working directory path contains control characters".to_string());
-    }
-    Ok(s.replace('\'', "'\\''"))
-}
-
 /* ── Agent loop ─── */
 
 #[allow(clippy::needless_pass_by_value)]
@@ -3811,13 +3797,9 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
         if tool_name == "bash" {
             if let Some(obj) = input_value.as_object_mut() {
                 obj.remove("dangerouslyDisableSandbox");
-            }
-            // Fix #4 — prepend cwd to bash commands instead of mutating process-global CWD
-            if let Some(ref cwd) = self.cwd {
-                if let Some(cmd) = input_value.get("command").and_then(|v| v.as_str()) {
-                    let escaped = posix_shell_escape(cwd).map_err(runtime::ToolError::new)?;
-                    let prefixed = format!("cd '{escaped}' && ( {cmd} )");
-                    input_value["command"] = Value::String(prefixed);
+                if let Some(ref cwd) = self.cwd {
+                    obj.entry("workdir".to_string())
+                        .or_insert_with(|| Value::String(cwd.clone()));
                 }
             }
         }
@@ -3845,7 +3827,14 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
             _ => None,
         };
 
-        let result = match tools::execute_tool(tool_name, &input_value) {
+        let context = tools::ToolExecutionContext {
+            cwd: self.cwd.clone(),
+            worktree: self.cwd.clone(),
+            session_id: Some(self.session_id.clone()),
+            message_id: Some(tool_use_id.clone()),
+            agent: None,
+        };
+        let result = match tools::execute_tool_with_context(tool_name, &input_value, &context) {
             Ok(result) => result,
             Err(error) => {
                 let message = if matches!(tool_name, "read") {

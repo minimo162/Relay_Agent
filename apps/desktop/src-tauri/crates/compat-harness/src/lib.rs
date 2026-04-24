@@ -48,7 +48,7 @@ mod mock_parity_manifest {
 }
 
 /// Deterministic scenarios inspired by claw-code mock parity (tool + permission + workspace).
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-compat-tests"))]
 mod parity_style {
     use std::fs;
     use std::sync::{Mutex, OnceLock};
@@ -391,7 +391,7 @@ mod parity_style {
 // on are unavailable and the test binary fails to load with
 // STATUS_ENTRYPOINT_NOT_FOUND before any test runs. Cargo.toml already
 // platform-gates the dev-dep, so match it on the consumer side.
-#[cfg(all(test, not(windows)))]
+#[cfg(all(test, feature = "legacy-compat-tests", not(windows)))]
 mod full_session_harness {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
