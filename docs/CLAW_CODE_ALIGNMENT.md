@@ -117,7 +117,7 @@ Additional Relay-only guards:
 - [x] `AskUserQuestion` desktop flow.
 - [x] `LSP` diagnostics slice.
 - [x] `Task*` in-memory registry surface.
-- [x] Session compaction and token accounting parity, with Relay’s canonical defaults defined in `runtime::CompactionConfig::default()` (`preserve_recent_messages = 5`, `max_estimated_tokens = 10000`).
+- [x] Session transcript and compaction ownership moved to OpenCode/OpenWork; Relay no longer carries a separate legacy runtime compaction source of truth.
 - [x] `PostToolUseFailure` hooks.
 - [x] Deterministic desktop full-session harness for streamed text, approval flow, and completed stop reasons.
 

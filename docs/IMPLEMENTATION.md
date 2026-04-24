@@ -15,6 +15,41 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: CI, release smoke, and live-doc alignment
+
+Aligned the live repository guidance after the OpenCode/OpenWork hard cut and
+verified both acceptance CI and the separate Windows installer release smoke.
+
+Changes:
+
+- Updated `AGENTS.md` to name only the active `desktop-core` and
+  `compat-harness` crates, and to reject reintroducing the deleted
+  Relay-owned `api`, `runtime`, `tools`, and `commands` crates.
+- Replaced stale model-facing `office_search` guidance with the current
+  OpenCode-shaped Office/PDF flow: `glob` for candidate discovery, exact
+  `read` for Office/PDF extracted plaintext, and `grep` for plaintext/code
+  only.
+- Updated `PLANS.md` so Phase 4 CI acceptance matches the workflow now running
+  on `main`, `pull_request`, and manual dispatch.
+- Updated `README.md` and `docs/CLAW_CODE_ALIGNMENT.md` to remove stale CI
+  clippy and legacy runtime compaction references from the live docs.
+- Stabilized the OpenCode runtime health probe by retrying short-lived
+  connection failures before reporting the runtime unavailable. This fixed the
+  Windows `doctor_cli` flake observed after the release workflow hardening.
+- Verified the separate `release-windows-installer` workflow by publishing an
+  unsigned prerelease smoke asset:
+  `v0.0.0-release-smoke-20260424204730`.
+
+Verification:
+
+- Local `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed.
+- Local `node scripts/check-hard-cut-guard.mjs`: passed.
+- Local `git diff --check`: passed.
+- GitHub CI run `24913551591` for commit `6e56068`: passed Ubuntu Acceptance
+  and Windows Acceptance.
+- GitHub release workflow run `24911166150`: passed and published
+  `Relay.Agent_0.1.0_x64-setup-unsigned.exe` as an unsigned prerelease asset.
+
 ### 2026-04-24 Implementation: Runtime/tools physical deletion
 
 Physically deleted the old Relay-owned `runtime` and `tools` crates after their

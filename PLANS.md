@@ -182,9 +182,15 @@ Change targets:
 Acceptance criteria:
 
 - Main CI runs on `ubuntu-latest` and `windows-latest`.
-- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm launch:test`.
+- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm launch:test`.
 - Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm smoke:windows`.
 - CI also guards the live docs map against stale removed-package or spreadsheet-era references.
+
+Status 2026-04-25:
+
+- Implemented on `main` for `push`, `pull_request`, and manual dispatch.
+- Latest verified push run: `24913551591`, commit `6e56068`, passed Ubuntu
+  Acceptance and Windows Acceptance.
 
 ### Phase 5: First-Use UI Simplification
 
@@ -362,7 +368,9 @@ Acceptance criteria:
 - Broad backend decomposition unrelated to doctor sharing or deterministic harness support.
 - Reintroducing upstream claw crates as direct Rust dependencies.
 - Reviving workbook / spreadsheet-specific MVP gates.
-- Release-installer signing or distribution workflows beyond keeping them separate from main CI.
+- Formal installer signing credential setup and public distribution operations.
+  The separate Windows installer release workflow exists for unsigned
+  prerelease smoke builds and for future Trusted Signing configuration.
 
 ## Risks And Mitigations
 

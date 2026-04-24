@@ -4,8 +4,9 @@
 
 - This repository contains a working Tauri v2 + SolidJS desktop agent application under `apps/desktop/`.
 - Desktop **visual design** is driven by CSS variables in `apps/desktop/src/index.css` (`--ra-*`), aligned with **`apps/desktop/DESIGN.md`** (Cursor Inspiration spec). Light theme uses the warm-token palette now documented in `docs/IMPLEMENTATION.md` (2026-04-14 milestone); dark is the paired warm-charcoal scale. Default theme is **light**. Prefer tokens and `.ra-*` utilities over ad hoc colors.
-- Rust backend lives in `apps/desktop/src-tauri/` with internal crates under `crates/{api,desktop-core,runtime,tools,commands,compat-harness}`.
-- Desktop **`read_file`** on `.pdf` uses **LiteParse** (`liteparse-runner/`, OCR off) via **Node**; release bundles include a **Tauri `externalBin`** sidecar (`relay-node`). `read_file` also extracts plaintext from `.docx`, `.xlsx`, and `.pptx`; `office_search` searches extracted `.docx` / `.xlsx` / `.pptx` / `.pdf` text with regex and citation anchors. See `README.md`, `PLANS.md`, `docs/OFFICE_SEARCH_DESIGN.md`, and `docs/IMPLEMENTATION.md`.
+- Rust backend lives in `apps/desktop/src-tauri/` with active internal crates under `crates/{desktop-core,compat-harness}`. The legacy Relay-owned `api`, `runtime`, `tools`, and `commands` crates are not active workspace members and must not be reintroduced.
+- Desktop execution delegates tool behavior to the bundled/external OpenCode runtime. Relay-specific Rust code is limited to desktop UX, Tauri IPC, M365 Copilot CDP adaptation, diagnostics, prompt/tool-call projection, and release packaging glue.
+- Desktop **`read`** on `.pdf`, `.docx`, `.xlsx`, and `.pptx` returns extracted plaintext through the OpenCode-shaped adapter path. Office/PDF discovery is model-facing `glob` followed by exact `read`; `office_search` is not a model-facing tool.
 - The legacy shared TypeScript contracts package has been removed; contracts are now defined inline within the Rust crates.
 - Use `PLANS.md` for the milestone roadmap and `docs/IMPLEMENTATION.md` for implementation notes.
 
@@ -18,7 +19,7 @@
   4. `docs/CLAW_CODE_ALIGNMENT.md` (claw-code reference pin, parity checklist, tool-catalog notes — optional for features unrelated to that alignment)
 - The Rust crate types and IPC command signatures in `src-tauri/` are the source of truth for contracts.
 - The frontend types in `src/lib/ipc.ts` must stay in sync with the Rust IPC layer.
-- `runtime::CompactionConfig::default()` is the canonical source for compaction defaults.
+- OpenCode/OpenWork session state is the canonical source for execution transcript and compaction behavior. Relay-owned defaults live only in the desktop adapter/config modules.
 
 ## Execution Rules
 
@@ -38,18 +39,18 @@
 
 ## MVP Guardrails
 
-- Priority A: make the agent loop work end to end with Copilot Proxy API and M365 Copilot via CDP.
-- Priority B: harden MCP server integration, tool approval, and session management.
-- Priority C: expand CDP browser automation and context-aware execution.
-- Do not implement arbitrary code execution, shell access, VBA, or external network execution outside agent-controlled tools.
-- Bash tool runs in a sandboxed context with approval gating for risky operations.
+- Priority A: keep M365 Copilot via Edge CDP as the primary LLM controller.
+- Priority B: keep OpenCode/OpenWork as the execution substrate for tools, permissions, sessions, MCP, plugins, skills, and workspace runtime behavior.
+- Priority C: keep Relay-specific code focused on desktop UX, Tauri IPC, Copilot CDP transport, prompt adaptation, and diagnostics.
+- Do not reintroduce Relay-owned execution runtime crates or compatibility contracts for removed tool/session paths.
+- Do not implement arbitrary code execution, unrestricted shell access, VBA, or uncontrolled external network execution outside agent-managed tools.
 
 ## Office / PDF Search Tool Guidance
 
-- Use `office_search` for exact string or regex search across `.docx`, `.xlsx`, `.pptx`, and `.pdf` corpora, especially when the user gives a glob or asks to find where content appears.
-- Use `read_file` when the user names one Office/PDF file and needs its extracted plaintext. Use `pages` only for `.pdf`, `sheets` only for `.xlsx`, and `slides` only for `.pptx`.
-- Use `grep_search` for plaintext/code files. It is not a substitute for Office parsing because `.docx`, `.xlsx`, and `.pptx` are zipped XML containers.
-- PDF search anchors are document-level (`doc`) in this phase; Office anchors are granular (`pN`, `Sheet!A1`, `slideN`).
+- Use `glob` to discover Office/PDF candidate paths by filename or extension.
+- Use exact `read` when the user names an Office/PDF file or when a candidate path must be inspected for evidence. `read` handles extracted plaintext for `.pdf`, `.docx`, `.xlsx`, and `.pptx`.
+- Use `grep` only for plaintext/code content search. It must reject Office/PDF container targets and point the caller toward `glob` then exact `read`.
+- Do not add `office_search` back to CDP catalogs, repair prompts, or model-facing tool guidance.
 
 ## Documentation Discipline
 
