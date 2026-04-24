@@ -3,6 +3,11 @@
   "source": "embedded",
   "server": "server.js",
   "bun": "bun",
+  "bunWindows": "bun.exe",
+  "bunVersion": "1.3.13",
   "migration": "migration/",
-  "target": "bun"
+  "targets": [
+    "linux-x64",
+    "windows-x64"
+  ]
 }
