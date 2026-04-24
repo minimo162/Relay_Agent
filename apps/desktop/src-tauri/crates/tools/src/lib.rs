@@ -1994,54 +1994,40 @@ mod opencode_runtime {
 
     #[cfg(windows)]
     fn windows_universal_name(path: &str) -> Option<String> {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, NO_ERROR};
-        use windows_sys::Win32::NetworkManagement::WNet::{
-            WNetGetUniversalNameW, UNIVERSAL_NAME_INFOW, UNIVERSAL_NAME_INFO_LEVEL,
-        };
-
-        let mut wide = OsStr::new(path).encode_wide().collect::<Vec<_>>();
-        wide.push(0);
-
-        let mut bytes_needed = 0u32;
-        let first = unsafe {
-            WNetGetUniversalNameW(
-                wide.as_ptr(),
-                UNIVERSAL_NAME_INFO_LEVEL,
-                std::ptr::null_mut(),
-                &mut bytes_needed,
-            )
-        };
-        if first != ERROR_MORE_DATA || bytes_needed == 0 {
+        let mut chars = path.chars();
+        let drive = chars.next()?.to_ascii_uppercase();
+        if !drive.is_ascii_alphabetic() || chars.next()? != ':' {
             return None;
         }
 
-        let mut buffer = vec![0u8; bytes_needed as usize];
-        let second = unsafe {
-            WNetGetUniversalNameW(
-                wide.as_ptr(),
-                UNIVERSAL_NAME_INFO_LEVEL,
-                buffer.as_mut_ptr().cast(),
-                &mut bytes_needed,
-            )
-        };
-        if second != NO_ERROR {
+        let suffix = path
+            .get(2..)
+            .unwrap_or_default()
+            .trim_start_matches(['\\', '/']);
+        let query = format!(
+            "(Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{}:'\").ProviderName",
+            drive
+        );
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &query])
+            .output()
+            .ok()?;
+        if !output.status.success() {
             return None;
         }
-
-        let info = unsafe { &*(buffer.as_ptr().cast::<UNIVERSAL_NAME_INFOW>()) };
-        if info.lpUniversalName.is_null() {
+        let provider = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with(r"\\") && !line.ends_with(':'))?
+            .trim_end_matches(['\\', '/'])
+            .to_string();
+        if provider.is_empty() {
             return None;
         }
-
-        let mut len = 0usize;
-        unsafe {
-            while *info.lpUniversalName.add(len) != 0 {
-                len += 1;
-            }
-            let slice = std::slice::from_raw_parts(info.lpUniversalName, len);
-            Some(String::from_utf16_lossy(slice))
+        if suffix.is_empty() {
+            Some(provider)
+        } else {
+            Some(format!(r"{provider}\{suffix}"))
         }
     }
 }
