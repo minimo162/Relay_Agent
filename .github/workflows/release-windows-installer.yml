@@ -136,8 +136,11 @@ jobs:
         working-directory: apps/desktop
         run: pnpm run prep:tauri-bundle
 
-      - name: Run desktop Rust tests
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Run Rust workspace tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
+
+      - name: Run doctor CLI tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
 
       - name: Build Windows installer
         shell: bash
