@@ -63,7 +63,10 @@ fn start_mock_server(mode: StatusMode, expected_boot_token: &str) -> MockServer 
     let join = thread::spawn(move || {
         while !stop_flag.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((mut stream, _)) => handle_connection(&mut stream, mode, &expected),
+                Ok((mut stream, _)) => {
+                    let expected = expected.clone();
+                    thread::spawn(move || handle_connection(&mut stream, mode, &expected));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -79,6 +82,7 @@ fn start_mock_server(mode: StatusMode, expected_boot_token: &str) -> MockServer 
 }
 
 fn handle_connection(stream: &mut TcpStream, mode: StatusMode, expected_boot_token: &str) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
     while let Ok(read) = stream.read(&mut buffer) {
