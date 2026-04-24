@@ -26,6 +26,8 @@ const CDP_READ_FILE_TOOL_RESULT_MAX_CHARS: usize = 32_000;
 const CDP_LARGE_TOOL_RESULT_MAX_CHARS: usize = 24_000;
 const CDP_OFFICE_SEARCH_FOLLOWUP_RESULT_LIMIT: usize = 30;
 const CDP_OFFICE_SEARCH_PREVIEW_MAX_CHARS: usize = 800;
+const CDP_GLOB_FOLLOWUP_RESULT_LIMIT: usize = 30;
+const CDP_GREP_FOLLOWUP_LINE_LIMIT: usize = 60;
 const COPILOT_UI_PROGRESS_POLL_MS: u64 = 350;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
@@ -1652,7 +1654,7 @@ Example:
 
 - This reply is parsed by Relay Agent, not Microsoft Copilot tools.
 - {search_surface}
-- Tool calls must be one fenced `relay_tool` or `json` block containing only JSON.
+- Tool calls must be exactly one fenced `relay_tool` block containing only JSON.
 
 Do not use M365/Copilot search, web search, citations, uploaded files, Python/code execution, Pages, `<File>` cards, or `office365_search`-style actions.
 
@@ -1664,18 +1666,19 @@ Do not use M365/Copilot search, web search, citations, uploaded files, Python/co
 
 ## Tool invocation protocol
 
-For the initial lookup reply, output exactly one fenced `relay_tool` or `json` block with JSON only.
+For the initial lookup reply, output exactly one fenced `relay_tool` block with JSON only. If more than one search is useful, put all tool objects in one JSON array inside that single fence.
 
 - No prose before the fence.
 - No prose after the fence.
 - Do not write `はい、...を検索します`.
-- Prefer one JSON array when two complementary searches are useful.
+- Do not repeat the same `name` + `input` object more than once.
+- Prefer one JSON array when two complementary searches are useful; never emit multiple fences for the same lookup.
 - In follow-ups after truncated search results, prefer narrowing path/include/pattern over widening the scan.
 
 Example:
 
 ```relay_tool
-{{"name":"glob","relay_tool_call":true,"input":{{"pattern":"**/*契約*","path":"reports"}}}}
+[{{"name":"glob","relay_tool_call":true,"input":{{"pattern":"**/*契約*","path":"reports"}}}}]
 ```
 "#,
                 search_surface = search_surface,
@@ -3101,13 +3104,22 @@ fn summarize_glob_tool_result(output: &str) -> Option<String> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let mut lines = filenames;
-        if truncated {
+        let shown = filenames.len().min(CDP_GLOB_FOLLOWUP_RESULT_LIMIT);
+        let hidden = filenames.len().saturating_sub(shown);
+        let mut lines = filenames
+            .into_iter()
+            .take(CDP_GLOB_FOLLOWUP_RESULT_LIMIT)
+            .collect::<Vec<_>>();
+        if truncated || hidden > 0 {
             lines.push(String::new());
-            lines.push(
-                "(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)"
-                    .to_string(),
-            );
+            lines.push(format!(
+                "(Results are truncated: showing {shown} of {num_files} files{}. Use read on the best candidate paths or narrow the glob pattern/path.)",
+                if hidden > 0 {
+                    format!(", {hidden} hidden")
+                } else {
+                    String::new()
+                }
+            ));
         }
         return Some(lines.join("\n"));
     }
@@ -3169,15 +3181,32 @@ fn summarize_grep_tool_result(output: &str) -> Option<String> {
     )];
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         if !content.is_empty() {
-            lines.extend(format_opencode_grep_content(content));
+            let formatted = format_opencode_grep_content(content);
+            let shown = formatted.len().min(CDP_GREP_FOLLOWUP_LINE_LIMIT);
+            let hidden = formatted.len().saturating_sub(shown);
+            lines.extend(formatted.into_iter().take(CDP_GREP_FOLLOWUP_LINE_LIMIT));
+            if hidden > 0 {
+                lines.push(String::new());
+                lines.push(format!(
+                    "(Results truncated: showing {shown} rendered lines from grep output, {hidden} hidden. Use read on the best candidate paths.)"
+                ));
+            }
         }
     } else if let Some(filenames) = object.get("filenames").and_then(Value::as_array) {
-        lines.extend(
-            filenames
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string),
-        );
+        let filenames = filenames
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let shown = filenames.len().min(CDP_GREP_FOLLOWUP_LINE_LIMIT);
+        let hidden = filenames.len().saturating_sub(shown);
+        lines.extend(filenames.into_iter().take(CDP_GREP_FOLLOWUP_LINE_LIMIT));
+        if hidden > 0 {
+            lines.push(String::new());
+            lines.push(format!(
+                "(Results truncated: showing {shown} filenames from grep output, {hidden} hidden. Use read on the best candidate paths.)"
+            ));
+        }
     }
     Some(lines.join("\n"))
 }
@@ -5406,6 +5435,25 @@ mod cdp_copilot_tool_tests {
         assert!(rendered.contains("filename/glob-pattern miss"));
         assert!(rendered.contains("does not mean grep"));
         assert!(!rendered.contains(r#""filenames":[]"#));
+    }
+
+    #[test]
+    fn glob_result_limits_followup_file_count() {
+        let output = serde_json::to_string(&json!({
+            "durationMs": 23,
+            "numFiles": 45,
+            "filenames": (0..45)
+                .map(|i| format!("/workspace/report-{i}.xlsx"))
+                .collect::<Vec<_>>(),
+            "truncated": true,
+            "pattern": "**/*CFS*"
+        }))
+        .expect("serialize glob output");
+
+        let rendered = format_cdp_tool_result("glob", &output, false);
+        assert!(rendered.contains("/workspace/report-29.xlsx"));
+        assert!(!rendered.contains("/workspace/report-30.xlsx"));
+        assert!(rendered.contains("showing 30 of 45 files, 15 hidden"));
     }
 
     #[test]

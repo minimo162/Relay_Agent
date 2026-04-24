@@ -1844,6 +1844,7 @@ mod opencode_runtime {
     use reqwest::blocking::Client;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
+    use std::path::Path;
     use std::time::Duration;
 
     const TOOL_RUNTIME_URL_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_URL";
@@ -1894,13 +1895,24 @@ mod opencode_runtime {
             .timeout(Duration::from_millis(timeout))
             .build()
             .map_err(|error| format!("failed to create opencode tool runtime client: {error}"))?;
-        let cwd = context.cwd.as_deref();
+        let normalized_cwd = normalize_runtime_path(context.cwd.as_deref());
+        let normalized_worktree = context
+            .worktree
+            .as_deref()
+            .and_then(|worktree| {
+                let normalized = normalize_runtime_path(Some(worktree));
+                match (&normalized_cwd, &normalized) {
+                    (Some(cwd), Some(worktree)) if cwd == worktree => None,
+                    _ => normalized,
+                }
+            });
+        let cwd = normalized_cwd.as_deref();
         let request = ExecuteRequest {
             tool: name,
             input,
             cwd,
             directory: cwd,
-            worktree: context.worktree.as_deref(),
+            worktree: normalized_worktree.as_deref(),
             session_id: context.session_id.as_deref(),
             message_id: context.message_id.as_deref(),
             agent: context.agent.as_deref(),
@@ -1937,6 +1949,100 @@ mod opencode_runtime {
             Some(title) if !title.trim().is_empty() => format!("{title}\n\n{rendered}"),
             _ => rendered,
         })
+    }
+
+    fn normalize_runtime_path(path: Option<&str>) -> Option<String> {
+        let raw = path?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
+        #[cfg(windows)]
+        if let Some(unc) = windows_universal_name(raw) {
+            return Some(unc);
+        }
+
+        let path = Path::new(raw);
+        Some(
+            path.canonicalize()
+                .map_or_else(|_| raw.to_string(), |path| display_path_for_runtime(&path)),
+        )
+    }
+
+    fn display_path_for_runtime(path: &Path) -> String {
+        #[cfg(windows)]
+        {
+            strip_windows_extended_prefix(&path.to_string_lossy())
+        }
+
+        #[cfg(not(windows))]
+        {
+            path.to_string_lossy().into_owned()
+        }
+    }
+
+    #[cfg(windows)]
+    fn strip_windows_extended_prefix(value: &str) -> String {
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+        value.to_string()
+    }
+
+    #[cfg(windows)]
+    fn windows_universal_name(path: &str) -> Option<String> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, NO_ERROR};
+        use windows_sys::Win32::NetworkManagement::WNet::{
+            WNetGetUniversalNameW, UNIVERSAL_NAME_INFOW, UNIVERSAL_NAME_INFO_LEVEL,
+        };
+
+        let mut wide = OsStr::new(path).encode_wide().collect::<Vec<_>>();
+        wide.push(0);
+
+        let mut bytes_needed = 0u32;
+        let first = unsafe {
+            WNetGetUniversalNameW(
+                wide.as_ptr(),
+                UNIVERSAL_NAME_INFO_LEVEL,
+                std::ptr::null_mut(),
+                &mut bytes_needed,
+            )
+        };
+        if first != ERROR_MORE_DATA || bytes_needed == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u8; bytes_needed as usize];
+        let second = unsafe {
+            WNetGetUniversalNameW(
+                wide.as_ptr(),
+                UNIVERSAL_NAME_INFO_LEVEL,
+                buffer.as_mut_ptr().cast(),
+                &mut bytes_needed,
+            )
+        };
+        if second != NO_ERROR {
+            return None;
+        }
+
+        let info = unsafe { &*(buffer.as_ptr().cast::<UNIVERSAL_NAME_INFOW>()) };
+        if info.lpUniversalName.is_null() {
+            return None;
+        }
+
+        let mut len = 0usize;
+        unsafe {
+            while *info.lpUniversalName.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(info.lpUniversalName, len);
+            Some(String::from_utf16_lossy(slice))
+        }
     }
 }
 

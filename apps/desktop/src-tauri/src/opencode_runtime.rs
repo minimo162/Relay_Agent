@@ -7,11 +7,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use serde_json::json;
 use tauri::Manager;
 
 const TOOL_RUNTIME_URL_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_URL";
 const TOOL_RUNTIME_DIR_ENV: &str = "RELAY_OPENCODE_RUNTIME_DIR";
 const TOOL_RUNTIME_BUN_ENV: &str = "RELAY_OPENCODE_BUN";
+const WARMUP_DISABLE_ENV: &str = "RELAY_OPENCODE_RUNTIME_NO_WARMUP";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
@@ -60,6 +62,7 @@ pub fn start(app: &tauri::App) -> Option<OpencodeRuntime> {
         Ok(runtime) => {
             tracing::info!("bundled opencode runtime ready at {}", runtime.url());
             std::env::set_var(TOOL_RUNTIME_URL_ENV, runtime.url());
+            spawn_warmup();
             Some(runtime)
         }
         Err(error) => {
@@ -67,6 +70,56 @@ pub fn start(app: &tauri::App) -> Option<OpencodeRuntime> {
             None
         }
     }
+}
+
+fn spawn_warmup() {
+    if std::env::var_os(WARMUP_DISABLE_ENV).is_some() {
+        tracing::info!("bundled opencode runtime warmup disabled by {WARMUP_DISABLE_ENV}");
+        return;
+    }
+
+    thread::spawn(|| {
+        if let Err(error) = warmup() {
+            tracing::warn!("bundled opencode runtime warmup failed: {error}");
+        }
+    });
+}
+
+fn warmup() -> Result<(), String> {
+    let root = std::env::temp_dir()
+        .join("RelayAgent")
+        .join("opencode-warmup");
+    std::fs::create_dir_all(&root).map_err(|error| {
+        format!(
+            "failed to create warmup directory {}: {error}",
+            root.display()
+        )
+    })?;
+    let probe = root.join("probe.txt");
+    if !probe.is_file() {
+        std::fs::write(&probe, "relay opencode warmup\n").map_err(|error| {
+            format!("failed to write warmup probe {}: {error}", probe.display())
+        })?;
+    }
+
+    let started = Instant::now();
+    let context = tools::ToolExecutionContext {
+        cwd: Some(root.to_string_lossy().into_owned()),
+        worktree: None,
+        session_id: None,
+        message_id: None,
+        agent: None,
+    };
+    let input = json!({
+        "pattern": "__relay_opencode_warmup_no_match__",
+        "path": "."
+    });
+    let _ = tools::execute_tool_with_context("grep", &input, &context)?;
+    tracing::info!(
+        "bundled opencode runtime warmup completed in {} ms",
+        started.elapsed().as_millis()
+    );
+    Ok(())
 }
 
 fn start_inner(app: &tauri::App) -> Result<OpencodeRuntime, String> {
