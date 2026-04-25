@@ -446,7 +446,8 @@ test("createServer writes an artifact when tool-call repair still fails", async 
     assert.equal(response.status, 502);
     const body = await response.json();
     assert.equal(body.error.code, "relay_tool_call_repair_failed");
-    assert.match(body.error.artifact_path, /^\/.*\.json$/);
+    assert.equal(path.isAbsolute(body.error.artifact_path), true);
+    assert.equal(path.extname(body.error.artifact_path), ".json");
     assert.equal(prompts.length, 2);
     assert.deepEqual(prompts[1].tools.map((tool) => tool.function.name), ["read"]);
 
