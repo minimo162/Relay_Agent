@@ -1,8 +1,8 @@
 {
-  "projectName": "Relay_Agent Current Desktop Baseline",
+  "projectName": "Relay_Agent OpenCode Provider Gateway",
   "version": "5.0",
   "createdAt": "2026-04-14",
-  "summary": "Current task graph for the conversation-first Tauri desktop agent, aligned with the live repo state and the claw-code hardening track.",
+  "summary": "Current task graph for the OpenAI-compatible M365 Copilot provider gateway, with OpenCode/OpenWork owning UX and execution.",
   "phases": [
     {
       "id": "baseline",
@@ -11,8 +11,8 @@
       "tasks": [
         {
           "id": "B01",
-          "title": "Conversation-first desktop shell is the live product",
-          "description": "The active product is the Tauri + Solid desktop app under apps/desktop with session-based conversations, inline tool events, Settings-based preflight, and warm-token light theme.",
+          "title": "OpenCode provider gateway is the live product path",
+          "description": "The active product path is OpenCode/OpenWork using Relay as an OpenAI-compatible M365 Copilot provider gateway. The Tauri + Solid shell under apps/desktop is diagnostic support only.",
           "files": [
             "README.md",
             "PLANS.md",
@@ -29,8 +29,8 @@
         },
         {
           "id": "B02",
-          "title": "Rust IPC contracts are canonical",
-          "description": "Rust source models and command signatures under apps/desktop/src-tauri define the contract; generated frontend bindings live in ipc.generated.ts and ipc.ts remains thin.",
+          "title": "Provider facade and diagnostic IPC contracts are canonical",
+          "description": "The provider contract is the OpenAI-compatible HTTP facade in copilot_server.js. Rust source models and command signatures under apps/desktop/src-tauri remain canonical for diagnostic IPC only.",
           "files": [
             "apps/desktop/src-tauri/src/models.rs",
             "apps/desktop/src-tauri/src/lib.rs",
@@ -45,16 +45,15 @@
         },
         {
           "id": "B03",
-          "title": "Agent loop, tools, and permissions run in Rust",
-          "description": "The real desktop loop, tool executor, permission escalation, MCP routing, and session registry are implemented in the Rust backend rather than a frontend runtime.",
+          "title": "Execution ownership belongs to OpenCode/OpenWork",
+          "description": "OpenCode/OpenWork owns sessions, tool execution, permissions, MCP routing, plugins, skills, workspace config, and transcript state. Relay-owned Rust execution is not a product fallback.",
           "files": [
-            "apps/desktop/src-tauri/src/agent_loop/",
             "apps/desktop/src-tauri/src/tauri_bridge.rs",
             "apps/desktop/src-tauri/src/registry.rs",
-            "apps/desktop/src-tauri/crates/runtime/",
-            "apps/desktop/src-tauri/crates/tools/"
+            "apps/desktop/src-tauri/src/opencode_runtime.rs",
+            "apps/desktop/src-tauri/binaries/copilot_server.js"
           ],
-          "artifact": "docs/IMPLEMENTATION.md (2026-04-12 backend/client split, 2026-04-14 hardening entry)",
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 provider gateway milestones)",
           "effort": "L",
           "priority": "critical",
           "blockedBy": [],
@@ -70,7 +69,7 @@
         {
           "id": "H01",
           "title": "Clean up repository source of truth",
-          "description": "Align workspace license metadata, remove dead workspace entries, make runtime::CompactionConfig::default() the canonical compaction source, set pnpm check as the canonical frontend gate, and update live docs to the current desktop product.",
+          "description": "Align workspace license metadata, remove dead workspace entries, set pnpm check as the canonical provider-safe frontend gate, and update live docs to the provider gateway product path.",
           "files": [
             "Cargo.toml",
             "pnpm-workspace.yaml",
@@ -111,12 +110,11 @@
         {
           "id": "H03",
           "title": "Expand deterministic parity with a desktop full-session harness",
-          "description": "Extract shared desktop smoke support, reuse it from compat-harness, and cover claw-style streaming text, plugin tool roundtrip, auto compaction, and token cost reporting deterministically.",
+          "description": "Keep deterministic provider/diagnostic fixture coverage without linking the removed Relay-owned runtime/tools crates.",
           "files": [
             "apps/desktop/src-tauri/src/test_support.rs",
-            "apps/desktop/src-tauri/src/agent_loop_smoke.rs",
             "apps/desktop/src-tauri/src/tauri_bridge.rs",
-            "apps/desktop/src-tauri/src/agent_loop/orchestrator.rs",
+            "apps/desktop/src-tauri/src/opencode_runtime.rs",
             "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml",
             "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
             "docs/CLAW_CODE_ALIGNMENT.md"
@@ -132,7 +130,7 @@
         {
           "id": "H04",
           "title": "Align CI with documented acceptance criteria",
-          "description": "Replace Linux-only CI with Ubuntu and Windows coverage, run pnpm check plus launched-app smokes, add docs truth guards, and keep release packaging separate from the main acceptance workflow.",
+          "description": "Replace Linux-only CI with Ubuntu and Windows coverage, run pnpm check plus diagnostic launch smokes, add docs truth guards, and keep release packaging separate from the main acceptance workflow.",
           "files": [
             ".github/workflows/ci.yml",
             "package.json",
@@ -147,6 +145,35 @@
             "H02",
             "H03"
           ],
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "id": "provider_only_hard_cut",
+      "name": "Provider-Only Hard Cut",
+      "description": "Remove remaining compatibility posture now that OpenCode/OpenWork is the product UX and execution owner. Relay keeps only provider gateway startup, M365 Copilot CDP transport, OpenCode/OpenWork config support, and diagnostics.",
+      "tasks": [
+        {
+          "id": "P01",
+          "title": "Make OpenCode provider gateway the only primary product path",
+          "description": "Update live docs, scripts, task metadata, and diagnostics so first-use guidance starts with OpenCode/OpenWork plus start:opencode-provider-gateway. Desktop launch and smoke paths become diag:* checks only. Do not preserve legacy Relay desktop chat/session/tool execution compatibility.",
+          "files": [
+            "README.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "package.json",
+            "apps/desktop/package.json",
+            "apps/desktop/src-tauri/src/doctor.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Provider-only hard cut implementation)",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [],
           "status": "completed"
         }
       ]

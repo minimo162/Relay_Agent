@@ -6,11 +6,12 @@ Date: 2026-04-14
 
 Relay_Agent is now an **OpenAI-compatible M365 Copilot provider gateway** for
 OpenCode/OpenWork. The historical Tauri desktop shell remains under
-`apps/desktop/` for transition, diagnostics, and live Copilot verification.
+`apps/desktop/` only for provider launch support, diagnostics, and live Copilot
+verification.
 
 - Primary UX and execution: OpenCode/OpenWork.
 - Provider gateway: `apps/desktop/src-tauri/binaries/copilot_server.js`.
-- Frontend: SolidJS + Vite transition desktop shell.
+- Frontend: SolidJS + Vite diagnostic desktop shell.
 - Backend: Rust in `apps/desktop/src-tauri/`, with active internal crates under
   `crates/{desktop-core,compat-harness}`. Historical `runtime` / `tools` crates
   and the unused legacy `api` crate have been physically removed as part of the
@@ -36,7 +37,7 @@ Additional rules:
 - Rust crate types and IPC signatures in `apps/desktop/src-tauri/` are canonical.
 - OpenCode/OpenWork session state is the canonical source for execution
   transcript and runtime behavior. Relay-specific defaults live in the provider
-  gateway and transition desktop adapter/config modules.
+  gateway and diagnostic desktop adapter/config modules.
 - `.taskmaster/tasks/tasks.json` must reflect real artifact state, not historical intent.
 
 ## Delivery Priorities
@@ -66,11 +67,58 @@ Implications:
 - Do not treat the Copilot browser thread as the execution source of truth.
 - New runtime work should target OpenCode/OpenWork APIs or extension points.
 
+## Completed Task: Provider-Only Hard Cut
+
+Goal: remove remaining compatibility posture now that the OpenAI-compatible
+OpenCode provider gateway has landed. Relay's desktop-owned UX and execution
+surface should stop being treated as a product path; Relay should keep only
+provider gateway startup, OpenCode/OpenWork config support, M365 Copilot CDP
+transport, and diagnostics.
+
+Status 2026-04-25: implemented for live docs, root/package scripts, CI naming,
+doctor diagnostics, task graph, and hard-cut guard enforcement.
+
+Compatibility policy:
+
+- Do not preserve legacy Relay desktop chat/session behavior.
+- Do not preserve hidden compatibility tools such as `office_search`.
+- Do not preserve Relay-owned tool execution, repair strategy, or transcript
+  state as a fallback path.
+- Do not keep migration shims unless they are strictly needed to launch or
+  diagnose the OpenCode/OpenWork provider gateway.
+
+Change targets:
+
+- `README.md`
+- `PLANS.md`
+- `.taskmaster/tasks/tasks.json`
+- `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`
+- `docs/IMPLEMENTATION.md`
+- `apps/desktop/package.json`
+- `package.json`
+- `apps/desktop/src-tauri/src/doctor.rs`
+- `apps/desktop/src-tauri/src/tauri_bridge.rs`
+- `apps/desktop/src-tauri/binaries/copilot_server.js`
+
+Acceptance criteria:
+
+- README first-run guidance starts with OpenCode/OpenWork plus
+  `pnpm start:opencode-provider-gateway`, not the diagnostic desktop shell.
+- Package scripts clearly separate canonical provider commands from diagnostic
+  desktop checks; compatibility-era launch paths are not presented as primary.
+- Doctor output names Relay as an OpenAI-compatible M365 provider gateway and
+  treats desktop-shell checks as diagnostics only.
+- No live documentation claims Relay owns the primary UX, sessions, tools,
+  permissions, transcript, or execution loop.
+- `office_search` is marked as a non-goal/unsupported leftover until moved into
+  an OpenCode/OpenWork extension point or deleted.
+- `pnpm check`, `pnpm check:opencode-provider`, and `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.
 - Preserve Copilot CDP product focus, but do not preserve Relay's bespoke
-  execution runtime or treat Relay's transition desktop shell as the target UX.
+  execution runtime or treat Relay's diagnostic desktop shell as the target UX.
 - Keep Relay-specific code focused on the OpenAI-compatible provider facade,
   M365 Copilot, CDP orchestration, prompt adaptation, and diagnostics.
 - Tool shapes, permission posture, session state, plugins, MCP, skills, and
@@ -97,11 +145,11 @@ pnpm start:opencode-provider-gateway -- --print-config
 pnpm install:opencode-provider-config -- --workspace /path/to/workspace --dry-run
 ```
 
-Transition desktop diagnostics:
+Diagnostic desktop checks:
 
 ```bash
-pnpm launch:test
-pnpm smoke:windows
+pnpm diag:desktop-launch
+pnpm diag:windows-smoke
 pnpm doctor -- --json
 ```
 
@@ -201,8 +249,8 @@ Change targets:
 Acceptance criteria:
 
 - Main CI runs on `ubuntu-latest` and `windows-latest`.
-- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm launch:test`.
-- Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm smoke:windows`.
+- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm diag:desktop-launch`.
+- Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm diag:windows-smoke`.
 - The `pnpm check` CI step includes the CI-safe OpenCode provider contract
   check. Full `pnpm smoke:opencode-provider` remains a local/ops smoke because
   it requires a real OpenCode checkout and Bun.
@@ -259,8 +307,8 @@ Acceptance criteria:
   `.xlsm`, `.pptx`, and `.pdf` targets with guidance to use `glob` then `read`.
 - `read` is the model-facing path for exact Office/PDF files and returns
   extracted plaintext.
-- `office_search` is hidden from CDP catalogs and repair prompts; it remains
-  only as an internal compatibility helper until callers are migrated.
+- `office_search` is hidden from CDP catalogs and repair prompts; retaining it
+  as a Relay compatibility helper is not a goal.
 - Local lookup repair generates only active model-facing tools: `read`, `glob`,
   and `grep`.
 - Office/PDF filename discovery stays a `glob` responsibility; candidate
@@ -278,8 +326,8 @@ Status 2026-04-23:
 - Office/PDF evidence lookup repair now starts with `glob`; if Copilot tries to
   summarize a `glob` candidate as evidence, the loop continues with a targeted
   `read` of the top Office/PDF candidate.
-- `office_search` remains present as a hidden compatibility/internal execution
-  path until all non-CDP callers and legacy transcript handling are migrated.
+- Any remaining `office_search` code is an unsupported leftover and should move
+  into an OpenCode/OpenWork extension point or be deleted.
 
 ### Cross-Cutting Hardening: Workspace Approval Persistence
 
@@ -369,8 +417,9 @@ Acceptance criteria:
 - Standard ignore directories such as `.git`, `node_modules`, and `target`,
   plus `.gitignore` patterns, are skipped by default, and
   large/plainly unreadable/binary files do not bloat results.
-- `glob`, `grep`, and hidden compatibility `office_search` emit baseline
-  search telemetry for counts, elapsed time, truncation, and failure surfaces.
+- `glob` and `grep` emit baseline search telemetry for counts, elapsed time,
+  truncation, and failure surfaces; `office_search` is not part of the target
+  provider surface.
 - Search roots are constrained to the current workspace; paths or symlink
   resolutions that escape the workspace are not read.
 - CDP prompt guidance prefers concrete `glob`, `grep`, or `read` calls for

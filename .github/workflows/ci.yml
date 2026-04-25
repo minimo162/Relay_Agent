@@ -95,10 +95,10 @@ jobs:
       - name: pnpm check
         run: pnpm check
 
-      - name: pnpm launch:test
+      - name: pnpm diag:desktop-launch
         if: matrix.run_launch_smokes
-        run: pnpm launch:test
+        run: pnpm diag:desktop-launch
 
-      - name: pnpm smoke:windows
+      - name: pnpm diag:windows-smoke
         if: matrix.run_windows_smoke
-        run: pnpm smoke:windows
+        run: pnpm diag:windows-smoke

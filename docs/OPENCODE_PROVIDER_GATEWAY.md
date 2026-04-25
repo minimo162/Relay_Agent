@@ -47,7 +47,7 @@ OpenCode sends `options.apiKey` as:
 Authorization: Bearer <api key>
 ```
 
-Relay also accepts the legacy desktop bridge header:
+Relay also accepts the diagnostic desktop bridge header:
 
 ```text
 X-Relay-Boot-Token: <boot token>

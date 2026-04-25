@@ -1476,13 +1476,13 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
 
 fn relay_predictability_notes() -> Vec<String> {
     vec![
-        "Edge CDP defaults to port 9360 for the Copilot bridge unless you change “CDP port hint” in Settings (Browser automation)."
+        "Edge CDP defaults to port 9360 for the M365 Copilot provider bridge unless RELAY_EDGE_CDP_PORT or a diagnostic browser setting overrides it."
             .into(),
-        "The workspace path (cwd) in Settings is sent per agent run and may differ from the app process working directory (see diagnostics processCwd)."
+        "Provider-mode workspace state belongs to OpenCode/OpenWork; diagnostics processCwd is only the Relay process working directory."
             .into(),
-        "“Allow for this workspace” persists tool names under ~/.relay-agent/workspace_allowed_tools.json (normalized folder keys)."
+        "OpenCode/OpenWork owns tool permissions in provider mode. Relay workspace allowlist data is diagnostic desktop state only."
             .into(),
-        "Optional project slash commands: add .relay/commands/<name>.md or .relay/commands/commands.json (see PLANS.md)."
+        "OpenCode/OpenWork owns slash commands, MCP, plugins, skills, and workspace config for the product path."
             .into(),
     ]
 }
@@ -1490,7 +1490,7 @@ fn relay_predictability_notes() -> Vec<String> {
 fn relay_doctor_hints() -> Vec<String> {
     let mut hints = Vec::new();
     hints.push(format!(
-        "Copilot Node bridge port {COPILOT_HTTP_PORT}; default Edge CDP target port {COPILOT_JS_CDP_PORT} (see scripts/start-relay-edge-cdp.sh and docs/COPILOT_E2E_CDP_PITFALLS.md)."
+        "Provider bridge port {COPILOT_HTTP_PORT}; default Edge CDP target port {COPILOT_JS_CDP_PORT} (see pnpm start:opencode-provider-gateway and docs/COPILOT_E2E_CDP_PITFALLS.md)."
     ));
     hints.push(
         "OpenCode/OpenWork provider mode uses Relay only as an OpenAI-compatible M365 Copilot gateway; UX, sessions, permissions, and tools live in OpenCode/OpenWork."
@@ -1521,7 +1521,7 @@ fn relay_doctor_hints() -> Vec<String> {
         }
     }
     hints.push(
-        "PDF read_file uses LiteParse via bundled relay-node when present (see README / AGENTS.md)."
+        "Office/PDF extraction is not a Relay provider fallback. Add it through OpenCode/OpenWork extension points when needed."
             .into(),
     );
     hints
@@ -1555,7 +1555,7 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_node_bridge_port: COPILOT_HTTP_PORT,
         default_edge_cdp_port: COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
-        architecture_notes: "OpenCode/OpenWork owns desktop UX, sessions, permissions, workspace tools, and execution state. Relay exposes the M365 Copilot CDP bridge as an OpenAI-compatible provider gateway and should not be the execution source of truth in this mode.".to_string(),
+        architecture_notes: "OpenCode/OpenWork owns UX, sessions, permissions, workspace tools, transcript, and execution state. Relay is an OpenAI-compatible M365 Copilot provider gateway plus diagnostics, not a desktop execution fallback.".to_string(),
         process_cwd,
         claw_config_home_display,
         max_text_file_read_bytes: RELAY_MAX_TEXT_FILE_READ_BYTES,
