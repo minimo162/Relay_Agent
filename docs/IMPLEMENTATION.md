@@ -23,6 +23,46 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Legacy agent event/type retirement
+
+Removed the remaining Relay-owned agent event and session-history IPC
+projection surface after the public invoke commands and hard-cut wrapper had
+already been deleted. Relay's desktop IPC is now diagnostic/provider-support
+only.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/agent_projection.rs`.
+- Removed legacy agent request/response structs from
+  `apps/desktop/src-tauri/crates/desktop-core/src/models.rs`.
+- Removed unsupported approval, question, cancel, session history, compact,
+  undo, and redo entrypoints from `tauri_bridge.rs`.
+- Removed OpenCode session-history-to-Relay-message mapping helpers from
+  `opencode_runtime.rs`.
+- Removed frontend `onAgentEvent` and the orphan event subscription bridge.
+- Regenerated/trimmed frontend IPC bindings so legacy agent event and history
+  contracts are no longer exported.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so the deleted projection
+  module and event listener bridge cannot return.
+- Added completed task `D08` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('apps/desktop/package.json','utf8'))"`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`:
+  passed, 90 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop --lib`:
+  passed, 15 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`:
+  passed, 5 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Hard-cut agent wrapper retirement
 
 Deleted the internal Relay-owned hard-cut agent controller after public IPC,

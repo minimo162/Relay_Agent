@@ -2,26 +2,17 @@ use std::path::PathBuf;
 
 use ts_rs::TS;
 
-use crate::agent_projection::{
-    AgentApprovalNeededEvent, AgentErrorEvent, AgentSessionHistoryResponse,
-    AgentSessionStatusEvent, AgentTextDeltaEvent, AgentToolResultEvent, AgentToolStartEvent,
-    AgentTurnCompleteEvent, AgentUserQuestionNeededEvent, MessageContent, RelayMessage,
-};
 use crate::models::{
-    BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
-    CopilotBridgeFailureInfo, CopilotRepairStageFailureCount, CopilotRepairStageStats,
-    GetAgentSessionHistoryRequest, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
-    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
-    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse,
-    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
-    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow,
-    WorkspaceSlashCommandRow,
+    BrowserAutomationSettings, CopilotBridgeFailureInfo, CopilotRepairStageFailureCount,
+    CopilotRepairStageStats, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
+    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RustAnalyzerProbeRequest,
+    RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistEntryRow,
+    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
 };
 use crate::tauri_bridge::{
-    CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, CompactAgentSessionRequest,
-    CompactAgentSessionResponse, ConnectCdpRequest, CopilotWarmupFailureCode, CopilotWarmupResult,
-    CopilotWarmupStage,
+    CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, ConnectCdpRequest,
+    CopilotWarmupFailureCode, CopilotWarmupResult, CopilotWarmupStage,
 };
 use crate::workspace_surfaces::{InstructionSurface, WorkspaceInstructionSurfaces};
 
@@ -32,22 +23,12 @@ fn decl<T: TS>() -> String {
 pub fn render_ipc_generated_ts() -> String {
     let sections = [
         decl::<BrowserAutomationSettings>(),
-        decl::<StartAgentRequest>(),
-        decl::<ContinueAgentSessionRequest>(),
-        decl::<RespondAgentApprovalRequest>(),
-        decl::<RespondUserQuestionRequest>(),
         decl::<CopilotBridgeFailureInfo>(),
         decl::<CopilotRepairStageFailureCount>(),
         decl::<CopilotRepairStageStats>(),
         decl::<RelayDiagnostics>(),
-        decl::<CancelAgentRequest>(),
-        decl::<GetAgentSessionHistoryRequest>(),
-        decl::<SessionWriteUndoRequest>(),
-        decl::<SessionWriteUndoStatusResponse>(),
         decl::<RustAnalyzerProbeRequest>(),
         decl::<RustAnalyzerProbeResponse>(),
-        decl::<CompactAgentSessionRequest>(),
-        decl::<CompactAgentSessionResponse>(),
         decl::<McpServerInfo>(),
         decl::<McpAddServerRequest>(),
         decl::<WorkspaceAllowlistEntryRow>(),
@@ -68,21 +49,10 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<CdpSendPromptRequest>(),
         decl::<CdpConnectResult>(),
         decl::<CdpPromptResult>(),
-        decl::<AgentToolStartEvent>(),
-        decl::<AgentToolResultEvent>(),
-        decl::<AgentApprovalNeededEvent>(),
-        decl::<AgentTurnCompleteEvent>(),
-        decl::<AgentSessionStatusEvent>(),
-        decl::<AgentTextDeltaEvent>(),
-        decl::<AgentErrorEvent>(),
-        decl::<AgentUserQuestionNeededEvent>(),
-        decl::<MessageContent>(),
-        decl::<RelayMessage>(),
-        decl::<AgentSessionHistoryResponse>(),
     ];
 
     format!(
-        "// Generated from Rust IPC source types via ts-rs.\n// Source: apps/desktop/src-tauri/src/models.rs, agent_projection.rs, tauri_bridge.rs\n\n{}\n",
+        "// Generated from Rust IPC source types via ts-rs.\n// Source: apps/desktop/src-tauri/src/models.rs, tauri_bridge.rs\n\n{}\n",
         sections.join("\n\n")
     )
 }
@@ -103,9 +73,9 @@ mod tests {
     fn rendered_ipc_bindings_include_core_contracts() {
         let rendered = render_ipc_generated_ts();
         for required in [
-            "StartAgentRequest",
-            "AgentSessionHistoryResponse",
-            "AgentSessionStatusEvent",
+            "BrowserAutomationSettings",
+            "RelayDiagnostics",
+            "CopilotWarmupResult",
         ] {
             assert!(
                 rendered.contains(required),
@@ -122,7 +92,6 @@ mod tests {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let ipc_source_files = [
             manifest_dir.join("src/tauri_bridge.rs"),
-            manifest_dir.join("src/agent_projection.rs"),
             manifest_dir.join("crates/desktop-core/src/models.rs"),
             manifest_dir.join("crates/desktop-core/src/workspace_surfaces.rs"),
         ];

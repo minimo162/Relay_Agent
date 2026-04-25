@@ -1,8 +1,6 @@
-mod agent_projection;
 mod app_services;
 mod cdp_copilot;
 mod commands;
-mod copilot_persistence;
 mod copilot_port_reclaim;
 mod copilot_server;
 mod dev_control;

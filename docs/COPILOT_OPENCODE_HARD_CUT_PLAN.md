@@ -186,6 +186,30 @@ Acceptance:
 - The hard-cut guard rejects reintroducing retired agent commands to
   `generate_handler!` or `ipc.ts`.
 
+## Completed Task: Legacy Agent Event And Type Retirement
+
+Implemented on 2026-04-25: removed the remaining Relay-owned agent event and
+session-history projection surface. Relay no longer exports `agent:*` event
+payloads, session-history message projection types, or frontend event listeners
+for the deleted desktop execution path.
+
+Retired:
+
+- `apps/desktop/src-tauri/src/agent_projection.rs`
+- Legacy agent request/response structs from `desktop-core/src/models.rs`.
+- Unsupported session history, approval, user-question, cancel, compact, undo,
+  and redo entrypoints from `tauri_bridge.rs`.
+- Frontend `onAgentEvent` listener bridge and generated TS event/history
+  contracts.
+- OpenCode session-history-to-Relay-message mapping helpers.
+
+Acceptance:
+
+- The generated frontend IPC contract is diagnostic/provider-support only.
+- Relay desktop code does not subscribe to Relay-owned `agent:*` events.
+- The hard-cut guard rejects restoring the deleted projection module or event
+  listener bridge.
+
 ## Completed Task: Hard-Cut Agent Wrapper Retirement
 
 Implemented on 2026-04-25: deleted the internal `hard_cut_agent.rs` controller
