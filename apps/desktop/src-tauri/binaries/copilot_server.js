@@ -1086,7 +1086,7 @@ class CopilotSession {
         });
         return {
           status: 200,
-          body: { choices: [{ message: { role: "assistant", content: description } }] },
+          body: buildOpenAiCompletionBody(description, params),
         };
       } catch (error) {
         this._updateRequestProgress(requestState, {
@@ -4595,14 +4595,25 @@ function findEdgePath() {
 
 /* ─── HTTP server ─── */
 const RELAY_COPILOT_SERVICE_NAME = "relay_copilot_server";
+const OPENAI_COMPAT_DEFAULT_MODEL = "m365-copilot";
+const OPENAI_STREAM_PROGRESS_POLL_MS = 200;
 
-function requireBridgeAuth(req, res) {
-  if (!globalOptions.bootToken) return true;
-  const header = req.headers["x-relay-boot-token"];
-  const token = Array.isArray(header) ? header[0] : header;
-  if (token === globalOptions.bootToken) return true;
+function requireBridgeAuth(req, res, options = globalOptions) {
+  if (!options.bootToken) return true;
+  const token = requestBridgeAuthToken(req);
+  if (token === options.bootToken) return true;
   writeJson(res, 401, { error: "unauthorized" });
   return false;
+}
+
+function requestBridgeAuthToken(req) {
+  const header = req.headers["x-relay-boot-token"];
+  const relayToken = Array.isArray(header) ? header[0] : header;
+  if (relayToken) return relayToken;
+  const auth = req.headers.authorization;
+  const authHeader = Array.isArray(auth) ? auth[0] : auth;
+  const match = String(authHeader || "").match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
 }
 
 function responseRecordFromError(error) {
@@ -4613,18 +4624,30 @@ function responseRecordFromError(error) {
       : null;
   console.error("[copilot] request failed:", error);
   if (error instanceof CopilotLoginRequiredError) {
-    return { status: 401, body: { error: "login_required", message } };
+    return { status: 401, body: openAiErrorBody(message, "login_required", "login_required") };
   }
   if (message === "relay_copilot_aborted") {
-    return { status: 499, body: { error: "relay_copilot_aborted" } };
+    return { status: 499, body: openAiErrorBody("relay_copilot_aborted", "request_aborted", "relay_copilot_aborted") };
   }
   if (/\bis required\b/i.test(message) || /User prompt is empty/i.test(message)) {
-    return { status: 400, body: { error: message } };
+    return { status: 400, body: openAiErrorBody(message, "invalid_request_error", "invalid_request") };
   }
-  return { status: 500, body: { error: message, ...(meta || {}) } };
+  return { status: 500, body: openAiErrorBody(message, "server_error", "relay_copilot_error", meta) };
 }
 
-function createServer(session) {
+function openAiErrorBody(message, type = "server_error", code = null, meta = null) {
+  return {
+    error: {
+      message: String(message || "unknown error"),
+      type,
+      param: null,
+      code,
+      ...(meta || {}),
+    },
+  };
+}
+
+function createServer(session, options = globalOptions) {
   return http.createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
@@ -4635,13 +4658,27 @@ function createServer(session) {
         });
       }
       const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && reqUrl.pathname === "/v1/models") {
+        if (!requireBridgeAuth(req, res, options)) return;
+        return writeJson(res, 200, {
+          object: "list",
+          data: [
+            {
+              id: OPENAI_COMPAT_DEFAULT_MODEL,
+              object: "model",
+              created: 0,
+              owned_by: "relay-agent",
+            },
+          ],
+        });
+      }
       if (req.method === "GET" && reqUrl.pathname === "/status") {
-        if (!requireBridgeAuth(req, res)) return;
+        if (!requireBridgeAuth(req, res, options)) return;
         const status = await session.inspectStatus();
         return writeJson(res, 200, status);
       }
       if (req.method === "POST" && reqUrl.pathname === "/v1/chat/abort") {
-        if (!requireBridgeAuth(req, res)) return;
+        if (!requireBridgeAuth(req, res, options)) return;
         const payload = await readJsonBody(req);
         const relaySessionId = String(payload.relay_session_id || "").trim();
         const relayRequestId = String(payload.relay_request_id || "").trim();
@@ -4653,7 +4690,7 @@ function createServer(session) {
         return writeJson(res, 200, { ok: true, aborted });
       }
       if (req.method === "POST" && reqUrl.pathname === "/v1/chat/completions") {
-        if (!requireBridgeAuth(req, res)) return;
+        if (!requireBridgeAuth(req, res, options)) return;
         const payload = await readJsonBody(req);
         const prompt = parseOpenAiRequest(payload);
         console.error(
@@ -4672,11 +4709,15 @@ function createServer(session) {
           "relay_stage_label=",
           prompt.relayStageLabel,
         );
-        const record = await session.startOrJoinDescribe(prompt);
+        bindClientAbortToRelayRequest(req, res, session, prompt);
+        if (prompt.stream === true) {
+          return await writeOpenAiChatCompletionLiveStream(res, session, prompt);
+        }
+        const record = await startOpenAiCompletionWithToolRepair(session, prompt);
         return writeJson(res, record.status, record.body);
       }
       if (req.method === "GET" && reqUrl.pathname === "/v1/chat/progress") {
-        if (!requireBridgeAuth(req, res)) return;
+        if (!requireBridgeAuth(req, res, options)) return;
         const relaySessionId = String(reqUrl.searchParams.get("relay_session_id") || "").trim();
         const relayRequestId = String(reqUrl.searchParams.get("relay_request_id") || "").trim();
         if (!relaySessionId || !relayRequestId) {
@@ -4705,33 +4746,57 @@ async function readJsonBody(req) {
 
 function parseOpenAiRequest(payload) {
   const msgs = payload.messages ?? [];
-  const systemPrompt = msgs
+  if (!Array.isArray(msgs)) throw new Error("messages is required");
+  const explicitRelaySession = String(payload.relay_session_id || "").trim();
+  const explicitRelayRequest = String(payload.relay_request_id || "").trim();
+  const systemPromptBase = msgs
     .filter((m) => m.role === "system")
     .map((m) => normalizeTextContent(m.content))
     .filter(Boolean)
     .join("\n\n");
+  const tools = normalizeOpenAiTools(payload.tools);
+  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
+  const systemPrompt = [systemPromptBase, toolProtocolPrompt].filter(Boolean).join("\n\n");
+  const hasToolResultMessages = msgs.some((m) => m?.role === "tool" || m?.role === "function");
+  const openAiToolChoice = normalizeOpenAiToolChoice(payload.tool_choice);
   let userPrompt = "";
   let imageB64;
-  for (const m of msgs) {
-    if (m.role !== "user") continue;
-    if (typeof m.content === "string") {
-      userPrompt = `${userPrompt}\n${m.content}`.trim();
-      continue;
+  const nonSystem = msgs.filter((m) => m && m.role !== "system");
+  const useTranscriptPrompt =
+    !explicitRelaySession &&
+    (nonSystem.length > 1 || nonSystem.some((m) => m.role !== "user"));
+  if (useTranscriptPrompt) {
+    const parts = [];
+    for (const m of nonSystem) {
+      const role = String(m.role || "message");
+      const content = normalizeTextContent(m.content);
+      if (!content) continue;
+      if (role === "user" && !imageB64) {
+        imageB64 = extractFirstImageBase64(m.content);
+      }
+      parts.push(`${role.toUpperCase()}:\n${content}`);
     }
-    if (Array.isArray(m.content)) {
-      for (const p of m.content) {
-        if (p.type === "text" && p.text) userPrompt = `${userPrompt}\n${p.text}`.trim();
-        if (p.type === "image_url" && p.image_url?.url) imageB64 = extractBase64(p.image_url.url);
+    userPrompt = parts.join("\n\n");
+  } else {
+    for (const m of msgs) {
+      if (m.role !== "user") continue;
+      if (typeof m.content === "string") {
+        userPrompt = `${userPrompt}\n${m.content}`.trim();
+        continue;
+      }
+      if (Array.isArray(m.content)) {
+        for (const p of m.content) {
+          if (p.type === "text" && p.text) userPrompt = `${userPrompt}\n${p.text}`.trim();
+          if (p.type === "image_url" && p.image_url?.url) imageB64 = extractBase64(p.image_url.url);
+        }
       }
     }
   }
   const ra = payload.relay_attachments;
   const attachmentPaths = Array.isArray(ra) ? ra.map((x) => String(x || "").trim()).filter(Boolean) : [];
   if (!userPrompt.trim()) throw new Error("User prompt is empty");
-  const relaySessionId = String(payload.relay_session_id || "").trim();
-  const relayRequestId = String(payload.relay_request_id || "").trim();
-  if (!relaySessionId) throw new Error("relay_session_id is required");
-  if (!relayRequestId) throw new Error("relay_request_id is required");
+  const relayRequestId = explicitRelayRequest || openAiCompatRequestId(payload);
+  const relaySessionId = explicitRelaySession || openAiCompatSessionId(payload, relayRequestId);
   const relayRequestChain = String(payload.relay_request_chain || relayRequestId).trim() || relayRequestId;
   const relayRequestAttemptRaw = Number.parseInt(String(payload.relay_request_attempt || "1"), 10);
   const relayRequestAttempt =
@@ -4740,11 +4805,17 @@ function parseOpenAiRequest(payload) {
   const relayProbeMode = payload.relay_probe_mode === true;
   const relayNewChat = payload.relay_new_chat === true;
   const relayForceFreshChat = payload.relay_force_fresh_chat === true;
+  const model = String(payload.model || OPENAI_COMPAT_DEFAULT_MODEL).trim() || OPENAI_COMPAT_DEFAULT_MODEL;
   return {
+    model,
     systemPrompt,
     userPrompt,
     imageB64,
     attachmentPaths,
+    tools,
+    hasToolResultMessages,
+    openAiToolChoice,
+    stream: payload.stream === true,
     relayNewChat,
     relayForceFreshChat,
     relaySessionId,
@@ -4757,6 +4828,729 @@ function parseOpenAiRequest(payload) {
 }
 
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }
+
+function extractFirstImageBase64(content) {
+  if (!Array.isArray(content)) return undefined;
+  const part = content.find((p) => p?.type === "image_url" && p.image_url?.url);
+  return part?.image_url?.url ? extractBase64(part.image_url.url) : undefined;
+}
+
+function openAiCompatSessionId(payload, fallbackRequestId = "") {
+  const user = String(payload.user || payload.session_id || payload.metadata?.session_id || "").trim();
+  return user ? `openai-${stableIdFragment(user)}` : stableIdFragment(fallbackRequestId || "openai-default");
+}
+
+function openAiCompatRequestId(payload) {
+  const id = String(payload.id || payload.request_id || payload.metadata?.request_id || "").trim();
+  if (id) return `openai-${stableIdFragment(id)}`;
+  return `openai-${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+}
+
+function stableIdFragment(value) {
+  return String(value || "")
+    .replace(/[^a-zA-Z0-9_.:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96) || "default";
+}
+
+function normalizeOpenAiTools(rawTools) {
+  if (!Array.isArray(rawTools)) return [];
+  return rawTools
+    .map((tool) => {
+      const fn = tool?.function && typeof tool.function === "object" ? tool.function : null;
+      const name = String(fn?.name || "").trim();
+      if (!name) return null;
+      return {
+        type: "function",
+        function: {
+          name,
+          description: String(fn.description || "").trim(),
+          parameters: fn.parameters && typeof fn.parameters === "object" ? fn.parameters : { type: "object" },
+        },
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeOpenAiToolChoice(rawChoice) {
+  if (rawChoice == null) return null;
+  if (typeof rawChoice === "string") {
+    const value = rawChoice.trim().toLowerCase();
+    return value || null;
+  }
+  if (rawChoice && typeof rawChoice === "object") {
+    const name = String(rawChoice.function?.name || "").trim();
+    if (name) return { type: "function", function: { name } };
+  }
+  return null;
+}
+
+function formatOpenAiToolProtocolPrompt(tools) {
+  if (!tools.length) return "";
+  const names = tools.map((tool) => tool.function.name).join(", ");
+  return [
+    "Tool invocation protocol:",
+    "When a tool is needed, return only JSON in one of these OpenAI-compatible shapes, with no prose before or after it:",
+    '{"tool_calls":[{"id":"call_1","function":{"name":"tool_name","arguments":"{\\"key\\":\\"value\\"}"}}]}',
+    '{"tool_uses":[{"recipient_name":"functions.tool_name","parameters":{"key":"value"}}]}',
+    `Available tools: ${names}`,
+  ].join("\n");
+}
+
+async function startOpenAiCompletionWithToolRepair(session, prompt) {
+  prompt.relayActiveRequestId = prompt.relayRequestId;
+  const record = await session.startOrJoinDescribe(prompt);
+  if (!shouldAttemptOpenAiToolRepair(record, prompt)) return record;
+
+  const invalidText = openAiMessageContent(record);
+  const repairPrompt = buildOpenAiToolRepairPrompt(prompt, invalidText);
+  prompt.relayActiveRequestId = repairPrompt.relayRequestId;
+  console.error(
+    "[copilot:http] OpenAI tool-call repair retry relay_session_id=",
+    repairPrompt.relaySessionId,
+    "relay_request_id=",
+    repairPrompt.relayRequestId,
+    "tool_choice=",
+    JSON.stringify(prompt.openAiToolChoice || null),
+  );
+  const repairRecord = await session.startOrJoinDescribe(repairPrompt);
+  if (recordHasOpenAiToolCalls(repairRecord) || repairRecord.status !== 200) return repairRecord;
+
+  const repairText = openAiMessageContent(repairRecord);
+  const artifactPath = await writeOpenAiToolRepairFailureArtifact({
+    prompt,
+    repairPrompt,
+    originalRecord: record,
+    repairRecord,
+    invalidText,
+    repairText,
+  });
+  return {
+    status: 502,
+    body: openAiErrorBody(
+      "M365 Copilot did not return structured tool_calls after a required tool-call repair retry.",
+      "invalid_response_format",
+      "relay_tool_call_repair_failed",
+      {
+        original_excerpt: invalidText.slice(0, 500),
+        repair_excerpt: repairText.slice(0, 500),
+        ...(artifactPath ? { artifact_path: artifactPath } : {}),
+      },
+    ),
+  };
+}
+
+function shouldAttemptOpenAiToolRepair(record, prompt = {}) {
+  if (!Array.isArray(prompt.tools) || !prompt.tools.length) return false;
+  if (prompt.hasToolResultMessages) return false;
+  if (prompt.openAiToolRepairAttempt === true) return false;
+  if (recordHasOpenAiToolCalls(record)) return false;
+  const requiresTool =
+    openAiToolChoiceRequiresTool(prompt.openAiToolChoice, prompt.tools) ||
+    promptExplicitlyRequestsAvailableTool(prompt);
+  const content = openAiMessageContent(record);
+  if (!content.trim()) return requiresTool;
+  return requiresTool;
+}
+
+function openAiToolChoiceRequiresTool(toolChoice, tools = []) {
+  if (!toolChoice) return false;
+  if (typeof toolChoice === "string") return toolChoice === "required" || toolChoice === "any";
+  const requestedName = normalizeToolName(toolChoice?.function?.name || "");
+  if (!requestedName) return false;
+  const allowed = new Set(tools.map((tool) => normalizeToolName(tool?.function?.name || "")).filter(Boolean));
+  return !allowed.size || allowed.has(requestedName);
+}
+
+function promptExplicitlyRequestsAvailableTool(prompt = {}) {
+  const text = String(prompt.userPrompt || "");
+  for (const tool of prompt.tools || []) {
+    const name = normalizeToolName(tool?.function?.name || "");
+    if (!name) continue;
+    const escaped = escapeRegex(name);
+    const patterns = [
+      new RegExp(`\\b(?:use|call|invoke|run|execute)\\s+(?:the\\s+)?${escaped}\\s+(?:tool|function)\\b`, "iu"),
+      new RegExp(`\\b${escaped}\\s+(?:tool|function)\\b`, "iu"),
+    ];
+    if (patterns.some((pattern) => pattern.test(text))) return true;
+  }
+  return false;
+}
+
+function buildOpenAiToolRepairPrompt(prompt, invalidText) {
+  const repairTools = selectOpenAiToolRepairTools(prompt);
+  const toolCatalog = repairTools.map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description || "",
+    parameters: tool.function.parameters || { type: "object" },
+  }));
+  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(repairTools);
+  return {
+    ...prompt,
+    tools: repairTools,
+    openAiToolRepairAttempt: true,
+    relayRequestId: `${prompt.relayRequestId || openAiCompatRequestId({})}:tool-repair1`,
+    relayRequestChain: String(prompt.relayRequestChain || prompt.relayRequestId || "").trim() || prompt.relayRequestId,
+    relayRequestAttempt: Number.isFinite(prompt.relayRequestAttempt) ? prompt.relayRequestAttempt + 1 : 2,
+    relayStageLabel: "tool_repair1",
+    relayNewChat: false,
+    relayForceFreshChat: false,
+    systemPrompt: [
+      toolProtocolPrompt,
+      "Tool-call repair instruction:",
+      "The previous answer was invalid because tools were required but the response was prose or code.",
+      "Do not write code, explanations, markdown, or natural language.",
+      "Return only OpenAI-compatible JSON with a tool_calls array.",
+    ].filter(Boolean).join("\n\n"),
+    userPrompt: [
+      "Repair the previous response by returning the required tool call as JSON only.",
+      "",
+      "Original user request:",
+      prompt.userPrompt || "",
+      "",
+      "Available tools:",
+      JSON.stringify(toolCatalog),
+      "",
+      "Previous invalid response:",
+      String(invalidText || "").slice(0, 4000),
+      "",
+      'Return exactly this shape: {"tool_calls":[{"id":"call_1","function":{"name":"tool_name","arguments":"{\\"key\\":\\"value\\"}"}}]}',
+    ].join("\n"),
+  };
+}
+
+function selectOpenAiToolRepairTools(prompt = {}) {
+  const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
+  const byName = new Map(tools.map((tool) => [normalizeToolName(tool?.function?.name || ""), tool]).filter(([name]) => name));
+  const chosen = [];
+  const choiceName =
+    typeof prompt.openAiToolChoice === "object"
+      ? normalizeToolName(prompt.openAiToolChoice?.function?.name || "")
+      : "";
+  if (choiceName && byName.has(choiceName)) chosen.push(byName.get(choiceName));
+  const text = String(prompt.userPrompt || "");
+  for (const [name, tool] of byName.entries()) {
+    const escaped = escapeRegex(name);
+    const patterns = [
+      new RegExp(`\\b(?:use|call|invoke|run|execute)\\s+(?:the\\s+)?${escaped}\\s+(?:tool|function)\\b`, "iu"),
+      new RegExp(`\\b${escaped}\\s+(?:tool|function)\\b`, "iu"),
+    ];
+    if (patterns.some((pattern) => pattern.test(text))) chosen.push(tool);
+  }
+  return dedupeOpenAiTools(chosen.length ? chosen : tools);
+}
+
+function dedupeOpenAiTools(tools) {
+  const out = [];
+  const seen = new Set();
+  for (const tool of tools || []) {
+    const name = normalizeToolName(tool?.function?.name || "");
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(tool);
+  }
+  return out;
+}
+
+function recordHasOpenAiToolCalls(record) {
+  const calls = record?.body?.choices?.[0]?.message?.tool_calls;
+  return Array.isArray(calls) && calls.length > 0;
+}
+
+function openAiMessageContent(record) {
+  return String(record?.body?.choices?.[0]?.message?.content || "");
+}
+
+async function writeOpenAiToolRepairFailureArtifact({
+  prompt,
+  repairPrompt,
+  originalRecord,
+  repairRecord,
+  invalidText,
+  repairText,
+}) {
+  const dir = openAiToolRepairArtifactDir();
+  if (!dir) return null;
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+    const id = stableIdFragment(repairPrompt?.relayRequestId || prompt?.relayRequestId || randomBytes(6).toString("hex"));
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filePath = path.join(dir, `${stamp}-${id}.json`);
+    const parsedRepair = extractOpenAiToolCallsFromText(repairText, repairPrompt?.tools || []);
+    const parsedOriginal = extractOpenAiToolCallsFromText(invalidText, prompt?.tools || []);
+    const body = {
+      kind: "openai_tool_call_repair_failed",
+      createdAt: new Date().toISOString(),
+      relaySessionId: prompt?.relaySessionId || null,
+      relayRequestId: prompt?.relayRequestId || null,
+      repairRequestId: repairPrompt?.relayRequestId || null,
+      model: prompt?.model || OPENAI_COMPAT_DEFAULT_MODEL,
+      toolChoice: prompt?.openAiToolChoice || null,
+      tools: (repairPrompt?.tools || []).map((tool) => ({
+        name: tool.function?.name || "",
+        description: tool.function?.description || "",
+        parameters: tool.function?.parameters || { type: "object" },
+      })),
+      original: {
+        status: originalRecord?.status || null,
+        text: String(invalidText || ""),
+        parsedToolCallCount: parsedOriginal.toolCalls.length,
+        parsedDisplayText: parsedOriginal.displayText,
+      },
+      repair: {
+        status: repairRecord?.status || null,
+        text: String(repairText || ""),
+        parsedToolCallCount: parsedRepair.toolCalls.length,
+        parsedDisplayText: parsedRepair.displayText,
+      },
+      repairPrompt: {
+        systemPrompt: repairPrompt?.systemPrompt || "",
+        userPrompt: repairPrompt?.userPrompt || "",
+      },
+    };
+    await fs.promises.writeFile(filePath, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+    console.error("[copilot:http] wrote OpenAI tool-call repair failure artifact:", filePath);
+    return filePath;
+  } catch (error) {
+    console.error("[copilot:http] failed to write OpenAI tool-call repair artifact:", error?.message || error);
+    return null;
+  }
+}
+
+function openAiToolRepairArtifactDir() {
+  const configured = String(process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR || "").trim();
+  if (configured) return path.resolve(configured);
+  const home = os.homedir();
+  return home ? path.join(home, ".relay-agent", "opencode-provider-artifacts") : null;
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildOpenAiCompletionBody(description, params = {}) {
+  const model = String(params.model || OPENAI_COMPAT_DEFAULT_MODEL);
+  const extracted = extractOpenAiToolCallsFromText(description, params.tools || []);
+  const message = {
+    role: "assistant",
+    content: extracted.toolCalls.length ? (extracted.displayText || null) : String(description || ""),
+  };
+  if (extracted.toolCalls.length) message.tool_calls = extracted.toolCalls;
+  return {
+    id: `chatcmpl-${randomBytes(12).toString("hex")}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message,
+        finish_reason: extracted.toolCalls.length ? "tool_calls" : "stop",
+      },
+    ],
+  };
+}
+
+function extractOpenAiToolCallsFromText(text, tools = []) {
+  const allowed = new Set(
+    tools
+      .map((tool) => String(tool?.function?.name || "").trim())
+      .filter(Boolean),
+  );
+  const raw = String(text || "");
+  const candidates = [];
+  let displayText = raw;
+  const relayFence = /```relay_tool\s*([\s\S]*?)```/giu;
+  displayText = displayText.replace(relayFence, (_match, json) => {
+    candidates.push(json);
+    return "";
+  });
+  const jsonFence = /```(?:json)?\s*([\s\S]*?)```/giu;
+  displayText = displayText.replace(jsonFence, (match, json) => {
+    if (looksLikeToolJson(json)) {
+      candidates.push(json);
+      return "";
+    }
+    return match;
+  });
+  if (looksLikeToolJson(raw.trim())) candidates.push(raw.trim());
+  if (textContainsToolJsonMarkers(raw)) {
+    candidates.push(...extractBalancedJsonCandidates(raw));
+  }
+
+  const toolCalls = [];
+  for (const candidate of candidates) {
+    const parsed = parseJsonCandidate(candidate);
+    if (parsed === undefined) continue;
+    toolCalls.push(...extractToolCallsFromJsonValue(parsed, allowed));
+  }
+  toolCalls.push(...extractMalformedOpenAiToolCalls(raw, allowed));
+  return { displayText: displayText.trim(), toolCalls: dedupeOpenAiToolCalls(toolCalls) };
+}
+
+function looksLikeToolJson(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed || !/^[{[]/.test(trimmed)) return false;
+  return textContainsToolJsonMarkers(trimmed);
+}
+
+function textContainsToolJsonMarkers(text) {
+  return /"tool_calls"|"tool_uses"|"recipient_name"|"relay_tool_call"|"function"\s*:\s*\{|"name"\s*:/u.test(String(text || ""));
+}
+
+function extractBalancedJsonCandidates(text) {
+  const raw = String(text || "");
+  const out = [];
+  for (let start = 0; start < raw.length; start += 1) {
+    const open = raw[start];
+    if (open !== "{" && open !== "[") continue;
+    const close = open === "{" ? "}" : "]";
+    const stack = [close];
+    let inString = false;
+    let escaped = false;
+    for (let i = start + 1; i < raw.length; i += 1) {
+      const ch = raw[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === "\\") {
+          escaped = true;
+        } else if (ch === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === "\"") {
+        inString = true;
+        continue;
+      }
+      if (ch === "{" || ch === "[") {
+        stack.push(ch === "{" ? "}" : "]");
+        continue;
+      }
+      if (ch === "}" || ch === "]") {
+        if (stack[stack.length - 1] !== ch) break;
+        stack.pop();
+        if (stack.length === 0) {
+          const candidate = raw.slice(start, i + 1);
+          if (looksLikeToolJson(candidate)) out.push(candidate);
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function extractMalformedOpenAiToolCalls(text, allowed) {
+  const raw = String(text || "");
+  if (!/"tool_calls"/u.test(raw) || !/"arguments"/u.test(raw)) return [];
+  const calls = [];
+  const nameRe = /"name"\s*:\s*"([^"]+)"/gu;
+  for (const match of raw.matchAll(nameRe)) {
+    const name = normalizeToolName(match[1]);
+    if (!name || (allowed.size && !allowed.has(name))) continue;
+    const argsKey = raw.indexOf('"arguments"', match.index + match[0].length);
+    if (argsKey < 0) continue;
+    const nextName = raw.indexOf('"name"', match.index + match[0].length);
+    if (nextName >= 0 && nextName < argsKey) continue;
+    const colon = raw.indexOf(":", argsKey);
+    if (colon < 0) continue;
+    const quote = raw.indexOf("\"", colon + 1);
+    if (quote < 0) continue;
+    let cursor = quote + 1;
+    while (/\s/u.test(raw[cursor] || "")) cursor += 1;
+    if (raw[cursor] !== "{") continue;
+    const argumentCandidate = extractBalancedJsonAt(raw, cursor);
+    const args = parseJsonCandidate(argumentCandidate);
+    if (!args || typeof args !== "object" || Array.isArray(args)) continue;
+    const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
+    const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
+    calls.push({
+      id,
+      type: "function",
+      function: {
+        name,
+        arguments: JSON.stringify(args),
+      },
+    });
+  }
+  return calls;
+}
+
+function extractBalancedJsonAt(raw, start) {
+  const open = raw[start];
+  if (open !== "{" && open !== "[") return "";
+  const stack = [open === "{" ? "}" : "]"];
+  let inString = false;
+  let escaped = false;
+  for (let i = start + 1; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      stack.push(ch === "{" ? "}" : "]");
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      if (stack[stack.length - 1] !== ch) return "";
+      stack.pop();
+      if (stack.length === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return "";
+}
+
+function parseJsonCandidate(text) {
+  try {
+    return JSON.parse(String(text || "").trim());
+  } catch {
+    return undefined;
+  }
+}
+
+function extractToolCallsFromJsonValue(value, allowed) {
+  if (Array.isArray(value)) return value.flatMap((item) => extractToolCallsFromJsonValue(item, allowed));
+  if (!value || typeof value !== "object") return [];
+  const calls = [];
+  if (Array.isArray(value.tool_calls)) {
+    for (const item of value.tool_calls) calls.push(...extractToolCallsFromJsonValue(item, allowed));
+  }
+  if (Array.isArray(value.tool_uses)) {
+    for (const item of value.tool_uses) calls.push(...extractToolCallsFromJsonValue(item, allowed));
+  }
+  const call = normalizeOpenAiToolCall(value, allowed);
+  if (call) calls.push(call);
+  return calls;
+}
+
+function normalizeOpenAiToolCall(value, allowed) {
+  if (!value || typeof value !== "object") return null;
+  const rawName =
+    typeof value.recipient_name === "string"
+      ? value.recipient_name
+      : typeof value.name === "string" && value.relay_tool_call === true
+        ? value.name
+        : typeof value.function?.name === "string"
+          ? value.function.name
+          : "";
+  const name = normalizeToolName(rawName);
+  if (!name || (allowed.size && !allowed.has(name))) return null;
+  const rawArguments =
+    value.parameters ??
+    value.input ??
+    value.arguments ??
+    value.function?.arguments ??
+    {};
+  const args =
+    typeof rawArguments === "string"
+      ? parseJsonCandidate(rawArguments) ?? {}
+      : rawArguments && typeof rawArguments === "object"
+        ? rawArguments
+        : {};
+  return {
+    id: String(value.id || value.call_id || value.tool_call_id || `call_${randomBytes(6).toString("hex")}`),
+    type: "function",
+    function: {
+      name,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
+function normalizeToolName(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  return raw.replace(/^functions\./, "").replace(/^function\./, "");
+}
+
+function dedupeOpenAiToolCalls(calls) {
+  const out = [];
+  const seen = new Set();
+  for (const call of calls) {
+    const key = `${call.function.name}:${call.function.arguments}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(call);
+  }
+  return out;
+}
+
+async function writeOpenAiChatCompletionLiveStream(res, session, params = {}) {
+  const id = `chatcmpl-${randomBytes(12).toString("hex")}`;
+  const model = params.model || OPENAI_COMPAT_DEFAULT_MODEL;
+  const created = Math.floor(Date.now() / 1000);
+  writeOpenAiSseHeaders(res);
+  writeSseData(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
+
+  let lastText = "";
+  let settled = false;
+  let record;
+  const requestPromise = startOpenAiCompletionWithToolRepair(session, params)
+    .then((result) => {
+      record = result;
+    })
+    .catch((error) => {
+      record = responseRecordFromError(error);
+    })
+    .finally(() => {
+      settled = true;
+    });
+
+  while (!settled && !res.destroyed) {
+    const snapshot = session.getRequestProgress(params.relaySessionId, params.relayActiveRequestId || params.relayRequestId);
+    const visible = normalizeStreamableProgressText(snapshot?.visibleText);
+    if (visible && shouldStreamProgressText(visible, params)) {
+      lastText = writeOpenAiTextDelta(res, { id, created, model }, visible, lastText);
+    }
+    await sleep(OPENAI_STREAM_PROGRESS_POLL_MS);
+  }
+  await requestPromise;
+  if (res.destroyed) return;
+  writeOpenAiFinalStreamRecord(res, record, params, { id, created, model, lastText });
+}
+
+function writeOpenAiChatCompletionStream(res, record, params = {}) {
+  if (!record || record.status !== 200) return writeJson(res, record?.status || 500, record?.body || openAiErrorBody("unknown error"));
+  const body = record.body || {};
+  const choice = body.choices?.[0] || {};
+  const message = choice.message || {};
+  const id = body.id || `chatcmpl-${randomBytes(12).toString("hex")}`;
+  const model = body.model || params.model || OPENAI_COMPAT_DEFAULT_MODEL;
+  const created = body.created || Math.floor(Date.now() / 1000);
+  writeOpenAiSseHeaders(res);
+  writeSseData(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
+  writeOpenAiFinalStreamRecord(res, record, params, { id, created, model, lastText: "" });
+}
+
+function writeOpenAiSseHeaders(res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+}
+
+function writeOpenAiFinalStreamRecord(res, record, params = {}, streamState = {}) {
+  const body = record?.body || {};
+  const choice = body.choices?.[0] || {};
+  const message = choice.message || {};
+  const id = body.id || streamState.id || `chatcmpl-${randomBytes(12).toString("hex")}`;
+  const model = body.model || streamState.model || params.model || OPENAI_COMPAT_DEFAULT_MODEL;
+  const created = body.created || streamState.created || Math.floor(Date.now() / 1000);
+  const lastText = streamState.lastText || "";
+  if (!record || record.status !== 200) {
+    writeSseData(res, body?.error ? body : openAiErrorBody("unknown streaming error"));
+    res.write("data: [DONE]\n\n");
+    res.end();
+    return;
+  }
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length) {
+    writeSseData(res, {
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: message.tool_calls.map((call, index) => ({
+              index,
+              ...call,
+            })),
+          },
+          finish_reason: null,
+        },
+      ],
+    });
+    writeSseData(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] });
+  } else if (message.content) {
+    writeOpenAiTextDelta(res, { id, created, model }, String(message.content), lastText);
+    writeSseData(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+  } else {
+    writeSseData(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+  }
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
+function normalizeStreamableProgressText(text) {
+  return String(text || "").trim();
+}
+
+function shouldStreamProgressText(text, params = {}) {
+  if (!text) return false;
+  if (
+    Array.isArray(params.tools) &&
+    params.tools.length &&
+    !params.hasToolResultMessages &&
+    (openAiToolChoiceRequiresTool(params.openAiToolChoice, params.tools) || promptExplicitlyRequestsAvailableTool(params))
+  ) {
+    return false;
+  }
+  if (looksLikeToolJson(text)) return false;
+  if (/```relay_tool|relay_tool_call|"tool_calls"|"tool_uses"/u.test(text)) return false;
+  return true;
+}
+
+function writeOpenAiTextDelta(res, streamInfo, nextText, previousText = "") {
+  const next = String(nextText || "");
+  const previous = String(previousText || "");
+  let delta = "";
+  if (!next) return previous;
+  if (!previous) {
+    delta = next;
+  } else if (next.startsWith(previous)) {
+    delta = next.slice(previous.length);
+  } else {
+    return previous;
+  }
+  if (!delta) return previous || next;
+  writeSseData(res, {
+    id: streamInfo.id,
+    object: "chat.completion.chunk",
+    created: streamInfo.created,
+    model: streamInfo.model,
+    choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+  });
+  return next;
+}
+
+function writeSseData(res, data) {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function bindClientAbortToRelayRequest(_req, res, session, prompt) {
+  let finished = false;
+  res.on("finish", () => {
+    finished = true;
+  });
+  res.on("close", () => {
+    if (finished) return;
+    try {
+      session.abortRequest(prompt.relaySessionId, prompt.relayActiveRequestId || prompt.relayRequestId);
+    } catch (error) {
+      console.error("[copilot:http] abort on client close failed:", error?.message || error);
+    }
+  });
+}
 
 function writeJson(res, code, body) {
   const p = JSON.stringify(body);
@@ -4825,3 +5619,11 @@ if (isDirectEntry) {
     process.exit(1);
   });
 }
+
+export {
+  buildOpenAiCompletionBody,
+  createServer,
+  extractOpenAiToolCallsFromText,
+  parseOpenAiRequest,
+  writeOpenAiChatCompletionStream,
+};

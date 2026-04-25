@@ -104,7 +104,7 @@ export async function postCopilotChatCompletion(opts: CopilotCompletionOptions):
     if (!res.ok) {
       const errMsg =
         typeof json === "object" && json !== null && "error" in json
-          ? String((json as { error: unknown }).error)
+          ? formatCopilotServerError((json as { error: unknown }).error)
           : text.slice(0, 500);
       throw new Error(`copilot_server HTTP ${res.status}: ${errMsg}`);
     }
@@ -114,4 +114,12 @@ export async function postCopilotChatCompletion(opts: CopilotCompletionOptions):
   } finally {
     clearTimeout(timer);
   }
+}
+
+function formatCopilotServerError(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
 }

@@ -1,13 +1,14 @@
-# Copilot-Controlled OpenCode/OpenWork Hard-Cut Plan
+# OpenCode/OpenWork Provider Hard-Cut Plan
 
 Date: 2026-04-24
 
 ## Decision
 
-Relay_Agent will keep M365 Copilot over Edge CDP as the primary LLM control
-path. Relay will stop treating its Rust agent runtime as the execution source
-of truth. OpenCode/OpenWork will become the execution substrate for sessions,
-tools, permissions, events, and workspace runtime behavior.
+Relay_Agent will keep M365 Copilot over Edge CDP as the primary LLM surface, but
+will expose it to OpenCode/OpenWork as an OpenAI-compatible provider gateway.
+Relay will stop treating its Rust agent runtime or desktop shell as the source
+of truth. OpenCode/OpenWork will own UX, sessions, tools, permissions, events,
+and workspace runtime behavior.
 
 This is a hard cut. Compatibility with the current Relay tool runtime,
 `relay_tool` schema details, legacy session history, and hidden compatibility
@@ -17,15 +18,16 @@ Target role split:
 
 ```text
 M365 Copilot CDP
-  LLM controller. Produces tool requests and final responses.
+  LLM surface. Produces assistant text and structured tool-call candidates.
 
 OpenCode/OpenWork
-  Execution substrate. Owns sessions, tools, permissions, MCP, plugins,
-  workspace config, events, and tool result state.
+  Product UX and execution substrate. Owns sessions, tools, permissions, MCP,
+  plugins, workspace config, events, and tool result state.
 
 Relay_Agent
-  Desktop UX and adapter. Connects Copilot CDP to OpenCode/OpenWork, renders
-  session state, and owns Copilot-specific diagnostics.
+  OpenAI-compatible provider gateway. Connects OpenCode/OpenWork provider
+  requests to M365 Copilot over CDP, normalizes tool calls, and owns
+  Copilot-specific diagnostics.
 ```
 
 ## Non-Negotiable Constraints
@@ -41,32 +43,30 @@ Relay_Agent
 ## Target Architecture
 
 ```text
-Relay Desktop UI
+OpenCode/OpenWork UX
   |
   v
-Relay Session Adapter
-  - maps UI actions to OpenCode/OpenWork session operations
-  - maps OpenCode/OpenWork events to Relay transcript UI
-  - stores Copilot tab bindings as transport metadata only
+OpenCode/OpenWork Provider Loop
+  - owns session state, tools, permissions, events, and execution
+  - sends OpenAI-compatible chat requests to Relay
+  - executes returned tool_calls through OpenCode/OpenWork
   |
-  +--> Copilot Transport Adapter
-  |     - Edge/CDP lifecycle
-  |     - prompt bundle assembly from OpenCode session state
-  |     - Copilot send/wait/extract
-  |     - structured tool-call extraction and validation
+  v
+Relay OpenAI-Compatible Provider Gateway
+  - Edge/CDP lifecycle
+  - Copilot send/wait/extract
+  - structured tool-call extraction and validation
+  - constrained repair for malformed required tool turns
+  - Copilot-specific diagnostics
   |
-  +--> OpenCode/OpenWork Execution Adapter
-        - session create/continue
-        - tool execution
-        - permission request/reply
-        - SSE/event subscription
-        - workspace runtime health
+  v
+M365 Copilot
 ```
 
 Canonical source of truth:
 
 1. OpenCode/OpenWork session state.
-2. Relay UI projection of that state.
+2. OpenCode/OpenWork UX projection of that state.
 3. Copilot thread/tab binding as disposable transport state.
 
 Copilot thread history is never the authoritative execution history. If a
@@ -92,7 +92,10 @@ The retained Relay-specific code should be:
 - Copilot CDP bridge and DOM interaction.
 - Copilot response extraction and transport diagnostics.
 - Prompt adapter that asks Copilot for OpenCode/OpenWork-compatible tool calls.
-- Desktop UX, settings, diagnostics, and live Copilot smoke coverage.
+- OpenAI-compatible provider facade, diagnostics, and live Copilot smoke
+  coverage.
+- Transition desktop shell only where still needed for compatibility and
+  diagnostics.
 
 ## Milestones
 
@@ -361,10 +364,11 @@ pnpm doctor -- --json
 
 ## Success Criteria
 
-- Relay's production execution path uses OpenCode/OpenWork for tools,
-  permissions, sessions, and events.
-- M365 Copilot CDP remains the primary LLM controller.
-- Relay-owned code is concentrated in desktop UX, Copilot transport, prompt
-  adaptation, and diagnostics.
+- OpenCode/OpenWork owns the primary UX, tools, permissions, sessions, events,
+  and workspace execution state.
+- M365 Copilot remains the LLM behind Relay's OpenAI-compatible provider
+  gateway.
+- Relay-owned code is concentrated in Copilot transport, OpenAI-compatible
+  provider adaptation, diagnostics, and launch/support glue.
 - The largest existing sources of bespoke runtime complexity are deleted or
   quarantined from production.

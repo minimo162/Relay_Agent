@@ -70,7 +70,7 @@ struct StatusErrorBody {
 #[serde(rename_all = "camelCase")]
 struct PromptErrorBody {
     #[serde(default)]
-    error: Option<String>,
+    error: Option<Value>,
     #[serde(default)]
     message: Option<String>,
     #[serde(default)]
@@ -165,7 +165,7 @@ fn prompt_error_to_bridge_failure(body: &PromptErrorBody) -> Option<CopilotBridg
         message: body
             .message
             .clone()
-            .or(body.error.clone())
+            .or_else(|| body.error.as_ref().and_then(prompt_error_value_message))
             .filter(|value| !value.trim().is_empty()),
     };
     let has_metadata = failure.failure_class.is_some()
@@ -245,6 +245,18 @@ fn format_bridge_failure(failure: &CopilotBridgeFailureInfo) -> String {
         parts.push(format!("message={value}"));
     }
     parts.join(" ")
+}
+
+fn prompt_error_value_message(value: &Value) -> Option<String> {
+    match value {
+        Value::String(message) => Some(message.clone()),
+        Value::Object(map) => map
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| map.get("code").and_then(Value::as_str).map(str::to_string)),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -333,6 +345,8 @@ fn parse_prompt_error_body(status: reqwest::StatusCode, raw_body: &str) -> Copil
         }
         let message = body
             .error
+            .as_ref()
+            .and_then(prompt_error_value_message)
             .or(body.message)
             .unwrap_or_else(|| "unknown error".to_string());
         return CopilotError::PromptError(Box::new(CopilotPromptFailure::Message(format!(

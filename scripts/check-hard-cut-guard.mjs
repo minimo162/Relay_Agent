@@ -19,6 +19,7 @@ function isDirectory(path) {
 
 const plans = read("PLANS.md");
 const hardCutPlan = read("docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md");
+const providerGatewayDoc = read("docs/OPENCODE_PROVIDER_GATEWAY.md");
 
 const required = [
   {
@@ -36,6 +37,118 @@ const required = [
   {
     path: "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
     text: "OpenCode/OpenWork session state.",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "OpenCode/OpenWork\n  owns UX, sessions, tools, permissions, workspace execution, and event state",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "Relay_Agent copilot_server.js\n  exposes an OpenAI-compatible provider facade",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "pnpm --filter @relay-agent/desktop smoke:opencode-provider",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "pnpm --filter @relay-agent/desktop live:m365:opencode-provider",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "pnpm start:opencode-provider-gateway",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "pnpm install:opencode-provider-config -- --workspace /path/to/workspace",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "preserves unrelated `opencode.json` settings",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "Provider base URL: http://127.0.0.1:18180/v1",
+  },
+  {
+    path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
+    text: "~/.relay-agent/opencode-provider-token",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"smoke:opencode-provider\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"start:opencode-provider-gateway\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"install:opencode-provider-config\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"check:opencode-provider\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"live:m365:opencode-provider\"",
+  },
+  {
+    path: "package.json",
+    text: "\"smoke:opencode-provider\"",
+  },
+  {
+    path: "package.json",
+    text: "\"start:opencode-provider-gateway\"",
+  },
+  {
+    path: "package.json",
+    text: "\"install:opencode-provider-config\"",
+  },
+  {
+    path: "package.json",
+    text: "\"check:opencode-provider\"",
+  },
+  {
+    path: "package.json",
+    text: "\"live:m365:opencode-provider\"",
+  },
+  {
+    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    text: "function buildOpenAiCompletionBody",
+  },
+  {
+    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    text: "function writeOpenAiChatCompletionLiveStream",
+  },
+  {
+    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    text: "GET\" && reqUrl.pathname === \"/v1/models\"",
+  },
+  {
+    path: "apps/desktop/scripts/opencode_provider_gateway_smoke.mjs",
+    text: "OPEN_CODE_RELAY_TOOL_SMOKE_OK",
+  },
+  {
+    path: "apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs",
+    text: "OPEN_CODE_M365_PROVIDER_OK",
+  },
+  {
+    path: "apps/desktop/scripts/start_opencode_provider_gateway.mjs",
+    text: "opencode-provider-token",
+  },
+  {
+    path: "apps/desktop/scripts/start_opencode_provider_gateway.mjs",
+    text: "start:opencode-provider-gateway",
+  },
+  {
+    path: "apps/desktop/scripts/install_opencode_provider_config.mjs",
+    text: "mergeOpencodeConfig",
+  },
+  {
+    path: "apps/desktop/scripts/opencode_provider_config.mjs",
+    text: "export function opencodeProviderConfig",
   },
   {
     path: "apps/desktop/src-tauri/src/lib.rs",
@@ -171,6 +284,30 @@ const forbidden = [
   {
     path: "docs/IMPLEMENTATION.md",
     text: "RELAY_EXECUTION_BACKEND",
+  },
+  {
+    path: "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+    text: "Relay-owned code is concentrated in desktop UX",
+  },
+  {
+    path: "docs/IMPLEMENTATION.md",
+    text: "Relay is the desktop UX",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/doctor.rs",
+    text: "Relay is the desktop UX",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "Relay is the desktop UX",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/doctor.rs",
+    text: "Copilot controls the turn; OpenCode/OpenWork owns tool execution state",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "Copilot controls the turn; OpenCode/OpenWork owns tool execution state",
   },
   {
     path: "apps/desktop/src-tauri/src/commands/agent.rs",
@@ -586,6 +723,7 @@ const byPath = {
   "PLANS.md": plans,
   "Cargo.toml": read("Cargo.toml"),
   "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md": hardCutPlan,
+  "docs/OPENCODE_PROVIDER_GATEWAY.md": providerGatewayDoc,
   "docs/IMPLEMENTATION.md": read("docs/IMPLEMENTATION.md"),
   "apps/desktop/src-tauri/src/commands/agent.rs": read("apps/desktop/src-tauri/src/commands/agent.rs"),
   "apps/desktop/src-tauri/src/opencode_runtime.rs": read("apps/desktop/src-tauri/src/opencode_runtime.rs"),
@@ -606,6 +744,12 @@ const byPath = {
   "apps/desktop/src-tauri/src/dev_control.rs": read("apps/desktop/src-tauri/src/dev_control.rs"),
   "apps/desktop/src-tauri/src/doctor.rs": read("apps/desktop/src-tauri/src/doctor.rs"),
   "apps/desktop/src-tauri/src/tauri_bridge.rs": read("apps/desktop/src-tauri/src/tauri_bridge.rs"),
+  "apps/desktop/src-tauri/binaries/copilot_server.js": read("apps/desktop/src-tauri/binaries/copilot_server.js"),
+  "apps/desktop/scripts/opencode_provider_gateway_smoke.mjs": read("apps/desktop/scripts/opencode_provider_gateway_smoke.mjs"),
+  "apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs": read("apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs"),
+  "apps/desktop/scripts/start_opencode_provider_gateway.mjs": read("apps/desktop/scripts/start_opencode_provider_gateway.mjs"),
+  "apps/desktop/scripts/install_opencode_provider_config.mjs": read("apps/desktop/scripts/install_opencode_provider_config.mjs"),
+  "apps/desktop/scripts/opencode_provider_config.mjs": read("apps/desktop/scripts/opencode_provider_config.mjs"),
   "package.json": read("package.json"),
   "apps/desktop/package.json": read("apps/desktop/package.json"),
   "apps/desktop/src-tauri/Cargo.toml": read("apps/desktop/src-tauri/Cargo.toml"),

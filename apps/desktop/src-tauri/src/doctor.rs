@@ -576,6 +576,10 @@ fn relay_doctor_hints() -> Vec<String> {
         crate::tauri_bridge::COPILOT_HTTP_PORT,
         crate::tauri_bridge::COPILOT_JS_CDP_PORT,
     ));
+    hints.push(
+        "OpenCode/OpenWork provider mode uses Relay only as an OpenAI-compatible M365 Copilot gateway; UX, sessions, permissions, and tools live in OpenCode/OpenWork."
+            .into(),
+    );
     if std::env::var("ANTHROPIC_API_KEY")
         .ok()
         .is_some_and(|s| !s.trim().is_empty())
@@ -635,7 +639,7 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_node_bridge_port: crate::tauri_bridge::COPILOT_HTTP_PORT,
         default_edge_cdp_port: crate::tauri_bridge::COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
-        architecture_notes: "Relay is the desktop UX and adapter between M365 Copilot CDP and OpenCode/OpenWork execution. Copilot controls the turn; OpenCode/OpenWork owns tool execution state.".to_string(),
+        architecture_notes: "OpenCode/OpenWork owns desktop UX, sessions, permissions, workspace tools, and execution state. Relay exposes the M365 Copilot CDP bridge as an OpenAI-compatible provider gateway and should not be the execution source of truth in this mode.".to_string(),
         process_cwd,
         claw_config_home_display,
         max_text_file_read_bytes: RELAY_MAX_TEXT_FILE_READ_BYTES,
