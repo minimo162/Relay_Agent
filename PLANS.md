@@ -244,6 +244,33 @@ Acceptance criteria:
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
   `pnpm check`, and `git diff --check` pass.
 
+## Completed Task: Orphan Desktop Live Harness Retirement
+
+Goal: physically remove old desktop-owned live automation helpers after their
+package entry points and dev-control execution routes were retired. Relay's live
+M365 verification surface now stays on the OpenAI-compatible provider smoke and
+Copilot response probe.
+
+Status 2026-04-25: implemented by deleting the stale dev-control helper
+scripts and old `live_m365_*` desktop execution harnesses from
+`apps/desktop/scripts/`, then extending the hard-cut guard so those files cannot
+return.
+
+Acceptance criteria:
+
+- `apps/desktop/scripts/dev-first-run-send.mjs`,
+  `dev-approve-latest*.mjs`, and `dev-reject-latest.mjs` no longer exist.
+- Old desktop execution harnesses such as
+  `live_m365_desktop_smoke.mjs`, `live_m365_tetris_html_smoke.mjs`,
+  grounding/path/workspace/continuity/heterogeneous live smokes no longer
+  exist.
+- Provider live verification remains available through
+  `live:m365:opencode-provider` and `live:m365:copilot-response-probe`.
+- `scripts/check-hard-cut-guard.mjs` fails if any retired helper or harness
+  file is recreated.
+- `node scripts/check-hard-cut-guard.mjs`, `pnpm check`, and
+  `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.

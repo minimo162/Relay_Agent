@@ -950,6 +950,18 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/crates/runtime",
   "apps/desktop/src-tauri/crates/tools",
   "apps/desktop/src-tauri/src/commands/agent.rs",
+  "apps/desktop/scripts/dev-approve-latest-session.mjs",
+  "apps/desktop/scripts/dev-approve-latest-workspace.mjs",
+  "apps/desktop/scripts/dev-approve-latest.mjs",
+  "apps/desktop/scripts/dev-first-run-send.mjs",
+  "apps/desktop/scripts/dev-reject-latest.mjs",
+  "apps/desktop/scripts/live_m365_desktop_smoke.mjs",
+  "apps/desktop/scripts/live_m365_heterogeneous_tools_smoke.mjs",
+  "apps/desktop/scripts/live_m365_long_continuity_smoke.mjs",
+  "apps/desktop/scripts/live_m365_multiturn_grounding_approval.mjs",
+  "apps/desktop/scripts/live_m365_same_session_path_resolution.mjs",
+  "apps/desktop/scripts/live_m365_tetris_html_smoke.mjs",
+  "apps/desktop/scripts/live_m365_workspace_search_smoke.mjs",
 ];
 
 const byPath = {

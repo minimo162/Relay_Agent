@@ -23,6 +23,36 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Orphan desktop live harness retirement
+
+Deleted old desktop-owned live automation helpers that had become unreachable
+after package aliases and dev-control execution routes were retired. Relay's
+live M365 verification surface now stays on the OpenAI-compatible provider
+smoke and Copilot response probe.
+
+Changes:
+
+- Deleted `apps/desktop/scripts/dev-first-run-send.mjs`,
+  `dev-approve-latest*.mjs`, and `dev-reject-latest.mjs`.
+- Deleted old desktop execution live harnesses:
+  `live_m365_desktop_smoke.mjs`, `live_m365_tetris_html_smoke.mjs`,
+  `live_m365_multiturn_grounding_approval.mjs`,
+  `live_m365_same_session_path_resolution.mjs`,
+  `live_m365_workspace_search_smoke.mjs`,
+  `live_m365_long_continuity_smoke.mjs`, and
+  `live_m365_heterogeneous_tools_smoke.mjs`.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so the retired helper and
+  harness files cannot return.
+- Added completed task `D05` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('apps/desktop/package.json','utf8'))"`:
+  passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Dev-control agent route retirement
 
 Removed debug-only localhost controls that could still start, continue, or

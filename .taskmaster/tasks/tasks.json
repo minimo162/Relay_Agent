@@ -272,6 +272,37 @@
             "D03"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D05",
+          "title": "Delete orphan desktop live harness scripts",
+          "description": "Remove stale dev-control helper scripts and desktop-owned M365 live execution harnesses now that provider gateway live verification is the only supported M365 live path.",
+          "files": [
+            "apps/desktop/scripts/dev-first-run-send.mjs",
+            "apps/desktop/scripts/dev-approve-latest.mjs",
+            "apps/desktop/scripts/dev-approve-latest-session.mjs",
+            "apps/desktop/scripts/dev-approve-latest-workspace.mjs",
+            "apps/desktop/scripts/dev-reject-latest.mjs",
+            "apps/desktop/scripts/live_m365_desktop_smoke.mjs",
+            "apps/desktop/scripts/live_m365_tetris_html_smoke.mjs",
+            "apps/desktop/scripts/live_m365_multiturn_grounding_approval.mjs",
+            "apps/desktop/scripts/live_m365_same_session_path_resolution.mjs",
+            "apps/desktop/scripts/live_m365_workspace_search_smoke.mjs",
+            "apps/desktop/scripts/live_m365_long_continuity_smoke.mjs",
+            "apps/desktop/scripts/live_m365_heterogeneous_tools_smoke.mjs",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Orphan desktop live harness retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D04"
+          ],
+          "status": "completed"
         }
       ]
     }
