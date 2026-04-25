@@ -120,8 +120,8 @@ coverage live under `apps/desktop/scripts/`:
 
 ## Diagnostic IPC
 
-The Tauri IPC surface remains for doctor, CDP inspection, warmup, support
-bundles, and historical desktop smoke coverage. It is not the provider-mode
+The Tauri IPC surface remains for doctor, CDP inspection, warmup, and support
+bundles. It is not the provider-mode
 execution contract. In provider mode, OpenCode/OpenWork calls
 `/v1/chat/completions`, receives OpenAI-compatible assistant messages or
 `tool_calls`, executes tools itself, and sends tool results back in the next
@@ -203,19 +203,11 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 **Headless launched-app smoke:** `pnpm diag:desktop-launch` verifies the
 diagnostic `tauri:dev` shell can still launch under Linux/Xvfb.
 
-**Live desktop smoke:** `pnpm diag:m365:desktop-smoke` drives the diagnostic
-desktop app against signed-in M365 Copilot and validates app launch plus
-desktop/Copilot bridge behavior for regression diagnosis.
+**Live M365 provider smoke:** `pnpm live:m365:opencode-provider` validates the
+OpenAI-compatible provider path against signed-in M365 Copilot. This is the live
+execution smoke for OpenCode/OpenWork provider mode.
 
-**Live same-session grounding / approval smoke:** `pnpm diag:m365:grounding-approval-multiturn` drives three diagnostic desktop turns against signed-in M365 Copilot, checks Turn 1 grounding on `tests/fixtures/tetris_grounding.html`, verifies `Always allow in this conversation` reuse on Turn 3, and writes JSON artifacts under `/tmp/relay-live-m365-grounding-approval-*`.
-
-**Live same-session path-resolution smoke:** `pnpm diag:m365:path-resolution-same-session` drives three read-only diagnostic desktop turns against signed-in M365 Copilot, verifies absolute / workspace-relative / workspace-root-relative `read` resolution in one Relay session, and writes JSON artifacts under `/tmp/relay-live-m365-path-resolution-*`.
-
-**Live local-search smoke:** `pnpm diag:m365:workspace-search` drives read-only diagnostic desktop turns against signed-in M365 Copilot, prepares a disposable `tests/live_search_fixture` folder under the workspace, verifies low-level `glob` / `grep` lookup behavior, covers honest no-evidence behavior plus generated-directory ignore fixtures, forbids mutation tools, and writes JSON artifacts under `/tmp/relay-live-m365-workspace-search-*`. Office/PDF fixture coverage follows the CDP-facing `glob` candidate discovery plus exact `read` extraction flow when the local fixture set includes those document types.
-
-**Live Tetris smoke:** `pnpm diag:m365:tetris-html` remains a diagnostic
-desktop regression harness for the old local-file creation flow. Provider-mode
-tool execution is validated with `pnpm live:m365:opencode-provider`.
+**Live Copilot response probe:** `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --prompt "<prompt>"` drives the signed-in Copilot web UI over CDP and records response artifacts without invoking Relay-owned desktop execution.
 
 **Headless desktop coverage:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop` runs the workspace tests without invoking the Windows-hostile Tauri lib test binary. Headless desktop logic and its unit tests now live in `apps/desktop/src-tauri/crates/desktop-core`.
 

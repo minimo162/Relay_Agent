@@ -249,6 +249,29 @@
             "D02"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D04",
+          "title": "Retire dev-control legacy agent routes",
+          "description": "Remove debug-only localhost routes and package aliases that could still start, continue, or approve Relay-owned desktop agent execution.",
+          "files": [
+            "apps/desktop/src-tauri/src/dev_control.rs",
+            "apps/desktop/package.json",
+            "package.json",
+            "README.md",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Dev-control agent route retirement)",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "D03"
+          ],
+          "status": "completed"
         }
       ]
     }

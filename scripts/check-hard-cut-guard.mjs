@@ -374,6 +374,70 @@ const forbidden = [
     text: "\"agent-loop:test\"",
   },
   {
+    path: "apps/desktop/package.json",
+    text: "\"tauri:dev:send\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"tauri:dev:approve\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:desktop-smoke\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:tetris-html\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:grounding-approval-multiturn\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:path-resolution-same-session\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:workspace-search\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:long-continuity\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"diag:m365:heterogeneous-tools\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:desktop-smoke\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:tetris-html\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:grounding-approval-multiturn\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:path-resolution-same-session\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:workspace-search\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:long-continuity\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:m365:heterogeneous-tools\"",
+  },
+  {
     path: "apps/desktop/src/shell/Shell.tsx",
     text: "startAgent",
   },
@@ -500,6 +564,30 @@ const forbidden = [
   {
     path: "apps/desktop/src-tauri/src/dev_control.rs",
     text: "crate::agent_loop::",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "\"/start-agent\"",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "\"/first-run-send\"",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "\"/approve\"",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "hard_cut_agent::start_agent",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "hard_cut_agent::continue_agent_session",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "respond_approval_inner",
   },
   {
     path: "apps/desktop/src-tauri/src/tauri_bridge.rs",

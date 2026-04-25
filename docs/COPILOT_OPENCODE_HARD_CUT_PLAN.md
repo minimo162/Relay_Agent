@@ -206,6 +206,30 @@ Acceptance:
 - The hard-cut guard rejects recreating the deleted module or module
   declaration.
 
+## Completed Task: Dev-Control Agent Route Retirement
+
+Implemented on 2026-04-25: removed debug-only localhost controls that still
+started, continued, or approved Relay-owned agent execution from the desktop
+process. Dev-control is now health/state/configuration support only; live
+execution validation belongs to the OpenAI-compatible provider smoke.
+
+Retired dev-control routes:
+
+- `POST /start-agent`
+- `POST /first-run-send`
+- `POST /approve`
+- `POST /approve-latest`
+- `POST /approve-latest-session`
+- `POST /approve-latest-workspace`
+- `POST /reject-latest`
+
+Acceptance:
+
+- `dev_control.rs` has no direct `hard_cut_agent` start/continue calls.
+- Old desktop live harness package aliases are removed from root and desktop
+  `package.json`.
+- The hard-cut guard rejects restoring those localhost agent controls or aliases.
+
 ## Milestones
 
 ### Phase 0: Hard-Cut Branch Setup

@@ -219,6 +219,31 @@ Acceptance criteria:
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
   `pnpm check`, and `git diff --check` pass.
 
+## Completed Task: Dev-Control Agent Route Retirement
+
+Goal: remove debug-only localhost controls that could still start, continue, or
+approve Relay-owned agent execution from the desktop process. Dev-control now
+stays limited to local health, state, and diagnostic configuration support.
+
+Status 2026-04-25: implemented by deleting `/start-agent`, `/first-run-send`,
+direct `/approve`, approve/reject event routes, and all `hard_cut_agent` calls
+from `dev_control.rs`. Old desktop live harness package aliases were removed in
+favor of `live:m365:opencode-provider` and the Copilot response probe.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/dev_control.rs` no longer calls
+  `hard_cut_agent::start_agent`, `hard_cut_agent::continue_agent_session`, or
+  `respond_approval_inner`.
+- Debug localhost routes no longer expose `/start-agent`, `/first-run-send`, or
+  direct `/approve` execution controls.
+- Root and desktop package scripts no longer advertise old `diag:m365:*`
+  desktop execution harnesses.
+- `scripts/check-hard-cut-guard.mjs` fails if those routes or script aliases
+  return.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
+  `pnpm check`, and `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.
