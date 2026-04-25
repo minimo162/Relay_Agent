@@ -2,7 +2,6 @@
 members = [
     "apps/desktop/src-tauri",
     "apps/desktop/src-tauri/crates/desktop-core",
-    "apps/desktop/src-tauri/crates/compat-harness",
 ]
 resolver = "2"
 

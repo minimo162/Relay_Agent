@@ -231,10 +231,6 @@ const required = [
     text: "const CDP_TOOL_NAMES",
   },
   {
-    path: "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
-    text: "The old Relay-owned runtime parity harness has been removed.",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
     text: "pub struct DesktopCoreError",
   },
@@ -702,28 +698,8 @@ const forbidden = [
     text: "tools = { path = \"../tools\"",
   },
   {
-    path: "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml",
-    text: "runtime = { path = \"../runtime\"",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml",
-    text: "tools = { path = \"../tools\"",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
-    text: "use runtime",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
-    text: "runtime::",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
-    text: "use tools",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
-    text: "tools::",
+    path: "Cargo.toml",
+    text: "compat-harness",
   },
   {
     path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
@@ -949,6 +925,7 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/crates/api",
   "apps/desktop/src-tauri/crates/runtime",
   "apps/desktop/src-tauri/crates/tools",
+  "apps/desktop/src-tauri/crates/compat-harness",
   "apps/desktop/src-tauri/src/commands/agent.rs",
   "apps/desktop/scripts/dev-approve-latest-session.mjs",
   "apps/desktop/scripts/dev-approve-latest-workspace.mjs",
@@ -978,8 +955,6 @@ const byPath = {
   "apps/desktop/src-tauri/src/hard_cut_agent.rs": read("apps/desktop/src-tauri/src/hard_cut_agent.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/lib.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/Cargo.toml": read("apps/desktop/src-tauri/crates/desktop-core/Cargo.toml"),
-  "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml": read("apps/desktop/src-tauri/crates/compat-harness/Cargo.toml"),
-  "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs": read("apps/desktop/src-tauri/crates/compat-harness/src/lib.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/error.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/error.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/opencode_tools.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/opencode_tools.rs"),

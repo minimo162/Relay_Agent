@@ -12,10 +12,10 @@ verification.
 - Primary UX and execution: OpenCode/OpenWork.
 - Provider gateway: `apps/desktop/src-tauri/binaries/copilot_server.js`.
 - Frontend: SolidJS + Vite diagnostic desktop shell.
-- Backend: Rust in `apps/desktop/src-tauri/`, with active internal crates under
-  `crates/{desktop-core,compat-harness}`. Historical `runtime` / `tools` crates
-  and the unused legacy `api` crate have been physically removed as part of the
-  OpenCode/OpenWork hard cut.
+- Backend: Rust in `apps/desktop/src-tauri/`, with `crates/desktop-core` as the
+  only active internal crate. Historical `runtime` / `tools` /
+  `compat-harness` crates and the unused legacy `api` crate have been
+  physically removed as part of the OpenCode/OpenWork hard cut.
 - Primary LLM path: M365 Copilot via Edge CDP and the Relay provider gateway.
 - Contract source of truth: Rust IPC types and command signatures; generated frontend bindings live in `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` kept thin.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
@@ -271,6 +271,30 @@ Acceptance criteria:
 - `node scripts/check-hard-cut-guard.mjs`, `pnpm check`, and
   `git diff --check` pass.
 
+## Completed Task: Compat Harness Crate Retirement
+
+Goal: remove the remaining standalone compatibility fixture crate after the old
+Relay runtime/tools parity harness was already deleted. The crate only kept a
+historical claw-code mock parity manifest readable and was no longer an active
+provider gateway verification surface.
+
+Status 2026-04-25: implemented by deleting
+`apps/desktop/src-tauri/crates/compat-harness/`, removing it from the root
+Cargo workspace, updating current docs that advertised it as active coverage,
+and extending the hard-cut guard so the crate cannot return.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/crates/compat-harness/` no longer exists.
+- Root `Cargo.toml` no longer lists `compat-harness` as a workspace member.
+- README / AGENTS / current plan wording no longer presents `compat-harness` as
+  active coverage.
+- `scripts/check-hard-cut-guard.mjs` fails if the crate directory or workspace
+  member returns.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
+  `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace
+  --exclude relay-agent-desktop`, `pnpm check`, and `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.
@@ -378,15 +402,12 @@ Change targets:
 - `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `apps/desktop/src-tauri/src/tauri_bridge.rs`
-- `apps/desktop/src-tauri/crates/compat-harness/**`
 - `docs/CLAW_CODE_ALIGNMENT.md`
 
 Acceptance criteria:
 
 - The hard-cut smoke starts the bundled OpenCode runtime and verifies linked
   OpenCode transcript writes.
-- `compat-harness` remains a lightweight fixture manifest check and does not
-  link the old Relay runtime/tools crates or desktop smoke helpers.
 - Deterministic tests cover the active OpenCode-backed hard-cut adapter path;
   old runtime-level parity scenarios are not compatibility requirements.
 - Alignment docs name the exact test covering each claw-style scenario.
@@ -563,7 +584,6 @@ Change targets:
 - `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
-- `apps/desktop/src-tauri/crates/compat-harness/src/lib.rs`
 - `docs/IMPLEMENTATION.md`
 
 Acceptance criteria:
@@ -584,7 +604,7 @@ Acceptance criteria:
 - Important conclusions, reviews, edits, comparisons, and recommendations must
   expand relevant search candidates with `read`; search snippets are
   candidate evidence, not a substitute for full-file inspection.
-- Deterministic runtime and compat-harness coverage verifies low-level search
+- Deterministic provider/desktop-core coverage verifies low-level search
   behavior.
 
 ## Forward-Looking Designs (Not Yet Scheduled)

@@ -1,5 +1,5 @@
 //! Deterministic Copilot/CDP parsing and prompt helpers used by the hard-cut
-//! desktop adapter and `compat-harness`.
+//! desktop adapter.
 //!
 //! The old Tauri-owned agent loop has been removed. This module keeps the pure
 //! pieces still needed by the Copilot-to-OpenCode adapter: CDP prompt

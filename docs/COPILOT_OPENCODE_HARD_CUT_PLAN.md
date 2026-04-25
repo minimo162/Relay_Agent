@@ -253,6 +253,22 @@ Acceptance:
 - Provider live commands remain `live:m365:opencode-provider` and
   `live:m365:copilot-response-probe`.
 
+## Completed Task: Compat Harness Crate Retirement
+
+Implemented on 2026-04-25: deleted the standalone `compat-harness` crate and
+the vendored historical claw-code mock parity manifest. The crate no longer
+represented active provider gateway behavior after the old runtime/tools
+parity harness was removed.
+
+Acceptance:
+
+- `apps/desktop/src-tauri/crates/compat-harness/` no longer exists.
+- The root Cargo workspace contains only the desktop shell crate and
+  `desktop-core`.
+- Current README / AGENTS / plan wording no longer present `compat-harness` as
+  an active verification gate.
+- The hard-cut guard rejects restoring the crate or workspace member.
+
 ## Milestones
 
 ### Phase 0: Hard-Cut Branch Setup
@@ -459,7 +475,8 @@ Delete or archive:
 
 - `apps/desktop/src-tauri/crates/runtime` (deleted)
 - `apps/desktop/src-tauri/crates/tools` (deleted)
-- Relay-owned `compat-harness` tests that assert old runtime behavior.
+- Relay-owned `compat-harness` tests that assert old runtime behavior
+  (deleted).
 - Agent-loop repair tests that only exist for Relay-owned execution quirks.
 - Docs that describe Relay's Rust runtime as the primary execution path.
 
