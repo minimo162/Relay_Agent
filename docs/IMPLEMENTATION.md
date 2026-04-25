@@ -23,6 +23,38 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Hard-cut agent wrapper retirement
+
+Deleted the internal Relay-owned hard-cut agent controller after public IPC,
+dev-control routes, desktop live harnesses, and compatibility harnesses were
+already retired. Relay no longer keeps a Rust path that can start or continue
+desktop-owned execution turns.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/hard_cut_agent.rs`.
+- Deleted `apps/desktop/src-tauri/src/config.rs`, which only held old
+  agent-loop turn, retry, and concurrency defaults.
+- Removed `mod hard_cut_agent;` and `mod config;` from `src/lib.rs`.
+- Simplified `AppServices` to retain only the diagnostic session registry and
+  Copilot bridge manager.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so the deleted wrapper and
+  config module cannot return.
+- Added completed task `D07` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('apps/desktop/package.json','utf8'))"`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`:
+  passed, 90 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`:
+  passed, 5 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Compat harness crate retirement
 
 Deleted the remaining standalone compatibility fixture crate after the old
