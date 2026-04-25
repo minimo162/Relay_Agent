@@ -73,13 +73,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::agent::start_agent,
-            commands::agent::continue_agent_session,
-            commands::agent::respond_approval,
-            commands::agent::respond_user_question,
-            commands::agent::cancel_agent,
-            commands::agent::get_session_history,
-            commands::agent::compact_agent_session,
             commands::copilot::connect_cdp,
             commands::copilot::cdp_send_prompt,
             commands::copilot::cdp_start_new_chat,
@@ -87,9 +80,6 @@ pub fn run() {
             commands::copilot::disconnect_cdp,
             commands::copilot::warmup_copilot_bridge,
             commands::diagnostics::get_relay_diagnostics,
-            commands::agent::undo_session_write,
-            commands::agent::redo_session_write,
-            commands::agent::get_session_write_undo_status,
             commands::diagnostics::probe_rust_analyzer,
             commands::mcp::mcp_list_servers,
             commands::mcp::mcp_add_server,

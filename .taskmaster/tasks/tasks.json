@@ -207,6 +207,27 @@
             "P01"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D02",
+          "title": "Retire legacy agent commands from public IPC",
+          "description": "Remove Relay-owned chat/session execution commands from the public Tauri generate_handler list and frontend IPC bridge while leaving internal Rust diagnostic harnesses as deletion targets.",
+          "files": [
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src/lib/ipc.ts",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Legacy agent IPC retirement)",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "D01"
+          ],
+          "status": "completed"
         }
       ]
     }
