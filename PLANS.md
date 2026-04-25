@@ -199,6 +199,26 @@ Acceptance criteria:
 - `pnpm check`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
   and `git diff --check` pass.
 
+## Completed Task: Agent Command Module Retirement
+
+Goal: delete the now-unreachable Tauri command wrapper module for legacy Relay
+chat/session execution. After the public invoke handler and frontend IPC bridge
+were retired, `commands/agent.rs` only preserved obsolete Tauri command symbols.
+
+Status 2026-04-25: implemented by removing `commands/agent.rs`, removing the
+`pub mod agent;` declaration from `commands/mod.rs`, and strengthening the
+hard-cut guard so the module cannot return.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/commands/agent.rs` no longer exists.
+- `apps/desktop/src-tauri/src/commands/mod.rs` no longer declares the agent
+  command module.
+- `scripts/check-hard-cut-guard.mjs` fails if the deleted module or module
+  declaration returns.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
+  `pnpm check`, and `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.

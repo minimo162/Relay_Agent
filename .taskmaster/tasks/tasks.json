@@ -228,6 +228,27 @@
             "D01"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D03",
+          "title": "Delete legacy agent Tauri command module",
+          "description": "Remove the now-unreachable Tauri command wrapper module for Relay-owned chat/session execution and guard against restoring it.",
+          "files": [
+            "apps/desktop/src-tauri/src/commands/agent.rs",
+            "apps/desktop/src-tauri/src/commands/mod.rs",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Agent command module retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D02"
+          ],
+          "status": "completed"
         }
       ]
     }

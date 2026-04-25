@@ -23,6 +23,33 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Agent command module retirement
+
+Deleted the now-unreachable Tauri command wrapper module for legacy Relay
+chat/session execution. The public invoke handler and frontend IPC bridge had
+already stopped exposing these commands; this pass removes the obsolete
+`#[tauri::command]` wrappers from the command tree.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/commands/agent.rs`.
+- Removed `pub mod agent;` from `apps/desktop/src-tauri/src/commands/mod.rs`.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so the deleted module and
+  module declaration cannot return.
+- Added completed task `D03` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8'))"`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`: passed, 91 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 5 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Legacy agent IPC retirement
 
 Removed legacy Relay chat/session execution commands from the public desktop
