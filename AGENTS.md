@@ -4,7 +4,7 @@
 
 - This repository contains a working Tauri v2 + SolidJS desktop agent application under `apps/desktop/`.
 - Desktop **visual design** is driven by CSS variables in `apps/desktop/src/index.css` (`--ra-*`), aligned with **`apps/desktop/DESIGN.md`** (Cursor Inspiration spec). Light theme uses the warm-token palette now documented in `docs/IMPLEMENTATION.md` (2026-04-14 milestone); dark is the paired warm-charcoal scale. Default theme is **light**. Prefer tokens and `.ra-*` utilities over ad hoc colors.
-- Rust backend lives in `apps/desktop/src-tauri/` with active internal crates under `crates/{desktop-core,compat-harness}`. The legacy Relay-owned `api`, `runtime`, `tools`, and `commands` crates are not active workspace members and must not be reintroduced.
+- Rust backend lives in `apps/desktop/src-tauri/` with `crates/desktop-core` as the only active internal crate. The legacy Relay-owned `api`, `runtime`, `tools`, `commands`, and `compat-harness` crates are not active workspace members and must not be reintroduced.
 - Desktop execution delegates tool behavior to the bundled/external OpenCode runtime. Relay-specific Rust code is limited to desktop UX, Tauri IPC, M365 Copilot CDP adaptation, diagnostics, prompt/tool-call projection, and release packaging glue.
 - Desktop **`read`** on `.pdf`, `.docx`, `.xlsx`, and `.pptx` returns extracted plaintext through the OpenCode-shaped adapter path. Office/PDF discovery is model-facing `glob` followed by exact `read`; `office_search` is not a model-facing tool.
 - The legacy shared TypeScript contracts package has been removed; contracts are now defined inline within the Rust crates.

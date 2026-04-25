@@ -23,6 +23,39 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Compat harness crate retirement
+
+Deleted the remaining standalone compatibility fixture crate after the old
+Relay-owned runtime/tools parity harness had already been removed. The crate
+only kept a historical claw-code mock parity manifest readable and was no
+longer active provider gateway coverage.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/crates/compat-harness/`, including the
+  vendored mock parity manifest and sync note.
+- Removed `compat-harness` from the root Cargo workspace.
+- Updated current README / AGENTS / plan wording so `compat-harness` is no
+  longer presented as active coverage.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so the crate directory or
+  workspace member cannot return.
+- Added completed task `D06` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `cargo metadata --manifest-path apps/desktop/src-tauri/Cargo.toml --format-version 1 --no-deps`:
+  passed; workspace members are `relay-agent-desktop` and `desktop-core`.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('apps/desktop/package.json','utf8'))"`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`:
+  passed, 90 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`:
+  passed, 5 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Orphan desktop live harness retirement
 
 Deleted old desktop-owned live automation helpers that had become unreachable

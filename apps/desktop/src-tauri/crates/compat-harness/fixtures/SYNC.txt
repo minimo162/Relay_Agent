@@ -1,1 +1,0 @@
-When refreshing the upstream pin, copy rust/mock_parity_scenarios.json from https://github.com/ultraworkers/claw-code and replace mock_parity_scenarios.json. Update docs/CLAW_CODE_ALIGNMENT.md and the EXPECTED_SCENARIO_NAMES list in src/lib.rs if the scenario set changes.

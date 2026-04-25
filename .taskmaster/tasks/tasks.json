@@ -109,17 +109,16 @@
         },
         {
           "id": "H03",
-          "title": "Expand deterministic parity with a desktop full-session harness",
-          "description": "Keep deterministic provider/diagnostic fixture coverage without linking the removed Relay-owned runtime/tools crates.",
+          "title": "Retain deterministic provider and diagnostic coverage",
+          "description": "Keep deterministic provider/diagnostic fixture coverage without linking or retaining the removed Relay-owned runtime/tools/compat harness crates.",
           "files": [
             "apps/desktop/src-tauri/src/test_support.rs",
             "apps/desktop/src-tauri/src/tauri_bridge.rs",
             "apps/desktop/src-tauri/src/opencode_runtime.rs",
-            "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml",
-            "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
             "docs/CLAW_CODE_ALIGNMENT.md"
           ],
-          "artifact": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness",
+          "artifact": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop",
           "effort": "L",
           "priority": "critical",
           "blockedBy": [
@@ -301,6 +300,32 @@
           "priority": "critical",
           "blockedBy": [
             "D04"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D06",
+          "title": "Delete compat-harness crate",
+          "description": "Remove the remaining standalone compatibility fixture crate and its vendored historical mock parity manifest now that provider gateway coverage is the supported verification surface.",
+          "files": [
+            "Cargo.toml",
+            "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml",
+            "apps/desktop/src-tauri/crates/compat-harness/fixtures/SYNC.txt",
+            "apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json",
+            "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
+            "README.md",
+            "AGENTS.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Compat harness crate retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D05"
           ],
           "status": "completed"
         }

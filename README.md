@@ -70,7 +70,7 @@ The desktop shell is not a supported execution fallback. Diagnostic commands
 are grouped under `diag:*` and are kept only to troubleshoot the provider
 gateway, CDP transport, and historical Tauri launch surface.
 
-Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment (upstream pin, tool-shape notes, `compat-harness` parity-style tests, and deterministic full-session harness coverage): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
+Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment history is preserved in **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**, but it is no longer an active execution-compatibility gate.
 
 ## Architecture (high level)
 
@@ -212,8 +212,6 @@ execution smoke for OpenCode/OpenWork provider mode.
 **Headless desktop coverage:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop` runs the workspace tests without invoking the Windows-hostile Tauri lib test binary. Headless desktop logic and its unit tests now live in `apps/desktop/src-tauri/crates/desktop-core`.
 
 **Doctor CLI integration:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli` covers doctor report shape and CLI-facing status handling.
-
-**Deterministic fixture harness:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` checks that the vendored historical mock parity manifest remains readable. It no longer links the old Relay runtime/tools parity harness.
 
 **E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.
 
