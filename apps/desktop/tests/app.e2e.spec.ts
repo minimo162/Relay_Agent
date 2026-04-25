@@ -2,8 +2,8 @@ import { test, expect } from "@playwright/test";
 import { injectRelayMock } from "./relay-e2e-harness";
 
 async function openApp(page: any) {
-  await page.goto("/", { waitUntil: "networkidle", timeout: 15000 });
-  await expect(page.getByRole("banner").getByText("Relay Agent", { exact: true })).toBeVisible();
+  await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
+  await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
 }
 
 test("desktop opens as a provider gateway diagnostic console", async ({ page }) => {

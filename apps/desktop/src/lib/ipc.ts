@@ -11,9 +11,8 @@
  *   list_workspace_slash_commands,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
- * Legacy diagnostic commands still present while deletion proceeds:
- *   start_agent, respond_approval, cancel_agent, get_session_history,
- *   compact_agent_session
+ * Legacy agent chat/session commands are intentionally not exported from this
+ * frontend bridge. Provider-mode execution belongs to OpenCode/OpenWork.
  *
  * Events:
  *   agent:tool_start | agent:tool_result | agent:approval_needed | agent:user_question
@@ -33,15 +32,10 @@ import type {
   AgentTurnCompleteEvent as GeneratedAgentTurnCompleteEvent,
   AgentUserQuestionNeededEvent as GeneratedAgentUserQuestionNeededEvent,
   BrowserAutomationSettings as GeneratedBrowserAutomationSettings,
-  CancelAgentRequest as GeneratedCancelAgentRequest,
   CdpConnectResult as GeneratedCdpConnectResult,
   CdpPromptResult as GeneratedCdpPromptResult,
   CdpSendPromptRequest as GeneratedCdpSendPromptRequest,
-  CompactAgentSessionRequest as GeneratedCompactAgentSessionRequest,
-  CompactAgentSessionResponse as GeneratedCompactAgentSessionResponse,
-  ContinueAgentSessionRequest as GeneratedContinueAgentSessionRequest,
   ConnectCdpRequest as GeneratedConnectCdpRequest,
-  GetAgentSessionHistoryRequest as GeneratedGetAgentSessionHistoryRequest,
   InstructionSurface as GeneratedInstructionSurface,
   McpAddServerRequest as GeneratedMcpAddServerRequest,
   McpServerInfo as GeneratedMcpServerInfo,
@@ -49,9 +43,6 @@ import type {
   RelayDiagnostics as GeneratedRelayDiagnostics,
   RustAnalyzerProbeRequest as GeneratedRustAnalyzerProbeRequest,
   RustAnalyzerProbeResponse as GeneratedRustAnalyzerProbeResponse,
-  SessionWriteUndoRequest as GeneratedSessionWriteUndoRequest,
-  SessionWriteUndoStatusResponse as GeneratedSessionWriteUndoStatusResponse,
-  StartAgentRequest as GeneratedStartAgentRequest,
   WorkspaceAllowlistSnapshot as GeneratedWorkspaceAllowlistSnapshot,
   WorkspaceInstructionSurfaces as GeneratedWorkspaceInstructionSurfaces,
   WorkspaceSkillRow as GeneratedWorkspaceSkillRow,
@@ -64,35 +55,8 @@ import type {
 
 export type BrowserAutomationSettings = GeneratedBrowserAutomationSettings;
 
-export type StartAgentRequest = GeneratedStartAgentRequest;
-export type ContinueAgentSessionRequest = GeneratedContinueAgentSessionRequest;
-
-/**
- * Tool approvals (OpenWork-style): `approved` unblocks one execution; `rememberForSession`
- * adds the tool name to a session allow-list so the host skips further prompts for that tool
- * until the session ends. This request drives interactive prompts from the agent loop.
- */
-export interface RespondAgentApprovalRequest {
-  sessionId: string;
-  approvalId: string;
-  approved: boolean;
-  rememberForSession?: boolean;
-  rememberForWorkspace?: boolean;
-}
-
-/** Answer a pending `AskUserQuestion` tool invocation. */
-export interface RespondUserQuestionRequest {
-  sessionId: string;
-  questionId: string;
-  answer: string;
-}
-
 /** `get_relay_diagnostics` payload (camelCase from Rust). */
 export type RelayDiagnostics = GeneratedRelayDiagnostics;
-
-export type CancelAgentRequest = GeneratedCancelAgentRequest;
-
-export type GetAgentSessionHistoryRequest = GeneratedGetAgentSessionHistoryRequest;
 
 /* Content block inside a Rust Message */
 type MessageBlock = GeneratedMessageContent;
@@ -150,24 +114,8 @@ export type AgentEvent =
   | { type: "error"; data: AgentErrorEvent };
 
 /* ============================================================
-   Tauri commands
+   Diagnostic Tauri commands
    ============================================================ */
-
-export async function startAgent(request: StartAgentRequest): Promise<string> {
-  return invoke<string>("start_agent", { request });
-}
-
-export async function continueAgentSession(request: ContinueAgentSessionRequest): Promise<string> {
-  return invoke<string>("continue_agent_session", { request });
-}
-
-export async function respondApproval(request: RespondAgentApprovalRequest): Promise<void> {
-  return invoke<void>("respond_approval", { request });
-}
-
-export async function respondUserQuestion(request: RespondUserQuestionRequest): Promise<void> {
-  return invoke<void>("respond_user_question", { request });
-}
 
 export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
   return invoke<RelayDiagnostics>("get_relay_diagnostics");
@@ -259,33 +207,6 @@ export function formatSessionAuditSummary(res: AgentSessionHistoryResponse): str
   return lines.join("\n").trimEnd();
 }
 
-export async function cancelAgent(request: CancelAgentRequest): Promise<void> {
-  return invoke<void>("cancel_agent", { request });
-}
-
-export async function getSessionHistory(
-  request: GetAgentSessionHistoryRequest,
-): Promise<AgentSessionHistoryResponse> {
-  return invoke<AgentSessionHistoryResponse>("get_session_history", { request });
-}
-
-export type SessionWriteUndoRequest = GeneratedSessionWriteUndoRequest;
-export type SessionWriteUndoStatusResponse = GeneratedSessionWriteUndoStatusResponse;
-
-export async function undoSessionWrite(request: SessionWriteUndoRequest): Promise<void> {
-  return invoke<void>("undo_session_write", { request });
-}
-
-export async function redoSessionWrite(request: SessionWriteUndoRequest): Promise<void> {
-  return invoke<void>("redo_session_write", { request });
-}
-
-export async function getSessionWriteUndoStatus(
-  request: SessionWriteUndoRequest,
-): Promise<SessionWriteUndoStatusResponse> {
-  return invoke<SessionWriteUndoStatusResponse>("get_session_write_undo_status", { request });
-}
-
 export type RustAnalyzerProbeRequest = GeneratedRustAnalyzerProbeRequest;
 export type RustAnalyzerProbeResponse = GeneratedRustAnalyzerProbeResponse;
 
@@ -294,15 +215,6 @@ export async function probeRustAnalyzer(
   request: RustAnalyzerProbeRequest,
 ): Promise<RustAnalyzerProbeResponse> {
   return invoke<RustAnalyzerProbeResponse>("probe_rust_analyzer", { request });
-}
-
-export type CompactAgentSessionRequest = GeneratedCompactAgentSessionRequest;
-export type CompactAgentSessionResponse = GeneratedCompactAgentSessionResponse;
-
-export async function compactAgentSession(
-  request: CompactAgentSessionRequest,
-): Promise<CompactAgentSessionResponse> {
-  return invoke<CompactAgentSessionResponse>("compact_agent_session", { request });
 }
 
 /** Node bridge `GET /status` after ensuring Edge/Copilot tab (startup prewarm). */

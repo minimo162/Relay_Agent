@@ -163,6 +163,42 @@ Acceptance criteria:
 - Diagnostic launch checks still pass under their `diag:*` names or are
   intentionally retired with CI/docs updated in the same change.
 
+## Completed Task: Legacy Agent IPC Retirement
+
+Goal: remove legacy Relay chat/session execution commands from the public Tauri
+WebView invoke surface and frontend IPC bridge. Internal Rust diagnostic
+harnesses may still call the old controller directly while the remaining
+backend deletion proceeds, but the desktop app can no longer invoke those paths
+as product APIs.
+
+Status 2026-04-25: implemented for the Tauri `generate_handler!` command list,
+frontend `ipc.ts`, and hard-cut guard enforcement.
+
+Retired public commands:
+
+- `start_agent`
+- `continue_agent_session`
+- `respond_approval`
+- `respond_user_question`
+- `cancel_agent`
+- `get_session_history`
+- `compact_agent_session`
+- `undo_session_write`
+- `redo_session_write`
+- `get_session_write_undo_status`
+
+Acceptance criteria:
+
+- The normal WebView invoke handler exposes provider diagnostics, CDP helpers,
+  doctor, OpenCode/OpenWork config support, MCP diagnostics, and workspace
+  inspection only.
+- `apps/desktop/src/lib/ipc.ts` no longer exports frontend wrappers for retired
+  legacy agent commands.
+- `scripts/check-hard-cut-guard.mjs` fails if retired commands return to the
+  public invoke handler or frontend IPC bridge.
+- `pnpm check`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
+  and `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.

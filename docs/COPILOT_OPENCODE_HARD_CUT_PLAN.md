@@ -157,6 +157,35 @@ Acceptance:
   provider acceptance path.
 - `pnpm check`, `pnpm check:opencode-provider`, and doctor CLI tests pass.
 
+## Completed Task: Legacy Agent IPC Retirement
+
+Implemented on 2026-04-25: removed legacy Relay chat/session execution commands
+from the public Tauri WebView invoke surface and frontend IPC bridge. The Rust
+controller modules remain only as internal diagnostic/deletion targets while
+the provider gateway path continues through OpenCode/OpenWork.
+
+Retired from public invoke/frontend IPC:
+
+- `start_agent`
+- `continue_agent_session`
+- `respond_approval`
+- `respond_user_question`
+- `cancel_agent`
+- `get_session_history`
+- `compact_agent_session`
+- `undo_session_write`
+- `redo_session_write`
+- `get_session_write_undo_status`
+
+Acceptance:
+
+- The desktop WebView cannot invoke Relay-owned chat/session execution as a
+  product API.
+- Diagnostic shell status, doctor, CDP helpers, provider gateway config, and
+  MCP/workspace inspection remain available.
+- The hard-cut guard rejects reintroducing retired agent commands to
+  `generate_handler!` or `ipc.ts`.
+
 ## Milestones
 
 ### Phase 0: Hard-Cut Branch Setup

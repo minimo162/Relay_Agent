@@ -23,6 +23,38 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Legacy agent IPC retirement
+
+Removed legacy Relay chat/session execution commands from the public desktop
+WebView IPC surface. Internal Rust diagnostic harnesses can still call the old
+controller directly while the remaining backend deletion proceeds, but the
+desktop app no longer exposes these paths as product APIs.
+
+Changes:
+
+- Removed `start_agent`, `continue_agent_session`, `respond_approval`,
+  `respond_user_question`, `cancel_agent`, `get_session_history`,
+  `compact_agent_session`, `undo_session_write`, `redo_session_write`, and
+  `get_session_write_undo_status` from Tauri `generate_handler!`.
+- Removed frontend IPC wrappers for those retired commands from
+  `apps/desktop/src/lib/ipc.ts`.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so retired agent commands
+  cannot return to the public invoke handler or frontend IPC bridge.
+- Added completed task `D02` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check`: passed.
+- `cd apps/desktop && E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`: passed, 5 passed.
+- `pnpm diag:desktop-launch`: passed.
+- `pnpm diag:windows-smoke`: passed as non-Windows skip.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 5 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Diagnostic shell minimization
 
 Shrank the normal Tauri/Solid shell from a chat/session agent surface into a

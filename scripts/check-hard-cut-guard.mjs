@@ -406,6 +406,86 @@ const forbidden = [
     text: "../components/InlineApprovalCard",
   },
   {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::start_agent",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::continue_agent_session",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::respond_approval",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::respond_user_question",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::cancel_agent",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::get_session_history",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::compact_agent_session",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::undo_session_write",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::redo_session_write",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::agent::get_session_write_undo_status",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function startAgent",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function continueAgentSession",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function respondApproval",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function respondUserQuestion",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function cancelAgent",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function getSessionHistory",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function undoSessionWrite",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function redoSessionWrite",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function getSessionWriteUndoStatus",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export async function compactAgentSession",
+  },
+  {
     path: ".github/workflows/ci.yml",
     text: "pnpm agent-loop:test",
   },
@@ -813,6 +893,7 @@ const byPath = {
   "apps/desktop/src-tauri/src/doctor.rs": read("apps/desktop/src-tauri/src/doctor.rs"),
   "apps/desktop/src-tauri/src/tauri_bridge.rs": read("apps/desktop/src-tauri/src/tauri_bridge.rs"),
   "apps/desktop/src/shell/Shell.tsx": read("apps/desktop/src/shell/Shell.tsx"),
+  "apps/desktop/src/lib/ipc.ts": read("apps/desktop/src/lib/ipc.ts"),
   "apps/desktop/src-tauri/binaries/copilot_server.js": read("apps/desktop/src-tauri/binaries/copilot_server.js"),
   "apps/desktop/scripts/opencode_provider_gateway_smoke.mjs": read("apps/desktop/scripts/opencode_provider_gateway_smoke.mjs"),
   "apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs": read("apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs"),
