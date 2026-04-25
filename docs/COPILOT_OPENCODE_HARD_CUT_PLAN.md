@@ -94,8 +94,39 @@ The retained Relay-specific code should be:
 - Prompt adapter that asks Copilot for OpenCode/OpenWork-compatible tool calls.
 - OpenAI-compatible provider facade, diagnostics, and live Copilot smoke
   coverage.
-- Transition desktop shell only where still needed for compatibility and
-  diagnostics.
+- Transition desktop shell only where still needed for provider launch support
+  and diagnostics. Compatibility with the old desktop-owned UX is no longer a
+  goal.
+
+## Completed Task: Provider-Only Hard Cut
+
+Implemented on 2026-04-25: removed the remaining compatibility posture around
+the diagnostic desktop shell. The OpenAI-compatible provider gateway is now the
+product path; Relay desktop behavior is support glue for that path, not a
+second UX or execution runtime.
+
+Tasks:
+
+- Make README and package scripts present OpenCode/OpenWork plus
+  `start:opencode-provider-gateway` as the first-use route.
+- Move desktop launch and smoke commands under `diag:*` diagnostics wording.
+- Remove or quarantine old Relay desktop chat/session/execution claims from
+  live docs.
+- Treat `office_search`, Relay-owned repair strategy, and Relay-owned
+  transcript/tool execution as unsupported compatibility leftovers unless they
+  are moved into OpenCode/OpenWork extension points.
+- Update doctor wording so provider readiness is the canonical health check and
+  desktop-shell checks are diagnostic.
+
+Acceptance:
+
+- A new contributor can follow docs without starting the diagnostic desktop
+  shell as the main product.
+- No production-facing path routes execution through Relay-owned tools,
+  permissions, or transcript state.
+- Provider gateway checks remain in `pnpm check`.
+- Deterministic and live provider smokes remain the acceptance path for the
+  M365 Copilot to OpenCode/OpenWork contract.
 
 ## Milestones
 

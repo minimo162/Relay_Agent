@@ -7,7 +7,7 @@
   primary UX, sessions, permissions, tools, and execution; Relay owns the
   Copilot CDP provider bridge, normalization, and diagnostics.
 - Repository state: pnpm workspace, OpenCode provider gateway scripts, SolidJS
-  + Vite transition desktop shell, Tauri v2 shell, Rust-source IPC contracts
+  + Vite diagnostic desktop shell, Tauri v2 shell, Rust-source IPC contracts
   with generated TS bindings, shared doctor service, and deterministic
   `compat-harness` coverage are in source.
 - Active source-of-truth documents:
@@ -15,11 +15,67 @@
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `docs/CLAW_CODE_ALIGNMENT.md`
-- Active task graph: `.taskmaster/tasks/tasks.json` now describes the current desktop baseline plus the completed repo-hardening track instead of historical claw-crate or workbook-era phases.
+- Active task graph: `.taskmaster/tasks/tasks.json` now describes the OpenCode
+  provider gateway product path plus diagnostic desktop support instead of
+  historical desktop-runtime or workbook-era phases.
 - Packaging policy: `docs/PACKAGING_POLICY.md` still fixes the packaged end-user release path to Windows 10/11 x64 via NSIS, with installer-driven updates and preserved app-local storage across upgrades.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-04-25 Implementation: Provider-only hard cut
+
+Executed the provider-only hard cut after PR #30 landed. OpenCode/OpenWork plus
+`start:opencode-provider-gateway` is now the documented first-use route, while
+desktop launch and live desktop smokes are grouped under diagnostic `diag:*`
+commands.
+
+Changes:
+
+- Removed root-level primary-looking `launch:test`, `smoke:windows`, and
+  desktop live smoke aliases; replaced them with `diag:*` scripts.
+- Updated desktop package scripts and CI to call `diag:desktop-launch` and
+  `diag:windows-smoke`.
+- Rewrote README first-use, stack, IPC, configuration, and diagnostics wording
+  so Relay is not presented as a product UX or execution fallback.
+- Updated doctor and diagnostics hints to name Relay as an OpenAI-compatible
+  M365 Copilot provider gateway plus diagnostics.
+- Updated `.taskmaster/tasks/tasks.json` to make provider gateway ownership the
+  current task graph and mark `P01` completed.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so old root/CI desktop smoke
+  names cannot return as primary scripts.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check:opencode-provider`: passed.
+- `pnpm check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 5 passed.
+- `pnpm diag:windows-smoke`: passed as non-Windows skip.
+- `pnpm diag:desktop-launch`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Planning: Provider-only hard cut task
+
+Set the next task after PR #30 to a compatibility-dropping provider-only hard
+cut. The task makes OpenCode/OpenWork plus `start:opencode-provider-gateway`
+the only primary product path, with Relay's transition desktop shell treated as
+provider launch support and diagnostics only.
+
+Changes:
+
+- Added `PLANS.md` active next task: Provider-Only Hard Cut.
+- Added the same task to `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`.
+- Updated `.taskmaster/tasks/tasks.json` with pending task `P01`.
+- Recorded that legacy Relay desktop chat/session/tool execution compatibility,
+  hidden `office_search` compatibility, and Relay-owned transcript/tool
+  execution fallback behavior are not preservation goals.
+
+Verification:
+
+- Planning-only change; validation pending with the next implementation pass.
 
 ### 2026-04-25 Verification: Provider-gateway PR readiness audit
 

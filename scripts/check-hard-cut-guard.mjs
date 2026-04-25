@@ -115,6 +115,14 @@ const required = [
     text: "\"live:m365:opencode-provider\"",
   },
   {
+    path: "package.json",
+    text: "\"diag:desktop-launch\"",
+  },
+  {
+    path: "package.json",
+    text: "\"diag:windows-smoke\"",
+  },
+  {
     path: "apps/desktop/src-tauri/binaries/copilot_server.js",
     text: "function buildOpenAiCompletionBody",
   },
@@ -332,6 +340,30 @@ const forbidden = [
   {
     path: "package.json",
     text: "\"agent-loop:test\"",
+  },
+  {
+    path: "package.json",
+    text: "\"launch:test\"",
+  },
+  {
+    path: "package.json",
+    text: "\"smoke:windows\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"launch:test\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"smoke:windows\"",
+  },
+  {
+    path: ".github/workflows/ci.yml",
+    text: "pnpm launch:test",
+  },
+  {
+    path: ".github/workflows/ci.yml",
+    text: "pnpm smoke:windows",
   },
   {
     path: "apps/desktop/package.json",
