@@ -23,6 +23,41 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Dev-control agent route retirement
+
+Removed debug-only localhost controls that could still start, continue, or
+approve Relay-owned agent execution from the desktop process. Dev-control now
+stays limited to local health, diagnostic state, and stored diagnostic
+configuration; live execution validation is the OpenAI-compatible provider
+path.
+
+Changes:
+
+- Removed `/start-agent`, `/first-run-send`, `/approve`, approve-latest, and
+  reject-latest routes from `apps/desktop/src-tauri/src/dev_control.rs`.
+- Removed `hard_cut_agent::start_agent`,
+  `hard_cut_agent::continue_agent_session`, and `respond_approval_inner`
+  calls from dev-control.
+- Removed old desktop live harness package aliases from root and desktop
+  `package.json`.
+- Updated README live verification guidance to point at
+  `live:m365:opencode-provider` and the Copilot response probe.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so these routes and aliases
+  cannot return.
+- Added completed task `D04` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('apps/desktop/package.json','utf8')); JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8'))"`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`: passed, 91 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 5 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Agent command module retirement
 
 Deleted the now-unreachable Tauri command wrapper module for legacy Relay
