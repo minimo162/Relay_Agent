@@ -114,6 +114,55 @@ Acceptance criteria:
   an OpenCode/OpenWork extension point or deleted.
 - `pnpm check`, `pnpm check:opencode-provider`, and `git diff --check` pass.
 
+## Completed Task: Diagnostic Shell Minimization
+
+Goal: physically shrink the remaining Relay desktop shell so it can no longer
+look like a product UX or execution fallback. The shell should remain only for
+provider gateway launch support, doctor output, CDP/M365 diagnostics, and
+targeted regression harnesses.
+
+Status 2026-04-25: implemented for the normal desktop UI path. `Shell.tsx` now
+renders a provider gateway diagnostic console and the hard-cut guard rejects
+reintroducing `startAgent`, `continueAgentSession`, Composer, MessageFeed,
+Sidebar, or inline approval imports into the normal shell.
+
+Non-goals:
+
+- Do not preserve `start_agent` / `continue_agent_session` as primary product
+  APIs.
+- Do not keep Relay-owned chat/session UI behavior for compatibility.
+- Do not keep Relay-owned approval, write-undo, slash-command, MCP, or
+  workspace permission flows as product surfaces.
+- Do not move execution back into Relay to keep old desktop smokes passing.
+
+Change targets:
+
+- `apps/desktop/src/shell/**`
+- `apps/desktop/src/components/**`
+- `apps/desktop/src/lib/ipc.ts`
+- `apps/desktop/src-tauri/src/commands/agent.rs`
+- `apps/desktop/src-tauri/src/tauri_bridge.rs`
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
+- `apps/desktop/tests/**`
+- `README.md`
+- `PLANS.md`
+- `.taskmaster/tasks/tasks.json`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- The desktop first screen is diagnostic/provider-oriented, not a chat-first
+  agent workspace.
+- `start_agent` and `continue_agent_session` are documented and treated as
+  diagnostic-only or removed from the desktop UI path.
+- Chat/session stores, approval UI, write undo UI, and session transcript
+  rendering are either removed or explicitly isolated under diagnostic test
+  harnesses.
+- Root provider checks remain unchanged: `pnpm check`,
+  `pnpm check:opencode-provider`, and `pnpm smoke:opencode-provider`.
+- Diagnostic launch checks still pass under their `diag:*` names or are
+  intentionally retired with CI/docs updated in the same change.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.

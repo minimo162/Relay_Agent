@@ -128,6 +128,35 @@ Acceptance:
 - Deterministic and live provider smokes remain the acceptance path for the
   M365 Copilot to OpenCode/OpenWork contract.
 
+## Completed Task: Diagnostic Shell Minimization
+
+Implemented on 2026-04-25: shrank the remaining desktop shell to provider
+launch support and diagnostics. This was a deletion and isolation task, not a
+UX redesign. OpenCode/OpenWork is the product UX; Relay's normal shell no
+longer carries parallel chat, session, permission, and tool-result product
+surfaces.
+
+Tasks:
+
+- Replace the chat-first desktop landing posture with provider gateway,
+  doctor, CDP, M365 sign-in, and OpenCode/OpenWork config status.
+- Remove or isolate desktop chat/session stores from the normal UI path.
+- Remove or isolate approval cards, write-undo controls, slash-command surfaces,
+  MCP registry UI, and transcript rendering from the normal UI path.
+- Treat `start_agent` and `continue_agent_session` as diagnostic-only until
+  they are deleted.
+- Keep provider gateway startup, config installation, doctor, and CDP/M365
+  inspection reachable.
+
+Acceptance:
+
+- A user opening the desktop shell sees a provider/diagnostic console, not an
+  agent chat app.
+- Provider-mode execution continues to happen only through OpenCode/OpenWork.
+- Diagnostic commands use `diag:*` names and remain visibly separate from the
+  provider acceptance path.
+- `pnpm check`, `pnpm check:opencode-provider`, and doctor CLI tests pass.
+
 ## Milestones
 
 ### Phase 0: Hard-Cut Branch Setup
