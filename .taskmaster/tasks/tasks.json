@@ -177,6 +177,38 @@
           "status": "completed"
         }
       ]
+    },
+    {
+      "id": "diagnostic_shell_minimization",
+      "name": "Diagnostic Shell Minimization",
+      "description": "Shrink the remaining Tauri/Solid shell so it is a provider gateway and diagnostics console, not a parallel chat/session execution product.",
+      "tasks": [
+        {
+          "id": "D01",
+          "title": "Replace chat-first desktop posture with provider diagnostics",
+          "description": "Make the desktop first screen provider/diagnostic-oriented. Remove or isolate chat/session stores, approval UI, write undo UI, slash-command surfaces, MCP registry UI, and transcript rendering from the normal UI path. Treat start_agent and continue_agent_session as diagnostic-only until deleted.",
+          "files": [
+            "apps/desktop/src/shell/",
+            "apps/desktop/src/components/",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/src-tauri/src/commands/agent.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/hard_cut_agent.rs",
+            "apps/desktop/tests/",
+            "README.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Diagnostic shell minimization implementation)",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "P01"
+          ],
+          "status": "completed"
+        }
+      ]
     }
   ]
 }

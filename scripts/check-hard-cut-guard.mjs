@@ -95,6 +95,14 @@ const required = [
     text: "\"live:m365:opencode-provider\"",
   },
   {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "Provider Gateway Console",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "This desktop surface is diagnostic-only.",
+  },
+  {
     path: "package.json",
     text: "\"smoke:opencode-provider\"",
   },
@@ -368,6 +376,34 @@ const forbidden = [
   {
     path: "apps/desktop/package.json",
     text: "\"agent-loop:test\"",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "startAgent",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "continueAgentSession",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "respondApproval",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "../components/Composer",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "../components/MessageFeed",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "../components/Sidebar",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "../components/InlineApprovalCard",
   },
   {
     path: ".github/workflows/ci.yml",
@@ -776,6 +812,7 @@ const byPath = {
   "apps/desktop/src-tauri/src/dev_control.rs": read("apps/desktop/src-tauri/src/dev_control.rs"),
   "apps/desktop/src-tauri/src/doctor.rs": read("apps/desktop/src-tauri/src/doctor.rs"),
   "apps/desktop/src-tauri/src/tauri_bridge.rs": read("apps/desktop/src-tauri/src/tauri_bridge.rs"),
+  "apps/desktop/src/shell/Shell.tsx": read("apps/desktop/src/shell/Shell.tsx"),
   "apps/desktop/src-tauri/binaries/copilot_server.js": read("apps/desktop/src-tauri/binaries/copilot_server.js"),
   "apps/desktop/scripts/opencode_provider_gateway_smoke.mjs": read("apps/desktop/scripts/opencode_provider_gateway_smoke.mjs"),
   "apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs": read("apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs"),

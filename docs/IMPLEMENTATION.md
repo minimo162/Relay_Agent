@@ -23,6 +23,61 @@
 
 ## Milestone Log
 
+### 2026-04-25 Implementation: Diagnostic shell minimization
+
+Shrank the normal Tauri/Solid shell from a chat/session agent surface into a
+provider gateway diagnostics console. The desktop first screen now shows the
+OpenCode/OpenWork ownership boundary, provider endpoint, gateway commands,
+Copilot readiness, Settings, and diagnostics refresh. It no longer imports or
+renders the Composer, MessageFeed, Sidebar, inline approvals, or session-store
+execution path.
+
+Changes:
+
+- Replaced `apps/desktop/src/shell/Shell.tsx` with a provider/diagnostic
+  console.
+- Updated app e2e coverage to assert the diagnostic shell and absence of the
+  legacy chat/session product surface.
+- Documented `start_agent` / `continue_agent_session` and related Tauri IPC as
+  legacy diagnostic commands in `apps/desktop/src/lib/ipc.ts`.
+- Strengthened `scripts/check-hard-cut-guard.mjs` so normal `Shell.tsx` cannot
+  re-import `startAgent`, `continueAgentSession`, Composer, MessageFeed,
+  Sidebar, or inline approval UI.
+- Marked `.taskmaster/tasks/tasks.json` task `D01` completed.
+
+Verification:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check`: passed.
+- `pnpm --filter @relay-agent/desktop test:e2e:local`: passed, 3 passed.
+- `cd apps/desktop && E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`: passed, 5 passed.
+- `pnpm diag:desktop-launch`: passed.
+- `pnpm diag:windows-smoke`: passed as non-Windows skip.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 5 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Planning: Diagnostic shell minimization
+
+Set the next task after the provider-only hard cut: shrink the remaining
+Tauri/Solid desktop shell into a provider gateway and diagnostics console. The
+task is deliberately a deletion/isolation pass, not a new chat UX redesign.
+
+Changes:
+
+- Added `PLANS.md` active next task: Diagnostic Shell Minimization.
+- Added the same active task to `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`.
+- Added pending `.taskmaster/tasks/tasks.json` task `D01`.
+- Defined `start_agent` / `continue_agent_session`, desktop chat/session stores,
+  approval UI, write undo UI, slash-command surfaces, MCP registry UI, and
+  transcript rendering as diagnostic-only or deletion targets.
+
+Verification:
+
+- Planning-only change; validation pending with the implementation pass.
+
 ### 2026-04-25 Implementation: Provider-only hard cut
 
 Executed the provider-only hard cut after PR #30 landed. OpenCode/OpenWork plus

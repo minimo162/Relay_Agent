@@ -1,12 +1,19 @@
 /**
- * Tauri IPC bridge — commands + events for Relay Agent
+ * Tauri IPC bridge — provider diagnostics plus legacy desktop diagnostic events.
  *
- * Commands (tauri_bridge.rs):
- *   start_agent, respond_approval, cancel_agent, get_session_history,
- *   compact_agent_session, warmup_copilot_bridge (optional browserSettings), get_relay_diagnostics,
+ * Provider-mode execution does not use these commands. OpenCode/OpenWork calls
+ * the OpenAI-compatible provider gateway directly and owns sessions, tools,
+ * permissions, transcript state, and workspace execution.
+ *
+ * Diagnostic commands (tauri_bridge.rs):
+ *   warmup_copilot_bridge (optional browserSettings), get_relay_diagnostics,
  *   get_workspace_allowlist, remove_workspace_allowlist_tool, clear_workspace_allowlist,
  *   list_workspace_slash_commands,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
+ *
+ * Legacy diagnostic commands still present while deletion proceeds:
+ *   start_agent, respond_approval, cancel_agent, get_session_history,
+ *   compact_agent_session
  *
  * Events:
  *   agent:tool_start | agent:tool_result | agent:approval_needed | agent:user_question
