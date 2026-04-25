@@ -4,14 +4,18 @@ Date: 2026-04-14
 
 ## Current Product Baseline
 
-Relay_Agent is a **conversation-first Tauri desktop agent** under `apps/desktop/`.
+Relay_Agent is now an **OpenAI-compatible M365 Copilot provider gateway** for
+OpenCode/OpenWork. The historical Tauri desktop shell remains under
+`apps/desktop/` for transition, diagnostics, and live Copilot verification.
 
-- Frontend: SolidJS + Vite desktop shell.
+- Primary UX and execution: OpenCode/OpenWork.
+- Provider gateway: `apps/desktop/src-tauri/binaries/copilot_server.js`.
+- Frontend: SolidJS + Vite transition desktop shell.
 - Backend: Rust in `apps/desktop/src-tauri/`, with active internal crates under
   `crates/{desktop-core,compat-harness}`. Historical `runtime` / `tools` crates
   and the unused legacy `api` crate have been physically removed as part of the
   OpenCode/OpenWork hard cut.
-- Primary execution path: M365 Copilot via Edge CDP and the Relay Node bridge.
+- Primary LLM path: M365 Copilot via Edge CDP and the Relay provider gateway.
 - Contract source of truth: Rust IPC types and command signatures; generated frontend bindings live in `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` kept thin.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
 - PDF reads: LiteParse via bundled `relay-node`.
@@ -31,25 +35,26 @@ Additional rules:
 
 - Rust crate types and IPC signatures in `apps/desktop/src-tauri/` are canonical.
 - OpenCode/OpenWork session state is the canonical source for execution
-  transcript and runtime behavior. Relay-specific defaults live in the desktop
-  adapter/config modules.
+  transcript and runtime behavior. Relay-specific defaults live in the provider
+  gateway and transition desktop adapter/config modules.
 - `.taskmaster/tasks/tasks.json` must reflect real artifact state, not historical intent.
 
 ## Delivery Priorities
 
-- Priority A: keep M365 Copilot via Edge CDP as the primary LLM controller.
-- Priority B: replace Relay's bespoke execution runtime with OpenCode/OpenWork
-  as the external OSS execution substrate for sessions, tools, permissions,
-  events, MCP, plugins, skills, and workspace runtime behavior.
-- Priority C: keep Relay-specific code focused on desktop UX, Copilot CDP
-  transport, prompt adaptation, and diagnostics.
+- Priority A: keep M365 Copilot via Edge CDP as the primary LLM surface.
+- Priority B: keep OpenCode/OpenWork as the external OSS owner for UX,
+  sessions, tools, permissions, events, MCP, plugins, skills, and workspace
+  runtime behavior.
+- Priority C: keep Relay-specific code focused on the OpenAI-compatible
+  provider gateway, Copilot CDP transport, tool-call normalization, and
+  diagnostics.
 
-## Strategic Reset: Copilot-Controlled OpenCode/OpenWork Execution
+## Strategic Reset: OpenCode/OpenWork Provider Gateway
 
 The active architecture direction is a hard cut, not a compatibility migration:
 Relay_Agent becomes the adapter between M365 Copilot CDP and OpenCode/OpenWork.
-OpenCode/OpenWork owns execution; Copilot owns LLM control; Relay owns the
-desktop UX and transport bridge.
+OpenCode/OpenWork owns UX and execution; Copilot owns the LLM surface; Relay
+owns the M365 Copilot provider gateway and diagnostics.
 
 Detailed plan: `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`.
 
@@ -64,10 +69,10 @@ Implications:
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.
-- Preserve the desktop UX and Copilot CDP product focus, but do not preserve
-  Relay's bespoke execution runtime.
-- Keep Relay-specific code focused on desktop UI, Tauri IPC, M365 Copilot,
-  CDP orchestration, prompt adaptation, and diagnostics.
+- Preserve Copilot CDP product focus, but do not preserve Relay's bespoke
+  execution runtime or treat Relay's transition desktop shell as the target UX.
+- Keep Relay-specific code focused on the OpenAI-compatible provider facade,
+  M365 Copilot, CDP orchestration, prompt adaptation, and diagnostics.
 - Tool shapes, permission posture, session state, plugins, MCP, skills, and
   workspace config should come from OpenCode/OpenWork wherever practical.
 - Do not implement arbitrary code execution, unrestricted shell access, VBA, or uncontrolled external network execution outside agent-managed tools.
@@ -78,12 +83,21 @@ Canonical repo verification commands:
 
 ```bash
 pnpm check
+pnpm check:opencode-provider
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
 ```
 
-Acceptance and smoke commands:
+Provider-gateway acceptance and smoke commands:
+
+```bash
+pnpm smoke:opencode-provider
+pnpm start:opencode-provider-gateway -- --print-config
+pnpm install:opencode-provider-config -- --workspace /path/to/workspace --dry-run
+```
+
+Transition desktop diagnostics:
 
 ```bash
 pnpm launch:test
@@ -94,6 +108,11 @@ pnpm doctor -- --json
 Rules:
 
 - `pnpm check` is the canonical frontend acceptance gate.
+- `pnpm check` includes the CI-safe provider contract check.
+- `pnpm check:opencode-provider` validates provider scripts and OpenAI facade
+  tests without requiring Bun, OpenCode, Edge, or live M365.
+- `pnpm smoke:opencode-provider` is the canonical deterministic
+  OpenCode/OpenWork provider contract gate.
 - `pnpm typecheck` remains the fast local frontend-only check.
 - Every completed milestone must leave a concrete artifact or logged verification result in `docs/IMPLEMENTATION.md`.
 - CI must enforce the documented acceptance path instead of a smaller substitute.
@@ -184,6 +203,9 @@ Acceptance criteria:
 - Main CI runs on `ubuntu-latest` and `windows-latest`.
 - Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm launch:test`.
 - Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and `pnpm smoke:windows`.
+- The `pnpm check` CI step includes the CI-safe OpenCode provider contract
+  check. Full `pnpm smoke:opencode-provider` remains a local/ops smoke because
+  it requires a real OpenCode checkout and Bun.
 - CI also guards the live docs map against stale removed-package or spreadsheet-era references.
 
 Status 2026-04-25:

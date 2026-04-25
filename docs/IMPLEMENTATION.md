@@ -2,8 +2,14 @@
 
 ## Status
 
-- Current phase: the conversation-first desktop agent, Rust IPC boundary, Copilot bridge, and multi-turn agent loop are implemented in source. Current hardening work focuses on repo truth cleanup, headless doctor, deterministic parity coverage, and CI acceptance alignment.
-- Repository state: pnpm workspace, SolidJS + Vite desktop shell, Tauri v2 shell, Rust-source IPC contracts with generated TS bindings, shared doctor service, and deterministic `compat-harness` coverage are in source.
+- Current phase: Relay_Agent is being cut over to an OpenAI-compatible M365
+  Copilot provider gateway for OpenCode/OpenWork. OpenCode/OpenWork owns the
+  primary UX, sessions, permissions, tools, and execution; Relay owns the
+  Copilot CDP provider bridge, normalization, and diagnostics.
+- Repository state: pnpm workspace, OpenCode provider gateway scripts, SolidJS
+  + Vite transition desktop shell, Tauri v2 shell, Rust-source IPC contracts
+  with generated TS bindings, shared doctor service, and deterministic
+  `compat-harness` coverage are in source.
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
@@ -14,6 +20,357 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-04-25 Verification: Provider-gateway PR readiness audit
+
+Audited the provider-gateway migration diff before PR handoff.
+
+Checks:
+
+- Reviewed changed and new file inventory with `git diff --stat`,
+  `git diff --name-status`, and `git ls-files --others --exclude-standard`.
+- Searched README, plans, docs, scripts, and desktop Rust sources for stale
+  role-split language such as Relay owning desktop UX, Relay Session Adapter,
+  Copilot controlling execution turns, or Relay delegating provider-mode tool
+  execution to its bundled runtime.
+- Reviewed provider script dependencies and cleanup paths. The full
+  deterministic OpenCode smoke remains intentionally dependent on
+  `OPENCODE_REPO` / `BUN_BIN`, while `pnpm check:opencode-provider` stays
+  CI-safe.
+- Confirmed no provider gateway or live smoke process was left running.
+
+Verification:
+
+- `pnpm check`: passed.
+- `pnpm smoke:opencode-provider`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Documentation: CI provider-check alignment
+
+Aligned CI documentation with the updated `pnpm check` behavior.
+
+Changes:
+
+- Confirmed `.github/workflows/ci.yml` already calls `pnpm check` on both
+  Ubuntu and Windows acceptance jobs, so no workflow change was required for the
+  new provider contract gate.
+- Updated `README.md` to state that CI's `pnpm check` step includes the
+  CI-safe OpenCode provider contract check.
+- Updated `PLANS.md` Phase 4 acceptance text to distinguish the CI-safe
+  provider check from the fuller `smoke:opencode-provider`, which requires a
+  real OpenCode checkout and Bun.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Implementation: CI-safe provider contract check
+
+Added a lightweight provider-gateway contract gate to `pnpm check` without
+requiring a local OpenCode checkout, Bun, Edge, or a live M365 session.
+
+Changes:
+
+- Added root `check:opencode-provider`, forwarded to the desktop package.
+- Added desktop `check:opencode-provider`, which syntax-checks provider config,
+  installer, startup, deterministic smoke, and live smoke scripts, then runs the
+  OpenAI-compatible `copilot_server.test.mjs` suite.
+- Updated root `pnpm check` so it now runs the hard-cut guard, provider contract
+  check, TypeScript typecheck, and frontend build.
+- Extended `scripts/check-hard-cut-guard.mjs` so both package manifests must
+  keep the provider contract check script.
+- Updated `README.md` and `PLANS.md` to distinguish the CI-safe contract check
+  from the fuller `smoke:opencode-provider`, which still requires OpenCode and
+  Bun.
+
+Verification:
+
+- `pnpm check:opencode-provider`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Documentation: Provider checks vs desktop diagnostics
+
+Separated the remaining README and plan guidance into provider-gateway
+acceptance checks and transition desktop diagnostics.
+
+Changes:
+
+- Added a `Canonical Provider Checks` section to `README.md` for
+  `smoke:opencode-provider`, `live:m365:opencode-provider`, gateway
+  `--print-config`, and provider config dry-run usage.
+- Added a `Transition Desktop Diagnostics` section to `README.md` for doctor,
+  CDP probes, launch smoke, and legacy live desktop harnesses.
+- Reworded `launch:test`, `live:m365:desktop-smoke`, grounding/path/search live
+  smokes, and `live:m365:tetris-html` as transition diagnostics rather than the
+  provider-gateway acceptance path.
+- Updated `PLANS.md` so provider-gateway smoke commands are listed separately
+  from transition desktop diagnostics.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Documentation: OpenCode/OpenWork UX ownership cleanup
+
+Updated top-level planning and README language to match the provider-gateway
+direction.
+
+Changes:
+
+- Reframed `README.md` around Relay as an OpenAI-compatible M365 Copilot
+  provider gateway for OpenCode/OpenWork.
+- Added the provider gateway quick-start commands to `README.md` and moved the
+  Tauri desktop shell wording into transition/diagnostic scope.
+- Updated the README architecture diagram so OpenCode/OpenWork owns UX and
+  execution, with Relay only between the OpenAI-compatible provider API and
+  M365 Copilot CDP.
+- Updated `PLANS.md` so priorities name OpenCode/OpenWork as the owner of UX,
+  sessions, permissions, tools, events, and runtime behavior.
+- Updated `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md` so Relay's target role is
+  provider gateway and diagnostics, not desktop UX ownership.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-25 Verification: Standard OpenCode workspace provider run
+
+Verified the standard provider-gateway workflow against the real OpenCode
+workspace at `/root/opencode`.
+
+Steps:
+
+- Ran `pnpm install:opencode-provider-config -- --workspace /root/opencode`,
+  which created `/root/opencode/opencode.json`. The file is ignored by the
+  OpenCode repository's `.gitignore`, so it stays local operational config.
+- Started the gateway with `pnpm start:opencode-provider-gateway` on
+  `http://127.0.0.1:18180/v1`.
+- Confirmed authenticated provider readiness:
+  - `GET /status`: `connected: true`, `loginRequired: false`
+  - `GET /v1/models`: returned `m365-copilot`
+- Ran OpenCode from `/root/opencode` with
+  `--model relay-agent/m365-copilot --dir /root/opencode`.
+
+Result:
+
+- OpenCode loaded `/root/opencode/opencode.json`, found provider
+  `relay-agent`, sent the request through Relay's OpenAI-compatible provider
+  gateway, and received the live M365 Copilot response
+  `OPENWORK_STANDARD_RUN_OK.`.
+
+### 2026-04-25 Verification: Standard OpenCode workspace tool run attempt
+
+Attempted the next standard-workspace verification: a live OpenCode run through
+the `relay-agent/m365-copilot` provider with an available `read` tool and a
+fixture file under `/root/opencode`.
+
+Result:
+
+- Provider readiness still passed (`/status` connected and `/v1/models`
+  returned `m365-copilot`).
+- OpenCode loaded the workspace `opencode.json` and sent the request through
+  Relay's OpenAI-compatible provider gateway.
+- M365 Copilot did not emit an OpenAI `tool_calls` payload. It returned a
+  fenced Python snippet that would read the target file instead of asking
+  OpenCode to execute the `read` tool.
+- No OpenCode tool execution event occurred, so the live M365 tool-turn path is
+  not yet reliable in the standard workspace.
+
+Follow-up:
+
+- Keep Relay from executing or inferring arbitrary code snippets as tools.
+- Add a provider-mode tool-call forcing or repair turn when tools are available
+  and M365 returns prose/code instead of structured `tool_calls`.
+
+### 2026-04-25 Implementation: OpenAI provider tool-call repair retry
+
+Added a constrained repair retry for the OpenAI-compatible provider gateway when
+M365 returns prose or code instead of structured tool calls.
+
+Changes:
+
+- `parseOpenAiRequest` now records OpenAI `tool_choice` and whether the incoming
+  message history already contains `tool` / `function` result messages.
+- `/v1/chat/completions` now performs one same-thread repair retry when tools
+  are available, no tool result has been supplied yet, and either `tool_choice`
+  requires a tool or the prompt explicitly asks to use an available tool.
+- The repair retry asks M365 to return only OpenAI-compatible
+  `{"tool_calls":[...]}` JSON. Relay still does not execute or infer arbitrary
+  code snippets as tools.
+- The repair retry uses a compact tool catalog for only the explicitly requested
+  tool when possible, instead of replaying OpenCode's full system prompt and
+  complete tool catalog.
+- When the repair retry still fails, Relay writes an inspection artifact with
+  the original response, repair response, compact repair prompt, selected tools,
+  and parsed tool-call counts. The default path is
+  `~/.relay-agent/opencode-provider-artifacts`, overrideable with
+  `RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR`.
+- The tool-call parser now recovers two live M365 repair-response shapes without
+  executing or inferring code: repeated embedded `tool_calls` JSON objects, and
+  OpenAI `tool_calls` JSON where `function.arguments` contains an unescaped
+  nested JSON object.
+- Empty M365 responses now also enter the one-shot repair path when the user
+  explicitly requested an available tool.
+- Streaming provider responses suppress progress text during required tool-call
+  turns so an invalid first response is not streamed before the repaired
+  `tool_calls` delta.
+- If the repair retry still does not produce `tool_calls`, Relay returns an
+  OpenAI-shaped `relay_tool_call_repair_failed` error instead of treating the
+  prose/code response as successful execution intent.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed,
+  21 tests.
+- `pnpm smoke:opencode-provider`: passed.
+
+Live standard workspace result:
+
+- Retried the `/root/opencode` standard workspace `read` tool scenario through
+  live M365 Copilot after adding the repair retry.
+- The first repair attempt replayed too much context (`~48k` characters), so it
+  was tightened to a compact requested-tool-only repair prompt (`~6k`
+  characters).
+- Even with the compact repair, M365 still returned a non-parseable response
+  instead of OpenAI `tool_calls`, and OpenCode reported
+  `relay_tool_call_repair_failed`.
+- Added repair-failure artifacts and captured live samples under
+  `/tmp/relay-live-tool-artifacts`. Those artifacts showed that M365 often emits
+  recoverable `tool_calls` JSON with malformed wrapping/escaping, so the parser
+  now recovers those exact structured cases.
+- A later live run exposed a separate empty-response timeout; that is now routed
+  into the same repair path.
+- Re-ran the `/root/opencode` standard workspace `read` tool scenario after the
+  empty-response repair. M365's initial tool turn timed out empty, the compact
+  repair turn returned recoverable tool-call JSON, Relay normalized it, OpenCode
+  executed `read` against `/root/opencode/relay_provider_tool_fixture.txt`, and
+  the follow-up provider turn returned `OPENWORK_TOOL_STANDARD_OK`.
+- The live standard workspace now demonstrates the intended split: Relay bridges
+  M365 Copilot as an OpenAI-compatible provider, while OpenCode owns the `read`
+  tool execution and final tool-result loop.
+
+### 2026-04-25 Implementation: Live M365 OpenCode tool smoke
+
+Extended `apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs` so the
+live smoke now verifies both provider text and OpenCode-owned tool execution.
+
+Changes:
+
+- The live smoke writes a temporary workspace fixture whose content is
+  `OPEN_CODE_M365_TOOL_OK` by default.
+- After the plain provider text check, it runs a second OpenCode session asking
+  M365 to use the `read` tool on that fixture.
+- The smoke passes only if OpenCode emits a completed `read` tool event whose
+  output contains the fixture marker and the follow-up provider turn returns
+  the expected final text.
+- Added separate text/tool stdout and stderr artifacts, a
+  `tool-repair-artifacts` directory, and separate tool-run timeout control via
+  `RELAY_OPENCODE_LIVE_TOOL_TIMEOUT_MS`.
+- Updated `docs/OPENCODE_PROVIDER_GATEWAY.md` with the expanded live smoke
+  contract and overrides.
+
+Verification:
+
+- `node --check apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs`:
+  passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed,
+  21 tests.
+- `pnpm smoke:opencode-provider`: passed.
+- `RELAY_OPENCODE_LIVE_TIMEOUT_MS=420000 RELAY_OPENCODE_LIVE_TOOL_TIMEOUT_MS=900000 pnpm live:m365:opencode-provider`:
+  passed. The report showed plain text `OPEN_CODE_M365_PROVIDER_OK`, a completed
+  OpenCode `read` tool event, and final text `OPEN_CODE_M365_TOOL_OK`.
+
+### 2026-04-25 Implementation: OpenCode provider config installer
+
+Added a repeatable setup path for connecting OpenCode/OpenWork workspaces to
+Relay's M365 Copilot provider gateway.
+
+Changes:
+
+- Added shared provider config helpers in
+  `apps/desktop/scripts/opencode_provider_config.mjs`.
+- Refactored `start_opencode_provider_gateway.mjs` to use the shared provider
+  config and shell-safe API key export formatting.
+- Added `install:opencode-provider-config` at the repo root and desktop package.
+- Added `apps/desktop/scripts/install_opencode_provider_config.mjs`, which
+  writes or updates a workspace `opencode.json`, preserves unrelated settings
+  and providers, and installs only the `relay-agent` provider block.
+- Updated `docs/OPENCODE_PROVIDER_GATEWAY.md` and the hard-cut guard so the
+  installer is part of the documented provider-gateway setup.
+
+Verification:
+
+- `node --check apps/desktop/scripts/opencode_provider_config.mjs`: passed.
+- `node --check apps/desktop/scripts/start_opencode_provider_gateway.mjs`: passed.
+- `node --check apps/desktop/scripts/install_opencode_provider_config.mjs`: passed.
+- `pnpm install:opencode-provider-config -- --workspace /tmp/relay-opencode-install-smoke --dry-run`: passed.
+- Temp workspace merge smoke preserving an existing `other` provider: passed.
+- `pnpm start:opencode-provider-gateway -- --print-config`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm smoke:opencode-provider`: passed.
+
+### 2026-04-25 Implementation: OpenCode provider gateway startup command
+
+Added a stable startup path for running Relay as the standalone
+OpenCode/OpenWork provider gateway.
+
+Changes:
+
+- Added `start:opencode-provider-gateway` at the repo root and desktop package.
+- Added `apps/desktop/scripts/start_opencode_provider_gateway.mjs`, which starts
+  the M365 Copilot provider gateway on `127.0.0.1:18180` by default, uses Edge
+  CDP `9360`, and creates or reuses a local API key at
+  `~/.relay-agent/opencode-provider-token`.
+- Updated `docs/OPENCODE_PROVIDER_GATEWAY.md` so the normal operational flow is
+  `pnpm start:opencode-provider-gateway`, then OpenCode/OpenWork configured for
+  `relay-agent/m365-copilot`.
+- Extended the hard-cut guard so the startup command, provider default port,
+  and token-file convention stay present.
+
+Verification:
+
+- `node --check apps/desktop/scripts/start_opencode_provider_gateway.mjs`: passed.
+- `pnpm start:opencode-provider-gateway -- --print-config`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml parse_prompt_error_body`: passed.
+- `pnpm smoke:opencode-provider`: passed.
+
+### 2026-04-25 Implementation: OpenCode provider gateway truth guard
+
+Locked the OpenCode/OpenWork provider-gateway migration into the local repo
+guard so future changes do not drift back to Relay-owned desktop UX/execution
+language.
+
+Changes:
+
+- Added root scripts for `smoke:opencode-provider` and
+  `live:m365:opencode-provider`.
+- Extended `scripts/check-hard-cut-guard.mjs` to require the OpenCode provider
+  gateway docs, deterministic contract smoke, live M365 smoke, and OpenAI
+  compatible `copilot_server.js` provider surface.
+- Added forbidden checks for stale diagnostics/docs language that says Relay
+  owns desktop UX or that Copilot controls the execution turn.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node --check scripts/check-hard-cut-guard.mjs`: passed.
+- `node --check apps/desktop/scripts/opencode_provider_gateway_smoke.mjs`: passed.
+- `node --check apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm smoke:opencode-provider`: passed.
 
 ### 2026-04-25 Implementation: CI, release smoke, and live-doc alignment
 
@@ -813,8 +1170,9 @@ Verification:
 
 ### 2026-04-24 Implementation: Copilot-to-OpenCode hard-cut entrypoint
 
-Started the hard-cut migration where Relay is the desktop UX and Copilot CDP
-adapter, while OpenCode/OpenWork is the execution substrate.
+Started the hard-cut migration from Relay-owned desktop orchestration toward
+OpenCode/OpenWork-owned UX, sessions, permissions, and execution, with Relay
+kept as the M365 Copilot CDP bridge.
 
 Changes:
 
@@ -834,7 +1192,9 @@ Changes:
   results.
 - Persisted Relay session config now stores the linked `opencodeSessionId` so
   the OpenCode session can become the execution source of truth in the next
-  phase.
+  phase. The follow-on provider-gateway work makes OpenCode/OpenWork the
+  intended UX and execution owner, with Relay reduced to the M365 Copilot
+  bridge/provider boundary.
 
 Verification:
 
