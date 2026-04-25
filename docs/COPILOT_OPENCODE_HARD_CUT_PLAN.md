@@ -230,6 +230,29 @@ Acceptance:
   `package.json`.
 - The hard-cut guard rejects restoring those localhost agent controls or aliases.
 
+## Completed Task: Orphan Desktop Live Harness Retirement
+
+Implemented on 2026-04-25: deleted the old dev-control helper scripts and
+desktop-owned M365 live execution harnesses that no longer had package entry
+points after the hard cut. Live validation now stays on the provider gateway
+smoke and Copilot response probe.
+
+Retired script families:
+
+- `dev-first-run-send.mjs`, `dev-approve-latest*.mjs`, and
+  `dev-reject-latest.mjs`.
+- `live_m365_desktop_smoke.mjs` and the old Tetris, grounding approval,
+  same-session path, workspace search, long-continuity, and heterogeneous-tool
+  desktop live smokes.
+
+Acceptance:
+
+- The retired helper and harness files no longer exist under
+  `apps/desktop/scripts/`.
+- The hard-cut guard rejects recreating those files.
+- Provider live commands remain `live:m365:opencode-provider` and
+  `live:m365:copilot-response-probe`.
+
 ## Milestones
 
 ### Phase 0: Hard-Cut Branch Setup
