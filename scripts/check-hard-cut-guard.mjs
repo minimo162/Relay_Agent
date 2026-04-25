@@ -171,18 +171,6 @@ const required = [
     text: "mod agent_projection;",
   },
   {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "fn ensure_continuable_session",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "SessionState::new(config.clone())",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "message_count: 0",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
     text: "pub fn save_session(",
   },
@@ -253,10 +241,6 @@ const required = [
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
     text: "/experimental/tool/execute",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "crate::opencode_runtime::execute_tool_with_context",
   },
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
@@ -550,10 +534,6 @@ const forbidden = [
     text: "src/agent_loop/events.rs",
   },
   {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "crate::agent_loop::events",
-  },
-  {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
     text: "crate::agent_loop::events",
   },
@@ -608,26 +588,6 @@ const forbidden = [
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
     text: "pub mod agent_loop;",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "desktop_core::agent_loop",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "loaded.session",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: ".messages.push",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "ConversationMessage::",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "ContentBlock::",
   },
   {
     path: "apps/desktop/src-tauri/src/dev_control.rs",
@@ -702,16 +662,8 @@ const forbidden = [
     text: "compat-harness",
   },
   {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "tools::ToolExecutionContext",
-  },
-  {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
     text: "tools::ToolExecutionContext",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "\n            tools::execute_tool_with_context",
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
@@ -776,14 +728,6 @@ const forbidden = [
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
     text: "OpencodeToolExecutionContext",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "desktop_core::opencode_tools::execute_tool_with_context",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/hard_cut_agent.rs",
-    text: "desktop_core::opencode_tools::OpencodeToolExecutionContext",
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
@@ -926,6 +870,8 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/crates/runtime",
   "apps/desktop/src-tauri/crates/tools",
   "apps/desktop/src-tauri/crates/compat-harness",
+  "apps/desktop/src-tauri/src/config.rs",
+  "apps/desktop/src-tauri/src/hard_cut_agent.rs",
   "apps/desktop/src-tauri/src/commands/agent.rs",
   "apps/desktop/scripts/dev-approve-latest-session.mjs",
   "apps/desktop/scripts/dev-approve-latest-workspace.mjs",
@@ -952,7 +898,6 @@ const byPath = {
   "apps/desktop/src-tauri/src/lib.rs": read("apps/desktop/src-tauri/src/lib.rs"),
   "apps/desktop/src-tauri/src/ipc_codegen.rs": read("apps/desktop/src-tauri/src/ipc_codegen.rs"),
   "apps/desktop/src-tauri/src/agent_projection.rs": read("apps/desktop/src-tauri/src/agent_projection.rs"),
-  "apps/desktop/src-tauri/src/hard_cut_agent.rs": read("apps/desktop/src-tauri/src/hard_cut_agent.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/lib.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/Cargo.toml": read("apps/desktop/src-tauri/crates/desktop-core/Cargo.toml"),
   "apps/desktop/src-tauri/crates/desktop-core/src/error.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/error.rs"),

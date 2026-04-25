@@ -129,7 +129,9 @@ provider request.
 
 ## Configuration
 
-**Rust defaults** (`apps/desktop/src-tauri/src/config.rs`): diagnostic desktop defaults such as `max_turns`, concurrency, and session TTL remain only for the Tauri shell. Provider-mode execution transcript state lives in OpenCode/OpenWork.
+**Runtime defaults:** provider-mode execution, turn limits, permissions, and
+transcript state live in OpenCode/OpenWork. Relay keeps only provider gateway
+and diagnostic configuration.
 
 **Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md). The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. Runtime behavior should come from OpenCode/OpenWork wherever practical.
 

@@ -142,7 +142,6 @@ Change targets:
 - `apps/desktop/src/lib/ipc.ts`
 - `apps/desktop/src-tauri/src/commands/agent.rs`
 - `apps/desktop/src-tauri/src/tauri_bridge.rs`
-- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/tests/**`
 - `README.md`
 - `PLANS.md`
@@ -153,8 +152,8 @@ Acceptance criteria:
 
 - The desktop first screen is diagnostic/provider-oriented, not a chat-first
   agent workspace.
-- `start_agent` and `continue_agent_session` are documented and treated as
-  diagnostic-only or removed from the desktop UI path.
+- `start_agent` and `continue_agent_session` are removed from the desktop UI
+  path.
 - Chat/session stores, approval UI, write undo UI, and session transcript
   rendering are either removed or explicitly isolated under diagnostic test
   harnesses.
@@ -295,6 +294,32 @@ Acceptance criteria:
   `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace
   --exclude relay-agent-desktop`, `pnpm check`, and `git diff --check` pass.
 
+## Completed Task: Hard-Cut Agent Wrapper Retirement
+
+Goal: delete the last internal wrapper that could run Relay-owned desktop agent
+turns against the bundled OpenCode runtime. Provider-mode execution belongs to
+OpenCode/OpenWork and reaches Relay only through the OpenAI-compatible M365
+Copilot provider gateway.
+
+Status 2026-04-25: implemented by deleting `hard_cut_agent.rs`, removing the
+module declaration, and deleting the now-unused Relay agent-loop config and
+semaphore plumbing from `AppServices`.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs` no longer exists.
+- `apps/desktop/src-tauri/src/config.rs` no longer exists.
+- `apps/desktop/src-tauri/src/lib.rs` no longer declares `mod hard_cut_agent`
+  or `mod config`.
+- `AppServices` only retains diagnostic registry and Copilot bridge state.
+- `scripts/check-hard-cut-guard.mjs` fails if the deleted wrapper or config
+  returns.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
+  `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace
+  --exclude relay-agent-desktop`, `cargo test --manifest-path
+  apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `pnpm check`, and
+  `git diff --check` pass.
+
 ## Guardrails
 
 - Do not widen scope without updating this file and recording the reason in `docs/IMPLEMENTATION.md`.
@@ -393,21 +418,21 @@ Acceptance criteria:
 - Existing IPC warmup/diagnostics commands delegate to the shared doctor service.
 - Integration tests cover ready, login-required, auth-failure, missing-workspace, and missing-runtime-asset paths.
 
-### Phase 3: Deterministic Parity And OpenCode Session Harness
+### Phase 3: Deterministic Provider And Diagnostic Coverage
 
-Goal: keep parity-style tool tests and verify full-session execution through the OpenCode-backed hard-cut path.
+Goal: keep deterministic provider and diagnostic tests without preserving a
+Relay-owned desktop execution wrapper.
 
 Change targets:
 
-- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `apps/desktop/src-tauri/src/tauri_bridge.rs`
 - `docs/CLAW_CODE_ALIGNMENT.md`
 
 Acceptance criteria:
 
-- The hard-cut smoke starts the bundled OpenCode runtime and verifies linked
-  OpenCode transcript writes.
+- Provider and diagnostic checks verify gateway, doctor, CDP, and runtime
+  health surfaces without routing tasks through Relay-owned desktop execution.
 - Deterministic tests cover the active OpenCode-backed hard-cut adapter path;
   old runtime-level parity scenarios are not compatibility requirements.
 - Alignment docs name the exact test covering each claw-style scenario.
@@ -472,7 +497,6 @@ exact documents with `read`.
 
 Change targets:
 
-- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `docs/OPENCODE_ALIGNMENT_PLAN.md`
@@ -534,7 +558,6 @@ orchestrator removed.
 
 Change targets:
 
-- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `docs/IMPLEMENTATION.md`
@@ -545,9 +568,9 @@ Acceptance criteria:
 - Wrapper forms such as `env ...`, `command ...`, `nice ...`, and mixed-case blocked verbs are covered by regression tests.
 - OpenCode-backed adapter regression coverage verifies that Relay does not
   reintroduce the old shell policy engine.
-- The deleted desktop `agent_loop/**` tree is not reintroduced; adapter logic
-  stays in `hard_cut_agent.rs`, UI/IPC payloads stay in `agent_projection.rs`,
-  and deterministic parser/prompt helpers stay in `desktop-core`.
+- The deleted desktop `agent_loop/**` tree and hard-cut wrapper are not
+  reintroduced; UI/IPC payloads stay in `agent_projection.rs`, and
+  deterministic parser/prompt helpers stay in `desktop-core`.
 
 ### Cross-Cutting Feature: Office File Search
 
@@ -555,7 +578,6 @@ Goal: implement `docs/OFFICE_SEARCH_DESIGN.md` Phase A so the agent can extract 
 
 Change targets:
 
-- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `AGENTS.md`
@@ -581,7 +603,6 @@ low-level tools.
 
 Change targets:
 
-- `apps/desktop/src-tauri/src/hard_cut_agent.rs`
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
 - `docs/IMPLEMENTATION.md`

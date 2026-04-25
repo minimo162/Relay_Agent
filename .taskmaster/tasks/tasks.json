@@ -185,14 +185,13 @@
         {
           "id": "D01",
           "title": "Replace chat-first desktop posture with provider diagnostics",
-          "description": "Make the desktop first screen provider/diagnostic-oriented. Remove or isolate chat/session stores, approval UI, write undo UI, slash-command surfaces, MCP registry UI, and transcript rendering from the normal UI path. Treat start_agent and continue_agent_session as diagnostic-only until deleted.",
+          "description": "Make the desktop first screen provider/diagnostic-oriented. Remove or isolate chat/session stores, approval UI, write undo UI, slash-command surfaces, MCP registry UI, and transcript rendering from the normal UI path. Legacy start_agent and continue_agent_session routing has since been deleted.",
           "files": [
             "apps/desktop/src/shell/",
             "apps/desktop/src/components/",
             "apps/desktop/src/lib/ipc.ts",
             "apps/desktop/src-tauri/src/commands/agent.rs",
             "apps/desktop/src-tauri/src/tauri_bridge.rs",
-            "apps/desktop/src-tauri/src/hard_cut_agent.rs",
             "apps/desktop/tests/",
             "README.md",
             "PLANS.md",
@@ -326,6 +325,30 @@
           "priority": "critical",
           "blockedBy": [
             "D05"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D07",
+          "title": "Delete hard-cut agent wrapper",
+          "description": "Remove the internal Relay-owned hard-cut agent controller and now-unused agent-loop config/semaphore plumbing so desktop diagnostics cannot start or continue Relay-owned execution turns.",
+          "files": [
+            "apps/desktop/src-tauri/src/hard_cut_agent.rs",
+            "apps/desktop/src-tauri/src/config.rs",
+            "apps/desktop/src-tauri/src/app_services.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "README.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Hard-cut agent wrapper retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D06"
           ],
           "status": "completed"
         }

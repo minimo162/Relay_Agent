@@ -143,8 +143,8 @@ Tasks:
 - Remove or isolate desktop chat/session stores from the normal UI path.
 - Remove or isolate approval cards, write-undo controls, slash-command surfaces,
   MCP registry UI, and transcript rendering from the normal UI path.
-- Treat `start_agent` and `continue_agent_session` as diagnostic-only until
-  they are deleted.
+- Delete `start_agent` and `continue_agent_session` routing instead of keeping
+  diagnostic fallbacks.
 - Keep provider gateway startup, config installation, doctor, and CDP/M365
   inspection reachable.
 
@@ -185,6 +185,20 @@ Acceptance:
   MCP/workspace inspection remain available.
 - The hard-cut guard rejects reintroducing retired agent commands to
   `generate_handler!` or `ipc.ts`.
+
+## Completed Task: Hard-Cut Agent Wrapper Retirement
+
+Implemented on 2026-04-25: deleted the internal `hard_cut_agent.rs` controller
+and the now-unused `config.rs` agent-loop defaults. Relay no longer keeps an
+internal wrapper that can start or continue desktop-owned agent turns.
+
+Acceptance:
+
+- `apps/desktop/src-tauri/src/hard_cut_agent.rs` no longer exists.
+- `apps/desktop/src-tauri/src/config.rs` no longer exists.
+- `src/lib.rs` no longer declares either module.
+- `AppServices` retains only diagnostic registry and Copilot bridge state.
+- The hard-cut guard rejects restoring the wrapper or config module.
 
 ## Completed Task: Agent Command Module Retirement
 
@@ -312,7 +326,6 @@ Tasks:
 Implementation targets:
 
 - `apps/desktop/src-tauri/src/lib.rs`
-- `apps/desktop/src-tauri/src/config.rs`
 - new `apps/desktop/src-tauri/src/opencode_runtime/**`
 - `apps/desktop/src/lib/ipc.ts`
 - `apps/desktop/src/components/SettingsModal.tsx`
