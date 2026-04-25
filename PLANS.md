@@ -198,6 +198,34 @@ Acceptance criteria:
 - `pnpm check`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`,
   and `git diff --check` pass.
 
+## Completed Task: Legacy Agent Event And Type Retirement
+
+Goal: remove the remaining Relay-owned agent event and session-history IPC
+projection surface after public commands, command wrappers, dev-control routes,
+and the hard-cut wrapper were deleted.
+
+Status 2026-04-25: implemented for Rust IPC models, generated frontend
+bindings, the frontend event subscription bridge, OpenCode transcript mapping
+shims, and hard-cut guard enforcement.
+
+Retired surfaces:
+
+- `apps/desktop/src-tauri/src/agent_projection.rs`
+- Relay-owned `agent:*` event payload types and frontend `onAgentEvent`
+  listener bridge.
+- Legacy agent request/response structs in `desktop-core/src/models.rs`.
+- OpenCode session-history-to-Relay-message projection helpers.
+- Unsupported Relay session history, approval, question, cancel, compact, undo,
+  and redo entrypoints from `tauri_bridge.rs`.
+
+Acceptance criteria:
+
+- Generated frontend IPC bindings contain only diagnostic/provider-support
+  contracts.
+- `ipc.ts` does not listen for Relay-owned `agent:*` events.
+- The hard-cut guard rejects restoring the deleted event/type projection
+  module and event listener bridge.
+
 ## Completed Task: Agent Command Module Retirement
 
 Goal: delete the now-unreachable Tauri command wrapper module for legacy Relay
@@ -568,9 +596,10 @@ Acceptance criteria:
 - Wrapper forms such as `env ...`, `command ...`, `nice ...`, and mixed-case blocked verbs are covered by regression tests.
 - OpenCode-backed adapter regression coverage verifies that Relay does not
   reintroduce the old shell policy engine.
-- The deleted desktop `agent_loop/**` tree and hard-cut wrapper are not
-  reintroduced; UI/IPC payloads stay in `agent_projection.rs`, and
-  deterministic parser/prompt helpers stay in `desktop-core`.
+- The deleted desktop `agent_loop/**` tree, hard-cut wrapper, and legacy
+  `agent_projection.rs` event/type surface are not reintroduced; diagnostic IPC
+  payloads stay in `models.rs`/`tauri_bridge.rs`, and deterministic
+  parser/prompt helpers stay in `desktop-core`.
 
 ### Cross-Cutting Feature: Office File Search
 

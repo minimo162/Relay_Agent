@@ -1,37 +1,10 @@
 // Generated from Rust IPC source types via ts-rs.
-// Source: apps/desktop/src-tauri/src/models.rs, agent_projection.rs, tauri_bridge.rs
+// Source: apps/desktop/src-tauri/src/models.rs, tauri_bridge.rs
 
 export interface BrowserAutomationSettings {
   cdpPort: number;
   autoLaunchEdge: boolean;
   timeoutMs: number;
-}
-
-export interface StartAgentRequest {
-  goal: string;
-  files: string[];
-  cwd?: string | null;
-  browserSettings?: BrowserAutomationSettings | null;
-  maxTurns?: number | null;
-}
-
-export interface ContinueAgentSessionRequest {
-  sessionId: string;
-  message: string;
-}
-
-export interface RespondAgentApprovalRequest {
-  sessionId: string;
-  approvalId: string;
-  approved: boolean;
-  rememberForSession?: boolean | null;
-  rememberForWorkspace?: boolean | null;
-}
-
-export interface RespondUserQuestionRequest {
-  sessionId: string;
-  questionId: string;
-  answer: string;
 }
 
 export interface CopilotBridgeFailureInfo {
@@ -102,23 +75,6 @@ export interface RelayDiagnostics {
   opencodeRuntimeMessage?: string | null;
 }
 
-export interface CancelAgentRequest {
-  sessionId: string;
-}
-
-export interface GetAgentSessionHistoryRequest {
-  sessionId: string;
-}
-
-export interface SessionWriteUndoRequest {
-  sessionId: string;
-}
-
-export interface SessionWriteUndoStatusResponse {
-  canUndo: boolean;
-  canRedo: boolean;
-}
-
 export interface RustAnalyzerProbeRequest {
   workspacePath?: string | null;
 }
@@ -127,15 +83,6 @@ export interface RustAnalyzerProbeResponse {
   ok: boolean;
   versionLine?: string | null;
   error?: string | null;
-}
-
-export interface CompactAgentSessionRequest {
-  sessionId: string;
-}
-
-export interface CompactAgentSessionResponse {
-  message: string;
-  removedMessageCount: number;
 }
 
 export interface McpServerInfo {
@@ -211,6 +158,40 @@ export interface WorkspaceInstructionSurfaces {
   surfaces: InstructionSurface[];
 }
 
+export type CopilotWarmupStage =
+  | "ensure_server"
+  | "health_check"
+  | "boot_token_auth"
+  | "status_request"
+  | "cdp_attach"
+  | "copilot_tab"
+  | "login_check"
+  | "ready";
+
+export type CopilotWarmupFailureCode =
+  | "ensure_server_failed"
+  | "health_check_failed"
+  | "boot_token_unauthorized"
+  | "status_http_error"
+  | "status_transport_error"
+  | "cdp_attach_failed"
+  | "copilot_tab_unavailable"
+  | "login_required"
+  | "unknown";
+
+export interface CopilotWarmupResult {
+  requestId: string;
+  connected: boolean;
+  loginRequired: boolean;
+  bootTokenPresent: boolean;
+  cdpPort: number;
+  stage: CopilotWarmupStage;
+  message: string;
+  failureCode?: CopilotWarmupFailureCode | null;
+  statusCode?: number | null;
+  url?: string | null;
+}
+
 export interface ConnectCdpRequest {
   autoLaunch?: boolean | null;
   basePort?: number | null;
@@ -236,81 +217,4 @@ export interface CdpPromptResult {
   responseText: string;
   bodyLength: number;
   error?: string | null;
-}
-
-export interface AgentToolStartEvent {
-  sessionId: string;
-  toolUseId: string;
-  toolName: string;
-  input: unknown;
-}
-
-export interface AgentToolResultEvent {
-  sessionId: string;
-  toolUseId: string;
-  toolName: string;
-  content: string;
-  isError: boolean;
-}
-
-export interface AgentUserQuestionNeededEvent {
-  sessionId: string;
-  questionId: string;
-  prompt: string;
-}
-
-export interface AgentApprovalNeededEvent {
-  sessionId: string;
-  approvalId: string;
-  toolName: string;
-  description: string;
-  target?: string | null;
-  input: unknown;
-  workspaceCwdConfigured: boolean;
-}
-
-export interface AgentTurnCompleteEvent {
-  sessionId: string;
-  stopReason: string;
-  assistantMessage: string;
-  messageCount: number;
-}
-
-export interface AgentSessionStatusEvent {
-  sessionId: string;
-  phase: string;
-  attempt?: number | null;
-  message?: string | null;
-  nextRetryAtMs?: number | null;
-  toolName?: string | null;
-  stopReason?: string | null;
-}
-
-export interface AgentErrorEvent {
-  sessionId: string;
-  error: string;
-  cancelled: boolean;
-}
-
-export interface AgentTextDeltaEvent {
-  sessionId: string;
-  text: string;
-  isComplete: boolean;
-  replaceExisting: boolean;
-}
-
-export type MessageContent =
-  | { type: "text"; text: string }
-  | { type: "toolUse"; id: string; name: string; input: unknown }
-  | { type: "toolResult"; toolUseId: string; content: string; isError: boolean };
-
-export interface RelayMessage {
-  role: string;
-  content: MessageContent[];
-}
-
-export interface AgentSessionHistoryResponse {
-  sessionId: string;
-  running: boolean;
-  messages: RelayMessage[];
 }

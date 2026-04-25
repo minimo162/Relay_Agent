@@ -351,6 +351,35 @@
             "D06"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D08",
+          "title": "Retire legacy agent event and IPC types",
+          "description": "Remove the remaining Relay-owned agent event payloads, session-history projection types, unsupported session-state entrypoints, frontend event listener bridge, and generated TypeScript contracts for the deleted desktop execution path.",
+          "files": [
+            "apps/desktop/src-tauri/src/agent_projection.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+            "apps/desktop/src-tauri/src/ipc_codegen.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/src/opencode_runtime.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/src/shell/useAgentEvents.ts",
+            "README.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-25 Legacy agent event/type retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D07"
+          ],
+          "status": "completed"
         }
       ]
     }

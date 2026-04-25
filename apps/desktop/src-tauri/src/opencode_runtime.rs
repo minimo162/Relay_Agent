@@ -12,8 +12,6 @@ use serde_json::json;
 use serde_json::Value;
 use tauri::Manager;
 
-use crate::agent_projection::{MessageContent, RelayMessage};
-
 const TOOL_RUNTIME_URL_ENV: &str = "RELAY_OPENCODE_TOOL_RUNTIME_URL";
 const TOOL_RUNTIME_DIR_ENV: &str = "RELAY_OPENCODE_RUNTIME_DIR";
 const TOOL_RUNTIME_BUN_ENV: &str = "RELAY_OPENCODE_BUN";
@@ -312,18 +310,6 @@ struct AppendTranscriptInfo {
     message_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct OpencodeSessionMessage {
-    pub info: OpencodeMessageInfo,
-    #[serde(default)]
-    pub parts: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct OpencodeMessageInfo {
-    pub role: String,
-}
-
 pub async fn create_session(
     directory: Option<&str>,
     title: Option<&str>,
@@ -364,38 +350,6 @@ pub async fn create_session(
         format!("invalid OpenCode session create response: {error}; body={body}")
     })?;
     Ok(session.id)
-}
-
-pub async fn session_messages(session_id: &str) -> Result<Vec<OpencodeSessionMessage>, String> {
-    let session_id = session_id.trim();
-    if session_id.is_empty() {
-        return Err("OpenCode session id must not be empty".to_string());
-    }
-    let base = external_runtime_url()
-        .ok_or_else(|| format!("{TOOL_RUNTIME_URL_ENV} is required to read OpenCode sessions"))?;
-    let url = format!(
-        "{}/session/{session_id}/message",
-        base.trim_end_matches('/')
-    );
-    let response = reqwest::Client::new()
-        .get(url)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|error| format!("OpenCode session messages request failed: {error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("failed to read OpenCode session messages response: {error}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "OpenCode session messages returned HTTP {status}: {body}"
-        ));
-    }
-    serde_json::from_str(&body).map_err(|error| {
-        format!("invalid OpenCode session messages response: {error}; body={body}")
-    })
 }
 
 pub async fn append_text_message(
@@ -483,98 +437,6 @@ async fn append_transcript_message(session_id: &str, body: Value) -> Result<Stri
         format!("invalid OpenCode transcript append response: {error}; body={body}")
     })?;
     Ok(info.message_id)
-}
-
-pub fn messages_to_relay(messages: &[OpencodeSessionMessage]) -> Vec<RelayMessage> {
-    messages
-        .iter()
-        .filter_map(|message| {
-            let content = opencode_parts_to_relay_content(&message.parts);
-            if content.is_empty() {
-                return None;
-            }
-            Some(RelayMessage {
-                role: opencode_role_to_relay(&message.info.role).to_string(),
-                content,
-            })
-        })
-        .collect()
-}
-
-fn opencode_role_to_relay(role: &str) -> &str {
-    match role {
-        "user" => "user",
-        "system" => "system",
-        _ => "assistant",
-    }
-}
-
-fn opencode_parts_to_relay_content(parts: &[Value]) -> Vec<MessageContent> {
-    let mut content = Vec::new();
-    for part in parts {
-        match part.get("type").and_then(Value::as_str) {
-            Some("text") => {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    if !text.is_empty() {
-                        content.push(MessageContent::Text {
-                            text: text.to_string(),
-                        });
-                    }
-                }
-            }
-            Some("tool") => push_tool_part(&mut content, part),
-            _ => {}
-        }
-    }
-    content
-}
-
-fn push_tool_part(content: &mut Vec<MessageContent>, part: &Value) {
-    let tool_use_id = part
-        .get("callID")
-        .and_then(Value::as_str)
-        .or_else(|| part.get("id").and_then(Value::as_str))
-        .unwrap_or("opencode-tool");
-    let name = part
-        .get("tool")
-        .and_then(Value::as_str)
-        .unwrap_or("tool")
-        .to_string();
-    let state = part.get("state").unwrap_or(&Value::Null);
-    let input = state.get("input").cloned().unwrap_or_else(|| json!({}));
-    content.push(MessageContent::ToolUse {
-        id: tool_use_id.to_string(),
-        name,
-        input,
-    });
-
-    match state.get("status").and_then(Value::as_str) {
-        Some("completed") => {
-            let output = state
-                .get("output")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            content.push(MessageContent::ToolResult {
-                tool_use_id: tool_use_id.to_string(),
-                content: output,
-                is_error: false,
-            });
-        }
-        Some("error") => {
-            let output = state
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("OpenCode tool failed")
-                .to_string();
-            content.push(MessageContent::ToolResult {
-                tool_use_id: tool_use_id.to_string(),
-                content: output,
-                is_error: true,
-            });
-        }
-        _ => {}
-    }
 }
 
 impl Drop for OpencodeRuntime {
@@ -910,44 +772,6 @@ fn wait_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn maps_opencode_text_and_tool_parts_to_relay_messages() {
-        let messages: Vec<OpencodeSessionMessage> = serde_json::from_value(json!([
-            {
-                "info": { "role": "assistant" },
-                "parts": [
-                    { "type": "text", "text": "Reading files" },
-                    {
-                        "type": "tool",
-                        "id": "part_1",
-                        "callID": "call_1",
-                        "tool": "read",
-                        "state": {
-                            "status": "completed",
-                            "input": { "path": "README.md" },
-                            "output": "Hello"
-                        }
-                    }
-                ]
-            }
-        ]))
-        .expect("valid opencode message fixture");
-
-        let relay = messages_to_relay(&messages);
-        assert_eq!(relay.len(), 1);
-        assert_eq!(relay[0].role, "assistant");
-        assert_eq!(relay[0].content.len(), 3);
-        assert!(matches!(
-            &relay[0].content[1],
-            MessageContent::ToolUse { id, name, .. } if id == "call_1" && name == "read"
-        ));
-        assert!(matches!(
-            &relay[0].content[2],
-            MessageContent::ToolResult { tool_use_id, content, is_error }
-                if tool_use_id == "call_1" && content == "Hello" && !is_error
-        ));
-    }
 
     #[test]
     fn render_execute_tool_response_includes_title_and_json_output() {

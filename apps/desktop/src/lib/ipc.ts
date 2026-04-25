@@ -1,5 +1,5 @@
 /**
- * Tauri IPC bridge — provider diagnostics plus legacy desktop diagnostic events.
+ * Tauri IPC bridge — provider diagnostics.
  *
  * Provider-mode execution does not use these commands. OpenCode/OpenWork calls
  * the OpenAI-compatible provider gateway directly and owns sessions, tools,
@@ -14,23 +14,11 @@
  * Legacy agent chat/session commands are intentionally not exported from this
  * frontend bridge. Provider-mode execution belongs to OpenCode/OpenWork.
  *
- * Events:
- *   agent:tool_start | agent:tool_result | agent:approval_needed | agent:user_question
- *   agent:status | agent:turn_complete | agent:text_delta | agent:error
+ * Relay-owned agent events were removed with the hard-cut migration.
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn, Event } from "@tauri-apps/api/event";
 import type {
-  AgentApprovalNeededEvent as GeneratedAgentApprovalNeededEvent,
-  AgentErrorEvent as GeneratedAgentErrorEvent,
-  AgentSessionHistoryResponse as GeneratedAgentSessionHistoryResponse,
-  AgentSessionStatusEvent as GeneratedAgentSessionStatusEvent,
-  AgentTextDeltaEvent as GeneratedAgentTextDeltaEvent,
-  AgentToolResultEvent as GeneratedAgentToolResultEvent,
-  AgentToolStartEvent as GeneratedAgentToolStartEvent,
-  AgentTurnCompleteEvent as GeneratedAgentTurnCompleteEvent,
-  AgentUserQuestionNeededEvent as GeneratedAgentUserQuestionNeededEvent,
   BrowserAutomationSettings as GeneratedBrowserAutomationSettings,
   CdpConnectResult as GeneratedCdpConnectResult,
   CdpPromptResult as GeneratedCdpPromptResult,
@@ -39,7 +27,6 @@ import type {
   InstructionSurface as GeneratedInstructionSurface,
   McpAddServerRequest as GeneratedMcpAddServerRequest,
   McpServerInfo as GeneratedMcpServerInfo,
-  MessageContent as GeneratedMessageContent,
   RelayDiagnostics as GeneratedRelayDiagnostics,
   RustAnalyzerProbeRequest as GeneratedRustAnalyzerProbeRequest,
   RustAnalyzerProbeResponse as GeneratedRustAnalyzerProbeResponse,
@@ -58,20 +45,6 @@ export type BrowserAutomationSettings = GeneratedBrowserAutomationSettings;
 /** `get_relay_diagnostics` payload (camelCase from Rust). */
 export type RelayDiagnostics = GeneratedRelayDiagnostics;
 
-/* Content block inside a Rust Message */
-type MessageBlock = GeneratedMessageContent;
-type AgentMessage = GeneratedAgentSessionHistoryResponse["messages"][number];
-export type AgentSessionHistoryResponse = GeneratedAgentSessionHistoryResponse;
-
-/* ============================================================
-   Tauri event payloads
-   ============================================================ */
-
-export type AgentToolStartEvent = GeneratedAgentToolStartEvent;
-export type AgentToolResultEvent = GeneratedAgentToolResultEvent;
-export type AgentApprovalNeededEvent = GeneratedAgentApprovalNeededEvent;
-export type AgentUserQuestionNeededEvent = GeneratedAgentUserQuestionNeededEvent;
-
 export type AgentStopReason =
   | "completed"
   | "cancelled"
@@ -83,9 +56,6 @@ export type AgentStopReason =
   | "tool_error"
   | "doom_loop";
 
-export type AgentTurnCompleteEvent =
-  Omit<GeneratedAgentTurnCompleteEvent, "stopReason"> & { stopReason: AgentStopReason };
-
 export type AgentSessionPhase =
   | "idle"
   | "running"
@@ -93,25 +63,6 @@ export type AgentSessionPhase =
   | "compacting"
   | "waiting_approval"
   | "cancelling";
-
-export type AgentSessionStatusEvent =
-  Omit<GeneratedAgentSessionStatusEvent, "phase" | "stopReason"> & {
-    phase: AgentSessionPhase;
-    stopReason?: AgentStopReason;
-  };
-export type AgentTextDeltaEvent = GeneratedAgentTextDeltaEvent;
-export type AgentErrorEvent = GeneratedAgentErrorEvent;
-
-/* Union of all agent events */
-export type AgentEvent =
-  | { type: "tool_start"; data: AgentToolStartEvent }
-  | { type: "tool_result"; data: AgentToolResultEvent }
-  | { type: "approval_needed"; data: AgentApprovalNeededEvent }
-  | { type: "user_question"; data: AgentUserQuestionNeededEvent }
-  | { type: "status"; data: AgentSessionStatusEvent }
-  | { type: "text_delta"; data: AgentTextDeltaEvent }
-  | { type: "turn_complete"; data: AgentTurnCompleteEvent }
-  | { type: "error"; data: AgentErrorEvent };
 
 /* ============================================================
    Diagnostic Tauri commands
@@ -168,43 +119,6 @@ export async function fetchWorkspaceInstructionSurfaces(
   return invoke<WorkspaceInstructionSurfaces>("workspace_instruction_surfaces", {
     request: { cwd: cwd?.trim() || null },
   });
-}
-
-const AUDIT_SUMMARY_LINE_MAX = 280;
-
-function trimAuditText(s: string, max: number): string {
-  const t = s.replace(/\s+/g, " ").trim();
-  if (t.length <= max) return t;
-  return `${t.slice(0, max - 1)}…`;
-}
-
-/** Compact, copy-paste friendly audit trail from session history (tools + truncated text). */
-export function formatSessionAuditSummary(res: AgentSessionHistoryResponse): string {
-  const lines: string[] = [];
-  lines.push("Relay Agent — session audit summary");
-  lines.push(`sessionId: ${res.sessionId}`);
-  lines.push(`running: ${res.running}`);
-  lines.push("");
-  let mi = 0;
-  for (const msg of res.messages) {
-    mi += 1;
-    lines.push(`--- Message ${mi} (${msg.role}) ---`);
-    for (const block of msg.content) {
-      if (block.type === "text") {
-        const t = block.text.trim();
-        if (t) lines.push(trimAuditText(t, AUDIT_SUMMARY_LINE_MAX));
-      } else if (block.type === "toolUse") {
-        lines.push(`tool: ${block.name}  [${block.id}]`);
-      } else if (block.type === "toolResult") {
-        const flag = block.isError ? " (error)" : "";
-        lines.push(`tool_result: ${block.toolUseId}${flag}`);
-        const c = block.content.trim();
-        if (c) lines.push(`  ${trimAuditText(c, AUDIT_SUMMARY_LINE_MAX)}`);
-      }
-    }
-    lines.push("");
-  }
-  return lines.join("\n").trimEnd();
 }
 
 export type RustAnalyzerProbeRequest = GeneratedRustAnalyzerProbeRequest;
@@ -300,96 +214,6 @@ export async function disconnectCdp(): Promise<void> {
   return invoke<void>("disconnect_cdp", {});
 }
 
-/* ============================================================
-   Tauri events — listen to all
-   ============================================================ */
-
-const E_TOOL_START = "agent:tool_start";
-const E_TOOL_RESULT = "agent:tool_result";
-const E_APPROVAL_NEEDED = "agent:approval_needed";
-const E_USER_QUESTION = "agent:user_question";
-const E_TEXT_DELTA = "agent:text_delta";
-const E_STATUS = "agent:status";
-const E_TURN_COMPLETE = "agent:turn_complete";
-const E_ERROR = "agent:error";
-
-export function onAgentEvent(
-  callback: (event: AgentEvent) => void,
-): Promise<() => void> {
-  const p = [
-    listen<AgentToolStartEvent>(E_TOOL_START, (e) =>
-      callback({ type: "tool_start", data: e.payload }),
-    ),
-    listen<AgentToolResultEvent>(E_TOOL_RESULT, (e) =>
-      callback({ type: "tool_result", data: e.payload }),
-    ),
-    listen<AgentApprovalNeededEvent>(E_APPROVAL_NEEDED, (e) =>
-      callback({ type: "approval_needed", data: e.payload }),
-    ),
-    listen<AgentUserQuestionNeededEvent>(E_USER_QUESTION, (e) =>
-      callback({ type: "user_question", data: e.payload }),
-    ),
-    listen<AgentSessionStatusEvent>(E_STATUS, (e) =>
-      callback({ type: "status", data: e.payload }),
-    ),
-    listen<AgentTextDeltaEvent>(E_TEXT_DELTA, (e) =>
-      callback({ type: "text_delta", data: e.payload }),
-    ),
-    listen<AgentTurnCompleteEvent>(E_TURN_COMPLETE, (e) =>
-      callback({ type: "turn_complete", data: e.payload }),
-    ),
-    listen<AgentErrorEvent>(E_ERROR, (e) =>
-      callback({ type: "error", data: e.payload }),
-    ),
-  ];
-  return Promise.all(p).then((fns) => () => fns.forEach((fn) => fn()));
-}
-
-/* ============================================================
-   Message formatting helpers
-   ============================================================ */
-
-/** Flatten a Rust Message into displayable UI chunks */
-export function formatMessageBlock(block: MessageBlock): UiMessageChunk {
-  switch (block.type) {
-    case "text":
-      return { kind: "text", text: block.text };
-
-    case "toolUse":
-      return {
-        kind: "tool_use",
-        toolUseId: block.id,
-        toolName: block.name,
-        input: (block.input ?? {}) as Record<string, unknown>,
-        status: "running",
-      };
-
-    case "toolResult":
-      return {
-        kind: "tool_result",
-        toolUseId: block.toolUseId,
-        content: block.content,
-        isError: block.isError,
-      };
-  }
-}
-
-export type UiMessageChunk =
-  | { kind: "text"; text: string }
-  | {
-      kind: "tool_use";
-      toolUseId: string;
-      toolName: string;
-      input: Record<string, unknown>;
-      status: "running" | "done" | "error";
-    }
-  | {
-      kind: "tool_result";
-      toolUseId: string;
-      content: string;
-      isError: boolean;
-    };
-
 const COPILOT_TRANSIENT_STATUS_PATTERNS = [
   /Loading image/gi,
   /Image has been generated/gi,
@@ -438,50 +262,6 @@ export function normalizeAssistantVisibleText(text: string): string {
     dedupeConsecutiveLines(stripTransientCopilotStatus(String(text ?? ""))),
   );
   return cleaned.trim();
-}
-
-/** Convert full history to a flat array of UI chunks (ordered) */
-export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
-  const chunks: UiChunk[] = [];
-  const toolCallIndex = new Map<string, Extract<UiChunk, { kind: "tool_call" }>>();
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      const texts = msg.content
-        .filter((b): b is Extract<MessageBlock, { type: "text" }> => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
-      if (texts) chunks.push({ kind: "user" as const, text: texts });
-    }
-    if (msg.role === "assistant") {
-      for (const block of msg.content) {
-        if (block.type === "text" && block.text) {
-          const text = normalizeAssistantVisibleText(block.text);
-          if (!text) continue;
-          chunks.push({ kind: "assistant" as const, text, streaming: false });
-        }
-        if (block.type === "toolUse") {
-          const chunk = {
-            kind: "tool_call" as const,
-            toolUseId: block.id,
-            toolName: block.name,
-            input: (block.input ?? {}) as Record<string, unknown>,
-            result: null as string | null,
-            status: "running" as const,
-          };
-          chunks.push(chunk);
-          toolCallIndex.set(block.id, chunk);
-        }
-        if (block.type === "toolResult") {
-          const lastTool = toolCallIndex.get(block.toolUseId);
-          if (lastTool) {
-            lastTool.result = block.content;
-            lastTool.status = block.isError ? "error" : "done";
-          }
-        }
-      }
-    }
-  }
-  return chunks;
 }
 
 export interface UiUserChunk {

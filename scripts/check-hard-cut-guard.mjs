@@ -167,10 +167,6 @@ const required = [
     text: "export function opencodeProviderConfig",
   },
   {
-    path: "apps/desktop/src-tauri/src/lib.rs",
-    text: "mod agent_projection;",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
     text: "pub fn save_session(",
   },
@@ -181,10 +177,6 @@ const required = [
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
     text: "pub struct LoadedSessionMetadata",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/agent_projection.rs",
-    text: "pub struct RelayMessage",
   },
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs",
@@ -486,6 +478,34 @@ const forbidden = [
     text: "commands::agent::get_session_write_undo_status",
   },
   {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub async fn cancel_agent",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub async fn get_session_history",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub async fn respond_approval",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub async fn respond_user_question",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub async fn compact_agent_session",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub fn undo_session_write",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "pub fn redo_session_write",
+  },
+  {
     path: "apps/desktop/src/lib/ipc.ts",
     text: "export async function startAgent",
   },
@@ -504,6 +524,10 @@ const forbidden = [
   {
     path: "apps/desktop/src/lib/ipc.ts",
     text: "export async function cancelAgent",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "export function onAgentEvent",
   },
   {
     path: "apps/desktop/src/lib/ipc.ts",
@@ -806,18 +830,6 @@ const forbidden = [
     text: "runtime::MAX_TEXT_FILE_READ_BYTES",
   },
   {
-    path: "apps/desktop/src-tauri/src/agent_projection.rs",
-    text: "runtime::ConversationMessage",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/agent_projection.rs",
-    text: "runtime::ContentBlock",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/agent_projection.rs",
-    text: "runtime::MessageRole",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
     text: "pub mod session_write_undo;",
   },
@@ -873,6 +885,8 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/src/config.rs",
   "apps/desktop/src-tauri/src/hard_cut_agent.rs",
   "apps/desktop/src-tauri/src/commands/agent.rs",
+  "apps/desktop/src-tauri/src/agent_projection.rs",
+  "apps/desktop/src/shell/useAgentEvents.ts",
   "apps/desktop/scripts/dev-approve-latest-session.mjs",
   "apps/desktop/scripts/dev-approve-latest-workspace.mjs",
   "apps/desktop/scripts/dev-approve-latest.mjs",
@@ -897,7 +911,6 @@ const byPath = {
   "apps/desktop/src-tauri/src/opencode_runtime.rs": read("apps/desktop/src-tauri/src/opencode_runtime.rs"),
   "apps/desktop/src-tauri/src/lib.rs": read("apps/desktop/src-tauri/src/lib.rs"),
   "apps/desktop/src-tauri/src/ipc_codegen.rs": read("apps/desktop/src-tauri/src/ipc_codegen.rs"),
-  "apps/desktop/src-tauri/src/agent_projection.rs": read("apps/desktop/src-tauri/src/agent_projection.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/lib.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/Cargo.toml": read("apps/desktop/src-tauri/crates/desktop-core/Cargo.toml"),
   "apps/desktop/src-tauri/crates/desktop-core/src/error.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/error.rs"),

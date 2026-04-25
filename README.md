@@ -87,9 +87,9 @@ M365 Copilot
 ```
 
 Diagnostic desktop shell entry: `apps/desktop/src-tauri/src/lib.rs`. IPC source
-types live in Rust (`models.rs`, `agent_projection.rs`) and generate
-`apps/desktop/src/lib/ipc.generated.ts`; `apps/desktop/src/lib/ipc.ts` stays as
-the thin invoke/listen wrapper plus UI helpers for diagnostics.
+types live in Rust (`models.rs` and diagnostic structs in `tauri_bridge.rs`) and
+generate `apps/desktop/src/lib/ipc.generated.ts`; `apps/desktop/src/lib/ipc.ts`
+stays as the thin invoke wrapper plus UI helpers for diagnostics.
 
 ## Repository layout
 
