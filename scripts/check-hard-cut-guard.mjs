@@ -326,12 +326,8 @@ const forbidden = [
     text: "Copilot controls the turn; OpenCode/OpenWork owns tool execution state",
   },
   {
-    path: "apps/desktop/src-tauri/src/commands/agent.rs",
-    text: "start_agent_inner",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/commands/agent.rs",
-    text: "continue_agent_session_inner",
+    path: "apps/desktop/src-tauri/src/commands/mod.rs",
+    text: "pub mod agent;",
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
@@ -865,6 +861,7 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/crates/api",
   "apps/desktop/src-tauri/crates/runtime",
   "apps/desktop/src-tauri/crates/tools",
+  "apps/desktop/src-tauri/src/commands/agent.rs",
 ];
 
 const byPath = {
@@ -873,7 +870,7 @@ const byPath = {
   "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md": hardCutPlan,
   "docs/OPENCODE_PROVIDER_GATEWAY.md": providerGatewayDoc,
   "docs/IMPLEMENTATION.md": read("docs/IMPLEMENTATION.md"),
-  "apps/desktop/src-tauri/src/commands/agent.rs": read("apps/desktop/src-tauri/src/commands/agent.rs"),
+  "apps/desktop/src-tauri/src/commands/mod.rs": read("apps/desktop/src-tauri/src/commands/mod.rs"),
   "apps/desktop/src-tauri/src/opencode_runtime.rs": read("apps/desktop/src-tauri/src/opencode_runtime.rs"),
   "apps/desktop/src-tauri/src/lib.rs": read("apps/desktop/src-tauri/src/lib.rs"),
   "apps/desktop/src-tauri/src/ipc_codegen.rs": read("apps/desktop/src-tauri/src/ipc_codegen.rs"),

@@ -186,6 +186,26 @@ Acceptance:
 - The hard-cut guard rejects reintroducing retired agent commands to
   `generate_handler!` or `ipc.ts`.
 
+## Completed Task: Agent Command Module Retirement
+
+Implemented on 2026-04-25: deleted the unreachable Tauri wrapper module for
+legacy Relay chat/session execution commands. The remaining diagnostic backend
+tests and dev-control paths call their internal helpers directly while the
+provider gateway path remains OpenCode/OpenWork-owned.
+
+Deleted from the normal command tree:
+
+- `apps/desktop/src-tauri/src/commands/agent.rs`
+- `pub mod agent;` in `apps/desktop/src-tauri/src/commands/mod.rs`
+
+Acceptance:
+
+- No Tauri command module can be re-exported for legacy agent execution.
+- The public command tree contains diagnostics, CDP, MCP, and workspace support
+  only.
+- The hard-cut guard rejects recreating the deleted module or module
+  declaration.
+
 ## Milestones
 
 ### Phase 0: Hard-Cut Branch Setup
