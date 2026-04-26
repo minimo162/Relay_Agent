@@ -67,6 +67,26 @@ Implications:
 - Do not treat the Copilot browser thread as the execution source of truth.
 - New runtime work should target OpenCode/OpenWork APIs or extension points.
 
+## Completed Task: Packaged Desktop Diagnostic Build Verification
+
+Goal: verify that the desktop diagnostic shell still builds as a packaged Tauri
+app after removing the bundled OpenCode runtime sidecar. The package should
+retain provider/diagnostic resources and sidecars while omitting
+`opencode-runtime`.
+
+Status 2026-04-26: passed on Linux. `pnpm --filter @relay-agent/desktop
+tauri:build` produced `.deb`, `.rpm`, and `.AppImage` bundles. Inspection of
+the `.deb` found no `opencode-runtime` entries and confirmed the expected
+LiteParse runner, sample CSV, `relay-node`, and `relay-rg` assets.
+
+Acceptance criteria:
+
+- `pnpm --filter @relay-agent/desktop tauri:build` completes successfully.
+- The generated `.deb` does not include `opencode-runtime`.
+- The generated `.deb` still includes LiteParse runner files, the bundled
+  sample CSV, and Tauri external binaries `relay-node` / `relay-rg`.
+- The result is recorded in `docs/IMPLEMENTATION.md`.
+
 ## Completed Task: Live M365 OpenCode Provider Smoke
 
 Goal: verify the current hard-cut product path against a real M365 Copilot CDP

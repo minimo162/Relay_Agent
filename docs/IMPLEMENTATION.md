@@ -23,6 +23,35 @@
 
 ## Milestone Log
 
+### 2026-04-26 Build Validation: Packaged desktop diagnostic build
+
+Verified the desktop diagnostic shell still builds and bundles after the
+bundled OpenCode runtime sidecar was removed. The full Tauri package script
+completed successfully on Linux and produced all configured Linux bundle
+artifacts.
+
+Result:
+
+- `pnpm --filter @relay-agent/desktop tauri:build`: passed.
+- Generated bundles:
+  - `/root/Relay_Agent/target/release/bundle/deb/Relay Agent_0.1.0_amd64.deb`
+  - `/root/Relay_Agent/target/release/bundle/rpm/Relay Agent-0.1.0-1.x86_64.rpm`
+  - `/root/Relay_Agent/target/release/bundle/appimage/Relay Agent_0.1.0_amd64.AppImage`
+- Bundle inspection confirmed the `.deb` does not contain `opencode-runtime`.
+- Bundle inspection confirmed the `.deb` still contains
+  `liteparse-runner/parse.mjs`, `liteparse-runner/package.json`,
+  `examples/revenue-workflow-demo.csv`, `usr/bin/relay-node`, and
+  `usr/bin/relay-rg`.
+
+Verification:
+
+- `dpkg-deb -c 'target/release/bundle/deb/Relay Agent_0.1.0_amd64.deb' | rg 'opencode-runtime' || true`:
+  returned no matches.
+- `dpkg-deb -c 'target/release/bundle/deb/Relay Agent_0.1.0_amd64.deb' | rg 'usr/lib/Relay Agent/examples/revenue-workflow-demo\.csv|usr/lib/Relay Agent/liteparse-runner/(parse\.mjs|package\.json)|usr/bin/relay-(node|rg)$'`:
+  returned the expected packaged resources and sidecars.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-26 Live Validation: M365 OpenCode provider smoke
 
 Ran the live OpenCode provider smoke against a real M365 Copilot CDP session
