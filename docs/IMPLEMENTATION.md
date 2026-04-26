@@ -23,6 +23,52 @@
 
 ## Milestone Log
 
+### 2026-04-26 Implementation: Orphan desktop chat UI retirement
+
+Deleted the orphan SolidJS chat/session UI modules and legacy browser-test
+mocks after the diagnostic shell became the only desktop frontend surface.
+Relay desktop now keeps provider diagnostics, settings, Copilot warmup, and
+status toasts without carrying unused chat/feed/session/approval modules.
+
+Changes:
+
+- Deleted the orphan chat UI components: Composer, MessageFeed, Sidebar,
+  CommandPalette, approval/question overlays, feed/status/rail/tool rows, and
+  message bubble renderer.
+- Deleted dependent legacy helpers and stores: `sessionStore`, `approvalStore`,
+  `session-display`, `shell-types`, `tool-timeline`, `slash-commands`,
+  `assistant-markdown`, and TodoWrite plan timeline parsing.
+- Removed legacy UI chunk/session phase helpers and `office_search` activity
+  labels from `ipc.ts`.
+- Deleted obsolete Playwright debug specs and old Tauri mock files that still
+  implemented legacy agent chat/session commands.
+- Simplified the remaining E2E mock harness to provider diagnostics and CDP
+  helpers only.
+- Updated the WebView CDP smoke assertion to look for the provider gateway
+  console instead of the old Sessions heading.
+- Strengthened the hard-cut guard so deleted chat UI modules and stale mock
+  command handlers cannot return.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8'))"`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`:
+  passed, 64 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop --lib`:
+  passed, 15 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`:
+  passed, 5 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+- `E2E_SKIP_AUTH_SETUP=1 pnpm --filter @relay-agent/desktop test:e2e -- app.e2e.spec.ts e2e-comprehensive.spec.ts`:
+  passed, 5 passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `git diff --check`: passed.
+
 ### 2026-04-26 Implementation: Legacy error taxonomy retirement
 
 Removed the unused Relay-owned execution error taxonomy after the registry and

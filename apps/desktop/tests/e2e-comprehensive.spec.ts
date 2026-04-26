@@ -8,7 +8,7 @@ async function openApp(page: any) {
 
 test.describe("Diagnostic shell", () => {
   test("does not expose the legacy chat/session product surface", async ({ page }) => {
-    await injectRelayMock(page, { autoComplete: true });
+    await injectRelayMock(page);
     await openApp(page);
 
     await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
@@ -20,7 +20,7 @@ test.describe("Diagnostic shell", () => {
   });
 
   test("keeps provider checks visible as the main workflow", async ({ page }) => {
-    await injectRelayMock(page, { autoComplete: true });
+    await injectRelayMock(page);
     await openApp(page);
 
     await expect(page.getByText("pnpm start:opencode-provider-gateway")).toBeVisible();

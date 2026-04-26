@@ -258,6 +258,33 @@ Acceptance:
   agent loop.
 - The hard-cut guard rejects restoring the obsolete variants or wording.
 
+## Completed Task: Orphan Desktop Chat UI Retirement
+
+Implemented on 2026-04-26: deleted the remaining orphan SolidJS chat/session UI
+modules and legacy browser-test mocks. The desktop frontend now keeps the
+provider diagnostic shell, settings, warmup, and status-toast surfaces without
+carrying unused Composer/feed/session/approval modules.
+
+Retired:
+
+- Chat UI components: Composer, MessageFeed, Sidebar, CommandPalette,
+  approval/question overlays, rail/status/feed rows, tool rows, and message
+  bubble renderer.
+- Legacy frontend stores/helpers: `sessionStore`, `approvalStore`,
+  `session-display`, `shell-types`, `tool-timeline`, `slash-commands`,
+  `assistant-markdown`, and TodoWrite plan timeline parsing.
+- Browser-test mocks and debug specs that still carried `start_agent`,
+  `continue_agent_session`, session history, compact, approval, or `agent:*`
+  event behavior.
+
+Acceptance:
+
+- The diagnostic shell cannot import old chat/session UI modules because they
+  no longer exist.
+- Provider-mode E2E mocks expose only diagnostic/provider commands.
+- The hard-cut guard rejects restoring the deleted frontend modules and stale
+  mock command handlers.
+
 ## Completed Task: Hard-Cut Agent Wrapper Retirement
 
 Implemented on 2026-04-25: deleted the internal `hard_cut_agent.rs` controller

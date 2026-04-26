@@ -7,7 +7,7 @@ async function openApp(page: any) {
 }
 
 test("desktop opens as a provider gateway diagnostic console", async ({ page }) => {
-  await injectRelayMock(page, { autoComplete: true });
+  await injectRelayMock(page);
   await openApp(page);
 
   await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
@@ -20,7 +20,7 @@ test("desktop opens as a provider gateway diagnostic console", async ({ page }) 
 });
 
 test("diagnostics panel reads provider bridge status", async ({ page }) => {
-  await injectRelayMock(page, { autoComplete: true });
+  await injectRelayMock(page);
   await openApp(page);
 
   await page.getByRole("button", { name: "Refresh" }).click();
@@ -30,7 +30,7 @@ test("diagnostics panel reads provider bridge status", async ({ page }) => {
 });
 
 test("settings remain available for provider diagnostics", async ({ page }) => {
-  await injectRelayMock(page, { autoComplete: true });
+  await injectRelayMock(page);
   await openApp(page);
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();

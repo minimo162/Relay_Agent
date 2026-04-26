@@ -1,211 +1,101 @@
 import type { Page } from "@playwright/test";
 
 type RelayMockConfig = {
-  autoComplete?: boolean;
-};
-
-type RelayHistoryEntry = {
-  role: "user" | "assistant";
-  text: string;
+  copilotReady?: boolean;
 };
 
 type RelayMockState = {
-  sessionCounter: number;
-  sessions: Map<string, { running: boolean; history: RelayHistoryEntry[] }>;
   invocations: Array<{ cmd: string; request: unknown }>;
-  listeners: Map<string, Set<(event: { payload: unknown }) => void>>;
-  listenerCounts: Map<string, number>;
-  mcpServers: Array<{
-    name: string;
-    command: string;
-    args: string[];
-    connected: boolean;
-    tools: string[];
-  }>;
-  callbackCounter: number;
   callbacks: Map<number, (event: { event: string; id: number; payload: unknown }) => void>;
-  eventCounter: number;
-  pluginListeners: Map<string, Map<number, number>>;
-  emit: (event: string, payload: unknown) => void;
+  callbackCounter: number;
 };
 
-function initRelayMock(config: { autoComplete: boolean }) {
+function mockDiagnostics() {
+  return {
+    appVersion: "0.0.0-mock",
+    targetOs: "linux",
+    copilotNodeBridgePort: 18080,
+    defaultEdgeCdpPort: 9360,
+    relayAgentDevMode: false,
+    architectureNotes: "mock provider diagnostics",
+    processCwd: "/mock",
+    clawConfigHomeDisplay: "~/.claw (mock)",
+    maxTextFileReadBytes: 10485760,
+    doctorHints: ["mock"],
+    predictabilityNotes: ["mock"],
+    copilotRepairStageStats: [],
+    copilotBridgeRunning: true,
+    copilotBridgeConnected: true,
+    copilotBridgeLoginRequired: false,
+    opencodeRuntimeMessage: "mock runtime ready",
+  };
+}
+
+function initRelayMock(config: { copilotReady: boolean }) {
   const state: RelayMockState = {
-    sessionCounter: 0,
-    sessions: new Map(),
     invocations: [],
-    listeners: new Map(),
-    listenerCounts: new Map(),
-    mcpServers: [],
-    callbackCounter: 0,
     callbacks: new Map(),
-    eventCounter: 0,
-    pluginListeners: new Map(),
-    emit(event: string, payload: unknown) {
-      const handlers = this.listeners.get(event);
-      if (handlers) {
-        for (const handler of handlers) handler({ payload });
-      }
-      const pluginHandlers = this.pluginListeners.get(event);
-      if (!pluginHandlers) return;
-      for (const [eventId, callbackId] of pluginHandlers.entries()) {
-        this.callbacks.get(callbackId)?.({ event, id: eventId, payload });
-      }
-    },
-  };
-
-  const setListenerCount = (event: string) => {
-    const direct = state.listeners.get(event)?.size ?? 0;
-    const plugin = state.pluginListeners.get(event)?.size ?? 0;
-    state.listenerCounts.set(event, direct + plugin);
-  };
-
-  const autoCompleteTurn = (sessionId: string) => {
-    if ((window as any).__RELAY_E2E_AUTOCOMPLETE === false) return;
-    setTimeout(() => {
-      const session = state.sessions.get(sessionId);
-      if (session) session.running = false;
-      state.emit("agent:turn_complete", {
-        sessionId,
-        stopReason: "end_turn",
-        assistantMessage: "Task completed.",
-        messageCount: (session?.messages?.length ?? 1) + 1,
-      });
-    }, 150);
+    callbackCounter: 0,
   };
 
   const invoke = async (cmd: string, args: any) => {
     const req = args?.request ?? args ?? {};
     state.invocations.push({ cmd, request: req });
     switch (cmd) {
-      case "start_agent": {
-        state.sessionCounter += 1;
-        const id = `session-e2e-${state.sessionCounter}`;
-        state.sessions.set(id, {
-          running: true,
-          history: [{ role: "user", text: String(req.goal ?? "") }],
-        });
-        autoCompleteTurn(id);
-        return id;
-      }
-      case "continue_agent_session": {
-        const session = state.sessions.get(req.sessionId);
-        if (!session) throw new Error(`[mock] Unknown session ${req.sessionId}`);
-        session.running = true;
-        session.history = [
-          ...(session.history ?? []),
-          { role: "user", text: String(req.message ?? "") },
-        ];
-        autoCompleteTurn(req.sessionId);
-        return req.sessionId;
-      }
-      case "respond_approval":
-      case "respond_user_question":
-      case "undo_session_write":
-      case "redo_session_write":
+      case "warmup_copilot_bridge":
+        return {
+          connected: config.copilotReady,
+          loginRequired: false,
+          bootTokenPresent: true,
+          cdpPort: 9360,
+          stage: config.copilotReady ? "ready" : "status_request",
+          message: config.copilotReady ? "Mock Copilot ready" : "Mock Copilot unavailable",
+          failureCode: null,
+          statusCode: 200,
+          url: "https://m365.cloud.microsoft/chat",
+        };
+      case "get_relay_diagnostics":
+        return mockDiagnostics();
       case "write_text_export":
       case "remove_workspace_allowlist_tool":
       case "clear_workspace_allowlist":
         return undefined;
-      case "cancel_agent": {
-        const session = state.sessions.get(req.sessionId);
-        if (session) session.running = false;
-        return undefined;
-      }
-      case "get_session_write_undo_status":
-        return { canUndo: false, canRedo: false };
-      case "get_session_history": {
-        const session = state.sessions.get(req.sessionId);
-        return {
-          sessionId: req.sessionId,
-          running: session?.running ?? false,
-          messages: (session?.history ?? []).map((entry: RelayHistoryEntry) => ({
-            role: entry.role,
-            content: [{ type: "text", text: entry.text }],
-          })),
-        };
-      }
-      case "compact_agent_session":
-        return { message: "Session compacted", removedMessageCount: 0 };
-      case "mcp_list_servers":
-        return state.mcpServers;
-      case "mcp_add_server": {
-        const server = { name: req.name, command: req.command, args: req.args ?? [], connected: true, tools: [] };
-        state.mcpServers = [...state.mcpServers, server];
-        return server;
-      }
-      case "mcp_remove_server":
-        state.mcpServers = state.mcpServers.filter((server) => server.name !== req.name);
-        return true;
-      case "mcp_check_server_status":
-        return state.mcpServers.find((server) => server.name === req.name) ?? {
-          name: req.name,
-          command: "",
-          args: [],
-          connected: false,
-          tools: [],
-        };
-      case "warmup_copilot_bridge":
-        return { connected: true, loginRequired: false, url: null, error: null };
-      case "workspace_instruction_surfaces":
-        return { workspaceRoot: null, surfaces: [] };
       case "get_workspace_allowlist":
-        return (window as any).__RELAY_ALLOWLIST_SNAPSHOT__ ?? {
+        return {
           storePath: "/mock/.relay-agent/workspace_allowed_tools.json",
           entries: [],
           warnings: [],
         };
       case "list_workspace_slash_commands":
+      case "list_workspace_skills":
         return [];
+      case "workspace_instruction_surfaces":
+        return { workspaceRoot: null, surfaces: [] };
       case "probe_rust_analyzer":
         return { ok: false, versionLine: null, error: "mock: rust-analyzer not available" };
-      case "get_relay_diagnostics":
-        return {
-          appVersion: "0.0.0-mock",
-          targetOs: "linux",
-          copilotNodeBridgePort: 18080,
-          defaultEdgeCdpPort: 9360,
-          relayAgentDevMode: false,
-          architectureNotes: "mock",
-          processCwd: "/mock",
-          clawConfigHomeDisplay: "~/.claw (mock)",
-          maxTextFileReadBytes: 10485760,
-          doctorHints: ["mock"],
-          predictabilityNotes: ["mock"],
-        };
       case "connect_cdp":
       case "cdp_start_new_chat":
-        return { ok: true, debugUrl: "", pageUrl: "", pageTitle: "", port: 9360, launched: false, error: null };
+        return {
+          ok: true,
+          debugUrl: "http://127.0.0.1:9360",
+          pageUrl: "https://m365.cloud.microsoft/chat",
+          pageTitle: "M365 Copilot",
+          port: 9360,
+          launched: false,
+          error: null,
+        };
       case "cdp_send_prompt":
         return { ok: true, responseText: "", bodyLength: 0, error: null };
       case "cdp_screenshot":
         return { ok: true, screenshot: "base64" };
-      case "plugin:event|listen": {
-        state.eventCounter += 1;
-        const eventId = state.eventCounter;
-        if (!state.pluginListeners.has(req.event)) {
-          state.pluginListeners.set(req.event, new Map());
-        }
-        state.pluginListeners.get(req.event)?.set(eventId, req.handler);
-        setListenerCount(req.event);
-        return eventId;
-      }
-      case "plugin:event|unlisten": {
-        state.pluginListeners.get(req.event)?.delete(req.eventId);
-        setListenerCount(req.event);
-        return undefined;
-      }
-      case "plugin:event|emit":
-      case "plugin:event|emit_to":
-        state.emit(req.event, req.payload);
+      case "disconnect_cdp":
         return undefined;
       default:
-        throw new Error("[mock] Unknown command: " + cmd);
+        throw new Error("[mock] Unknown diagnostic command: " + cmd);
     }
   };
 
   (window as any).__RELAY_MOCK__ = state;
-  (window as any).__RELAY_E2E_AUTOCOMPLETE = config.autoComplete;
   (window as any).__TAURI_INTERNALS__ = {
     invoke,
     transformCallback(callback: (event: { event: string; id: number; payload: unknown }) => void) {
@@ -226,49 +116,6 @@ function initRelayMock(config: { autoComplete: boolean }) {
 
 export async function injectRelayMock(page: Page, config?: RelayMockConfig) {
   await page.addInitScript(initRelayMock, {
-    autoComplete: config?.autoComplete ?? true,
+    copilotReady: config?.copilotReady ?? true,
   });
-}
-
-export async function emitAgentEvent(page: Page, eventName: string, payload: unknown) {
-  await page.evaluate(
-    ({ eventName, payload }) => {
-      (window as any).__RELAY_MOCK__?.emit(eventName, payload);
-    },
-    { eventName, payload },
-  );
-}
-
-export async function waitForMockSession(page: Page, sessionId: string) {
-  await page.waitForFunction(
-    (id) => Boolean((window as any).__RELAY_MOCK__?.sessions?.has(id)),
-    sessionId,
-  );
-}
-
-export async function setMockSessionHistory(
-  page: Page,
-  sessionId: string,
-  history: RelayHistoryEntry[],
-) {
-  await page.evaluate(
-    ({ sessionId, history }) => {
-      const state = (window as any).__RELAY_MOCK__;
-      const session = state?.sessions?.get(sessionId);
-      if (!session) throw new Error(`Unknown mock session ${sessionId}`);
-      session.history = history;
-    },
-    { sessionId, history },
-  );
-}
-
-export async function waitForAgentListener(page: Page, eventName: string) {
-  await page.waitForFunction(
-    (name) => {
-      const count = (window as any).__RELAY_MOCK__?.listenerCounts?.get(name);
-      const listeners = (window as any).__RELAY_MOCK__?.listeners?.get(name);
-      return Boolean((typeof count === "number" && count > 0) || (listeners && listeners.size > 0));
-    },
-    eventName,
-  );
 }

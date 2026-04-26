@@ -1,20 +1,16 @@
 /**
- * E2E mock for @tauri-apps/api/event
+ * E2E mock for @tauri-apps/api/event.
  */
 
-const state = (window as any).__RELAY_MOCK__ ??= {
-  sessionCounter: 0,
-  sessions: new Map(),
-  listeners: new Map(),
-  emit(event: string, payload: unknown) {
-    const fns = this.listeners.get(event);
-    if (fns) for (const fn of fns) fn({ payload });
-  },
+type Handler = (event: { payload: unknown }) => void;
+
+const state = (window as any).__RELAY_MOCK_EVENTS__ ??= {
+  listeners: new Map<string, Set<Handler>>(),
 };
 
 export async function listen(
   event: string,
-  handler: (e: { payload: unknown }) => void
+  handler: Handler,
 ): Promise<() => void> {
   if (!state.listeners.has(event)) {
     state.listeners.set(event, new Set());
@@ -27,15 +23,17 @@ export async function listen(
 
 export async function once(
   event: string,
-  handler: (e: { payload: unknown }) => void
+  handler: Handler,
 ): Promise<() => void> {
-  const unlisten = await listen(event, (e) => {
-    handler(e);
+  const unlisten = await listen(event, (payload) => {
+    handler(payload);
     unlisten();
   });
   return unlisten;
 }
 
 export async function emit(event: string, payload: unknown): Promise<void> {
-  state.emit(event, payload);
+  for (const handler of state.listeners.get(event) ?? []) {
+    handler({ payload });
+  }
 }

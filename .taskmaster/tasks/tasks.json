@@ -431,6 +431,45 @@
             "D09"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D11",
+          "title": "Retire orphan desktop chat UI and legacy browser mocks",
+          "description": "Delete unused SolidJS chat/session UI modules and stale Playwright/Tauri mocks now that the desktop frontend is a provider diagnostics shell only.",
+          "files": [
+            "apps/desktop/src/components/Composer.tsx",
+            "apps/desktop/src/components/MessageFeed.tsx",
+            "apps/desktop/src/components/Sidebar.tsx",
+            "apps/desktop/src/components/CommandPalette.tsx",
+            "apps/desktop/src/components/ApprovalOverlay.tsx",
+            "apps/desktop/src/components/InlineApprovalCard.tsx",
+            "apps/desktop/src/components/InlineQuestionCard.tsx",
+            "apps/desktop/src/components/MessageBubble.tsx",
+            "apps/desktop/src/components/RailPanel.tsx",
+            "apps/desktop/src/components/StatusBar.tsx",
+            "apps/desktop/src/components/ToolCallRow.tsx",
+            "apps/desktop/src/components/UserQuestionOverlay.tsx",
+            "apps/desktop/src/components/shell-types.ts",
+            "apps/desktop/src/shell/sessionStore.ts",
+            "apps/desktop/src/shell/approvalStore.ts",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/tests/relay-e2e-harness.ts",
+            "apps/desktop/tests/tauri-mock-core.ts",
+            "apps/desktop/tests/tauri-mock-event.ts",
+            "apps/desktop/tests/webview-cdp.spec.ts",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 Orphan desktop chat UI retirement)",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "D10"
+          ],
+          "status": "completed"
         }
       ]
     }
