@@ -256,6 +256,36 @@ Acceptance criteria:
 - The hard-cut guard rejects restoring the deleted registry/persistence files
   or their module declarations.
 
+## Completed Task: Legacy Error Taxonomy Retirement
+
+Goal: remove the leftover Relay-owned execution error taxonomy and stale
+agent-loop wording after the registry and persistence modules were deleted.
+`desktop-core` should expose provider/diagnostic helpers, not unused
+session-loop error variants.
+
+Status 2026-04-26: implemented by deleting the unused `AgentLoopError` enum,
+keeping only `DesktopCoreError`, and updating remaining CDP adapter comments
+and logs to describe provider diagnostics rather than `start_agent` or an
+agent loop.
+
+Retired surfaces:
+
+- `AgentLoopError`
+- `SessionNotFound`
+- `RegistryLockPoisoned`
+- `PersistenceError`
+- Agent-loop wording in Copilot adapter comments.
+- `start_agent` wording in CDP auto-connect logs.
+
+Acceptance criteria:
+
+- `desktop-core/src/error.rs` contains only active provider/diagnostic error
+  types.
+- Live Rust source does not mention `AgentLoopError`, the removed registry
+  lock error, or persistence/session variants.
+- The hard-cut guard rejects restoring the obsolete error taxonomy and stale
+  CDP adapter/log wording.
+
 ## Completed Task: Agent Command Module Retirement
 
 Goal: delete the now-unreachable Tauri command wrapper module for legacy Relay

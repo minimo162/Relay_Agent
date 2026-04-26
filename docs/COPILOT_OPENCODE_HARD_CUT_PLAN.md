@@ -234,6 +234,30 @@ Acceptance:
 - The hard-cut guard rejects restoring the deleted registry and persistence
   modules or wiring them back into `AppServices`.
 
+## Completed Task: Legacy Error Taxonomy Retirement
+
+Implemented on 2026-04-26: removed the leftover `AgentLoopError` enum and stale
+agent-loop/session-registry wording from live Rust source. The remaining
+desktop-core error surface is the active `DesktopCoreError` boundary used by
+provider diagnostics and adapter helpers.
+
+Retired:
+
+- `AgentLoopError`
+- `SessionNotFound`
+- `RegistryLockPoisoned`
+- `PersistenceError`
+- Agent-loop wording in Copilot adapter comments.
+- `start_agent` wording in CDP auto-connect logs.
+
+Acceptance:
+
+- Live Rust source no longer carries an unused Relay-owned session/execution
+  error taxonomy.
+- CDP adapter comments and logs describe provider diagnostics, not a desktop
+  agent loop.
+- The hard-cut guard rejects restoring the obsolete variants or wording.
+
 ## Completed Task: Hard-Cut Agent Wrapper Retirement
 
 Implemented on 2026-04-25: deleted the internal `hard_cut_agent.rs` controller

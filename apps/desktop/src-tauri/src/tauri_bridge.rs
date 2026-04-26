@@ -538,7 +538,7 @@ struct CdpSessionState {
     connected: bool,
     /// URL of the Copilot page (if connected).
     page_url: Option<String>,
-    /// Connected Copilot page for agent loop use.
+    /// Connected Copilot page for provider diagnostics and CDP prompts.
     page: Option<cdp_copilot::CopilotPage>,
 }
 
@@ -609,7 +609,7 @@ fn mark_cdp_disconnected() {
     }
 }
 
-/// Get the current CDP `CopilotPage` for use by the agent loop.
+/// Get the current CDP `CopilotPage` for provider diagnostics and CDP prompts.
 pub fn get_cdp_page() -> Result<cdp_copilot::CopilotPage, String> {
     let state = cdp_session()
         .lock()
@@ -621,7 +621,7 @@ pub fn get_cdp_page() -> Result<cdp_copilot::CopilotPage, String> {
 }
 
 /// Ensure a CDP connection is available, auto-connecting if needed.
-/// This allows the agent loop to start without requiring a prior `connect_cdp` call.
+/// This allows CDP-backed diagnostics to run without requiring a prior `connect_cdp` call.
 /// If already connected (e.g. via `connect_cdp`), returns the existing page immediately.
 pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
     // Fast path: already connected via `connect_cdp`
@@ -633,7 +633,10 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
 
     // Slow path: auto-connect CDP
     let debug_url = get_cdp_debug_url(COPILOT_JS_CDP_PORT);
-    tracing::info!("[CDP] auto-connecting to {} (start_agent)…", debug_url);
+    tracing::info!(
+        "[CDP] auto-connecting to {} (provider diagnostics)…",
+        debug_url
+    );
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

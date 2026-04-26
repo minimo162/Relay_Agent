@@ -857,6 +857,42 @@ const forbidden = [
     path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
     text: "block_port_change_on_concurrent_sessions",
   },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
+    text: "AgentLoopError",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
+    text: "SessionNotFound",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
+    text: "RegistryLockPoisoned",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
+    text: "PersistenceError",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
+    text: "agent loop failed",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
+    text: "session registry",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
+    text: "block the agent loop",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "start_agent",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "agent loop use",
+  },
 ];
 
 const forbiddenPaths = [
