@@ -684,6 +684,31 @@
           "status": "completed"
         }
       ]
+    },
+    {
+      "id": "release_validation",
+      "name": "Release And Packaging Validation",
+      "description": "Tracks packaged desktop diagnostic build checks after the OpenCode/OpenWork hard cut.",
+      "tasks": [
+        {
+          "id": "R01",
+          "title": "Verify packaged desktop diagnostic build",
+          "description": "Run the full Tauri package build after removing the bundled OpenCode runtime sidecar, then inspect the Linux package to confirm opencode-runtime is absent and retained diagnostic resources are present.",
+          "files": [
+            "apps/desktop/src-tauri/tauri.conf.json",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 packaged desktop diagnostic build)",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "D18"
+          ],
+          "status": "completed"
+        }
+      ]
     }
   ]
 }
