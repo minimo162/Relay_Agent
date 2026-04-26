@@ -23,6 +23,32 @@
 
 ## Milestone Log
 
+### 2026-04-26 Live Validation: M365 OpenCode provider smoke
+
+Ran the live OpenCode provider smoke against a real M365 Copilot CDP session
+after PR #43 landed. The smoke started the Relay OpenAI-compatible provider,
+verified Copilot status, then drove OpenCode through the provider for both a
+plain text response and an OpenCode-owned `read` tool turn.
+
+Result:
+
+- Overall result: passed.
+- Artifact directory: `/tmp/relay-live-m365-opencode-provider-f22aLj`.
+- Display: `:99`.
+- Provider base URL: `http://127.0.0.1:18180/v1`.
+- Copilot status: connected, `loginRequired: false`.
+- Text case returned `OPEN_CODE_M365_PROVIDER_OK`.
+- Tool case completed OpenCode `read` on
+  `/tmp/relay-live-opencode-provider-workspace-omuKQ7/workspace/relay_live_tool_fixture.txt`
+  and returned `OPEN_CODE_M365_TOOL_OK`.
+- Tool repair artifact directory:
+  `/tmp/relay-live-m365-opencode-provider-f22aLj/tool-repair-artifacts`.
+
+Verification:
+
+- `RELAY_KEEP_OPENCODE_LIVE_SMOKE_DIR=1 pnpm live:m365:opencode-provider`:
+  passed.
+
 ### 2026-04-26 Implementation: Bundled OpenCode runtime retirement
 
 Removed the packaged OpenCode runtime sidecar from the Relay desktop process.
