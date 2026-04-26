@@ -470,6 +470,194 @@
             "D10"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D12",
+          "title": "Harden OpenCode bash preflight policy",
+          "description": "Add Relay-side token inspection for OpenCode bash tool requests so obvious destructive shell roots are denied before forwarding to the external runtime, including wrapper forms and mixed-case Windows verbs.",
+          "files": [
+            "apps/desktop/src-tauri/src/opencode_runtime.rs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 OpenCode bash preflight hardening)",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "D11"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D13",
+          "title": "Remove stale office_search adapter fixture",
+          "description": "Replace the last live Rust test fixture that mentioned the retired office_search tool and extend the hard-cut guard so copilot_adapter.rs cannot reintroduce it.",
+          "files": [
+            "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 office_search adapter fixture retirement)",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "D12"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D14",
+          "title": "Retire Relay workspace approval allowlist diagnostics",
+          "description": "Delete the leftover Relay-owned workspace approval allowlist backend, IPC commands, generated/frontend wrappers, Settings UI, and mocks now that OpenCode/OpenWork owns tool permissions in provider mode.",
+          "files": [
+            "apps/desktop/src-tauri/src/workspace_allowlist.rs",
+            "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/doctor.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+            "apps/desktop/src-tauri/src/ipc_codegen.rs",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "apps/desktop/src/components/SettingsModal.tsx",
+            "apps/desktop/src/index.css",
+            "apps/desktop/tests/relay-e2e-harness.ts",
+            "apps/desktop/tests/tauri-mock-core.ts",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 workspace approval allowlist diagnostics retirement)",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "D13"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D15",
+          "title": "Retire Relay workspace skills and slash-command diagnostics",
+          "description": "Delete the leftover Relay-owned .relay/skills and .relay/commands discovery surfaces from backend, IPC, Settings, mocks, and desktop-core now that OpenCode/OpenWork owns skills and slash commands in provider mode.",
+          "files": [
+            "apps/desktop/src/lib/skills.ts",
+            "apps/desktop/src-tauri/src/workspace_skills.rs",
+            "apps/desktop/src-tauri/src/workspace_slash_commands.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/workspace_skills.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/workspace_slash_commands.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+            "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/ipc_codegen.rs",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "apps/desktop/src/components/SettingsModal.tsx",
+            "apps/desktop/src/index.css",
+            "apps/desktop/tests/relay-e2e-harness.ts",
+            "apps/desktop/tests/tauri-mock-core.ts",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 workspace skills and slash-command diagnostics retirement)",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "D14"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D16",
+          "title": "Retire Relay MCP registry diagnostics",
+          "description": "Delete the leftover Relay-owned in-memory MCP registry commands and IPC types now that OpenCode/OpenWork owns MCP configuration and execution in provider mode.",
+          "files": [
+            "apps/desktop/src-tauri/src/commands/mcp.rs",
+            "apps/desktop/src-tauri/src/commands/mod.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+            "apps/desktop/src-tauri/src/ipc_codegen.rs",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 MCP registry diagnostics retirement)",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "D15"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D17",
+          "title": "Retire orphan LSP and workspace instruction diagnostics",
+          "description": "Delete unused Relay-owned rust-analyzer probe and workspace instruction surface IPC after provider-mode LSP and workspace config ownership moved to OpenCode/OpenWork.",
+          "files": [
+            "apps/desktop/src-tauri/src/lsp_probe.rs",
+            "apps/desktop/src-tauri/src/workspace_surfaces.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/workspace_surfaces.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+            "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/ipc_codegen.rs",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "apps/desktop/tests/relay-e2e-harness.ts",
+            "apps/desktop/tests/tauri-mock-core.ts",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 LSP and workspace instruction diagnostics retirement)",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "D16"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D18",
+          "title": "Retire bundled OpenCode runtime sidecar",
+          "description": "Remove Relay desktop startup and packaging of the bundled OpenCode runtime so OpenCode/OpenWork remains the external owner of UX, sessions, transcript, tools, and execution.",
+          "files": [
+            "apps/desktop/src-tauri/src/opencode_runtime.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/tauri.conf.json",
+            "apps/desktop/src-tauri/resources/opencode-runtime/",
+            "scripts/check-hard-cut-guard.mjs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 bundled OpenCode runtime retirement)",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "D17"
+          ],
+          "status": "completed"
         }
       ]
     }

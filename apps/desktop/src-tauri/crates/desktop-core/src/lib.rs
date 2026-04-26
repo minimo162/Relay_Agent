@@ -5,6 +5,3 @@ pub mod doctor;
 pub mod error;
 pub mod models;
 pub mod opencode_tools;
-pub mod workspace_skills;
-pub mod workspace_slash_commands;
-pub mod workspace_surfaces;

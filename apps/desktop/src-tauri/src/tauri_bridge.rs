@@ -1,6 +1,5 @@
 #![allow(clippy::needless_pass_by_value, clippy::unused_async)]
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -13,13 +12,7 @@ use desktop_core::doctor::RELAY_MAX_TEXT_FILE_READ_BYTES;
 
 use crate::app_services::{AppServices, CopilotBridgeManager, CopilotServerState};
 use crate::cdp_copilot;
-use crate::models::{
-    BrowserAutomationSettings, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
-    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RustAnalyzerProbeRequest,
-    RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow,
-    WorkspaceSlashCommandRow,
-};
+use crate::models::{BrowserAutomationSettings, RelayDiagnostics};
 
 /* ── Copilot Node bridge (copilot_server.js) ───────────────── *
  * Spawns Node + copilot_server.js, which attaches to Edge via *
@@ -520,10 +513,6 @@ fn classify_warmup_status_response(
     )
 }
 
-pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerProbeResponse {
-    crate::lsp_probe::probe_rust_analyzer(request.workspace_path.as_deref())
-}
-
 /* ── CDP Copilot Tauri commands ────────────────────────────── */
 
 /// Shared state: tracks the session for auto-launched Edge + connection status.
@@ -985,89 +974,13 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
     Ok(serde_json::json!({ "ok": true, "format": "png", "data": b64 }))
 }
 
-/* ── MCP Server Management ─────────────────────────────────── */
-
-/// Global registry of MCP servers keyed by name.
-static MCP_SERVER_REGISTRY: OnceLock<Mutex<HashMap<String, McpServerInfo>>> = OnceLock::new();
-
-fn mcp_registry() -> &'static Mutex<HashMap<String, McpServerInfo>> {
-    MCP_SERVER_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn new_server_info(name: &str, command: &str, args: Vec<String>) -> McpServerInfo {
-    McpServerInfo {
-        name: name.to_string(),
-        command: command.to_string(),
-        args,
-        status: "registered".to_string(),
-        connected: false,
-        tools: Vec::new(),
-    }
-}
-
-/// List all registered MCP servers.
-pub fn mcp_list_servers() -> Result<Vec<McpServerInfo>, String> {
-    let registry = mcp_registry();
-    let data = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    let mut servers: Vec<McpServerInfo> = data.values().cloned().collect();
-    servers.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(servers)
-}
-
-/// Add an MCP server to the registry, or replace an existing one.
-/// If the server was already connected, it is reset to disconnected.
-pub fn mcp_add_server(request: McpAddServerRequest) -> Result<McpServerInfo, String> {
-    let name = request.name.trim().to_string();
-    if name.is_empty() {
-        return Err("server name must not be empty".into());
-    }
-
-    let command = request.command.trim().to_string();
-    if command.is_empty() {
-        return Err("command must not be empty".into());
-    }
-
-    let registry = mcp_registry();
-    let mut data = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-
-    let info = new_server_info(&name, &command, request.args);
-    data.insert(name.clone(), info.clone());
-    Ok(info)
-}
-
-/// Remove an MCP server from the registry.
-#[allow(clippy::needless_pass_by_value)]
-pub fn mcp_remove_server(name: String) -> Result<bool, String> {
-    let registry = mcp_registry();
-    let mut data = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    Ok(data.remove(&name).is_some())
-}
-
-/// Check the status of a single MCP server.
-#[allow(clippy::needless_pass_by_value)]
-pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
-    let registry = mcp_registry();
-    let data = registry
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    data.get(&name).cloned().ok_or_else(|| {
-        format!("MCP server `{name}` not found — register it via Settings or `mcp_add_server`")
-    })
-}
-
 fn relay_predictability_notes() -> Vec<String> {
     vec![
         "Edge CDP defaults to port 9360 for the M365 Copilot provider bridge unless RELAY_EDGE_CDP_PORT or a diagnostic browser setting overrides it."
             .into(),
         "Provider-mode workspace state belongs to OpenCode/OpenWork; diagnostics processCwd is only the Relay process working directory."
             .into(),
-        "OpenCode/OpenWork owns tool permissions in provider mode. Relay workspace allowlist data is diagnostic desktop state only."
+        "OpenCode/OpenWork owns tool permissions in provider mode; Relay does not expose a workspace approval allowlist."
             .into(),
         "OpenCode/OpenWork owns slash commands, MCP, plugins, skills, and workspace config for the product path."
             .into(),
@@ -1263,38 +1176,6 @@ pub fn write_text_export(path: String, contents: String) -> Result<(), String> {
         }
     }
     std::fs::write(p, contents).map_err(|e| e.to_string())
-}
-
-pub fn workspace_instruction_surfaces(
-    request: WorkspaceInstructionSurfacesRequest,
-) -> crate::workspace_surfaces::WorkspaceInstructionSurfaces {
-    crate::workspace_surfaces::scan_workspace_instructions(request.cwd)
-}
-
-pub fn get_workspace_allowlist() -> Result<WorkspaceAllowlistSnapshot, String> {
-    crate::workspace_allowlist::snapshot()
-}
-
-pub fn remove_workspace_allowlist_tool(
-    request: WorkspaceAllowlistRemoveToolRequest,
-) -> Result<(), String> {
-    crate::workspace_allowlist::remove_tool_for_cwd(&request.cwd, &request.tool_name)
-}
-
-pub fn clear_workspace_allowlist(request: WorkspaceAllowlistCwdRequest) -> Result<(), String> {
-    crate::workspace_allowlist::clear_cwd(&request.cwd)
-}
-
-pub fn list_workspace_slash_commands(
-    request: ListWorkspaceSlashCommandsRequest,
-) -> Result<Vec<WorkspaceSlashCommandRow>, String> {
-    crate::workspace_slash_commands::list_for_cwd(request.cwd.as_deref())
-}
-
-pub fn list_workspace_skills(
-    request: ListWorkspaceSkillsRequest,
-) -> Result<Vec<WorkspaceSkillRow>, String> {
-    crate::workspace_skills::list_for_cwd(request.cwd.as_deref())
 }
 
 #[cfg(test)]

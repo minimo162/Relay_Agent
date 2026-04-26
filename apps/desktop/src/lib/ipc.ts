@@ -7,8 +7,6 @@
  *
  * Diagnostic commands (tauri_bridge.rs):
  *   warmup_copilot_bridge (optional browserSettings), get_relay_diagnostics,
- *   get_workspace_allowlist, remove_workspace_allowlist_tool, clear_workspace_allowlist,
- *   list_workspace_slash_commands,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
  * Legacy agent chat/session commands are intentionally not exported from this
@@ -24,14 +22,7 @@ import type {
   CdpPromptResult as GeneratedCdpPromptResult,
   CdpSendPromptRequest as GeneratedCdpSendPromptRequest,
   ConnectCdpRequest as GeneratedConnectCdpRequest,
-  InstructionSurface as GeneratedInstructionSurface,
   RelayDiagnostics as GeneratedRelayDiagnostics,
-  RustAnalyzerProbeRequest as GeneratedRustAnalyzerProbeRequest,
-  RustAnalyzerProbeResponse as GeneratedRustAnalyzerProbeResponse,
-  WorkspaceAllowlistSnapshot as GeneratedWorkspaceAllowlistSnapshot,
-  WorkspaceInstructionSurfaces as GeneratedWorkspaceInstructionSurfaces,
-  WorkspaceSkillRow as GeneratedWorkspaceSkillRow,
-  WorkspaceSlashCommandRow as GeneratedWorkspaceSlashCommandRow,
 } from "./ipc.generated";
 
 /* ============================================================
@@ -54,60 +45,6 @@ export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
 /** Write support text (e.g. diagnostics JSON) to a path from the native save dialog. */
 export async function writeTextExport(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_export", { path, contents });
-}
-
-export type WorkspaceAllowlistSnapshot = GeneratedWorkspaceAllowlistSnapshot;
-
-export async function getWorkspaceAllowlist(): Promise<WorkspaceAllowlistSnapshot> {
-  return invoke<WorkspaceAllowlistSnapshot>("get_workspace_allowlist");
-}
-
-export async function removeWorkspaceAllowlistTool(cwd: string, toolName: string): Promise<void> {
-  return invoke<void>("remove_workspace_allowlist_tool", {
-    request: { cwd, toolName },
-  });
-}
-
-export async function clearWorkspaceAllowlist(cwd: string): Promise<void> {
-  return invoke<void>("clear_workspace_allowlist", { request: { cwd } });
-}
-
-export type WorkspaceSlashCommandRow = GeneratedWorkspaceSlashCommandRow;
-
-export async function listWorkspaceSlashCommands(cwd: string | null): Promise<WorkspaceSlashCommandRow[]> {
-  return invoke<WorkspaceSlashCommandRow[]>("list_workspace_slash_commands", {
-    request: { cwd: cwd?.trim() || null },
-  });
-}
-
-export type WorkspaceSkillRow = GeneratedWorkspaceSkillRow;
-
-export async function listWorkspaceSkills(cwd: string | null): Promise<WorkspaceSkillRow[]> {
-  return invoke<WorkspaceSkillRow[]>("list_workspace_skills", {
-    request: { cwd: cwd?.trim() || null },
-  });
-}
-
-export type InstructionSurface = GeneratedInstructionSurface;
-export type WorkspaceInstructionSurfaces = GeneratedWorkspaceInstructionSurfaces;
-
-/** Read-only Claw-style instruction paths under workspace `cwd`. */
-export async function fetchWorkspaceInstructionSurfaces(
-  cwd: string | null,
-): Promise<WorkspaceInstructionSurfaces> {
-  return invoke<WorkspaceInstructionSurfaces>("workspace_instruction_surfaces", {
-    request: { cwd: cwd?.trim() || null },
-  });
-}
-
-export type RustAnalyzerProbeRequest = GeneratedRustAnalyzerProbeRequest;
-export type RustAnalyzerProbeResponse = GeneratedRustAnalyzerProbeResponse;
-
-/** Minimal LSP milestone: runs `rust-analyzer --version` in the given folder (`docs/LSP_MILESTONE.md`). */
-export async function probeRustAnalyzer(
-  request: RustAnalyzerProbeRequest,
-): Promise<RustAnalyzerProbeResponse> {
-  return invoke<RustAnalyzerProbeResponse>("probe_rust_analyzer", { request });
 }
 
 /** Node bridge `GET /status` after ensuring Edge/Copilot tab (startup prewarm). */
