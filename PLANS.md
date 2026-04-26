@@ -67,6 +67,27 @@ Implications:
 - Do not treat the Copilot browser thread as the execution source of truth.
 - New runtime work should target OpenCode/OpenWork APIs or extension points.
 
+## Completed Task: Live M365 OpenCode Provider Smoke
+
+Goal: verify the current hard-cut product path against a real M365 Copilot CDP
+session after Relay stopped owning desktop UX and execution. The validation
+must pass through OpenCode/OpenWork using Relay only as the OpenAI-compatible
+M365 Copilot provider gateway.
+
+Status 2026-04-26: passed with artifact directory
+`/tmp/relay-live-m365-opencode-provider-f22aLj`. The smoke confirmed provider
+status was connected with `loginRequired: false`, OpenCode received
+`OPEN_CODE_M365_PROVIDER_OK` for a plain text request, and OpenCode completed a
+`read` tool turn before returning `OPEN_CODE_M365_TOOL_OK`.
+
+Acceptance criteria:
+
+- `RELAY_KEEP_OPENCODE_LIVE_SMOKE_DIR=1 pnpm live:m365:opencode-provider`
+  passes against signed-in M365 Copilot.
+- The smoke exercises both plain provider text and an OpenCode-owned `read`
+  tool turn.
+- The artifact directory and result are recorded in `docs/IMPLEMENTATION.md`.
+
 ## Completed Task: Provider-Only Hard Cut
 
 Goal: remove remaining compatibility posture now that the OpenAI-compatible

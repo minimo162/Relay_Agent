@@ -660,6 +660,30 @@
           "status": "completed"
         }
       ]
+    },
+    {
+      "id": "live_validation",
+      "name": "Live Provider Validation",
+      "description": "Tracks live signed-in M365 Copilot checks for the OpenAI-compatible OpenCode/OpenWork provider path.",
+      "tasks": [
+        {
+          "id": "L01",
+          "title": "Run live M365 OpenCode provider smoke",
+          "description": "Run the OpenCode provider live smoke against signed-in M365 Copilot to verify both plain provider text and an OpenCode-owned read tool turn after the hard cut.",
+          "files": [
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 live M365 OpenCode provider smoke)",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "D18"
+          ],
+          "status": "completed"
+        }
+      ]
     }
   ]
 }
