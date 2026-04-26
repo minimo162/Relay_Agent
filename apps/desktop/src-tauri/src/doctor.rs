@@ -546,7 +546,7 @@ fn relay_predictability_notes() -> Vec<String> {
             .into(),
         "Provider-mode workspace state belongs to OpenCode/OpenWork; diagnostics processCwd is only the Relay process working directory."
             .into(),
-        "OpenCode/OpenWork owns tool permissions in provider mode. Relay workspace allowlist data is diagnostic desktop state only."
+        "OpenCode/OpenWork owns tool permissions in provider mode; Relay does not expose a workspace approval allowlist."
             .into(),
         "OpenCode/OpenWork owns slash commands, MCP, plugins, skills, and workspace config for the product path."
             .into(),

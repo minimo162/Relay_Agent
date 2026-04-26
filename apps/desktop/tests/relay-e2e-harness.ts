@@ -57,22 +57,7 @@ function initRelayMock(config: { copilotReady: boolean }) {
       case "get_relay_diagnostics":
         return mockDiagnostics();
       case "write_text_export":
-      case "remove_workspace_allowlist_tool":
-      case "clear_workspace_allowlist":
         return undefined;
-      case "get_workspace_allowlist":
-        return {
-          storePath: "/mock/.relay-agent/workspace_allowed_tools.json",
-          entries: [],
-          warnings: [],
-        };
-      case "list_workspace_slash_commands":
-      case "list_workspace_skills":
-        return [];
-      case "workspace_instruction_surfaces":
-        return { workspaceRoot: null, surfaces: [] };
-      case "probe_rust_analyzer":
-        return { ok: false, versionLine: null, error: "mock: rust-analyzer not available" };
       case "connect_cdp":
       case "cdp_start_new_chat":
         return {

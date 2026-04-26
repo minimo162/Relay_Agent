@@ -9,7 +9,7 @@
 - Repository state: pnpm workspace, OpenCode provider gateway scripts, SolidJS
   + Vite diagnostic desktop shell, Tauri v2 shell, Rust-source IPC contracts
   with generated TS bindings, shared doctor service, and deterministic
-  `compat-harness` coverage are in source.
+  provider/diagnostic coverage are in source.
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
@@ -22,6 +22,220 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-04-26 Implementation: Bundled OpenCode runtime retirement
+
+Removed the packaged OpenCode runtime sidecar from the Relay desktop process.
+OpenCode/OpenWork owns execution and transcript state externally; Relay now
+keeps only an optional external runtime URL diagnostic probe.
+
+Changes:
+
+- Replaced `opencode_runtime.rs` with a small diagnostic module that reports
+  `RELAY_OPENCODE_TOOL_RUNTIME_URL` and probes `/path` when configured.
+- Removed Tauri setup startup/management of a bundled OpenCode runtime child
+  process.
+- Removed `resources/opencode-runtime/` from the Tauri bundle resources.
+- Deleted the vendored `apps/desktop/src-tauri/resources/opencode-runtime/`
+  directory.
+- Extended the hard-cut guard so bundled runtime startup, tool execution,
+  transcript relay endpoints, Bun resolution env vars, and ready-message
+  handling cannot return.
+- Added completed task `D18` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `pnpm check`: passed.
+
+### 2026-04-26 Implementation: LSP and workspace instruction diagnostics retirement
+
+Removed orphan Relay-owned diagnostic IPC for `rust-analyzer` probing and
+workspace instruction file discovery. OpenCode/OpenWork owns provider-mode LSP
+and workspace configuration behavior, while Relay keeps provider/CDP
+diagnostics.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/lsp_probe.rs`.
+- Deleted workspace instruction surface modules from the desktop shell and
+  `desktop-core`.
+- Removed `probe_rust_analyzer` and `workspace_instruction_surfaces` from the
+  public invoke handler and diagnostics command module.
+- Removed Rust IPC models, IPC codegen entries, generated TypeScript bindings,
+  frontend IPC wrappers, and stale browser-test mock handlers for these
+  diagnostics.
+- Extended the hard-cut guard so the retired LSP/workspace instruction
+  diagnostics cannot return.
+- Added completed task `D17` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop ipc_codegen -- --nocapture`:
+  passed, 2 passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `pnpm check`: passed.
+
+### 2026-04-26 Implementation: MCP registry diagnostics retirement
+
+Removed the leftover Relay-owned in-memory MCP registry diagnostics. OpenCode
+/ OpenWork owns MCP configuration and execution in provider mode, so Relay no
+longer exposes WebView commands to add, list, remove, or check MCP registry
+entries.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/commands/mcp.rs`.
+- Removed the MCP command module declaration and public invoke handler entries.
+- Removed the in-memory MCP registry and helpers from `tauri_bridge.rs`.
+- Removed MCP registry request/response IPC models from Rust models, IPC
+  codegen, and generated TypeScript bindings.
+- Extended the hard-cut guard so the retired MCP diagnostics cannot return.
+- Added completed task `D16` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop ipc_codegen -- --nocapture`:
+  passed, 2 passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `pnpm check`: passed.
+
+### 2026-04-26 Implementation: Workspace skills and slash-command diagnostics retirement
+
+Removed the leftover Relay-owned `.relay/skills` and `.relay/commands`
+discovery diagnostics. OpenCode/OpenWork owns skills and slash commands in
+provider mode, so Relay no longer exposes these as desktop diagnostics or
+Settings content.
+
+Changes:
+
+- Deleted `apps/desktop/src/lib/skills.ts`.
+- Deleted workspace skills/slash-command discovery modules from both the
+  desktop shell and `desktop-core`.
+- Removed `list_workspace_skills` and `list_workspace_slash_commands` from the
+  public invoke handler and diagnostics command module.
+- Removed workspace skill/slash IPC models from Rust models, IPC codegen, and
+  generated TypeScript bindings.
+- Removed frontend IPC wrappers, Settings Skills UI, stale skills CSS, and
+  browser-test mock handlers.
+- Extended the hard-cut guard so the retired modules, commands, and Settings
+  surface cannot return.
+- Added completed task `D15` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop ipc_codegen -- --nocapture`:
+  passed, 2 passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `pnpm check`: passed.
+
+### 2026-04-26 Implementation: Workspace approval allowlist diagnostics retirement
+
+Removed the leftover Relay-owned remembered workspace approval diagnostics.
+OpenCode/OpenWork owns tool permission state in provider mode, so Relay no
+longer exposes a workspace approval allowlist store, public Tauri management
+commands, frontend IPC wrappers, or Settings UI.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/src/workspace_allowlist.rs`.
+- Removed `get_workspace_allowlist`, `remove_workspace_allowlist_tool`, and
+  `clear_workspace_allowlist` from the public invoke handler and diagnostics
+  command module.
+- Removed workspace allowlist request/response IPC types from Rust models,
+  IPC codegen, and generated TypeScript bindings.
+- Removed frontend IPC wrappers, Settings Permissions management UI, stale
+  permissions CSS, and browser-test mock command handlers.
+- Updated doctor/diagnostic wording to say Relay does not expose a workspace
+  approval allowlist.
+- Extended the hard-cut guard so the retired allowlist module, commands, and
+  Settings surface cannot return.
+- Added completed task `D14` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop ipc_codegen -- --nocapture`:
+  passed, 2 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-26 Implementation: office_search adapter fixture retirement
+
+Removed the final live Rust Copilot adapter test fixture that still named the
+retired `office_search` tool. The test was only verifying unsupported-tool
+filtering, so it now uses a neutral unsupported tool name while keeping the
+same parser behavior coverage.
+
+Changes:
+
+- Replaced the `office_search` fixture in `copilot_adapter.rs` with
+  `unsupported_search`.
+- Kept regression coverage for retaining a supported `glob` call from a mixed
+  unfenced tool array while filtering the unsupported call.
+- Extended `scripts/check-hard-cut-guard.mjs` so `office_search` cannot return
+  to `copilot_adapter.rs`.
+- Added completed task `D13` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core parse_retry_filters_unsupported_unfenced_tool_array_when_name_is_not_first_key -- --nocapture`:
+  passed, 1 passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-26 Implementation: OpenCode bash preflight hardening
+
+Added a small Relay-side preflight for OpenCode `bash` tool requests. Relay
+still delegates execution to OpenCode/OpenWork, but it now rejects obvious
+destructive shell roots before forwarding a request to the external runtime.
+
+Changes:
+
+- Added shell-fragment token inspection in `opencode_runtime.rs`.
+- Stripped wrapper commands such as `env`, `command`, `nice`, `nohup`, and
+  `time` before checking the executable root.
+- Denied destructive Unix and Windows roots case-insensitively, including
+  `rm`, `del`, `icacls`, and `FORMAT.EXE`.
+- Added regression tests for allowed build/test commands, direct destructive
+  commands, wrapper forms, mixed-case Windows verbs, and chained command
+  separators.
+- Added completed task `D12` to `.taskmaster/tasks/tasks.json`.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop opencode_runtime::tests::bash_preflight -- --nocapture`:
+  passed, 5 passed.
 
 ### 2026-04-26 Implementation: Orphan desktop chat UI retirement
 

@@ -4,18 +4,12 @@ use ts_rs::TS;
 
 use crate::models::{
     BrowserAutomationSettings, CopilotBridgeFailureInfo, CopilotRepairStageFailureCount,
-    CopilotRepairStageStats, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
-    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RustAnalyzerProbeRequest,
-    RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistEntryRow,
-    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
-    WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
+    CopilotRepairStageStats, RelayDiagnostics,
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, ConnectCdpRequest,
     CopilotWarmupFailureCode, CopilotWarmupResult, CopilotWarmupStage,
 };
-use crate::workspace_surfaces::{InstructionSurface, WorkspaceInstructionSurfaces};
-
 fn decl<T: TS>() -> String {
     T::decl()
 }
@@ -27,21 +21,6 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<CopilotRepairStageFailureCount>(),
         decl::<CopilotRepairStageStats>(),
         decl::<RelayDiagnostics>(),
-        decl::<RustAnalyzerProbeRequest>(),
-        decl::<RustAnalyzerProbeResponse>(),
-        decl::<McpServerInfo>(),
-        decl::<McpAddServerRequest>(),
-        decl::<WorkspaceAllowlistEntryRow>(),
-        decl::<WorkspaceAllowlistSnapshot>(),
-        decl::<WorkspaceAllowlistRemoveToolRequest>(),
-        decl::<WorkspaceAllowlistCwdRequest>(),
-        decl::<WorkspaceSlashCommandRow>(),
-        decl::<ListWorkspaceSlashCommandsRequest>(),
-        decl::<WorkspaceSkillRow>(),
-        decl::<ListWorkspaceSkillsRequest>(),
-        decl::<WorkspaceInstructionSurfacesRequest>(),
-        decl::<InstructionSurface>(),
-        decl::<WorkspaceInstructionSurfaces>(),
         decl::<CopilotWarmupStage>(),
         decl::<CopilotWarmupFailureCode>(),
         decl::<CopilotWarmupResult>(),
@@ -93,7 +72,6 @@ mod tests {
         let ipc_source_files = [
             manifest_dir.join("src/tauri_bridge.rs"),
             manifest_dir.join("crates/desktop-core/src/models.rs"),
-            manifest_dir.join("crates/desktop-core/src/workspace_surfaces.rs"),
         ];
 
         let mut discovered: BTreeSet<String> = BTreeSet::new();

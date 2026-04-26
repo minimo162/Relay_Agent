@@ -212,15 +212,15 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
-    text: "pub struct OpencodeToolExecutionContext",
+    text: "pub struct OpencodeRuntimeSnapshot",
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
-    text: "pub fn execute_tool_with_context",
+    text: "pub fn external_runtime_url",
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
-    text: "/experimental/tool/execute",
+    text: "OpenCode/OpenWork execution is expected to run outside Relay",
   },
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
@@ -292,6 +292,46 @@ const forbidden = [
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
     text: "RELAY_EXECUTION_BACKEND",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "OpencodeToolExecutionContext",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "execute_tool_with_context",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "/experimental/tool/execute",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "/experimental/relay/session",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "RELAY_OPENCODE_RUNTIME_DIR",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "RELAY_OPENCODE_BUN",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "RELAY_OPENCODE_RUNTIME_NO_WARMUP",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
+    text: "relay-runtime-ready",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "opencode_runtime::start",
+  },
+  {
+    path: "apps/desktop/src-tauri/tauri.conf.json",
+    text: "resources/opencode-runtime/",
   },
   {
     path: "apps/desktop/src-tauri/src/lib.rs",
@@ -556,6 +596,78 @@ const forbidden = [
   {
     path: "apps/desktop/src/lib/ipc.ts",
     text: "office_search",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
+    text: "office_search",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "mod workspace_allowlist;",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+    text: "get_workspace_allowlist",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "getWorkspaceAllowlist",
+  },
+  {
+    path: "apps/desktop/src/components/SettingsModal.tsx",
+    text: "data-ra-permissions",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "mod workspace_skills;",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "mod workspace_slash_commands;",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+    text: "list_workspace_skills",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/commands/mod.rs",
+    text: "pub mod mcp;",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "commands::mcp::",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "MCP_SERVER_REGISTRY",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "mod lsp_probe;",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "mod workspace_surfaces;",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+    text: "probe_rust_analyzer",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "probeRustAnalyzer",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "fetchWorkspaceInstructionSurfaces",
+  },
+  {
+    path: "apps/desktop/src/lib/ipc.ts",
+    text: "listWorkspaceSkills",
+  },
+  {
+    path: "apps/desktop/src/components/SettingsModal.tsx",
+    text: "data-ra-skills",
   },
   {
     path: ".github/workflows/ci.yml",
@@ -934,13 +1046,24 @@ const forbidden = [
 const forbiddenPaths = [
   "apps/desktop/src-tauri/src/agent_loop",
   "apps/desktop/src-tauri/src/agent_loop_smoke.rs",
+  "apps/desktop/src-tauri/resources/opencode-runtime",
   "apps/desktop/scripts/launch_agent_loop_smoke.mjs",
   "apps/desktop/src-tauri/src/error.rs",
   "apps/desktop/src-tauri/Cargo.lock",
   "apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs",
   "apps/desktop/src-tauri/crates/desktop-core/src/relay_runtime.rs",
   "apps/desktop/src-tauri/src/session_write_undo.rs",
+  "apps/desktop/src-tauri/src/workspace_allowlist.rs",
+  "apps/desktop/src-tauri/src/commands/mcp.rs",
+  "apps/desktop/src-tauri/src/lsp_probe.rs",
+  "apps/desktop/src-tauri/src/workspace_surfaces.rs",
+  "apps/desktop/src-tauri/src/workspace_skills.rs",
+  "apps/desktop/src-tauri/src/workspace_slash_commands.rs",
   "apps/desktop/src-tauri/crates/desktop-core/src/session_write_undo.rs",
+  "apps/desktop/src-tauri/crates/desktop-core/src/workspace_skills.rs",
+  "apps/desktop/src-tauri/crates/desktop-core/src/workspace_slash_commands.rs",
+  "apps/desktop/src-tauri/crates/desktop-core/src/workspace_surfaces.rs",
+  "apps/desktop/src/lib/skills.ts",
   "apps/desktop/src-tauri/crates/commands",
   "apps/desktop/src-tauri/crates/api",
   "apps/desktop/src-tauri/crates/runtime",
@@ -1004,8 +1127,10 @@ const byPath = {
   "docs/OPENCODE_PROVIDER_GATEWAY.md": providerGatewayDoc,
   "docs/IMPLEMENTATION.md": read("docs/IMPLEMENTATION.md"),
   "apps/desktop/src-tauri/src/commands/mod.rs": read("apps/desktop/src-tauri/src/commands/mod.rs"),
+  "apps/desktop/src-tauri/src/commands/diagnostics.rs": read("apps/desktop/src-tauri/src/commands/diagnostics.rs"),
   "apps/desktop/src-tauri/src/app_services.rs": read("apps/desktop/src-tauri/src/app_services.rs"),
   "apps/desktop/src-tauri/src/opencode_runtime.rs": read("apps/desktop/src-tauri/src/opencode_runtime.rs"),
+  "apps/desktop/src-tauri/tauri.conf.json": read("apps/desktop/src-tauri/tauri.conf.json"),
   "apps/desktop/src-tauri/src/lib.rs": read("apps/desktop/src-tauri/src/lib.rs"),
   "apps/desktop/src-tauri/src/ipc_codegen.rs": read("apps/desktop/src-tauri/src/ipc_codegen.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/lib.rs"),
@@ -1019,6 +1144,7 @@ const byPath = {
   "apps/desktop/src-tauri/src/tauri_bridge.rs": read("apps/desktop/src-tauri/src/tauri_bridge.rs"),
   "apps/desktop/src/shell/Shell.tsx": read("apps/desktop/src/shell/Shell.tsx"),
   "apps/desktop/src/lib/ipc.ts": read("apps/desktop/src/lib/ipc.ts"),
+  "apps/desktop/src/components/SettingsModal.tsx": read("apps/desktop/src/components/SettingsModal.tsx"),
   "apps/desktop/tests/relay-e2e-harness.ts": read("apps/desktop/tests/relay-e2e-harness.ts"),
   "apps/desktop/tests/tauri-mock-core.ts": read("apps/desktop/tests/tauri-mock-core.ts"),
   "apps/desktop/src-tauri/binaries/copilot_server.js": read("apps/desktop/src-tauri/binaries/copilot_server.js"),

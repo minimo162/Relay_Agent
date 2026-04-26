@@ -7,17 +7,12 @@ mod dev_control;
 pub mod doctor;
 mod ipc_codegen;
 mod liteparse_env;
-mod lsp_probe;
 pub mod models;
 mod opencode_runtime;
 mod tauri_bridge;
 #[cfg(test)]
 pub mod test_support;
 mod windows_job;
-mod workspace_allowlist;
-mod workspace_skills;
-mod workspace_slash_commands;
-mod workspace_surfaces;
 
 use tauri::Manager;
 
@@ -60,9 +55,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             liteparse_env::apply(app);
-            if let Some(runtime) = opencode_runtime::start(app) {
-                app.manage(runtime);
-            }
             app.manage(AppServices::new());
             dev_control::spawn(app.handle());
             Ok(())
@@ -75,18 +67,7 @@ pub fn run() {
             commands::copilot::disconnect_cdp,
             commands::copilot::warmup_copilot_bridge,
             commands::diagnostics::get_relay_diagnostics,
-            commands::diagnostics::probe_rust_analyzer,
-            commands::mcp::mcp_list_servers,
-            commands::mcp::mcp_add_server,
-            commands::mcp::mcp_remove_server,
-            commands::mcp::mcp_check_server_status,
             commands::diagnostics::write_text_export,
-            commands::diagnostics::workspace_instruction_surfaces,
-            commands::diagnostics::get_workspace_allowlist,
-            commands::diagnostics::remove_workspace_allowlist_tool,
-            commands::diagnostics::clear_workspace_allowlist,
-            commands::diagnostics::list_workspace_slash_commands,
-            commands::diagnostics::list_workspace_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

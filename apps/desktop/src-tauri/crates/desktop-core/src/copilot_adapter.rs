@@ -3392,12 +3392,12 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key() {
-        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
+    fn parse_retry_filters_unsupported_unfenced_tool_array_when_name_is_not_first_key() {
+        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob", "relay_tool_call": true }, { "input": { "query": "キャッシュフロー" }, "name": "unsupported_search", "relay_tool_call": true } ]"#;
         let (display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "glob");
-        assert!(display.contains("office_search"));
+        assert!(display.contains("unsupported_search"));
     }
 
     // Parity with orchestrator.rs: Initial parse must recover unfenced tool

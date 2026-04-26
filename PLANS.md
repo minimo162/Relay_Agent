@@ -114,6 +114,32 @@ Acceptance criteria:
   an OpenCode/OpenWork extension point or deleted.
 - `pnpm check`, `pnpm check:opencode-provider`, and `git diff --check` pass.
 
+## Completed Task: Bundled OpenCode Runtime Retirement
+
+Goal: remove the packaged OpenCode runtime sidecar from the Relay desktop
+process. OpenCode/OpenWork is the external OSS owner for UX, sessions, tools,
+transcript, and execution; Relay should not spawn, warm up, or call a bundled
+tool runtime.
+
+Status 2026-04-26: implemented by shrinking `opencode_runtime.rs` to an
+external runtime URL diagnostic probe, removing Tauri startup of the bundled
+runtime, dropping the `opencode-runtime` bundle resource, deleting the vendored
+runtime resource directory, and extending the hard-cut guard so Relay cannot
+restore tool execution or sidecar startup paths.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/opencode_runtime.rs` no longer exposes
+  `OpencodeToolExecutionContext`, `execute_tool_with_context`, transcript
+  append helpers, bundled runtime startup, Bun resolution, or warmup behavior.
+- Tauri setup no longer calls `opencode_runtime::start` or manages a bundled
+  runtime child process.
+- `apps/desktop/src-tauri/tauri.conf.json` no longer bundles
+  `resources/opencode-runtime/`.
+- `apps/desktop/src-tauri/resources/opencode-runtime/` no longer exists.
+- The hard-cut guard rejects restoring the bundled sidecar, tool execution
+  endpoint, transcript relay endpoint, or old runtime env knobs.
+
 ## Completed Task: Diagnostic Shell Minimization
 
 Goal: physically shrink the remaining Relay desktop shell so it can no longer
@@ -316,6 +342,138 @@ Acceptance criteria:
 - `ipc.ts` no longer exports legacy UI chunk/session phase helpers or
   `office_search` activity labels.
 - The hard-cut guard rejects restoring the deleted chat UI and obsolete mocks.
+
+## Completed Task: OpenCode Bash Preflight Hardening
+
+Goal: keep Bash execution delegated to OpenCode/OpenWork while adding a small
+Relay-side adapter preflight for obvious destructive command roots before a
+`bash` tool request is forwarded to the external runtime.
+
+Status 2026-04-26: implemented in `opencode_runtime.rs` by tokenizing shell
+fragments, stripping wrapper commands such as `env`, `command`, `nice`,
+`nohup`, and `time`, and rejecting destructive root commands case-insensitively
+before the OpenCode tool request is sent.
+
+Acceptance criteria:
+
+- Relay no longer relies on broad regex matching for the adapter-side Bash
+  preflight.
+- Wrapper forms such as `env ... rm`, `command rm`, `nice -n 10 rm`, and
+  `nohup rm` are covered by regression tests.
+- Mixed-case Windows destructive verbs such as `DeL`, `ICACLS`, and
+  `FORMAT.EXE` are covered by regression tests.
+- The old desktop `agent_loop/**` tree remains deleted; Bash policy hardening
+  does not reintroduce Relay-owned tool execution.
+
+## Completed Task: `office_search` Adapter Fixture Retirement
+
+Goal: remove the last live Rust adapter test fixture that still named the
+retired `office_search` tool. Unsupported-tool parser coverage should use a
+neutral unsupported name instead of preserving old model-facing vocabulary.
+
+Status 2026-04-26: implemented by replacing the stale fixture in
+`copilot_adapter.rs` and extending the hard-cut guard so `office_search` cannot
+return to the Copilot adapter source.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs` no longer
+  mentions `office_search`.
+- Unsupported-tool parser regression coverage still verifies that unsupported
+  tools are filtered while supported tools in the same array are retained.
+- The hard-cut guard rejects future `office_search` references in
+  `copilot_adapter.rs`.
+
+## Completed Task: Workspace Approval Allowlist Diagnostics Retirement
+
+Goal: remove the leftover Relay-owned remembered workspace approval surface.
+Provider-mode tool permission state belongs to OpenCode/OpenWork, so Relay
+should not expose an allowlist store, Settings management UI, or diagnostic IPC
+for tool approvals.
+
+Status 2026-04-26: implemented by deleting the workspace allowlist backend
+module, removing the public Tauri commands and frontend IPC wrappers, dropping
+the generated IPC types, removing the Settings Permissions section and stale
+mock handlers, and updating diagnostic wording to say Relay does not expose a
+workspace approval allowlist.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/workspace_allowlist.rs` no longer exists.
+- Public invoke commands no longer include `get_workspace_allowlist`,
+  `remove_workspace_allowlist_tool`, or `clear_workspace_allowlist`.
+- Frontend IPC and Settings no longer expose remembered workspace approvals.
+- E2E mocks no longer implement workspace allowlist commands.
+- The hard-cut guard rejects restoring the deleted allowlist module, commands,
+  and Settings surface.
+
+## Completed Task: Workspace Skills And Slash-Command Diagnostics Retirement
+
+Goal: remove the leftover Relay-owned `.relay/skills` and `.relay/commands`
+discovery surfaces. Provider-mode skills and slash commands belong to
+OpenCode/OpenWork, not the Relay diagnostic desktop shell.
+
+Status 2026-04-26: implemented by deleting the frontend skill parser, the Rust
+workspace skills/slash-command discovery modules, generated IPC types, public
+Tauri commands, Settings Skills UI, stale mock handlers, and desktop-core
+exports/tests. The hard-cut guard now rejects restoring these diagnostics.
+
+Acceptance criteria:
+
+- `apps/desktop/src/lib/skills.ts` no longer exists.
+- `workspace_skills.rs` and `workspace_slash_commands.rs` no longer exist in
+  the desktop shell or `desktop-core`.
+- Public invoke commands no longer include `list_workspace_skills` or
+  `list_workspace_slash_commands`.
+- Frontend IPC and Settings no longer expose Relay-owned skills/slash-command
+  discovery.
+- The hard-cut guard rejects restoring the retired modules, commands, and
+  Settings Skills surface.
+
+## Completed Task: MCP Registry Diagnostics Retirement
+
+Goal: remove the leftover Relay-owned in-memory MCP registry diagnostics.
+Provider-mode MCP configuration and execution belong to OpenCode/OpenWork, so
+Relay should not expose add/list/remove/check MCP registry commands through the
+desktop WebView.
+
+Status 2026-04-26: implemented by deleting `commands/mcp.rs`, removing MCP
+commands from the public invoke handler, deleting the in-memory registry from
+`tauri_bridge.rs`, removing MCP IPC models from Rust and generated TypeScript,
+and extending the hard-cut guard.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/commands/mcp.rs` no longer exists.
+- Public invoke commands no longer include `mcp_list_servers`,
+  `mcp_add_server`, `mcp_remove_server`, or `mcp_check_server_status`.
+- `tauri_bridge.rs` no longer owns an MCP registry.
+- Generated frontend IPC no longer exports MCP registry request/response
+  types.
+- The hard-cut guard rejects restoring the retired MCP diagnostics.
+
+## Completed Task: LSP And Workspace Instruction Diagnostics Retirement
+
+Goal: remove orphan Relay-owned diagnostic IPC for `rust-analyzer` probing and
+workspace instruction file discovery. Provider-mode LSP/workspace config
+behavior belongs to OpenCode/OpenWork; the remaining desktop shell should keep
+provider/CDP diagnostics only.
+
+Status 2026-04-26: implemented by deleting `lsp_probe.rs`,
+`workspace_surfaces.rs`, their `desktop-core` models/exports, public Tauri
+commands, frontend IPC wrappers, generated TypeScript types, and stale browser
+mock handlers. The OpenCode tool catalog can still advertise `lsp` as an
+OpenCode-owned tool.
+
+Acceptance criteria:
+
+- `apps/desktop/src-tauri/src/lsp_probe.rs` and workspace surface modules no
+  longer exist.
+- Public invoke commands no longer include `probe_rust_analyzer` or
+  `workspace_instruction_surfaces`.
+- Frontend IPC no longer exports `probeRustAnalyzer` or
+  `fetchWorkspaceInstructionSurfaces`.
+- The hard-cut guard rejects restoring these orphan diagnostic surfaces.
 
 ## Completed Task: Agent Command Module Retirement
 
@@ -652,7 +810,12 @@ Status 2026-04-23:
 
 ### Cross-Cutting Hardening: Workspace Approval Persistence
 
-Goal: make persisted "Allow for this workspace" approvals resilient to interrupted writes and visible when the store is damaged.
+Status 2026-04-26: superseded by hard-cut deletion. The earlier persistence
+hardening shipped on 2026-04-18, but the provider-only architecture no longer
+keeps Relay-owned remembered workspace approvals. OpenCode/OpenWork owns tool
+permission state.
+
+Historical goal: make persisted "Allow for this workspace" approvals resilient to interrupted writes and visible when the store is damaged.
 
 Change targets:
 
@@ -691,6 +854,11 @@ Acceptance criteria:
   `agent_projection.rs` event/type surface are not reintroduced; diagnostic IPC
   payloads stay in `models.rs`/`tauri_bridge.rs`, and deterministic
   parser/prompt helpers stay in `desktop-core`.
+
+Status 2026-04-26:
+
+- Implemented the Relay-side Bash preflight for OpenCode tool forwarding.
+- Old desktop loop deletion remains enforced by `scripts/check-hard-cut-guard.mjs`.
 
 ### Cross-Cutting Feature: Office File Search
 
