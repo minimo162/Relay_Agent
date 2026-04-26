@@ -707,6 +707,24 @@
             "D18"
           ],
           "status": "completed"
+        },
+        {
+          "id": "R02",
+          "title": "Verify Windows installer release workflow smoke",
+          "description": "Dispatch the GitHub-hosted Windows installer release workflow with an unsigned prerelease smoke tag, confirm the Windows job builds the NSIS installer, skips Trusted Signing as intended for unsigned prerelease mode, records the SHA256 digest, and publishes the installer asset to GitHub Releases.",
+          "files": [
+            ".github/workflows/release-windows-installer.yml",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 Windows installer workflow smoke)",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "R01"
+          ],
+          "status": "completed"
         }
       ]
     }

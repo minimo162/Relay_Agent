@@ -87,6 +87,30 @@ Acceptance criteria:
   sample CSV, and Tauri external binaries `relay-node` / `relay-rg`.
 - The result is recorded in `docs/IMPLEMENTATION.md`.
 
+## Completed Task: Windows Installer Release Workflow Smoke
+
+Goal: verify the GitHub-hosted Windows installer release workflow can build and
+publish the NSIS installer through the unsigned prerelease smoke path after the
+OpenCode/OpenWork hard cut.
+
+Status 2026-04-26: passed. Workflow run `24952036759` built the Windows NSIS
+installer from `main` at `d340b56b7a283c311cfee54b68c12accd23dfce9`, skipped
+Trusted Signing as expected for `unsigned-prerelease`, and published
+`Relay.Agent_0.1.0_x64-setup-unsigned.exe` to the prerelease
+`v0.0.0-release-smoke-20260426081655`.
+
+Acceptance criteria:
+
+- `release-windows-installer.yml` can be dispatched manually from `main` with a
+  prerelease smoke tag.
+- The Windows job passes typecheck, Rust tests, doctor CLI tests, and NSIS
+  bundle generation.
+- Trusted Signing steps are skipped only because the dispatch uses the
+  unsigned prerelease path.
+- GitHub Releases contains the uploaded installer asset and workflow summary
+  includes the installer SHA256.
+- The result is recorded in `docs/IMPLEMENTATION.md`.
+
 ## Completed Task: Live M365 OpenCode Provider Smoke
 
 Goal: verify the current hard-cut product path against a real M365 Copilot CDP
