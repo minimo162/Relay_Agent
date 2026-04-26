@@ -40,7 +40,7 @@ test.describe("Tauri WebView2 via CDP", () => {
       await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible({
         timeout: 30_000,
       });
-      await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
     } finally {
       await browser.close();
     }

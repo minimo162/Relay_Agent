@@ -286,6 +286,37 @@ Acceptance criteria:
 - The hard-cut guard rejects restoring the obsolete error taxonomy and stale
   CDP adapter/log wording.
 
+## Completed Task: Orphan Desktop Chat UI Retirement
+
+Goal: delete the leftover SolidJS chat/session UI modules and browser-test
+mocks after the diagnostic shell became the only desktop surface. The frontend
+should no longer carry unused Composer, feed, approval, session list, or agent
+event test harness code.
+
+Status 2026-04-26: implemented by deleting the orphan chat UI components,
+session/approval stores, tool timeline helpers, slash-command composer helper,
+assistant markdown renderer, and obsolete Playwright debug/mock files. The
+remaining E2E mock now covers provider diagnostics only.
+
+Retired surfaces:
+
+- `Composer`, `MessageFeed`, `Sidebar`, `CommandPalette`, approval/question
+  overlays, rail/status/feed components, and their dependent helper modules.
+- `sessionStore`, `approvalStore`, `session-display`, `shell-types`,
+  `tool-timeline`, `slash-commands`, and `assistant-markdown`.
+- Browser E2E mocks that still implemented `start_agent`,
+  `continue_agent_session`, session history, compact, approval, or `agent:*`
+  events.
+
+Acceptance criteria:
+
+- The normal frontend source tree contains only the diagnostic shell and active
+  settings/provider-support components.
+- E2E mocks do not expose legacy agent chat/session commands.
+- `ipc.ts` no longer exports legacy UI chunk/session phase helpers or
+  `office_search` activity labels.
+- The hard-cut guard rejects restoring the deleted chat UI and obsolete mocks.
+
 ## Completed Task: Agent Command Module Retirement
 
 Goal: delete the now-unreachable Tauri command wrapper module for legacy Relay
