@@ -10,7 +10,6 @@ mod liteparse_env;
 mod lsp_probe;
 pub mod models;
 mod opencode_runtime;
-mod registry;
 mod tauri_bridge;
 #[cfg(test)]
 pub mod test_support;

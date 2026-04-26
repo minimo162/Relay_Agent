@@ -167,18 +167,6 @@ const required = [
     text: "export function opencodeProviderConfig",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "pub fn save_session(",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "#[serde(default, skip_serializing)]",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "pub struct LoadedSessionMetadata",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs",
     text: "pub const RELAY_MAX_TEXT_FILE_READ_BYTES",
   },
@@ -774,14 +762,6 @@ const forbidden = [
     text: "runtime::resolve_liteparse_paths",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "use runtime::RuntimeError",
-  },
-  {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "RuntimeError",
-  },
-  {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs",
     text: "relay_runtime",
   },
@@ -834,36 +814,48 @@ const forbidden = [
     text: "pub mod session_write_undo;",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs",
-    text: "pub session:",
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
+    text: "pub mod registry;",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs",
-    text: "RuntimeSession",
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
+    text: "pub mod copilot_persistence;",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs",
-    text: "with_write_undo",
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "mod registry;",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs",
-    text: "WriteUndoStacks",
+    path: "apps/desktop/src-tauri/src/app_services.rs",
+    text: "SessionRegistry",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "pub session:",
+    path: "apps/desktop/src-tauri/src/app_services.rs",
+    text: "pub fn registry",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "pub struct LoadedSession {",
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "DevSessionState",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "messages: Vec<PersistedMessage>",
+    path: "apps/desktop/src-tauri/src/dev_control.rs",
+    text: "latest_session_id",
   },
   {
-    path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
-    text: "PersistedContentBlock",
+    path: "apps/desktop/src-tauri/src/doctor.rs",
+    text: "SessionRegistry",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "SessionRegistry",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "running_session_count",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/tauri_bridge.rs",
+    text: "block_port_change_on_concurrent_sessions",
   },
 ];
 
@@ -886,6 +878,9 @@ const forbiddenPaths = [
   "apps/desktop/src-tauri/src/hard_cut_agent.rs",
   "apps/desktop/src-tauri/src/commands/agent.rs",
   "apps/desktop/src-tauri/src/agent_projection.rs",
+  "apps/desktop/src-tauri/src/registry.rs",
+  "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs",
+  "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
   "apps/desktop/src/shell/useAgentEvents.ts",
   "apps/desktop/scripts/dev-approve-latest-session.mjs",
   "apps/desktop/scripts/dev-approve-latest-workspace.mjs",
@@ -908,6 +903,7 @@ const byPath = {
   "docs/OPENCODE_PROVIDER_GATEWAY.md": providerGatewayDoc,
   "docs/IMPLEMENTATION.md": read("docs/IMPLEMENTATION.md"),
   "apps/desktop/src-tauri/src/commands/mod.rs": read("apps/desktop/src-tauri/src/commands/mod.rs"),
+  "apps/desktop/src-tauri/src/app_services.rs": read("apps/desktop/src-tauri/src/app_services.rs"),
   "apps/desktop/src-tauri/src/opencode_runtime.rs": read("apps/desktop/src-tauri/src/opencode_runtime.rs"),
   "apps/desktop/src-tauri/src/lib.rs": read("apps/desktop/src-tauri/src/lib.rs"),
   "apps/desktop/src-tauri/src/ipc_codegen.rs": read("apps/desktop/src-tauri/src/ipc_codegen.rs"),
@@ -917,8 +913,6 @@ const byPath = {
   "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/opencode_tools.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/opencode_tools.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs"),
-  "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/registry.rs"),
-  "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs"),
   "apps/desktop/src-tauri/src/dev_control.rs": read("apps/desktop/src-tauri/src/dev_control.rs"),
   "apps/desktop/src-tauri/src/doctor.rs": read("apps/desktop/src-tauri/src/doctor.rs"),
   "apps/desktop/src-tauri/src/tauri_bridge.rs": read("apps/desktop/src-tauri/src/tauri_bridge.rs"),

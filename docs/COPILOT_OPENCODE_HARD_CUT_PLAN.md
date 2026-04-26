@@ -210,6 +210,30 @@ Acceptance:
 - The hard-cut guard rejects restoring the deleted projection module or event
   listener bridge.
 
+## Completed Task: Legacy Session Registry And Persistence Retirement
+
+Implemented on 2026-04-26: deleted the remaining Relay-owned session registry
+and Copilot session metadata persistence after the desktop execution command
+and event surfaces were already gone. Relay provider diagnostics no longer keep
+a parallel in-memory session list or persisted Relay session metadata.
+
+Retired:
+
+- `apps/desktop/src-tauri/crates/desktop-core/src/registry.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs`
+- `apps/desktop/src-tauri/src/registry.rs`
+- `AppServices.registry`
+- Dev-control `/state` session snapshots.
+- CDP port-change blocking based on Relay-owned running sessions.
+
+Acceptance:
+
+- OpenCode/OpenWork owns session state without a Relay-owned registry fallback.
+- Relay diagnostic state contains provider/Copilot bridge status, not chat
+  session projections.
+- The hard-cut guard rejects restoring the deleted registry and persistence
+  modules or wiring them back into `AppServices`.
+
 ## Completed Task: Hard-Cut Agent Wrapper Retirement
 
 Implemented on 2026-04-25: deleted the internal `hard_cut_agent.rs` controller
