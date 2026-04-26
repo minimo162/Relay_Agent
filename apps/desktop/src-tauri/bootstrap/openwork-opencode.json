@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "selectedTrack": "windows-x64-openwork-desktop-plus-opencode-cli",
+  "ownershipBoundary": "Relay downloads and verifies external OpenWork/OpenCode artifacts only. OpenWork/OpenCode own UX, sessions, permissions, tools, MCP, and execution.",
+  "platforms": {
+    "windows-x64": {
+      "openworkDesktop": {
+        "name": "OpenWork Desktop",
+        "version": "0.11.212",
+        "kind": "installer",
+        "format": "msi",
+        "url": "https://github.com/different-ai/openwork/releases/download/v0.11.212/openwork-desktop-windows-x64.msi",
+        "sha256": "e52d020a1f6c2073164ed06279c441869844cb07a396bffac0789d63a4b7f486",
+        "size": 218517504,
+        "entrypoint": "msiexec",
+        "license": "MIT outside /ee; release artifact contents require explicit review before production auto-install.",
+        "installMode": "explicit-user-approved-installer"
+      },
+      "opencodeCli": {
+        "name": "OpenCode CLI",
+        "version": "1.14.25",
+        "kind": "archive",
+        "format": "zip",
+        "url": "https://github.com/anomalyco/opencode/releases/download/v1.14.25/opencode-windows-x64.zip",
+        "sha256": "8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b",
+        "size": 53772841,
+        "entrypoint": "opencode.exe",
+        "license": "MIT",
+        "usage": "provider-config, diagnostics, and direct fallback"
+      }
+    }
+  },
+  "compatibilityNotes": [
+    "OpenWork dev currently pins opencodeVersion to v1.4.9; this manifest intentionally pins a checked OpenCode CLI asset and requires compatibility smoke before downloader release.",
+    "Relay must not execute tools, own transcripts, or restore bundled runtime sidecars when using these artifacts."
+  ]
+}
