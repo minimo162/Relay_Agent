@@ -409,6 +409,28 @@
             "D08"
           ],
           "status": "completed"
+        },
+        {
+          "id": "D10",
+          "title": "Retire legacy error taxonomy and stale agent-loop wording",
+          "description": "Remove the unused Relay-owned execution error enum and stale agent-loop/session-registry naming after the legacy registry and persistence modules were deleted.",
+          "files": [
+            "apps/desktop/src-tauri/crates/desktop-core/src/error.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 Legacy error taxonomy retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D09"
+          ],
+          "status": "completed"
         }
       ]
     }

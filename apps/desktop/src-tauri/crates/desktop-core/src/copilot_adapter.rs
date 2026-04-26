@@ -1,11 +1,11 @@
 //! Deterministic Copilot/CDP parsing and prompt helpers used by the hard-cut
 //! desktop adapter.
 //!
-//! The old Tauri-owned agent loop has been removed. This module keeps the pure
+//! The old Tauri-owned execution loop has been removed. This module keeps the pure
 //! pieces still needed by the Copilot-to-OpenCode adapter: CDP prompt
 //! construction, tool-JSON parsing (`parse_copilot_tool_response`,
 //! `CdpToolParseMode`), repair-stage heuristics, and deterministic regression
-//! coverage. Tauri-only concerns such as event emission, session registry
+//! coverage. Tauri-only concerns such as event emission, session state
 //! mutation, UI streaming, and tool execution must stay out of this crate.
 
 #![allow(
@@ -353,7 +353,7 @@ fn sanitize_copilot_visible_text(s: &str) -> String {
 const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r"## CDP session: you are Relay Agent's model
 
 - User messages are sent from the **Relay Agent** desktop app through Microsoft Edge (M365 Copilot over CDP).
-- Emit fenced tool JSON when needed; prose-only refusals block the agent loop.
+- Emit fenced tool JSON when needed; prose-only refusals block the provider turn.
 
 ## Output style
 

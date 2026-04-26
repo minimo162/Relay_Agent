@@ -23,6 +23,44 @@
 
 ## Milestone Log
 
+### 2026-04-26 Implementation: Legacy error taxonomy retirement
+
+Removed the unused Relay-owned execution error taxonomy after the registry and
+persistence modules were deleted. The active desktop-core error surface is now
+the small `DesktopCoreError` boundary used by provider diagnostics and adapter
+helpers.
+
+Changes:
+
+- Deleted the unused `AgentLoopError` enum from
+  `apps/desktop/src-tauri/crates/desktop-core/src/error.rs`.
+- Removed obsolete tests for session-not-found, registry-lock, persistence,
+  cancellation, concurrency, and agent-loop error variants.
+- Updated Copilot adapter comments to describe provider turns and session state
+  rather than the old agent loop and session registry.
+- Updated CDP auto-connect comments/logging to describe provider diagnostics
+  rather than `start_agent`.
+- Strengthened the hard-cut guard so the deleted error taxonomy and stale
+  wording cannot return.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8'))"`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`:
+  passed, 64 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop --lib`:
+  passed, 15 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`:
+  passed, 5 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `git diff --check`: passed.
+
 ### 2026-04-26 Implementation: Legacy session registry and persistence retirement
 
 Deleted the remaining Relay-owned session registry and Copilot session metadata
