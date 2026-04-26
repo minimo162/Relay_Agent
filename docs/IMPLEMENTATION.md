@@ -23,6 +23,42 @@
 
 ## Milestone Log
 
+### 2026-04-26 Release Validation: Windows installer workflow smoke
+
+Verified the GitHub-hosted Windows installer release workflow after the
+OpenCode/OpenWork hard cut. A manual prerelease dispatch built the Windows
+NSIS installer, skipped Trusted Signing as intended for an unsigned prerelease
+smoke tag, collected the installer digest, and published the installer asset
+to GitHub Releases.
+
+Result:
+
+- Workflow run: `24952036759`.
+- Workflow job: `publish-windows-installer` (`73063707129`), passed in
+  12m33s.
+- Commit: `d340b56b7a283c311cfee54b68c12accd23dfce9` on `main`.
+- Release tag: `v0.0.0-release-smoke-20260426081655`.
+- Release URL:
+  `https://github.com/minimo162/Relay_Agent/releases/tag/v0.0.0-release-smoke-20260426081655`.
+- Published asset:
+  `Relay.Agent_0.1.0_x64-setup-unsigned.exe`, size `45867992` bytes.
+- Workflow installer file:
+  `Relay Agent_0.1.0_x64-setup-unsigned.exe`.
+- Installer SHA256:
+  `967974ac2196119f33e3895d4eb921feb93115dabe312e3498a17db0cdfca2af`.
+- Signing mode: `unsigned-prerelease`.
+- Authenticode verification: skipped as expected for unsigned prerelease.
+
+Verification:
+
+- `gh workflow run release-windows-installer.yml --ref main -f release_tag=v0.0.0-release-smoke-20260426081655 -f release_name="Relay Agent release workflow smoke 2026-04-26T08:16:55Z"`:
+  dispatched the workflow.
+- `gh run watch 24952036759 --exit-status --interval 30`: passed.
+- `gh run view 24952036759 --json status,conclusion,jobs,url,createdAt,updatedAt,headSha,headBranch,event`:
+  returned `conclusion: success`.
+- `gh release view v0.0.0-release-smoke-20260426081655 --json tagName,name,isDraft,isPrerelease,assets,url,publishedAt`:
+  confirmed a non-draft prerelease with the uploaded unsigned installer asset.
+
 ### 2026-04-26 Build Validation: Packaged desktop diagnostic build
 
 Verified the desktop diagnostic shell still builds and bundles after the
