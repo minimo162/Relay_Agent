@@ -6,6 +6,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 
 import {
@@ -22,7 +23,7 @@ const args = process.argv.slice(2);
 
 function usage() {
   return [
-    "Usage: pnpm install:opencode-provider-config -- [--workspace <dir>] [--output <file>] [--dry-run]",
+    "Usage: pnpm install:opencode-provider-config -- [--workspace <dir>] [--output <file>] [--opencode-bin <path>] [--dry-run]",
     "",
     "Defaults:",
     "  --workspace  current working directory",
@@ -32,6 +33,7 @@ function usage() {
     "  RELAY_OPENCODE_PROVIDER_PORT       Provider HTTP port, default 18180",
     "  RELAY_AGENT_API_KEY                Provider API key; otherwise a stable local token file is used",
     "  RELAY_OPENCODE_PROVIDER_TOKEN_FILE Token file path, default ~/.relay-agent/opencode-provider-token",
+    "  RELAY_BOOTSTRAPPED_OPENCODE_BIN    Optional bootstrapped OpenCode CLI path to probe with --version",
   ].join("\n");
 }
 
@@ -40,6 +42,7 @@ function parseArgs(raw) {
     workspace: process.cwd(),
     output: null,
     dryRun: false,
+    opencodeBin: process.env.RELAY_BOOTSTRAPPED_OPENCODE_BIN || null,
   };
   for (let index = 0; index < raw.length; index++) {
     const arg = raw[index];
@@ -60,6 +63,10 @@ function parseArgs(raw) {
       parsed.dryRun = true;
       continue;
     }
+    if (arg === "--opencode-bin") {
+      parsed.opencodeBin = raw[++index];
+      continue;
+    }
     if (!arg.startsWith("-") && parsed.workspace === process.cwd()) {
       parsed.workspace = arg;
       continue;
@@ -67,6 +74,30 @@ function parseArgs(raw) {
     throw new Error(`Unknown argument: ${arg}`);
   }
   return parsed;
+}
+
+function probeOpencodeBin(path) {
+  if (!path) return null;
+  const absolute = resolve(path);
+  if (!existsSync(absolute)) {
+    throw new Error(`Bootstrapped OpenCode CLI was not found: ${absolute}`);
+  }
+  const result = spawnSync(absolute, ["--version"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) {
+    throw new Error(`Could not run bootstrapped OpenCode CLI: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Bootstrapped OpenCode CLI version probe failed with exit ${result.status}: ${result.stderr || result.stdout}`,
+    );
+  }
+  return {
+    path: absolute,
+    version: `${result.stdout || result.stderr}`.trim(),
+  };
 }
 
 function readExistingConfig(path) {
@@ -94,6 +125,7 @@ function main() {
   const merged = mergeOpencodeConfig(readExistingConfig(output), relayConfig);
   const { token, source } = readOrCreateToken();
   const content = `${JSON.stringify(merged, null, 2)}\n`;
+  const opencodeProbe = probeOpencodeBin(options.opencodeBin);
 
   if (!options.dryRun) {
     mkdirSync(workspace, { recursive: true });
@@ -105,6 +137,10 @@ function main() {
   console.log("[relay-opencode-provider] baseURL:", baseURL);
   console.log("[relay-opencode-provider] model:", MODEL_REF);
   console.log("[relay-opencode-provider] api key source:", source);
+  if (opencodeProbe) {
+    console.log("[relay-opencode-provider] opencode bin:", opencodeProbe.path);
+    console.log("[relay-opencode-provider] opencode version:", opencodeProbe.version);
+  }
   console.log("");
   console.log("Export this before starting OpenCode/OpenWork:");
   console.log(shellExportLine(token));

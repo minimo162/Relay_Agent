@@ -727,6 +727,133 @@
           "status": "completed"
         }
       ]
+    },
+    {
+      "id": "openwork_opencode_bootstrap",
+      "name": "OpenWork/OpenCode First-Run Bootstrap",
+      "description": "Tracks managed first-run download, verification, and launch handoff for OpenWork/OpenCode while preserving Relay as a provider gateway only.",
+      "tasks": [
+        {
+          "id": "B01",
+          "title": "Check OpenWork/OpenCode bootstrap feasibility",
+          "description": "Confirm upstream OpenWork/OpenCode release artifacts, licenses, Windows x64 assets, digests, NPM package metadata, and the viable first-run bootstrap shape without reintroducing bundled Relay-owned execution.",
+          "files": [
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "R02"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B02",
+          "title": "Add pinned OpenWork/OpenCode bootstrap manifest",
+          "description": "Add a source-controlled manifest for the selected Windows x64 OpenWork Desktop plus OpenCode CLI bootstrap artifacts, including exact versions, URLs, sizes, SHA256 digests, entrypoints, license notes, and schema validation.",
+          "files": [
+            "apps/desktop/src-tauri/",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "bootstrap manifest schema and validation tests",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "B01"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B03",
+          "title": "Implement bootstrap downloader and verifier",
+          "description": "Implement local download and verification for the pinned OpenWork/OpenCode bootstrap manifest. Store artifacts under app-local data, clean up partial downloads, verify size and SHA256 before marking artifacts installed, reuse existing verified artifacts, and expose structured diagnostics without installing or launching OpenWork/OpenCode yet.",
+          "files": [
+            "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+            "apps/desktop/src-tauri/src/",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "bootstrap downloader/verifier module with tests",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "B02"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B04",
+          "title": "Add OpenCode CLI config smoke for bootstrapped artifacts",
+          "description": "Exercise the pinned OpenCode CLI artifact path enough to prove the manifest/cache contract can support provider config setup before OpenWork installer work begins. Verify the OpenCode CLI entrypoint path and provider config installation against a temp workspace without invoking OpenCode-owned tool execution.",
+          "files": [
+            "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/scripts/",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "OpenCode CLI bootstrap/config smoke",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "B03"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B05",
+          "title": "Add OpenWork Desktop install/launch smoke",
+          "description": "Define and implement a safe first OpenWork Desktop handoff smoke for the pinned Windows MSI path. The smoke must verify the OpenWork Desktop artifact and represent detection/launch status as diagnostics without silent install, Relay-owned UX, or OpenCode tool execution.",
+          "files": [
+            "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/scripts/",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "OpenWork Desktop bootstrap handoff smoke",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "B04"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B06",
+          "title": "Run live Windows OpenWork/OpenCode bootstrap E2E smoke",
+          "description": "Run the managed bootstrap path on a clean Windows environment with real downloaded OpenCode CLI and OpenWork Desktop artifacts plus a signed-in M365 Copilot provider session. Record versions, artifact paths, explicit operator install steps, provider handoff, plain provider text, and an OpenCode-owned read tool turn.",
+          "files": [
+            "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs",
+            "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+            "docs/IMPLEMENTATION.md",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "package.json",
+            "apps/desktop/package.json",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Windows bootstrap E2E preflight and runbook; live run pending",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "B05"
+          ],
+          "status": "pending"
+        }
+      ]
     }
   ]
 }

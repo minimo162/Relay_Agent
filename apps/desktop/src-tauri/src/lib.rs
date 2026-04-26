@@ -9,6 +9,7 @@ mod ipc_codegen;
 mod liteparse_env;
 pub mod models;
 mod opencode_runtime;
+pub mod openwork_bootstrap;
 mod tauri_bridge;
 #[cfg(test)]
 pub mod test_support;

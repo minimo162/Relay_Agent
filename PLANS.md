@@ -67,6 +67,147 @@ Implications:
 - Do not treat the Copilot browser thread as the execution source of truth.
 - New runtime work should target OpenCode/OpenWork APIs or extension points.
 
+## Completed Task: OpenWork/OpenCode First-Run Bootstrap Feasibility
+
+Goal: check whether Relay can offer a first-run OpenWork/OpenCode download
+flow while preserving the provider-only hard cut.
+
+Status 2026-04-26: feasible with guardrails. The selected Windows x64 MVP is a
+managed external install/download flow: Relay downloads and verifies OpenWork
+Desktop as the UX owner, downloads and verifies the OpenCode CLI for provider
+config installation/diagnostics/direct fallback, and keeps Relay limited to the
+M365 Copilot OpenAI-compatible provider gateway plus launcher/handoff
+diagnostics.
+
+Key findings:
+
+- OpenCode `v1.14.25` has MIT licensing, GitHub release CLI zip assets with
+  SHA256 digests, and the `opencode-ai` NPM package with bin `opencode`.
+- OpenWork `v0.11.212` has a Windows x64 desktop MSI release asset with a
+  SHA256 digest, and `openwork-orchestrator@0.11.212` is a small NPM shim for
+  platform binaries.
+- OpenWork's root license is MIT outside `/ee`, while `/ee` is separately Fair
+  Source licensed; production auto-install needs explicit artifact/license
+  review.
+- OpenWork currently pins `opencodeVersion` to `v1.4.9`, so the bootstrap
+  manifest must pin a tested compatible pair instead of independently floating
+  latest OpenWork and latest OpenCode.
+
+Acceptance criteria:
+
+- Upstream OpenCode release, NPM package, Windows asset, digest, and license
+  are identified.
+- Upstream OpenWork desktop release, orchestrator package, Windows asset,
+  digest, and license caveats are identified.
+- A first manifest shape and follow-up implementation tasks are documented.
+- Relay ownership boundaries stay provider-only; no bundled runtime sidecar or
+  Relay-owned execution path is reintroduced.
+
+Detailed plan: `docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md`.
+
+## Completed Task: Pinned OpenWork/OpenCode Bootstrap Manifest
+
+Goal: add the first source-controlled manifest for a managed first-run
+OpenWork/OpenCode download path.
+
+Status 2026-04-27: implemented for Windows x64. The manifest pins OpenWork
+Desktop `0.11.212` and OpenCode CLI `1.14.25` with exact release URLs, sizes,
+SHA256 digests, entrypoints, and license/installation caveats. The provider
+check now runs a manifest validation test, and the hard-cut guard requires the
+bootstrap manifest while still rejecting bundled runtime sidecar or Relay-owned
+tool-execution markers.
+
+Acceptance criteria:
+
+- The manifest pins exact Windows x64 OpenWork Desktop and OpenCode CLI
+  artifacts.
+- Each artifact includes version, kind, format, URL, SHA256, size, entrypoint,
+  and license notes.
+- Manifest validation is part of `check:opencode-provider`.
+- The hard-cut guard allows the bootstrap manifest but continues to reject
+  `opencode-runtime` resource bundling and Relay-owned execution markers.
+
+## Completed Task: Bootstrap Downloader And Verifier
+
+Goal: implement the local download/verify cache for the pinned bootstrap
+manifest without installing or launching OpenWork/OpenCode yet.
+
+Status 2026-04-27: implemented in `openwork_bootstrap.rs`. The module loads the
+pinned manifest, derives an app-local versioned cache path, reuses existing
+verified artifacts, downloads missing artifacts to a temporary file, verifies
+size and SHA256, and persists only verified files. It returns structured error
+codes for network, HTTP status, checksum, size, filesystem, manifest, unsafe
+filename, and unsupported-platform failures.
+
+Acceptance criteria:
+
+- Downloads are stored under app-local data, not under Tauri resources.
+- Partial downloads use an atomic temp-file path and are cleaned up on failure.
+- Size and SHA256 are verified before an artifact is marked installed.
+- Existing verified artifacts are reused.
+- Diagnostics distinguish network, checksum, size, filesystem, and unsupported
+  platform failures.
+
+## Completed Task: OpenCode CLI Config Smoke
+
+Goal: exercise the pinned OpenCode CLI artifact path enough to prove the
+manifest and cache contract can support provider config setup before any
+OpenWork installer work begins.
+
+Status 2026-04-27: implemented as a CI-safe smoke with a fake bootstrapped
+`opencode.exe`. The smoke derives the expected bootstrapped entrypoint path,
+probes it with `--version`, passes it to the provider config installer, and
+confirms a temp workspace receives the Relay provider config without invoking
+any OpenCode-owned tool execution.
+
+Acceptance criteria:
+
+- The bootstrap module can identify the pinned OpenCode CLI artifact from the
+  manifest.
+- A test or smoke fixture can verify an extracted `opencode.exe` path and run a
+  version/config-read probe without requiring a real OpenWork desktop install.
+- The provider config installer can target a temp workspace using the
+  bootstrapped OpenCode path.
+- No OpenCode-owned tool execution is invoked by Relay.
+
+## Completed Task: OpenWork Desktop Install/Launch Smoke
+
+Goal: define and implement a safe first OpenWork Desktop handoff smoke for the
+pinned Windows MSI path without silent install or OpenCode tool execution.
+
+Status 2026-04-27: implemented as a CI-safe diagnostic handoff smoke. The smoke
+validates the pinned OpenWork Desktop MSI manifest entry, creates a placeholder
+at the expected app-local cache path, reports detection state without launching
+OpenWork, and emits provider gateway handoff details for a later real Windows
+run.
+
+Acceptance criteria:
+
+- The bootstrap layer can identify and verify the pinned OpenWork Desktop MSI.
+- The smoke stops before silent installation unless explicitly approved by the
+  operator or uses a non-installing launch/detection fixture.
+- OpenWork detection/launch status is represented as diagnostics, not as Relay
+  owning the UX.
+- Provider gateway URL and API-key handoff expectations are recorded for the
+  eventual real Windows run.
+
+## Next Task: Live Windows OpenWork/OpenCode Bootstrap E2E Smoke
+
+Goal: run the bootstrap path on a clean Windows environment with real
+downloaded artifacts and a signed-in M365 Copilot provider session.
+
+Acceptance criteria:
+
+- Relay downloads and verifies the pinned OpenCode CLI zip and OpenWork Desktop
+  MSI using the manifest digests.
+- The operator explicitly approves or manually opens the OpenWork installer;
+  Relay does not silently install.
+- OpenWork/OpenCode receives the Relay provider config and API-key handoff.
+- A provider text turn and an OpenCode-owned `read` tool turn pass through
+  M365 Copilot.
+- The artifact paths, versions, run logs, and any manual operator steps are
+  recorded in `docs/IMPLEMENTATION.md`.
+
 ## Completed Task: Packaged Desktop Diagnostic Build Verification
 
 Goal: verify that the desktop diagnostic shell still builds as a packaged Tauri

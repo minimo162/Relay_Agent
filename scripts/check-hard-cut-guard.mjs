@@ -20,6 +20,7 @@ function isDirectory(path) {
 const plans = read("PLANS.md");
 const hardCutPlan = read("docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md");
 const providerGatewayDoc = read("docs/OPENCODE_PROVIDER_GATEWAY.md");
+const windowsBootstrapE2eDoc = read("docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md");
 
 const required = [
   {
@@ -165,6 +166,62 @@ const required = [
   {
     path: "apps/desktop/scripts/opencode_provider_config.mjs",
     text: "export function opencodeProviderConfig",
+  },
+  {
+    path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+    text: "Relay downloads and verifies external OpenWork/OpenCode artifacts only.",
+  },
+  {
+    path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+    text: "Relay must not execute tools, own transcripts, or restore bundled runtime sidecars",
+  },
+  {
+    path: "apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs",
+    text: "preserves provider-only boundary",
+  },
+  {
+    path: "apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs",
+    text: "fake opencode only supports --version in bootstrap smoke",
+  },
+  {
+    path: "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs",
+    text: "diagnostic_handoff_only",
+  },
+  {
+    path: "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs",
+    text: "explicit-user-approved-installer",
+  },
+  {
+    path: "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs",
+    text: "B06 requires a clean Windows host with M365 Copilot sign-in",
+  },
+  {
+    path: "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+    text: "Relay must remain a provider gateway only.",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"smoke:opencode-bootstrap-config\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"smoke:openwork-desktop-handoff\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"live:windows:openwork-bootstrap\"",
+  },
+  {
+    path: "package.json",
+    text: "\"smoke:opencode-bootstrap-config\"",
+  },
+  {
+    path: "package.json",
+    text: "\"smoke:openwork-desktop-handoff\"",
+  },
+  {
+    path: "package.json",
+    text: "\"live:windows:openwork-bootstrap\"",
   },
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs",
@@ -332,6 +389,18 @@ const forbidden = [
   {
     path: "apps/desktop/src-tauri/tauri.conf.json",
     text: "resources/opencode-runtime/",
+  },
+  {
+    path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+    text: "resources/opencode-runtime/",
+  },
+  {
+    path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+    text: "/experimental/tool/execute",
+  },
+  {
+    path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
+    text: "OpencodeToolExecutionContext",
   },
   {
     path: "apps/desktop/src-tauri/src/lib.rs",
@@ -1125,6 +1194,7 @@ const byPath = {
   "Cargo.toml": read("Cargo.toml"),
   "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md": hardCutPlan,
   "docs/OPENCODE_PROVIDER_GATEWAY.md": providerGatewayDoc,
+  "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md": windowsBootstrapE2eDoc,
   "docs/IMPLEMENTATION.md": read("docs/IMPLEMENTATION.md"),
   "apps/desktop/src-tauri/src/commands/mod.rs": read("apps/desktop/src-tauri/src/commands/mod.rs"),
   "apps/desktop/src-tauri/src/commands/diagnostics.rs": read("apps/desktop/src-tauri/src/commands/diagnostics.rs"),
@@ -1153,6 +1223,11 @@ const byPath = {
   "apps/desktop/scripts/start_opencode_provider_gateway.mjs": read("apps/desktop/scripts/start_opencode_provider_gateway.mjs"),
   "apps/desktop/scripts/install_opencode_provider_config.mjs": read("apps/desktop/scripts/install_opencode_provider_config.mjs"),
   "apps/desktop/scripts/opencode_provider_config.mjs": read("apps/desktop/scripts/opencode_provider_config.mjs"),
+  "apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs": read("apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs"),
+  "apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs": read("apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs"),
+  "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs": read("apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs"),
+  "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs": read("apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs"),
+  "apps/desktop/src-tauri/bootstrap/openwork-opencode.json": read("apps/desktop/src-tauri/bootstrap/openwork-opencode.json"),
   "package.json": read("package.json"),
   "apps/desktop/package.json": read("apps/desktop/package.json"),
   "apps/desktop/src-tauri/Cargo.toml": read("apps/desktop/src-tauri/Cargo.toml"),

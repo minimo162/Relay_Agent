@@ -23,6 +23,235 @@
 
 ## Milestone Log
 
+### 2026-04-27 Readiness: Windows OpenWork/OpenCode bootstrap E2E
+
+Prepared the live B06 Windows bootstrap E2E path without marking it complete.
+The current workspace is Linux, so the actual acceptance run still requires a
+clean Windows 10/11 x64 host with M365 Copilot signed in and explicit operator
+approval before opening the OpenWork Desktop MSI.
+
+Changes:
+
+- Added `apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs`.
+- Added `docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md`.
+- Added root and desktop `live:windows:openwork-bootstrap` scripts.
+- Wired the live Windows bootstrap preflight syntax check into
+  `check:opencode-provider`.
+- Extended the hard-cut guard so the B06 runbook and script preserve the
+  provider-only boundary.
+- Updated bootstrap planning and task metadata. `B06` remains pending until the
+  real Windows + M365 run records both provider text and an OpenCode-owned
+  `read` tool turn.
+
+Verification:
+
+- `pnpm live:windows:openwork-bootstrap`: passed as non-destructive preflight
+  and reported `blocked_non_windows_host` on Linux.
+- `node --check apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 8 tests.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-27 Implementation: OpenWork Desktop handoff smoke
+
+Added a CI-safe OpenWork Desktop handoff smoke for the pinned Windows MSI path.
+The smoke does not silently install or launch OpenWork; it validates the
+manifested MSI metadata, creates a placeholder at the expected app-local cache
+path, reports existing-install detection state, and emits the Relay provider
+handoff details that a real Windows run will need.
+
+Changes:
+
+- Added `apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs`.
+- Added root and desktop `smoke:openwork-desktop-handoff` scripts.
+- Wired the new smoke script syntax check into `check:opencode-provider`.
+- Extended the hard-cut guard to require the OpenWork handoff smoke and its
+  explicit `diagnostic_handoff_only` / `explicit-user-approved-installer`
+  posture.
+- Marked bootstrap task `B05` completed and added `B06` as the live Windows
+  end-to-end smoke task.
+
+Verification:
+
+- `pnpm smoke:openwork-desktop-handoff`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 8 tests.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-27 Implementation: OpenCode CLI bootstrap config smoke
+
+Added a CI-safe smoke for the bootstrapped OpenCode CLI handoff path. The smoke
+does not run OpenCode tools or require a real OpenWork install; it creates a
+fake bootstrapped `opencode.exe`, verifies the `--version` probe, passes that
+entrypoint into the provider config installer, and confirms a temp workspace
+receives the Relay OpenAI-compatible provider config.
+
+Changes:
+
+- Added `artifact_extract_dir` and `artifact_entrypoint_path` helpers to
+  `openwork_bootstrap.rs`.
+- Added entrypoint path unit tests, including rejection of nested/unsafe
+  entrypoint names.
+- Added `--opencode-bin` and `RELAY_BOOTSTRAPPED_OPENCODE_BIN` support to
+  `install_opencode_provider_config.mjs`; the installer probes the CLI with
+  `--version` before writing config when a path is provided.
+- Added `apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs`.
+- Added root and desktop `smoke:opencode-bootstrap-config` scripts.
+- Wired the new smoke script syntax check into `check:opencode-provider`.
+- Extended the hard-cut guard to require the smoke while preserving the
+  provider-only boundary.
+- Marked bootstrap task `B04` completed and added `B05` as the next OpenWork
+  Desktop install/launch smoke task.
+
+Verification:
+
+- `pnpm smoke:opencode-bootstrap-config`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 8 tests.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `pnpm --filter @relay-agent/desktop check:opencode-provider`: passed, 21
+  tests.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-27 Implementation: OpenWork/OpenCode bootstrap downloader and verifier
+
+Implemented the local bootstrap artifact cache for the pinned OpenWork/OpenCode
+manifest without installing or launching either upstream app. The module keeps
+downloads under an app-local data root, writes network responses to a temporary
+file, verifies size and SHA256, then atomically persists the verified artifact
+into a versioned cache path.
+
+Changes:
+
+- Added `apps/desktop/src-tauri/src/openwork_bootstrap.rs`.
+- Added `sha2` as a direct desktop crate dependency for SHA256 verification.
+- Exposed `bootstrap_cache_root(app_local_data_dir)` so callers store artifacts
+  under app-local data rather than Tauri resources.
+- Added manifest loading and selected-platform artifact lookup.
+- Added cache path derivation by platform, artifact key, version, and upstream
+  filename.
+- Added cached artifact reuse when an existing file passes size and SHA256
+  verification.
+- Added blocking HTTP download to a `tempfile::NamedTempFile`, with size and
+  SHA256 verification before persisting.
+- Added structured error codes for manifest, unsupported platform, unsafe file
+  name, filesystem, network, HTTP status, size mismatch, and SHA256 mismatch
+  diagnostics.
+- Marked bootstrap task `B03` completed and added `B04` as the next OpenCode CLI
+  config smoke task.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 6 tests.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-27 Implementation: OpenWork/OpenCode bootstrap manifest
+
+Added the first source-controlled bootstrap manifest for the managed first-run
+OpenWork/OpenCode download path. The manifest pins the Windows x64 OpenWork
+Desktop MSI and OpenCode CLI zip with exact versions, GitHub release URLs,
+sizes, SHA256 digests, entrypoints, and license/installation caveats.
+
+Changes:
+
+- Added `apps/desktop/src-tauri/bootstrap/openwork-opencode.json`.
+- Added `apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs`.
+- Wired the manifest validation test into
+  `pnpm --filter @relay-agent/desktop check:opencode-provider`.
+- Extended `scripts/check-hard-cut-guard.mjs` so the bootstrap manifest is
+  required while still rejecting any return of `resources/opencode-runtime`,
+  `/experimental/tool/execute`, or `OpencodeToolExecutionContext` in the
+  manifest.
+- Marked bootstrap task `B02` completed and added `B03` as the next downloader
+  / verifier implementation task.
+
+Pinned artifacts:
+
+- OpenWork Desktop `0.11.212`:
+  `openwork-desktop-windows-x64.msi`,
+  SHA256 `e52d020a1f6c2073164ed06279c441869844cb07a396bffac0789d63a4b7f486`.
+- OpenCode CLI `1.14.25`:
+  `opencode-windows-x64.zip`,
+  SHA256 `8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`.
+
+Verification:
+
+- `node --test apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs`:
+  passed, 2 tests.
+- `pnpm --filter @relay-agent/desktop check:opencode-provider`: passed, 21
+  tests.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('apps/desktop/src-tauri/bootstrap/openwork-opencode.json','utf8')); JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('json ok')"`:
+  passed.
+
+### 2026-04-26 Planning: OpenWork/OpenCode first-run bootstrap feasibility
+
+Checked whether Relay can move from "external OpenWork/OpenCode must already
+exist" to a first-run managed download flow without undoing the provider-only
+hard cut.
+
+Result:
+
+- Feasible as a managed external install/download flow.
+- Preferred Windows x64 MVP:
+  - Download and verify OpenWork Desktop MSI as the UX owner.
+  - Download and verify OpenCode CLI zip for provider config installation,
+    diagnostics, and direct fallback.
+  - Keep Relay limited to the M365 Copilot OpenAI-compatible provider gateway,
+    launcher/handoff, and diagnostics.
+- OpenCode checked upstream:
+  - `anomalyco/opencode` latest release `v1.14.25`.
+  - MIT license.
+  - Windows CLI asset:
+    `opencode-windows-x64.zip`,
+    SHA256 `8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`.
+  - NPM package `opencode-ai@1.14.25` exposes bin `opencode`.
+- OpenWork checked upstream:
+  - `different-ai/openwork` latest desktop release `v0.11.212`.
+  - Root license is MIT outside `/ee`; `/ee` has a separate Fair Source
+    License, so release artifact contents need explicit review before a
+    production auto-installer ships.
+  - Windows desktop asset:
+    `openwork-desktop-windows-x64.msi`,
+    SHA256 `e52d020a1f6c2073164ed06279c441869844cb07a396bffac0789d63a4b7f486`.
+  - `openwork-orchestrator@0.11.212` is a small MIT NPM shim that resolves or
+    downloads platform binaries from the
+    `openwork-orchestrator-v0.11.212` GitHub release.
+- OpenWork `constants.json` on `dev` currently pins `opencodeVersion` to
+  `v1.4.9`, so Relay should pin a known compatible pair rather than blindly
+  combining OpenWork latest with OpenCode latest.
+- Added `docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md` with the selected MVP
+  direction, manifest shape, follow-up task breakdown, and open questions.
+
+Verification:
+
+- `gh api repos/anomalyco/opencode/releases/latest --jq '{tag_name, name, published_at, assets: [.assets[] | {name, size, browser_download_url}]}'`:
+  passed.
+- `gh api repos/different-ai/openwork/releases/latest --jq '{tag_name, name, published_at, assets: [.assets[] | {name, size, browser_download_url}]}'`:
+  passed.
+- `npm view opencode-ai version license bin dist.tarball dist.integrity --json`:
+  passed.
+- `npm view openwork-orchestrator version license bin dist.tarball dist.integrity --json`:
+  passed.
+- `gh api repos/different-ai/openwork/releases/tags/openwork-orchestrator-v0.11.212 --jq '{tag_name, name, published_at, assets: [.assets[] | {name,size,digest,browser_download_url}]}'`:
+  passed.
+- `npm pack openwork-orchestrator@0.11.212 --dry-run --json`: passed.
+
 ### 2026-04-26 Release Validation: Windows installer workflow smoke
 
 Verified the GitHub-hosted Windows installer release workflow after the
