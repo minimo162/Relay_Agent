@@ -1,9 +1,7 @@
 use crate::app_services::AppServices;
 use crate::doctor::relay_diagnostics_blocking;
-use crate::registry::SessionRunState;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Mutex, OnceLock};
@@ -29,41 +27,10 @@ struct DevConfigureRequest {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DevPendingApprovalState {
-    approval_id: String,
-    tool_name: String,
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DevSessionState {
-    session_id: String,
-    cwd: Option<String>,
-    running: bool,
-    run_state: String,
-    last_stop_reason: Option<String>,
-    retry_count: usize,
-    message_count: usize,
-    pending_approvals: Vec<DevPendingApprovalState>,
-    tool_use_counts: BTreeMap<String, usize>,
-    tool_result_counts: BTreeMap<String, usize>,
-    tool_error_counts: BTreeMap<String, usize>,
-    last_assistant_text: Option<String>,
-    current_copilot_request_id: Option<String>,
-    stream_delta_count: usize,
-    first_stream_at_ms: Option<u64>,
-    last_stream_at_ms: Option<u64>,
-    stream_preview_text: Option<String>,
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
 struct DevStateResponse {
     ok: bool,
     relay_diagnostics: crate::models::RelayDiagnostics,
     automation_config: Option<DevConfigureRequest>,
-    latest_session_id: Option<String>,
-    sessions: Vec<DevSessionState>,
 }
 
 struct ParsedHttpRequest {
@@ -243,91 +210,17 @@ fn build_state_response(
     app: &AppHandle,
 ) -> Result<DevStateResponse, Box<dyn std::error::Error + Send + Sync>> {
     let services = app.state::<AppServices>();
-    let registry = services.registry();
     let relay_diagnostics = relay_diagnostics_blocking(services.copilot_bridge());
     let automation_config = dev_automation_config()
         .lock()
         .map_err(|_| "dev automation config lock poisoned")?
         .clone();
-    let mut sessions = Vec::new();
-
-    for session_id in registry.list_session_ids()? {
-        let Some(handle) = registry.get_handle(&session_id)? else {
-            continue;
-        };
-        let pending_approvals = handle
-            .list_pending_approvals()?
-            .into_iter()
-            .map(|(approval_id, tool_name)| DevPendingApprovalState {
-                approval_id,
-                tool_name,
-            })
-            .collect::<Vec<_>>();
-        let snapshot = handle.read_state(|state| {
-            build_session_state(&session_id, state, pending_approvals.clone())
-        })?;
-        sessions.push(snapshot);
-    }
-
-    sessions.sort_by(|left, right| {
-        right
-            .running
-            .cmp(&left.running)
-            .then_with(|| {
-                right
-                    .pending_approvals
-                    .len()
-                    .cmp(&left.pending_approvals.len())
-            })
-            .then_with(|| right.message_count.cmp(&left.message_count))
-            .then_with(|| left.session_id.cmp(&right.session_id))
-    });
-    let latest_session_id = sessions.first().map(|session| session.session_id.clone());
 
     Ok(DevStateResponse {
         ok: true,
         relay_diagnostics,
         automation_config,
-        latest_session_id,
-        sessions,
     })
-}
-
-fn build_session_state(
-    session_id: &str,
-    state: &crate::registry::SessionState,
-    pending_approvals: Vec<DevPendingApprovalState>,
-) -> DevSessionState {
-    DevSessionState {
-        session_id: session_id.to_string(),
-        cwd: state.session_config.cwd.clone(),
-        running: state.running,
-        run_state: run_state_label(state.run_state).to_string(),
-        last_stop_reason: state.last_stop_reason.clone(),
-        retry_count: state.retry_count,
-        message_count: 0,
-        pending_approvals,
-        tool_use_counts: BTreeMap::new(),
-        tool_result_counts: BTreeMap::new(),
-        tool_error_counts: BTreeMap::new(),
-        last_assistant_text: None,
-        current_copilot_request_id: state.current_copilot_request_id.clone(),
-        stream_delta_count: state.stream_delta_count,
-        first_stream_at_ms: state.first_stream_at_ms,
-        last_stream_at_ms: state.last_stream_at_ms,
-        stream_preview_text: state.stream_preview_text.clone(),
-    }
-}
-
-fn run_state_label(state: SessionRunState) -> &'static str {
-    match state {
-        SessionRunState::Running => "running",
-        SessionRunState::Retrying => "retrying",
-        SessionRunState::WaitingApproval => "waiting_approval",
-        SessionRunState::Compacting => "compacting",
-        SessionRunState::Cancelling => "cancelling",
-        SessionRunState::Finished => "finished",
-    }
 }
 
 fn write_json_response(

@@ -23,6 +23,44 @@
 
 ## Milestone Log
 
+### 2026-04-26 Implementation: Legacy session registry and persistence retirement
+
+Deleted the remaining Relay-owned session registry and Copilot session metadata
+persistence after desktop execution commands, events, and IPC projections had
+already been removed. OpenCode/OpenWork is now the only session owner; Relay
+keeps provider diagnostics and Copilot bridge lifecycle only.
+
+Changes:
+
+- Deleted `apps/desktop/src-tauri/crates/desktop-core/src/registry.rs`.
+- Deleted `apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs`.
+- Deleted `apps/desktop/src-tauri/src/registry.rs`.
+- Removed `AppServices.registry` and the registry getter.
+- Simplified dev-control `/state` to return provider diagnostics and stored
+  automation config only.
+- Simplified `ensure_copilot_server` so CDP port changes no longer consult a
+  Relay-owned running-session count.
+- Updated the hard-cut guard, plans, and task graph to reject restoring the
+  deleted registry/persistence files and module declarations.
+
+Verification:
+
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); JSON.parse(require('fs').readFileSync('package.json','utf8')); JSON.parse(require('fs').readFileSync('apps/desktop/package.json','utf8'))"`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`:
+  passed, 82 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop --lib`:
+  passed, 15 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`:
+  passed, 5 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `pnpm check`: passed.
+- `cargo fmt --check --all --manifest-path apps/desktop/src-tauri/Cargo.toml`:
+  passed.
+- `git diff --check`: passed.
+
 ### 2026-04-25 Implementation: Legacy agent event/type retirement
 
 Removed the remaining Relay-owned agent event and session-history IPC

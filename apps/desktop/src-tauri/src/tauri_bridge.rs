@@ -20,7 +20,6 @@ use crate::models::{
     WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow,
     WorkspaceSlashCommandRow,
 };
-use crate::registry::SessionRegistry;
 
 /* ── Copilot Node bridge (copilot_server.js) ───────────────── *
  * Spawns Node + copilot_server.js, which attaches to Edge via *
@@ -50,15 +49,9 @@ pub fn effective_cdp_port(browser_settings: Option<&BrowserAutomationSettings>) 
 }
 
 /// Spawns or reuses the Node `copilot_server.js` bridge with `--cdp-port` matching `desired_cdp_port`.
-///
-/// When the port must change and the bridge was already running, the Node process is stopped and
-/// restarted unless `block_port_change_on_concurrent_sessions` is true **and** more than one agent
-/// session is running (returns an error).
 pub fn ensure_copilot_server(
     desired_cdp_port: u16,
-    block_port_change_on_concurrent_sessions: bool,
     bridge: Arc<CopilotBridgeManager>,
-    registry: Option<&SessionRegistry>,
 ) -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
     let server_arc = {
         let mut slot = bridge.lock()?;
@@ -84,14 +77,6 @@ pub fn ensure_copilot_server(
                 .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
             if srv.cdp_port() != desired_cdp_port {
                 if st.started {
-                    if block_port_change_on_concurrent_sessions {
-                        if let Some(reg) = registry {
-                            let n = reg.running_session_count().map_err(|e| e.to_string())?;
-                            if n > 1 {
-                                return Err("Cannot change Copilot CDP port while multiple agent sessions are running. Wait for sessions to finish or restart the app.".to_string());
-                            }
-                        }
-                    }
                     srv.stop();
                     st.started = false;
                 }
@@ -168,17 +153,15 @@ pub async fn warmup_copilot_bridge(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<CopilotWarmupResult, String> {
-    let reg = services.registry();
     let bridge = services.copilot_bridge();
     let cdp = effective_cdp_port(browser_settings.as_ref());
     let request_id = Uuid::new_v4().to_string();
-    tokio::task::spawn_blocking(move || run_copilot_warmup_blocking(reg, bridge, cdp, request_id))
+    tokio::task::spawn_blocking(move || run_copilot_warmup_blocking(bridge, cdp, request_id))
         .await
         .map_err(|e| format!("copilot warmup task: {e}"))?
 }
 
 fn run_copilot_warmup_blocking(
-    reg: SessionRegistry,
     bridge: Arc<CopilotBridgeManager>,
     cdp: u16,
     request_id: String,
@@ -191,7 +174,7 @@ fn run_copilot_warmup_blocking(
         cdp,
         "ensure_server",
     );
-    let server_arc = match ensure_copilot_server(cdp, true, bridge, Some(&reg)) {
+    let server_arc = match ensure_copilot_server(cdp, bridge) {
         Ok(server_arc) => server_arc,
         Err(error) => {
             tracing::warn!(

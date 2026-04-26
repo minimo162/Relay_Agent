@@ -22,7 +22,6 @@ use crate::models::{
     BrowserAutomationSettings, CopilotWarmupFailureCode, CopilotWarmupResult, CopilotWarmupStage,
     RelayDiagnostics, RelayDoctorCheck, RelayDoctorReport,
 };
-use crate::registry::SessionRegistry;
 
 const DEFAULT_BROWSER_TIMEOUT_MS: u32 = 120_000;
 const DOCTOR_BRIDGE_URL_ENV: &str = "RELAY_DOCTOR_BRIDGE_URL";
@@ -153,21 +152,17 @@ fn warmup_result(
 }
 
 pub async fn warmup_copilot_bridge(
-    registry: SessionRegistry,
     bridge: Arc<CopilotBridgeManager>,
     browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<CopilotWarmupResult, String> {
     let settings = browser_settings.unwrap_or_else(default_browser_settings);
     let request_id = Uuid::new_v4().to_string();
-    tokio::task::spawn_blocking(move || {
-        run_copilot_warmup_blocking(registry, bridge, settings, request_id)
-    })
-    .await
-    .map_err(|e| format!("copilot warmup task: {e}"))?
+    tokio::task::spawn_blocking(move || run_copilot_warmup_blocking(bridge, settings, request_id))
+        .await
+        .map_err(|e| format!("copilot warmup task: {e}"))?
 }
 
 pub fn run_copilot_warmup_blocking(
-    registry: SessionRegistry,
     bridge: Arc<CopilotBridgeManager>,
     browser_settings: BrowserAutomationSettings,
     request_id: String,
@@ -179,12 +174,7 @@ pub fn run_copilot_warmup_blocking(
         cdp_port,
         "ensure_server",
     );
-    let server_arc = match crate::tauri_bridge::ensure_copilot_server(
-        cdp_port,
-        true,
-        bridge,
-        Some(&registry),
-    ) {
+    let server_arc = match crate::tauri_bridge::ensure_copilot_server(cdp_port, bridge) {
         Ok(server_arc) => server_arc,
         Err(error) => {
             tracing::warn!(
@@ -387,14 +377,8 @@ fn run_doctor_with_auto_launch(
     browser_settings: &BrowserAutomationSettings,
     checks: &mut Vec<RelayDoctorCheck>,
 ) {
-    let registry = SessionRegistry::new();
     let bridge = Arc::new(CopilotBridgeManager::new());
-    match crate::tauri_bridge::ensure_copilot_server(
-        browser_settings.cdp_port,
-        true,
-        bridge,
-        Some(&registry),
-    ) {
+    match crate::tauri_bridge::ensure_copilot_server(browser_settings.cdp_port, bridge) {
         Ok(server_arc) => run_started_bridge_checks(runtime, browser_settings, checks, server_arc),
         Err(error) => {
             checks.push(runtime.block_on(check_cdp_reachability(
@@ -1136,12 +1120,7 @@ pub async fn warmup_copilot_bridge_from_state(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<CopilotWarmupResult, String> {
-    warmup_copilot_bridge(
-        services.registry(),
-        services.copilot_bridge(),
-        browser_settings,
-    )
-    .await
+    warmup_copilot_bridge(services.copilot_bridge(), browser_settings).await
 }
 
 pub async fn get_relay_diagnostics_from_state(

@@ -226,6 +226,36 @@ Acceptance criteria:
 - The hard-cut guard rejects restoring the deleted event/type projection
   module and event listener bridge.
 
+## Completed Task: Legacy Session Registry And Persistence Retirement
+
+Goal: remove the remaining Relay-owned in-memory session registry and metadata
+persistence now that desktop execution commands, events, and projection IPC have
+been retired. OpenCode/OpenWork remains the only session source of truth.
+
+Status 2026-04-26: implemented by deleting the desktop-core session registry
+and Copilot session persistence module, removing the app-level registry
+re-export, and simplifying provider diagnostics to use only the Copilot bridge
+manager.
+
+Retired surfaces:
+
+- `apps/desktop/src-tauri/crates/desktop-core/src/registry.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs`
+- `apps/desktop/src-tauri/src/registry.rs`
+- `AppServices.registry`
+- Dev-control session snapshots from `GET /state`
+- Copilot CDP port-change blocking based on Relay-owned running sessions
+
+Acceptance criteria:
+
+- Relay desktop code no longer exports or constructs `SessionRegistry`.
+- `dev_control.rs` exposes provider diagnostics and stored automation config,
+  not Relay-owned session state.
+- `ensure_copilot_server` manages only Copilot bridge lifecycle and CDP port
+  changes; it does not consult Relay session concurrency.
+- The hard-cut guard rejects restoring the deleted registry/persistence files
+  or their module declarations.
+
 ## Completed Task: Agent Command Module Retirement
 
 Goal: delete the now-unreachable Tauri command wrapper module for legacy Relay

@@ -49,7 +49,8 @@
           "description": "OpenCode/OpenWork owns sessions, tool execution, permissions, MCP routing, plugins, skills, workspace config, and transcript state. Relay-owned Rust execution is not a product fallback.",
           "files": [
             "apps/desktop/src-tauri/src/tauri_bridge.rs",
-            "apps/desktop/src-tauri/src/registry.rs",
+            "apps/desktop/src-tauri/src/app_services.rs",
+            "apps/desktop/src-tauri/src/dev_control.rs",
             "apps/desktop/src-tauri/src/opencode_runtime.rs",
             "apps/desktop/src-tauri/binaries/copilot_server.js"
           ],
@@ -378,6 +379,34 @@
           "priority": "critical",
           "blockedBy": [
             "D07"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "D09",
+          "title": "Retire legacy session registry and persistence",
+          "description": "Delete the remaining Relay-owned in-memory session registry and Copilot session metadata persistence now that desktop execution commands, events, and IPC projection types are gone. Provider diagnostics should not expose Relay-owned chat session state.",
+          "files": [
+            "apps/desktop/src-tauri/crates/desktop-core/src/registry.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/copilot_persistence.rs",
+            "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs",
+            "apps/desktop/src-tauri/src/registry.rs",
+            "apps/desktop/src-tauri/src/app_services.rs",
+            "apps/desktop/src-tauri/src/dev_control.rs",
+            "apps/desktop/src-tauri/src/doctor.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/lib.rs",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json",
+            "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-26 Legacy session registry and persistence retirement)",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "D08"
           ],
           "status": "completed"
         }

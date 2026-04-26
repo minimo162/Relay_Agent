@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 
 use crate::copilot_server::CopilotServer;
-use crate::registry::SessionRegistry;
 
 pub struct CopilotServerState {
     pub server: Arc<Mutex<CopilotServer>>,
@@ -27,7 +26,6 @@ impl CopilotBridgeManager {
 }
 
 pub struct AppServices {
-    registry: SessionRegistry,
     copilot_bridge: Arc<CopilotBridgeManager>,
 }
 
@@ -35,14 +33,8 @@ impl AppServices {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            registry: SessionRegistry::new(),
             copilot_bridge: Arc::new(CopilotBridgeManager::new()),
         }
-    }
-
-    #[must_use]
-    pub fn registry(&self) -> SessionRegistry {
-        self.registry.clone()
     }
 
     #[must_use]
