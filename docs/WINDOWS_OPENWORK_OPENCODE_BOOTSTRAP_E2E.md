@@ -7,9 +7,9 @@ Windows 10/11 x64 environment, network access to GitHub Releases, Microsoft
 Edge with M365 Copilot signed in, and an operator who explicitly approves
 opening the OpenWork installer.
 
-Relay must remain a provider gateway only. Do not use this run to reintroduce
-Relay-owned OpenCode runtime sidecars, tool execution, transcript state, or
-chat UX.
+Relay must remain the OpenWork/OpenCode setup layer and provider gateway only.
+Do not use this run to reintroduce Relay-owned OpenCode runtime sidecars, tool
+execution, transcript state, or chat UX.
 
 ## Preflight
 
@@ -24,11 +24,11 @@ pnpm smoke:opencode-bootstrap-config
 pnpm live:windows:openwork-bootstrap
 ```
 
-`pnpm dev` must run the headless bootstrap preflight, not the Relay desktop
-frontend. `pnpm live:windows:openwork-bootstrap` is non-destructive by default:
-it checks the post-UX-removal production entrypoint, runs the Rust bootstrap
-preflight, and prints the pinned artifact URLs, SHA256 values, expected
-app-local cache paths, and provider handoff settings.
+`pnpm dev` must run the auto bootstrap path, not the Relay desktop frontend.
+`pnpm live:windows:openwork-bootstrap` is non-destructive by default: it checks
+the post-UX-removal production entrypoint, runs the Rust bootstrap preflight,
+and prints the pinned artifact URLs, SHA256 values, expected app-local cache
+paths, and provider handoff settings.
 
 On non-Windows CI or local Linux/macOS verification, use this readiness-only
 variant to require the same entrypoint/bootstrap checks without pretending the
@@ -64,10 +64,12 @@ Expected pinned artifacts:
 Run the bootstrap-managed provider handoff from a workspace:
 
 ```powershell
-pnpm bootstrap:openwork-opencode -- --download --workspace C:\RelayBootstrapSmoke\workspace --start-provider-gateway
+Set-Location C:\RelayBootstrapSmoke\workspace
+pnpm --dir C:\path\to\Relay_Agent dev
 ```
 
-Keep the printed `RELAY_AGENT_API_KEY` export available for OpenCode/OpenWork.
+Auto bootstrap writes the local provider token into the workspace config, so no
+manual `RELAY_AGENT_API_KEY` export should be required for the normal path.
 The expected model is:
 
 ```text
@@ -87,7 +89,7 @@ entrypoint, and installs Relay provider config into the test workspace. For a
 non-destructive check before downloading or starting the provider, run:
 
 ```powershell
-pnpm bootstrap:openwork-opencode -- --workspace C:\RelayBootstrapSmoke\workspace --pretty
+pnpm --dir C:\path\to\Relay_Agent bootstrap:openwork-opencode -- --workspace C:\RelayBootstrapSmoke\workspace --pretty
 ```
 
 Do not run Relay-owned tool execution. Tool execution must happen in
@@ -99,7 +101,8 @@ Open the verified MSI only after explicit operator approval. Do not silently
 install:
 
 ```powershell
-pnpm bootstrap:openwork-opencode -- --download --workspace C:\RelayBootstrapSmoke\workspace --open-openwork-installer
+Set-Location C:\RelayBootstrapSmoke\workspace
+pnpm --dir C:\path\to\Relay_Agent dev
 ```
 
 Record the installer path, OpenWork version, and any prompts shown to the

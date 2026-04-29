@@ -49,6 +49,16 @@ export interface CopilotRepairStageStats {
   lastTotalElapsedMs?: number | null;
 }
 
+export interface OpenWorkSetupSnapshot {
+  status: string;
+  stage: string;
+  message: string;
+  actionLabel?: string | null;
+  providerBaseUrl?: string | null;
+  configPath?: string | null;
+  updatedAt: string;
+}
+
 export interface RelayDiagnostics {
   appVersion: string;
   targetOs: string;
@@ -73,6 +83,7 @@ export interface RelayDiagnostics {
   opencodeRuntimeUrl?: string | null;
   opencodeRuntimeRunning?: boolean | null;
   opencodeRuntimeMessage?: string | null;
+  openworkSetup?: OpenWorkSetupSnapshot | null;
 }
 
 export type CopilotWarmupStage =

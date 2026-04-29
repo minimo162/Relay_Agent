@@ -3,17 +3,18 @@ import { injectRelayMock } from "./relay-e2e-harness";
 
 async function openApp(page: any) {
   await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
-  await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
 }
 
-test("desktop opens as a provider gateway diagnostic console", async ({ page }) => {
+test("desktop opens as an OpenWork/OpenCode setup diagnostic console", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);
 
-  await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry Setup" })).toBeVisible();
   await expect(page.getByText("OpenCode/OpenWork", { exact: true })).toBeVisible();
-  await expect(page.getByText("http://127.0.0.1:18180/v1")).toBeVisible();
-  await expect(page.getByText("pnpm bootstrap:openwork-opencode -- --pretty")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "http://127.0.0.1:18180/v1" })).toBeVisible();
+  await expect(page.getByText("pnpm dev")).toBeVisible();
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();

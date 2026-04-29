@@ -180,11 +180,11 @@ const report = {
     },
   },
   manualSteps: [
-    "Run pnpm bootstrap:openwork-opencode -- --pretty and confirm Relay desktop UX is not the production entrypoint.",
-    "Run pnpm bootstrap:openwork-opencode -- --download --workspace <workspace> --start-provider-gateway.",
-    "Keep the printed RELAY_AGENT_API_KEY available to OpenCode/OpenWork.",
-    "Open the verified OpenWork Desktop MSI only with --open-openwork-installer after explicit operator approval.",
-    "Configure OpenWork/OpenCode for relay-agent/m365-copilot.",
+    "Run pnpm dev and confirm Relay desktop UX is not the production entrypoint.",
+    "Confirm the auto bootstrap downloads/verifies artifacts on Windows, writes global OpenCode config, and starts the provider gateway.",
+    "Confirm the generated global config contains the Relay provider token without a manual RELAY_AGENT_API_KEY export.",
+    "Approve the verified OpenWork Desktop MSI only when the Windows installer prompt appears.",
+    "Open OpenWork/OpenCode and confirm relay-agent/m365-copilot is already available.",
     "Run one provider text turn and one OpenCode-owned read tool turn.",
   ],
 };
@@ -197,7 +197,7 @@ if (report.bootstrapPreflight.ok === false) {
   process.exit(1);
 }
 
-if (report.productionEntrypoint.rootDev !== "pnpm bootstrap:openwork-opencode -- --pretty") {
+if (report.productionEntrypoint.rootDev !== "pnpm bootstrap:openwork-opencode:auto") {
   report.ok = false;
   report.status = "production_entrypoint_not_bootstrap";
   console.log(JSON.stringify(report, null, 2));

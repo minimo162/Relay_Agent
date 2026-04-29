@@ -56,6 +56,64 @@ pub struct CopilotRepairStageStats {
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenWorkSetupSnapshot {
+    pub status: String,
+    pub stage: String,
+    pub message: String,
+    pub action_label: Option<String>,
+    pub provider_base_url: Option<String>,
+    pub config_path: Option<String>,
+    pub updated_at: String,
+}
+
+impl OpenWorkSetupSnapshot {
+    #[must_use]
+    pub fn preparing(message: impl Into<String>) -> Self {
+        Self {
+            status: "preparing".to_string(),
+            stage: "setup".to_string(),
+            message: message.into(),
+            action_label: None,
+            provider_base_url: None,
+            config_path: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[must_use]
+    pub fn ready(
+        message: impl Into<String>,
+        provider_base_url: impl Into<String>,
+        config_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: "ready".to_string(),
+            stage: "ready".to_string(),
+            message: message.into(),
+            action_label: Some("Open OpenWork/OpenCode".to_string()),
+            provider_base_url: Some(provider_base_url.into()),
+            config_path: Some(config_path.into()),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[must_use]
+    pub fn needs_attention(message: impl Into<String>) -> Self {
+        Self {
+            status: "needs_attention".to_string(),
+            stage: "needs_attention".to_string(),
+            message: message.into(),
+            action_label: Some("Retry setup".to_string()),
+            provider_base_url: None,
+            config_path: None,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct RelayDiagnostics {
     pub app_version: String,
     pub target_os: String,
@@ -93,6 +151,8 @@ pub struct RelayDiagnostics {
     pub opencode_runtime_running: Option<bool>,
     #[serde(default)]
     pub opencode_runtime_message: Option<String>,
+    #[serde(default)]
+    pub openwork_setup: Option<OpenWorkSetupSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, TS, PartialEq, Eq)]

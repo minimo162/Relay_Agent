@@ -4,7 +4,7 @@ use ts_rs::TS;
 
 use crate::models::{
     BrowserAutomationSettings, CopilotBridgeFailureInfo, CopilotRepairStageFailureCount,
-    CopilotRepairStageStats, RelayDiagnostics,
+    CopilotRepairStageStats, OpenWorkSetupSnapshot, RelayDiagnostics,
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, ConnectCdpRequest,
@@ -20,6 +20,7 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<CopilotBridgeFailureInfo>(),
         decl::<CopilotRepairStageFailureCount>(),
         decl::<CopilotRepairStageStats>(),
+        decl::<OpenWorkSetupSnapshot>(),
         decl::<RelayDiagnostics>(),
         decl::<CopilotWarmupStage>(),
         decl::<CopilotWarmupFailureCode>(),

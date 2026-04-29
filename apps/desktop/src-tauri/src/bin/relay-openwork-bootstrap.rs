@@ -9,11 +9,12 @@ use std::time::{Duration, Instant};
 use relay_agent_desktop_lib::openwork_bootstrap::{
     artifact_cache_path, artifact_entrypoint_path, bootstrap_cache_root,
     download_and_verify_artifact, extract_zip_artifact, load_manifest, platform_artifact,
-    probe_opencode_entrypoint, verify_cached_artifact, BootstrapArtifact, BootstrapArtifactKey,
-    BootstrapError, ExtractedBootstrapArtifact, VerifiedBootstrapArtifact,
+    probe_opencode_entrypoint, verify_cached_artifact, write_opencode_provider_config_file,
+    BootstrapArtifact, BootstrapArtifactKey, BootstrapError, ExtractedBootstrapArtifact,
+    VerifiedBootstrapArtifact,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use uuid::Uuid;
 
 const DEFAULT_PLATFORM: &str = "windows-x64";
@@ -35,7 +36,15 @@ struct Options {
     copilot_server_js: Option<PathBuf>,
     start_provider_gateway: bool,
     download: bool,
+    auto: bool,
     open_openwork_installer: bool,
+    json: bool,
+    pretty: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OutputOptions {
+    json: bool,
     pretty: bool,
 }
 
@@ -136,24 +145,32 @@ struct ErrorReport {
 
 fn main() -> ExitCode {
     match run() {
-        Ok((report, pretty)) => {
-            print_json(&report, pretty);
+        Ok((report, output)) => {
+            if output.json {
+                print_json(&report, output.pretty);
+            } else {
+                print_human_report(&report);
+            }
             ExitCode::SUCCESS
         }
-        Err((error, pretty)) => {
+        Err((error, output)) => {
             let report = ErrorReport {
                 ok: false,
                 status: "failed",
                 error_code: error.code(),
                 error: error.to_string(),
             };
-            print_json(&report, pretty);
+            if output.json {
+                print_json(&report, output.pretty);
+            } else {
+                print_human_error(&report);
+            }
             ExitCode::from(1)
         }
     }
 }
 
-fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
+fn run() -> Result<(BootstrapReport, OutputOptions), (BootstrapError, OutputOptions)> {
     let options = match parse_options(env::args().skip(1)) {
         Ok(options) => options,
         Err(message) => {
@@ -161,12 +178,16 @@ fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
             eprintln!("{}", usage());
             return Err((
                 BootstrapError::UnsupportedPlatform("invalid-arguments".to_string()),
-                true,
+                OutputOptions {
+                    json: false,
+                    pretty: false,
+                },
             ));
         }
     };
 
-    let manifest = load_manifest().map_err(|error| (error, options.pretty))?;
+    let output = output_options(&options);
+    let manifest = load_manifest().map_err(|error| (error, output))?;
     let cache_root = resolve_cache_root(&options);
     let provider_base_url = provider_base_url(options.provider_port);
     let token_file = resolve_provider_token_file(&options);
@@ -180,7 +201,7 @@ fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
 
     for key in keys {
         let artifact = platform_artifact(&manifest, &options.platform, key)
-            .map_err(|error| (error, options.pretty))?;
+            .map_err(|error| (error, output))?;
         let report = inspect_artifact(
             &cache_root,
             &options.platform,
@@ -189,7 +210,7 @@ fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
             options.download,
             options.workspace.is_some(),
         )
-        .map_err(|error| (error, options.pretty))?;
+        .map_err(|error| (error, output))?;
         if report.verified.is_none() {
             all_verified = false;
         }
@@ -202,13 +223,14 @@ fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
     let provider_config = provider_config_report(
         &options,
         &provider_base_url,
+        &token_file,
         opencode_probe_version.as_deref(),
     )
-    .map_err(|error| (error, options.pretty))?;
+    .map_err(|error| (error, output))?;
     let provider_gateway = provider_gateway_report(&options, &provider_base_url, &token_file)
-        .map_err(|error| (error, options.pretty))?;
-    let openwork_installer_handoff = openwork_installer_handoff_report(&options, &artifacts)
-        .map_err(|error| (error, options.pretty))?;
+        .map_err(|error| (error, output))?;
+    let openwork_installer_handoff =
+        openwork_installer_handoff_report(&options, &artifacts).map_err(|error| (error, output))?;
 
     let status = if all_verified {
         "verified"
@@ -231,7 +253,7 @@ fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
         cache_root,
         ownership_boundary: manifest.ownership_boundary,
         relay_boundary:
-            "Relay must remain a bootstrapper and provider gateway only; OpenWork/OpenCode own UX, sessions, tools, and execution.",
+            "Relay is the OpenWork/OpenCode setup layer and provider gateway; OpenWork/OpenCode own UX, sessions, tools, and execution.",
         provider_handoff: ProviderHandoff {
             base_url: provider_base_url,
             model: PROVIDER_MODEL,
@@ -246,11 +268,11 @@ fn run() -> Result<(BootstrapReport, bool), (BootstrapError, bool)> {
     if options.download && !all_verified {
         return Err((
             BootstrapError::UnsupportedPlatform("download_not_verified".to_string()),
-            options.pretty,
+            output,
         ));
     }
 
-    Ok((report, options.pretty))
+    Ok((report, output))
 }
 
 fn inspect_artifact(
@@ -321,6 +343,7 @@ fn inspect_artifact(
 fn provider_config_report(
     options: &Options,
     provider_base_url: &str,
+    token_file: &Path,
     opencode_probe_version: Option<&str>,
 ) -> Result<Option<ProviderConfigReport>, BootstrapError> {
     let Some(workspace) = &options.workspace else {
@@ -340,7 +363,13 @@ fn provider_config_report(
         }));
     }
 
-    write_opencode_provider_config(workspace, &output, provider_base_url)?;
+    let api_key = if options.auto {
+        read_or_create_provider_token(token_file)?
+    } else {
+        "{env:RELAY_AGENT_API_KEY}".to_string()
+    };
+
+    write_opencode_provider_config(workspace, &output, provider_base_url, &api_key)?;
     Ok(Some(ProviderConfigReport {
         installed: true,
         workspace: workspace.clone(),
@@ -432,87 +461,21 @@ fn write_opencode_provider_config(
     workspace: &Path,
     output: &Path,
     provider_base_url: &str,
+    api_key: &str,
 ) -> Result<(), BootstrapError> {
-    let existing = if output.exists() {
-        let raw = fs::read_to_string(output).map_err(|source| BootstrapError::Io {
-            path: output.to_path_buf(),
-            source,
-        })?;
-        if raw.trim().is_empty() {
-            json!({})
-        } else {
-            serde_json::from_str(&raw)?
-        }
-    } else {
-        json!({})
-    };
-
-    let merged = merge_opencode_config(existing, provider_base_url);
     fs::create_dir_all(workspace).map_err(|source| BootstrapError::Io {
         path: workspace.to_path_buf(),
         source,
     })?;
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|source| BootstrapError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    fs::write(
-        output,
-        format!(
-            "{}\n",
-            serde_json::to_string_pretty(&merged).expect("provider config serializes")
-        ),
-    )
-    .map_err(|source| BootstrapError::Io {
-        path: output.to_path_buf(),
-        source,
-    })
+    write_opencode_provider_config_file(output, provider_base_url, api_key)
 }
 
-fn merge_opencode_config(existing: Value, provider_base_url: &str) -> Value {
-    let mut base = existing.as_object().cloned().unwrap_or_default();
-    base.entry("$schema".to_string())
-        .or_insert_with(|| Value::String("https://opencode.ai/config.json".to_string()));
-
-    let mut enabled = base
-        .get("enabled_providers")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if !enabled.iter().any(|value| value == "relay-agent") {
-        enabled.push(Value::String("relay-agent".to_string()));
-    }
-    base.insert("enabled_providers".to_string(), Value::Array(enabled));
-
-    let mut providers = base
-        .get("provider")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    providers.insert(
-        "relay-agent".to_string(),
-        json!({
-            "npm": "@ai-sdk/openai-compatible",
-            "name": "Relay Agent / M365 Copilot",
-            "options": {
-                "baseURL": provider_base_url,
-                "apiKey": "{env:RELAY_AGENT_API_KEY}"
-            },
-            "models": {
-                "m365-copilot": {
-                    "name": "M365 Copilot",
-                    "limit": {
-                        "context": 128000,
-                        "output": 8192
-                    }
-                }
-            }
-        }),
-    );
-    base.insert("provider".to_string(), Value::Object(providers));
-    Value::Object(base)
+fn merge_opencode_config(existing: Value, provider_base_url: &str, api_key: &str) -> Value {
+    relay_agent_desktop_lib::openwork_bootstrap::merge_opencode_provider_config(
+        existing,
+        provider_base_url,
+        api_key,
+    )
 }
 
 fn provider_gateway_report(
@@ -757,6 +720,13 @@ fn default_home_dir() -> PathBuf {
         .unwrap_or_else(env::temp_dir)
 }
 
+fn default_auto_workspace() -> Result<PathBuf, String> {
+    if let Some(init_cwd) = env::var_os("INIT_CWD") {
+        return Ok(PathBuf::from(init_cwd));
+    }
+    env::current_dir().map_err(|error| format!("failed to resolve current workspace: {error}"))
+}
+
 fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
         platform: DEFAULT_PLATFORM.to_string(),
@@ -770,7 +740,9 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
         copilot_server_js: None,
         start_provider_gateway: false,
         download: false,
+        auto: false,
         open_openwork_installer: false,
+        json: false,
         pretty: false,
     };
 
@@ -811,13 +783,26 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
             "--start-provider-gateway" => {
                 options.start_provider_gateway = true;
             }
+            "--auto" => {
+                options.auto = true;
+                options.start_provider_gateway = true;
+                if cfg!(windows) {
+                    options.download = true;
+                    options.open_openwork_installer = true;
+                }
+                if options.workspace.is_none() {
+                    options.workspace = Some(default_auto_workspace()?);
+                }
+            }
             "--download" => {
                 options.download = true;
             }
             "--open-openwork-installer" => {
                 options.open_openwork_installer = true;
             }
-            "--json" => {}
+            "--json" => {
+                options.json = true;
+            }
             "--pretty" => {
                 options.pretty = true;
             }
@@ -842,6 +827,13 @@ fn parse_port(value: &str) -> Result<u16, String> {
     Ok(port)
 }
 
+fn output_options(options: &Options) -> OutputOptions {
+    OutputOptions {
+        json: options.json,
+        pretty: options.pretty,
+    }
+}
+
 fn next_arg(
     args: &mut std::iter::Peekable<impl Iterator<Item = String>>,
     option: &str,
@@ -852,7 +844,7 @@ fn next_arg(
 }
 
 fn usage() -> &'static str {
-    "Usage: relay-openwork-bootstrap [--download] [--workspace PATH] [--config-output PATH] [--start-provider-gateway] [--provider-port PORT] [--edge-cdp-port PORT] [--provider-token-file PATH] [--copilot-server-js PATH] [--open-openwork-installer] [--platform windows-x64] [--cache-root PATH] [--app-local-data-dir PATH] [--json] [--pretty]"
+    "Usage: relay-openwork-bootstrap [--auto] [--download] [--workspace PATH] [--config-output PATH] [--start-provider-gateway] [--provider-port PORT] [--edge-cdp-port PORT] [--provider-token-file PATH] [--copilot-server-js PATH] [--open-openwork-installer] [--platform windows-x64] [--cache-root PATH] [--app-local-data-dir PATH] [--json] [--pretty]"
 }
 
 fn print_json(value: &impl Serialize, pretty: bool) {
@@ -865,9 +857,120 @@ fn print_json(value: &impl Serialize, pretty: bool) {
     println!("{json}");
 }
 
+fn print_human_report(report: &BootstrapReport) {
+    println!("OpenWork/OpenCode setup");
+    println!("Status: {}", human_status(report));
+    println!();
+    println!("Workspace config: {}", human_provider_config(report));
+    println!("Provider gateway: {}", human_provider_gateway(report));
+    println!("OpenWork installer: {}", human_installer(report));
+    println!("Artifacts: {}", human_artifacts(report));
+    println!();
+    println!("Next:");
+    for step in human_next_steps(report) {
+        println!("- {step}");
+    }
+}
+
+fn print_human_error(report: &ErrorReport) {
+    eprintln!("OpenWork/OpenCode setup failed");
+    eprintln!("Reason: {}", report.error);
+    eprintln!("Run with --json for diagnostics.");
+}
+
+fn human_status(report: &BootstrapReport) -> &'static str {
+    if !report.ok {
+        return "needs attention";
+    }
+    if report.provider_gateway.running
+        && report
+            .provider_config
+            .as_ref()
+            .is_some_and(|config| config.installed)
+    {
+        return "ready";
+    }
+    if report.status == "ready_for_download" {
+        return "ready for Windows first run";
+    }
+    "ok"
+}
+
+fn human_provider_config(report: &BootstrapReport) -> String {
+    match &report.provider_config {
+        Some(config) if config.installed => {
+            format!("ready at {}", config.output.display())
+        }
+        Some(config) => format!(
+            "waiting for verified OpenCode ({})",
+            config
+                .skipped_reason
+                .as_deref()
+                .unwrap_or("not installed yet")
+        ),
+        None => "not requested".to_string(),
+    }
+}
+
+fn human_provider_gateway(report: &BootstrapReport) -> String {
+    if report.provider_gateway.running {
+        format!("running at {}", report.provider_gateway.base_url)
+    } else {
+        "not started".to_string()
+    }
+}
+
+fn human_installer(report: &BootstrapReport) -> String {
+    let handoff = &report.openwork_installer_handoff;
+    if handoff.opened {
+        return "opened; follow the Windows installer prompts".to_string();
+    }
+    if cfg!(windows) && handoff.requested {
+        return handoff
+            .skipped_reason
+            .as_deref()
+            .unwrap_or("not opened")
+            .to_string();
+    }
+    "will be opened automatically on Windows after verification".to_string()
+}
+
+fn human_artifacts(report: &BootstrapReport) -> String {
+    let ready = report
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.verified.is_some())
+        .count();
+    format!("{ready}/{} verified", report.artifacts.len())
+}
+
+fn human_next_steps(report: &BootstrapReport) -> Vec<String> {
+    let mut steps = Vec::new();
+    if !cfg!(windows) {
+        steps.push("For a real first run, run this command on Windows.".to_string());
+    }
+    if report.provider_gateway.running {
+        steps.push("If Edge asks, sign in to M365 Copilot.".to_string());
+    }
+    if report
+        .provider_config
+        .as_ref()
+        .is_some_and(|config| config.installed)
+    {
+        steps.push("Open OpenWork/OpenCode in the workspace shown above.".to_string());
+    } else if cfg!(windows) {
+        steps.push("Wait for OpenCode verification, then open OpenWork/OpenCode.".to_string());
+    }
+    if steps.is_empty() {
+        steps.push("No action needed unless an error is shown.".to_string());
+    }
+    steps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn merge_opencode_config_preserves_existing_provider_settings() {
@@ -882,6 +985,7 @@ mod tests {
                 }
             }),
             "http://127.0.0.1:18180/v1",
+            "{env:RELAY_AGENT_API_KEY}",
         );
 
         assert_eq!(
@@ -908,6 +1012,7 @@ mod tests {
                 "enabled_providers": ["relay-agent"]
             }),
             "http://127.0.0.1:18180/v1",
+            "{env:RELAY_AGENT_API_KEY}",
         );
         assert_eq!(
             merged["enabled_providers"].as_array().expect("array").len(),
@@ -927,8 +1032,13 @@ mod tests {
         )
         .expect("existing config");
 
-        write_opencode_provider_config(&workspace, &output, "http://127.0.0.1:18180/v1")
-            .expect("write config");
+        write_opencode_provider_config(
+            &workspace,
+            &output,
+            "http://127.0.0.1:18180/v1",
+            "{env:RELAY_AGENT_API_KEY}",
+        )
+        .expect("write config");
         let config: Value =
             serde_json::from_str(&fs::read_to_string(&output).expect("read config"))
                 .expect("config json");
@@ -955,6 +1065,30 @@ mod tests {
                 "/i".to_string(),
                 path.display().to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn auto_mode_sets_no_thinking_defaults() {
+        let options = parse_options(["--auto".to_string()].into_iter()).expect("parse options");
+        assert!(options.auto);
+        assert!(options.start_provider_gateway);
+        assert!(options.workspace.is_some());
+        if cfg!(windows) {
+            assert!(options.download);
+            assert!(options.open_openwork_installer);
+        } else {
+            assert!(!options.download);
+            assert!(!options.open_openwork_installer);
+        }
+    }
+
+    #[test]
+    fn merge_opencode_config_can_embed_auto_bootstrap_token() {
+        let merged = merge_opencode_config(json!({}), "http://127.0.0.1:18180/v1", "local-token");
+        assert_eq!(
+            merged["provider"]["relay-agent"]["options"]["apiKey"],
+            "local-token"
         );
     }
 }

@@ -9,6 +9,7 @@ mod ipc_codegen;
 mod liteparse_env;
 pub mod models;
 mod opencode_runtime;
+mod openwork_autostart;
 pub mod openwork_bootstrap;
 mod tauri_bridge;
 #[cfg(test)]
@@ -56,7 +57,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             liteparse_env::apply(app);
-            app.manage(AppServices::new());
+            let services = AppServices::new();
+            let provider_bridge = services.opencode_provider_bridge();
+            let openwork_setup = services.openwork_setup_store();
+            app.manage(services);
+            openwork_autostart::spawn(app.handle().clone(), provider_bridge, openwork_setup);
             dev_control::spawn(app.handle());
             Ok(())
         })
@@ -68,6 +73,7 @@ pub fn run() {
             commands::copilot::disconnect_cdp,
             commands::copilot::warmup_copilot_bridge,
             commands::diagnostics::get_relay_diagnostics,
+            commands::diagnostics::retry_openwork_setup,
             commands::diagnostics::write_text_export,
         ])
         .run(tauri::generate_context!())

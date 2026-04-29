@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
@@ -170,6 +171,101 @@ pub fn load_manifest() -> Result<BootstrapManifest, BootstrapError> {
 #[must_use]
 pub fn bootstrap_cache_root(app_local_data_dir: &Path) -> PathBuf {
     app_local_data_dir.join("openwork-opencode-bootstrap")
+}
+
+#[must_use]
+pub fn default_global_opencode_config_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".config")
+        .join("opencode")
+        .join("opencode.json")
+}
+
+pub fn write_opencode_provider_config_file(
+    output: &Path,
+    provider_base_url: &str,
+    api_key: &str,
+) -> Result<(), BootstrapError> {
+    let existing = if output.exists() {
+        let raw = fs::read_to_string(output).map_err(|source| BootstrapError::Io {
+            path: output.to_path_buf(),
+            source,
+        })?;
+        serde_json::from_str(&raw).map_err(BootstrapError::Manifest)?
+    } else {
+        json!({})
+    };
+
+    let merged = merge_opencode_provider_config(existing, provider_base_url, api_key);
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|source| BootstrapError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    fs::write(
+        output,
+        serde_json::to_string_pretty(&merged).expect("provider config serializes"),
+    )
+    .map_err(|source| BootstrapError::Io {
+        path: output.to_path_buf(),
+        source,
+    })
+}
+
+#[must_use]
+pub fn merge_opencode_provider_config(
+    existing: Value,
+    provider_base_url: &str,
+    api_key: &str,
+) -> Value {
+    let mut base = existing.as_object().cloned().unwrap_or_default();
+    base.entry("$schema".to_string())
+        .or_insert_with(|| Value::String("https://opencode.ai/config.json".to_string()));
+    base.entry("model".to_string())
+        .or_insert_with(|| Value::String("relay-agent/m365-copilot".to_string()));
+
+    let mut enabled = base
+        .get("enabled_providers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !enabled
+        .iter()
+        .any(|value| value.as_str() == Some("relay-agent"))
+    {
+        enabled.push(Value::String("relay-agent".to_string()));
+    }
+    base.insert("enabled_providers".to_string(), Value::Array(enabled));
+
+    let mut providers = base
+        .get("provider")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    providers.insert(
+        "relay-agent".to_string(),
+        json!({
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Relay Agent / M365 Copilot",
+            "options": {
+                "baseURL": provider_base_url,
+                "apiKey": api_key
+            },
+            "models": {
+                "m365-copilot": {
+                    "name": "M365 Copilot",
+                    "limit": {
+                        "context": 128000,
+                        "output": 8192
+                    }
+                }
+            }
+        }),
+    );
+    base.insert("provider".to_string(), Value::Object(providers));
+
+    Value::Object(base)
 }
 
 pub fn platform_artifact<'a>(

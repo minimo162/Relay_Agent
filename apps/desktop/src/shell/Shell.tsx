@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
-import { getRelayDiagnostics, type RelayDiagnostics } from "../lib/ipc";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { getRelayDiagnostics, retryOpenworkSetup, type RelayDiagnostics } from "../lib/ipc";
 import {
   loadAlwaysOnTop,
   loadBrowserSettings,
@@ -42,7 +42,23 @@ function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
     `bridge connected: ${formatBool(diagnostics.copilotBridgeConnected)}`,
     `M365 sign-in required: ${formatBool(diagnostics.copilotBridgeLoginRequired)}`,
     `OpenCode runtime: ${diagnostics.opencodeRuntimeMessage ?? "unknown"}`,
+    `OpenWork/OpenCode setup: ${diagnostics.openworkSetup?.status ?? "unknown"}`,
   ];
+}
+
+function setupTitle(diagnostics: RelayDiagnostics | null, copilotStatus: string): string {
+  const setup = diagnostics?.openworkSetup;
+  if (setup?.status === "needs_attention") return "Needs attention";
+  if (setup?.status === "preparing") return "Preparing";
+  if (copilotStatus === "needs_sign_in") return "Sign in to M365";
+  if (setup?.status === "ready" && copilotStatus === "ready") return "Ready";
+  return "Preparing";
+}
+
+function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: string | null | undefined): string {
+  const setup = diagnostics?.openworkSetup;
+  if (setup?.status === "ready" && copilotMessage) return copilotMessage;
+  return setup?.message ?? "Preparing OpenWork/OpenCode for M365 Copilot.";
 }
 
 export default function Shell(): JSX.Element {
@@ -54,27 +70,47 @@ export default function Shell(): JSX.Element {
   const [diagnostics, setDiagnostics] = createSignal<RelayDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = createSignal(false);
   const [diagnosticsError, setDiagnosticsError] = createSignal<string | null>(null);
+  const [setupRetrying, setSetupRetrying] = createSignal(false);
   const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
 
   const workspace = createMemo(() => workspaceLabel() || "OpenCode/OpenWork workspace owns execution state");
   const endpoint = createMemo(providerBaseUrl);
   const diagLines = createMemo(() => diagnosticsSummary(diagnostics()));
+  const setupState = createMemo(() => {
+    const copilot = copilotState();
+    const report = diagnostics();
+    return {
+      title: setupTitle(report, copilot.status),
+      message: setupMessage(report, copilot.message),
+      status: report?.openworkSetup?.status ?? "preparing",
+      providerBaseUrl: report?.openworkSetup?.providerBaseUrl ?? endpoint(),
+      configPath: report?.openworkSetup?.configPath ?? "~/.config/opencode/opencode.json",
+    };
+  });
 
   onMount(() => {
     void runCopilotWarmup(true);
+    void refreshDiagnostics(false);
+    const timer = window.setInterval(() => {
+      const setup = diagnostics()?.openworkSetup?.status;
+      if (setup !== "ready") {
+        void refreshDiagnostics(false);
+      }
+    }, 2500);
+    onCleanup(() => window.clearInterval(timer));
   });
 
   createEffect(() => {
     void applyAlwaysOnTopSetting(alwaysOnTop());
   });
 
-  const refreshDiagnostics = async () => {
+  const refreshDiagnostics = async (showSuccess = true) => {
     setDiagnosticsLoading(true);
     setDiagnosticsError(null);
     try {
       const report = await getRelayDiagnostics();
       setDiagnostics(report);
-      showToast({ tone: "ok", message: "Diagnostics refreshed" });
+      if (showSuccess) showToast({ tone: "ok", message: "Diagnostics refreshed" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setDiagnosticsError(message);
@@ -86,6 +122,20 @@ export default function Shell(): JSX.Element {
 
   const reconnectCopilot = () => {
     void runCopilotWarmup(false);
+  };
+
+  const retrySetup = async () => {
+    setSetupRetrying(true);
+    try {
+      await retryOpenworkSetup();
+      showToast({ tone: "ok", message: "OpenWork/OpenCode setup restarted" });
+      await refreshDiagnostics(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      showToast({ tone: "danger", message: "Setup retry failed", detail: message });
+    } finally {
+      setSetupRetrying(false);
+    }
   };
 
   const applySettings = (settings: ShellSettingsDraft) => {
@@ -104,7 +154,7 @@ export default function Shell(): JSX.Element {
         >
           <div>
             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--ra-color-text-muted)]">
-              M365 Copilot provider gateway
+              OpenWork/OpenCode setup + M365 Copilot gateway
             </p>
             <h1 class="text-2xl font-semibold">Relay Agent</h1>
           </div>
@@ -117,6 +167,35 @@ export default function Shell(): JSX.Element {
             </button>
           </div>
         </header>
+
+        <section class="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <article class="ra-surface p-5">
+            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">OpenWork/OpenCode</p>
+            <h2 class="mt-2 text-2xl font-semibold">{setupState().title}</h2>
+            <p class="mt-2 max-w-3xl text-sm text-[var(--ra-color-text-muted)]">{setupState().message}</p>
+            <div class="mt-4 grid gap-3 md:grid-cols-2">
+              <p class="break-all rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
+                Provider: <span class="font-mono">{setupState().providerBaseUrl}</span>
+              </p>
+              <p class="break-all rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
+                Config: <span class="font-mono">{setupState().configPath}</span>
+              </p>
+            </div>
+          </article>
+          <div class="ra-surface flex flex-col justify-center gap-3 p-5">
+            <button
+              type="button"
+              class="ra-button"
+              disabled={setupRetrying()}
+              onClick={retrySetup}
+            >
+              {setupRetrying() ? "Retrying" : "Retry Setup"}
+            </button>
+            <button type="button" class="ra-button ra-button--secondary" onClick={reconnectCopilot}>
+              Check Sign-In
+            </button>
+          </div>
+        </section>
 
         <section class="grid gap-4 py-5 md:grid-cols-3">
           <article class="ra-surface p-4">
@@ -154,10 +233,10 @@ export default function Shell(): JSX.Element {
           <div class="ra-surface p-5">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 class="text-xl font-semibold">Provider Gateway Console</h2>
+                <h2 class="text-xl font-semibold">OpenWork/OpenCode Setup</h2>
                 <p class="mt-2 max-w-2xl text-sm text-[var(--ra-color-text-muted)]">
-                  This desktop surface is diagnostic-only. Production starts with the headless OpenWork/OpenCode
-                  bootstrap, then OpenCode/OpenWork owns chat, tool execution, approvals, and session history.
+                  This desktop surface is diagnostic-only. Production starts with the OpenWork/OpenCode auto
+                  bootstrap, then OpenWork/OpenCode owns chat, tool execution, approvals, and session history.
                 </p>
               </div>
               <span class="rounded-full border border-[var(--ra-color-border)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--ra-color-text-muted)]">
@@ -167,10 +246,10 @@ export default function Shell(): JSX.Element {
 
             <div class="mt-5 grid gap-3">
               <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm bootstrap:openwork-opencode -- --pretty
+                pnpm dev
               </code>
               <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm bootstrap:openwork-opencode -- --workspace /path/to/workspace --start-provider-gateway
+                pnpm bootstrap:openwork-opencode:auto
               </code>
               <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
                 pnpm smoke:openwork-opencode-bootstrap-gateway
@@ -198,7 +277,7 @@ export default function Shell(): JSX.Element {
                 type="button"
                 class="ra-button ra-button--secondary"
                 disabled={diagnosticsLoading()}
-                onClick={refreshDiagnostics}
+                onClick={() => refreshDiagnostics()}
               >
                 {diagnosticsLoading() ? "Refreshing" : "Refresh"}
               </button>

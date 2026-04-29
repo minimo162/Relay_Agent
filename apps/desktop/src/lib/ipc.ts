@@ -42,6 +42,11 @@ export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
   return invoke<RelayDiagnostics>("get_relay_diagnostics");
 }
 
+/** Retry installed OpenWork/OpenCode provider setup. */
+export async function retryOpenworkSetup(): Promise<void> {
+  return invoke<void>("retry_openwork_setup");
+}
+
 /** Write support text (e.g. diagnostics JSON) to a path from the native save dialog. */
 export async function writeTextExport(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_export", { path, contents });

@@ -3,7 +3,7 @@ import { injectRelayMock } from "./relay-e2e-harness";
 
 async function openApp(page: any) {
   await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
-  await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
 }
 
 test.describe("Diagnostic shell", () => {
@@ -11,7 +11,8 @@ test.describe("Diagnostic shell", () => {
     await injectRelayMock(page);
     await openApp(page);
 
-    await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry Setup" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Chats" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
     await expect(page.locator(".ra-session-row")).toHaveCount(0);
@@ -23,8 +24,8 @@ test.describe("Diagnostic shell", () => {
     await injectRelayMock(page);
     await openApp(page);
 
-    await expect(page.getByText("pnpm bootstrap:openwork-opencode -- --pretty")).toBeVisible();
-    await expect(page.getByText("pnpm bootstrap:openwork-opencode -- --workspace /path/to/workspace --start-provider-gateway")).toBeVisible();
+    await expect(page.getByText("pnpm dev")).toBeVisible();
+    await expect(page.getByText("pnpm bootstrap:openwork-opencode:auto")).toBeVisible();
     await expect(page.getByText("pnpm smoke:openwork-opencode-bootstrap-gateway")).toBeVisible();
     await expect(page.getByText("Model id:")).toBeVisible();
   });

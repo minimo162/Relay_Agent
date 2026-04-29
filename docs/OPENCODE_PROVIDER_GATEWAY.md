@@ -1,9 +1,9 @@
-# OpenCode Provider Gateway
+# OpenWork/OpenCode Setup And Provider Gateway
 
 Date: 2026-04-25
 
-This document fixes the provider contract for running Relay_Agent's M365
-Copilot bridge as an OpenCode/OpenWork custom provider.
+This document fixes the setup and provider contract for making OpenWork/OpenCode
+easy to start with Relay_Agent's M365 Copilot bridge as a custom provider.
 
 ## Role Split
 
@@ -14,6 +14,11 @@ OpenCode/OpenWork
 Relay_Agent copilot_server.js
   exposes an OpenAI-compatible provider facade and forwards model turns to
   M365 Copilot over Edge CDP
+
+Relay_Agent bootstrap
+  starts the provider gateway, writes global OpenCode provider config,
+  downloads/verifies pinned OpenWork/OpenCode artifacts on Windows, and hands
+  Windows installer approval to the user
 
 M365 Copilot
   produces assistant text or OpenAI-compatible tool calls
@@ -53,27 +58,31 @@ Relay also accepts the diagnostic desktop bridge header:
 X-Relay-Boot-Token: <boot token>
 ```
 
-For OpenCode/OpenWork provider use, set `options.apiKey` to the same boot token
-that started `copilot_server.js`. The startup script below uses
-`RELAY_AGENT_API_KEY` when set; otherwise it creates a stable local token at
-`~/.relay-agent/opencode-provider-token`.
+For the installed desktop path, Relay writes the current local provider token
+directly into the global OpenCode config at
+`~/.config/opencode/opencode.json`. The normal repo `pnpm dev` auto bootstrap
+does the same for its generated config. Manual provider setup can still use
+`{env:RELAY_AGENT_API_KEY}` or an explicit local token.
 
 ## Bootstrap First-Run Path
 
-The production first-run entrypoint is the headless OpenWork/OpenCode
-bootstrap. It keeps Relay out of the desktop UX path while preparing the
-OpenCode provider handoff:
+The production first-run entrypoint is installing and launching Relay Agent.
+It keeps Relay out of the OpenWork/OpenCode UX path while preparing the
+OpenCode provider handoff. The repo development equivalent is:
 
 ```bash
-pnpm bootstrap:openwork-opencode -- --pretty
-pnpm bootstrap:openwork-opencode -- --download --workspace /path/to/workspace --start-provider-gateway
+pnpm dev
 ```
 
-The second command verifies and extracts the pinned OpenCode artifact, merges
-Relay's provider block into the workspace config, starts the provider gateway,
-and reports the provider base URL, model, and API-key handoff. Opening the
-OpenWork Desktop MSI requires explicit operator approval with
-`--open-openwork-installer`.
+The installed desktop launch starts the provider gateway and writes
+`relay-agent/m365-copilot` as the default model in the global OpenCode config.
+On Windows, the auto path also verifies and downloads the pinned artifacts,
+extracts OpenCode, opens the verified OpenWork Desktop MSI for normal Windows
+installer approval, and leaves OpenCode/OpenWork ready to call Relay's provider
+endpoint. The generated config already contains the local provider token, so
+users do not need to export `RELAY_AGENT_API_KEY`. For diagnostics,
+`pnpm bootstrap:openwork-opencode -- --pretty` still prints a non-destructive
+preflight report.
 
 ## Start The Gateway Manually
 
@@ -93,8 +102,8 @@ Edge CDP port: 9360
 Token file: ~/.relay-agent/opencode-provider-token
 ```
 
-The script prints the exact `RELAY_AGENT_API_KEY` export and `opencode.json`
-provider block to use with OpenCode/OpenWork. To print the config without
+The script prints a manual `RELAY_AGENT_API_KEY` export and `opencode.json`
+provider block for diagnostic or recovery use. To print the config without
 starting Edge or the provider:
 
 ```bash
@@ -120,10 +129,10 @@ workspace:
 pnpm install:opencode-provider-config -- --workspace /path/to/workspace
 ```
 
-The installer preserves unrelated `opencode.json` settings, adds
+The manual installer preserves unrelated `opencode.json` settings, adds
 `enabled_providers: ["relay-agent"]`, and replaces only the
 `provider.relay-agent` block. It also prints the `RELAY_AGENT_API_KEY` export
-that must be present when OpenCode/OpenWork starts.
+for manual environments that use `{env:RELAY_AGENT_API_KEY}`.
 
 Use this config shape in the workspace or OpenCode config file:
 

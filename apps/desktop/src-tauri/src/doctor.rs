@@ -641,6 +641,7 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         opencode_runtime_url: crate::opencode_runtime::external_runtime_url(),
         opencode_runtime_running: None,
         opencode_runtime_message: None,
+        openwork_setup: None,
     }
 }
 
@@ -1126,5 +1127,8 @@ pub async fn warmup_copilot_bridge_from_state(
 pub async fn get_relay_diagnostics_from_state(
     services: State<'_, AppServices>,
 ) -> RelayDiagnostics {
-    get_relay_diagnostics(services.copilot_bridge()).await
+    let openwork_setup = services.openwork_setup_status();
+    let mut diagnostics = get_relay_diagnostics(services.copilot_bridge()).await;
+    diagnostics.openwork_setup = Some(openwork_setup);
+    diagnostics
 }

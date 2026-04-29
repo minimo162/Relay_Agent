@@ -23,6 +23,96 @@
 
 ## Milestone Log
 
+### 2026-04-29 Implementation: Beginner setup status and retry
+
+Added a simple installed-app setup state for beginners. The app now tracks
+OpenWork/OpenCode setup as an `OpenWorkSetupSnapshot`, updates it from
+`openwork_autostart`, includes it in `get_relay_diagnostics`, and shows a
+top-level setup panel in the diagnostic shell. The panel collapses setup into
+`Preparing`, `Sign in to M365`, `Ready`, or `Needs attention` and provides a
+`Retry Setup` button backed by a new `retry_openwork_setup` IPC command.
+
+Changes:
+
+- Added `OpenWorkSetupSnapshot` to the canonical IPC model set.
+- Added setup status storage to `AppServices`.
+- Updated `openwork_autostart` to report preparation, ready, disabled, and
+  failure states.
+- Added `retry_openwork_setup` and frontend `retryOpenworkSetup`.
+- Updated the shell and E2E mocks/tests to show and verify the beginner state.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib openwork_autostart -- --nocapture`:
+  passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib ipc_codegen -- --nocapture`:
+  passed, 2 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+
+### 2026-04-29 Implementation: Installed Relay auto-configures OpenWork/OpenCode
+
+Extended the no-thinking path from repo commands to the installed desktop app.
+On launch, Relay starts the OpenAI-compatible provider gateway on
+`127.0.0.1:18180`, writes `relay-agent/m365-copilot` into the global OpenCode
+config at `~/.config/opencode/opencode.json`, and keeps the provider process
+owned by the Relay app. On Windows, the same background setup downloads and
+verifies pinned OpenWork/OpenCode artifacts, extracts/probes OpenCode, and opens
+the verified OpenWork MSI handoff once per pinned version.
+
+Changes:
+
+- Added `openwork_autostart` and wired it from Tauri setup.
+- Added a dedicated app-managed provider bridge separate from diagnostic
+  desktop bridge port `18080`.
+- Moved OpenCode provider config merge/write helpers into
+  `openwork_bootstrap` so CLI and installed app use the same provider block.
+- The provider config now sets the default model to
+  `relay-agent/m365-copilot` when the user has not already set `model`.
+- Added a `RELAY_OPENWORK_AUTOSTART=0` escape hatch for diagnostics.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib openwork_autostart -- --nocapture`:
+  passed, 2 passed.
+
+### 2026-04-29 Implementation: No-thinking OpenWork/OpenCode auto bootstrap
+
+Added a one-command first-run path so users do not need to choose bootstrap
+flags. Root `pnpm dev` now runs `bootstrap:openwork-opencode:auto`, and the
+Rust bootstrap CLI accepts `--auto`.
+
+Changes:
+
+- Added `--auto` to `relay-openwork-bootstrap`.
+- Auto mode starts the provider gateway and defaults the workspace to the
+  original command directory (`INIT_CWD`) when available, then the current
+  directory.
+- Auto mode writes the local provider token directly into the generated
+  OpenCode config so users do not need to export `RELAY_AGENT_API_KEY`.
+- On Windows, auto mode also downloads/verifies pinned OpenWork/OpenCode
+  artifacts and opens the verified OpenWork installer handoff for normal
+  operator approval.
+- On non-Windows, auto mode remains non-downloading so Linux/macOS development
+  and CI do not try to execute Windows artifacts.
+- The default CLI output is now a short human setup summary. `--json` preserves
+  the machine-readable report for smoke tests and diagnostics.
+- Added `openwork_opencode_auto_bootstrap_smoke.mjs` and root/desktop
+  `smoke:openwork-opencode-bootstrap-auto` scripts.
+- Updated README, provider docs, the diagnostic shell, tests, and hard-cut
+  guard text to point users to `pnpm dev` first.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --nocapture`:
+  passed, 6 passed.
+- `pnpm dev`: passed and printed the human setup summary.
+- `pnpm smoke:openwork-opencode-bootstrap-auto`: passed.
+- `pnpm smoke:openwork-opencode-bootstrap-gateway`: passed.
+- `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0 pnpm live:windows:openwork-bootstrap`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-29 Readiness: Post-UX-removal Windows bootstrap E2E
 
 Started `B12`. A full acceptance run still requires a clean Windows 10/11 x64
@@ -209,7 +299,7 @@ Changes:
 - Wired the headless smoke syntax check and hard-cut guard requirements.
 - Marked `B07` completed and set `B08` as the next bootstrap task.
 
-The command keeps Relay as a bootstrapper and provider gateway only. It does
+The command keeps Relay as the setup layer and provider gateway only. It does
 not extract OpenCode yet, write provider config, install OpenWork, start the
 gateway, own sessions, own transcripts, or execute OpenCode tools; those are
 separate follow-up tasks.
@@ -229,9 +319,9 @@ Verification:
 ### 2026-04-29 Planning: Automatic OpenWork/OpenCode bootstrap and Relay desktop UX removal
 
 Set the next task sequence for moving from bootstrap readiness to production
-handoff. The target architecture is Relay as a headless/bootstrap-capable M365
-Copilot provider gateway only, with OpenWork/OpenCode owning the desktop UX,
-chat, sessions, tools, permissions, transcript, and execution.
+handoff. The target architecture is Relay as the headless OpenWork/OpenCode
+setup layer and M365 Copilot provider gateway, with OpenWork/OpenCode owning
+the desktop UX, chat, sessions, tools, permissions, transcript, and execution.
 
 Planned tasks:
 
@@ -1203,8 +1293,9 @@ Changes:
   `diag:windows-smoke`.
 - Rewrote README first-use, stack, IPC, configuration, and diagnostics wording
   so Relay is not presented as a product UX or execution fallback.
-- Updated doctor and diagnostics hints to name Relay as an OpenAI-compatible
-  M365 Copilot provider gateway plus diagnostics.
+- Updated doctor and diagnostics hints to name Relay as an OpenWork/OpenCode
+  setup path, OpenAI-compatible M365 Copilot provider gateway, and diagnostics
+  surface.
 - Updated `.taskmaster/tasks/tasks.json` to make provider gateway ownership the
   current task graph and mark `P01` completed.
 - Strengthened `scripts/check-hard-cut-guard.mjs` so old root/CI desktop smoke
@@ -1511,7 +1602,7 @@ Verification:
 ### 2026-04-25 Implementation: OpenCode provider config installer
 
 Added a repeatable setup path for connecting OpenCode/OpenWork workspaces to
-Relay's M365 Copilot provider gateway.
+Relay's setup flow and M365 Copilot provider gateway.
 
 Changes:
 
@@ -1548,7 +1639,7 @@ Changes:
 
 - Added `start:opencode-provider-gateway` at the repo root and desktop package.
 - Added `apps/desktop/scripts/start_opencode_provider_gateway.mjs`, which starts
-  the M365 Copilot provider gateway on `127.0.0.1:18180` by default, uses Edge
+  the Relay M365 Copilot provider gateway on `127.0.0.1:18180` by default, uses Edge
   CDP `9360`, and creates or reuses a local API key at
   `~/.relay-agent/opencode-provider-token`.
 - Updated `docs/OPENCODE_PROVIDER_GATEWAY.md` so the normal operational flow is

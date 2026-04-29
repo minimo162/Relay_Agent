@@ -1073,6 +1073,7 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         opencode_runtime_url: crate::opencode_runtime::external_runtime_url(),
         opencode_runtime_running: None,
         opencode_runtime_message: None,
+        openwork_setup: None,
     }
 }
 

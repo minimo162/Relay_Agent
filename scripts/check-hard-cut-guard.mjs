@@ -25,7 +25,7 @@ const windowsBootstrapE2eDoc = read("docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2
 const required = [
   {
     path: "PLANS.md",
-    text: "Relay_Agent becomes the adapter between M365 Copilot CDP and OpenCode/OpenWork.",
+    text: "Relay_Agent makes OpenWork/OpenCode easy to use with M365 Copilot",
   },
   {
     path: "PLANS.md",
@@ -57,11 +57,11 @@ const required = [
   },
   {
     path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
-    text: "pnpm bootstrap:openwork-opencode -- --download --workspace /path/to/workspace --start-provider-gateway",
+    text: "pnpm dev",
   },
   {
     path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
-    text: "Opening the\nOpenWork Desktop MSI requires explicit operator approval with\n`--open-openwork-installer`.",
+    text: "On Windows, the auto path also verifies and downloads the pinned artifacts",
   },
   {
     path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
@@ -97,11 +97,11 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Provider Gateway Console",
+    text: "OpenWork/OpenCode Setup",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Production starts with the headless OpenWork/OpenCode",
+    text: "Production starts with the OpenWork/OpenCode auto",
   },
   {
     path: "package.json",
@@ -133,7 +133,15 @@ const required = [
   },
   {
     path: "package.json",
-    text: "\"dev\": \"pnpm bootstrap:openwork-opencode -- --pretty\"",
+    text: "\"dev\": \"pnpm bootstrap:openwork-opencode:auto\"",
+  },
+  {
+    path: "package.json",
+    text: "\"bootstrap:openwork-opencode:auto\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"bootstrap:openwork-opencode:auto\"",
   },
   {
     path: "package.json",
@@ -237,7 +245,7 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
-    text: "Relay must remain a bootstrapper and provider gateway only",
+    text: "Relay is the OpenWork/OpenCode setup layer and provider gateway",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
@@ -280,16 +288,68 @@ const required = [
     text: "provider_gateway_bootstrap_ok",
   },
   {
+    path: "apps/desktop/scripts/openwork_opencode_auto_bootstrap_smoke.mjs",
+    text: "auto_bootstrap_ok",
+  },
+  {
     path: "README.md",
-    text: "pnpm bootstrap:openwork-opencode -- --workspace /path/to/workspace --start-provider-gateway",
+    text: "**Installed desktop first run:** launch Relay Agent.",
+  },
+  {
+    path: "README.md",
+    text: "`~/.config/opencode/opencode.json`",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/lib.rs",
+    text: "openwork_autostart::spawn",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/openwork_autostart.rs",
+    text: "RELAY_OPENWORK_AUTOSTART=0",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/openwork_autostart.rs",
+    text: "relay-agent/m365-copilot",
+  },
+  {
+    path: "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+    text: "OpenWorkSetupSnapshot",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+    text: "retry_openwork_setup",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "Retry Setup",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "Sign in to M365",
+  },
+  {
+    path: "README.md",
+    text: "**Retry Setup**",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+    text: "default_global_opencode_config_path",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+    text: "\"model\"",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
     text: "pnpm smoke:openwork-opencode-bootstrap-gateway",
   },
   {
+    path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
+    text: "--auto",
+  },
+  {
     path: "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
-    text: "Relay must remain a provider gateway only.",
+    text: "Relay must remain the OpenWork/OpenCode setup layer and provider gateway only.",
   },
   {
     path: "apps/desktop/package.json",
@@ -310,6 +370,10 @@ const required = [
   {
     path: "apps/desktop/package.json",
     text: "\"smoke:openwork-opencode-bootstrap-headless\"",
+  },
+  {
+    path: "apps/desktop/package.json",
+    text: "\"smoke:openwork-opencode-bootstrap-auto\"",
   },
   {
     path: "apps/desktop/package.json",
@@ -334,6 +398,10 @@ const required = [
   {
     path: "package.json",
     text: "\"smoke:openwork-opencode-bootstrap-headless\"",
+  },
+  {
+    path: "package.json",
+    text: "\"smoke:openwork-opencode-bootstrap-auto\"",
   },
   {
     path: "package.json",
@@ -1333,6 +1401,7 @@ const byPath = {
   "apps/desktop/src-tauri/src/lib.rs": read("apps/desktop/src-tauri/src/lib.rs"),
   "apps/desktop/src-tauri/src/ipc_codegen.rs": read("apps/desktop/src-tauri/src/ipc_codegen.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/lib.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/lib.rs"),
+  "apps/desktop/src-tauri/crates/desktop-core/src/models.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/models.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/Cargo.toml": read("apps/desktop/src-tauri/crates/desktop-core/Cargo.toml"),
   "apps/desktop/src-tauri/crates/desktop-core/src/error.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/error.rs"),
   "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs": read("apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs"),
@@ -1356,9 +1425,11 @@ const byPath = {
   "apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs": read("apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs"),
   "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs": read("apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs"),
   "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs": read("apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs"),
+  "apps/desktop/scripts/openwork_opencode_auto_bootstrap_smoke.mjs": read("apps/desktop/scripts/openwork_opencode_auto_bootstrap_smoke.mjs"),
   "apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs": read("apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs"),
   "apps/desktop/scripts/openwork_opencode_provider_gateway_bootstrap_smoke.mjs": read("apps/desktop/scripts/openwork_opencode_provider_gateway_bootstrap_smoke.mjs"),
   "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs": read("apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs"),
+  "apps/desktop/src-tauri/src/openwork_autostart.rs": read("apps/desktop/src-tauri/src/openwork_autostart.rs"),
   "apps/desktop/src-tauri/src/openwork_bootstrap.rs": read("apps/desktop/src-tauri/src/openwork_bootstrap.rs"),
   "apps/desktop/src-tauri/bootstrap/openwork-opencode.json": read("apps/desktop/src-tauri/bootstrap/openwork-opencode.json"),
   "package.json": read("package.json"),

@@ -1,8 +1,8 @@
 {
-  "projectName": "Relay_Agent OpenCode Provider Gateway",
+  "projectName": "Relay_Agent OpenWork/OpenCode Setup Gateway",
   "version": "5.0",
   "createdAt": "2026-04-14",
-  "summary": "Current task graph for the OpenAI-compatible M365 Copilot provider gateway, with OpenCode/OpenWork owning UX and execution.",
+  "summary": "Current task graph for the OpenWork/OpenCode setup layer and OpenAI-compatible M365 Copilot provider gateway, with OpenWork/OpenCode owning UX and execution.",
   "phases": [
     {
       "id": "baseline",
@@ -12,7 +12,7 @@
         {
           "id": "B01",
           "title": "OpenCode provider gateway is the live product path",
-          "description": "The active product path is OpenCode/OpenWork using Relay as an OpenAI-compatible M365 Copilot provider gateway. The Tauri + Solid shell under apps/desktop is diagnostic support only.",
+          "description": "The active product path is OpenWork/OpenCode using Relay as the first-run setup layer and OpenAI-compatible M365 Copilot provider gateway. The Tauri + Solid shell under apps/desktop is diagnostic support only.",
           "files": [
             "README.md",
             "PLANS.md",
@@ -731,7 +731,7 @@
     {
       "id": "openwork_opencode_bootstrap",
       "name": "OpenWork/OpenCode First-Run Bootstrap",
-      "description": "Tracks managed first-run download, verification, and launch handoff for OpenWork/OpenCode while preserving Relay as a provider gateway only.",
+      "description": "Tracks managed first-run download, verification, launch handoff, and provider setup for OpenWork/OpenCode while preserving Relay outside UX and execution ownership.",
       "tasks": [
         {
           "id": "B01",
@@ -999,6 +999,85 @@
             "B11"
           ],
           "status": "pending"
+        },
+        {
+          "id": "B13",
+          "title": "Add no-thinking OpenWork/OpenCode auto bootstrap",
+          "description": "Make the normal user entrypoint run the auto bootstrap path so users do not need to choose download, workspace config, provider gateway, or installer handoff flags. Keep non-Windows runs CI-safe and keep Relay out of OpenWork/OpenCode UX or tool execution.",
+          "files": [
+            "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
+            "apps/desktop/scripts/openwork_opencode_auto_bootstrap_smoke.mjs",
+            "apps/desktop/src/shell/Shell.tsx",
+            "apps/desktop/tests/",
+            "apps/desktop/package.json",
+            "package.json",
+            "README.md",
+            "docs/OPENCODE_PROVIDER_GATEWAY.md",
+            "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "one-command auto bootstrap entrypoint and smoke",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "B11"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B14",
+          "title": "Auto-configure OpenWork/OpenCode from installed Relay",
+          "description": "Make the installed Relay desktop launch start the provider gateway, write the global OpenCode config, set relay-agent/m365-copilot as the default model when unset, and run the Windows OpenWork/OpenCode download/install handoff without requiring users to choose setup flags.",
+          "files": [
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src-tauri/src/app_services.rs",
+            "apps/desktop/src-tauri/src/openwork_autostart.rs",
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
+            "README.md",
+            "docs/OPENCODE_PROVIDER_GATEWAY.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "installed desktop auto provider/config bootstrap",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "B13"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B15",
+          "title": "Expose beginner OpenWork/OpenCode setup status and retry",
+          "description": "Show a simple installed-app setup state so beginners can tell whether Relay is preparing, waiting for M365 sign-in, ready, or needs attention, and provide a one-click retry without exposing provider ports or token setup as required knowledge.",
+          "files": [
+            "apps/desktop/src-tauri/crates/desktop-core/src/models.rs",
+            "apps/desktop/src-tauri/src/app_services.rs",
+            "apps/desktop/src-tauri/src/openwork_autostart.rs",
+            "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+            "apps/desktop/src-tauri/src/doctor.rs",
+            "apps/desktop/src-tauri/src/ipc_codegen.rs",
+            "apps/desktop/src/lib/ipc.ts",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "apps/desktop/src/shell/Shell.tsx",
+            "apps/desktop/tests/",
+            "README.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "beginner setup status and retry UI",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "B14"
+          ],
+          "status": "completed"
         }
       ]
     }

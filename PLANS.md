@@ -4,13 +4,15 @@ Date: 2026-04-14
 
 ## Current Product Baseline
 
-Relay_Agent is now an **OpenAI-compatible M365 Copilot provider gateway** for
-OpenCode/OpenWork. The historical Tauri desktop shell remains under
-`apps/desktop/` only for provider launch support, diagnostics, and live Copilot
-verification.
+Relay_Agent is now the **OpenWork/OpenCode setup layer and OpenAI-compatible
+M365 Copilot provider gateway**. The historical Tauri desktop shell remains
+under `apps/desktop/` only for provider launch support, diagnostics, and live
+Copilot verification.
 
 - Primary UX and execution: OpenCode/OpenWork.
-- Provider gateway: `apps/desktop/src-tauri/binaries/copilot_server.js`.
+- Setup + provider gateway: `pnpm dev` runs the OpenWork/OpenCode auto
+  bootstrap, and `apps/desktop/src-tauri/binaries/copilot_server.js` exposes
+  the OpenAI-compatible provider endpoint.
 - Frontend: SolidJS + Vite diagnostic desktop shell.
 - Backend: Rust in `apps/desktop/src-tauri/`, with `crates/desktop-core` as the
   only active internal crate. Historical `runtime` / `tools` /
@@ -46,16 +48,17 @@ Additional rules:
 - Priority B: keep OpenCode/OpenWork as the external OSS owner for UX,
   sessions, tools, permissions, events, MCP, plugins, skills, and workspace
   runtime behavior.
-- Priority C: keep Relay-specific code focused on the OpenAI-compatible
-  provider gateway, Copilot CDP transport, tool-call normalization, and
-  diagnostics.
+- Priority C: keep Relay-specific code focused on the OpenWork/OpenCode setup
+  path, OpenAI-compatible provider gateway, Copilot CDP transport, tool-call
+  normalization, and diagnostics.
 
 ## Strategic Reset: OpenCode/OpenWork Provider Gateway
 
 The active architecture direction is a hard cut, not a compatibility migration:
-Relay_Agent becomes the adapter between M365 Copilot CDP and OpenCode/OpenWork.
-OpenCode/OpenWork owns UX and execution; Copilot owns the LLM surface; Relay
-owns the M365 Copilot provider gateway and diagnostics.
+Relay_Agent makes OpenWork/OpenCode easy to use with M365 Copilot while staying
+out of UX and execution ownership. OpenCode/OpenWork owns UX and execution;
+Copilot owns the LLM surface; Relay owns the setup path, M365 Copilot provider
+gateway, and diagnostics.
 
 Detailed plan: `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`.
 
@@ -356,6 +359,79 @@ entrypoint, confirms `pnpm dev` is bootstrap-first, confirms desktop
 preflight. The live Windows/M365 acceptance run remains pending on a clean
 Windows host.
 
+## Completed Task: No-Thinking OpenWork/OpenCode Auto Bootstrap
+
+Goal: make the normal user entrypoint choose the safe defaults automatically so
+users do not need to know about download, workspace config, provider gateway,
+or installer handoff flags.
+
+Status 2026-04-29: implemented. Root `pnpm dev` now calls
+`bootstrap:openwork-opencode:auto`. The `--auto` mode starts the provider
+gateway, defaults the workspace to the current directory, and on Windows also
+downloads/verifies the pinned OpenWork/OpenCode artifacts and opens the
+verified OpenWork installer handoff. Non-Windows auto runs remain
+non-downloading so CI and Linux development do not try to execute Windows
+artifacts.
+
+Acceptance criteria:
+
+- A user can run `pnpm dev` as the no-thinking first-run command.
+- Windows auto mode downloads/verifies artifacts, prepares OpenCode provider
+  config, starts the Relay provider gateway, and opens only the normal
+  operator-approved installer handoff.
+- Non-Windows auto smoke verifies the entrypoint without downloading Windows
+  artifacts.
+- The diagnostic shell and docs point to the no-thinking command first.
+
+## Completed Task: Installed Relay Auto-Configures OpenWork/OpenCode
+
+Goal: make the installed Relay app prepare OpenWork/OpenCode automatically so
+users do not need to know about provider ports, tokens, config files, downloads,
+or bootstrap flags.
+
+Status 2026-04-29: implemented. Tauri setup now starts an app-managed provider
+gateway on `127.0.0.1:18180`, writes the global OpenCode config at
+`~/.config/opencode/opencode.json`, and sets `relay-agent/m365-copilot` as the
+default model when no model is already configured. On Windows, the background
+setup downloads/verifies the pinned OpenWork/OpenCode artifacts, extracts and
+probes OpenCode, and opens the verified OpenWork MSI handoff once per pinned
+version.
+
+Acceptance criteria:
+
+- Launching installed Relay starts the provider gateway without a separate
+  command.
+- OpenCode/OpenWork can discover the Relay provider from global config without
+  a workspace-specific setup step.
+- The generated config contains the current local provider token and default
+  Relay model.
+- Windows setup keeps OpenWork/OpenCode as the UX/execution owner and uses the
+  normal Windows installer approval prompt.
+- `RELAY_OPENWORK_AUTOSTART=0` disables the behavior for diagnostics.
+
+## Completed Task: Beginner Setup Status And Retry
+
+Goal: make the installed app understandable for beginners by reducing setup
+state to a few visible outcomes and giving them a retry button instead of
+requiring config, token, or port knowledge.
+
+Status 2026-04-29: implemented. The desktop shell now shows the OpenWork/OpenCode
+setup state as `Preparing`, `Sign in to M365`, `Ready`, or `Needs attention`
+based on the app-managed setup snapshot and Copilot warmup state. The setup
+snapshot is stored in `AppServices`, updated by `openwork_autostart`, included
+in `get_relay_diagnostics`, and exposed to the frontend through generated IPC
+types. The shell also exposes `Retry Setup`, which calls
+`retry_openwork_setup` and restarts the same idempotent autostart path.
+
+Acceptance criteria:
+
+- Beginners can see whether setup is still preparing, ready, blocked on M365
+  sign-in, or needs attention.
+- The retry action restarts OpenWork/OpenCode setup without requiring command
+  line usage.
+- Diagnostics still expose provider URL/config path for support, but they are
+  not required to start using OpenWork/OpenCode.
+
 ## Completed Task: Packaged Desktop Diagnostic Build Verification
 
 Goal: verify that the desktop diagnostic shell still builds as a packaged Tauri
@@ -404,8 +480,8 @@ Acceptance criteria:
 
 Goal: verify the current hard-cut product path against a real M365 Copilot CDP
 session after Relay stopped owning desktop UX and execution. The validation
-must pass through OpenCode/OpenWork using Relay only as the OpenAI-compatible
-M365 Copilot provider gateway.
+must pass through OpenCode/OpenWork using Relay only for setup, diagnostics,
+and the OpenAI-compatible M365 Copilot provider gateway.
 
 Status 2026-04-26: passed with artifact directory
 `/tmp/relay-live-m365-opencode-provider-f22aLj`. The smoke confirmed provider
