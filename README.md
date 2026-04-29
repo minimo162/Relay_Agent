@@ -19,10 +19,9 @@ cd Relay_Agent
 pnpm install
 ```
 
-- **OpenCode provider gateway:** `pnpm start:opencode-provider-gateway`, then
-  point OpenCode/OpenWork at `http://127.0.0.1:18180/v1`.
-- **Install OpenCode provider config:** `pnpm install:opencode-provider-config -- --workspace /path/to/workspace`.
-- **Deterministic provider smoke:** `pnpm smoke:opencode-provider`.
+- **First-run bootstrap preflight:** `pnpm bootstrap:openwork-opencode -- --pretty`.
+- **Bootstrap provider handoff:** `pnpm bootstrap:openwork-opencode -- --workspace /path/to/workspace --start-provider-gateway`.
+- **Deterministic bootstrap smoke:** `pnpm smoke:openwork-opencode-bootstrap-gateway`.
 - **Live M365 provider smoke:** `pnpm live:m365:opencode-provider`
   with Edge signed in to M365.
 
@@ -61,9 +60,14 @@ Details: **[docs/OPENCODE_PROVIDER_GATEWAY.md](docs/OPENCODE_PROVIDER_GATEWAY.md
 The canonical first-use path is:
 
 1. Start or sign in to Edge with M365 Copilot available.
-2. Run `pnpm start:opencode-provider-gateway`.
-3. Run `pnpm install:opencode-provider-config -- --workspace /path/to/workspace`.
-4. Start OpenCode/OpenWork in that workspace with `RELAY_AGENT_API_KEY` set to
+2. Run `pnpm bootstrap:openwork-opencode -- --pretty` to inspect the pinned
+   OpenWork/OpenCode artifact and provider handoff plan.
+3. Run `pnpm bootstrap:openwork-opencode -- --download --workspace /path/to/workspace --start-provider-gateway`
+   to verify/extract OpenCode, write the Relay provider config, and start the
+   provider gateway.
+4. Open the verified OpenWork installer only with
+   `--open-openwork-installer` after operator approval.
+5. Start OpenCode/OpenWork in that workspace with `RELAY_AGENT_API_KEY` set to
    the token printed by the gateway/config installer.
 
 The desktop shell is not a supported execution fallback. Diagnostic commands
@@ -137,10 +141,11 @@ and diagnostic configuration.
 
 **Diagnostics:** `get_relay_diagnostics` still exists in IPC, the Settings modal exposes **Export diagnostics** for a text bundle, and the repo ships a headless provider/transport doctor entrypoint: `pnpm doctor -- --json`.
 
-**OpenCode provider config:** `pnpm start:opencode-provider-gateway -- --print-config`
-prints the provider block and token export. `pnpm install:opencode-provider-config -- --workspace /path/to/workspace`
-merges that provider into a workspace `opencode.json` while preserving unrelated
-settings.
+**OpenWork/OpenCode bootstrap:** `pnpm bootstrap:openwork-opencode -- --pretty`
+prints the pinned artifact and provider handoff plan without downloading.
+`pnpm bootstrap:openwork-opencode -- --download --workspace /path/to/workspace --start-provider-gateway`
+verifies/extracts OpenCode, merges the Relay provider into the workspace
+`opencode.json`, starts the provider gateway, and reports the API-key handoff.
 
 **Environment (Copilot):** Default CDP base **9360**. Provider startup uses `RELAY_EDGE_CDP_PORT` unless overridden by script flags. Linux requires Edge + `DISPLAY`; the Relay Edge profile lives at `~/RelayAgentEdgeProfile`. Anonymous `GET /health` returns only a non-secret Relay fingerprint (`status`, `service`, `instanceId`). OpenAI-compatible provider requests should use `Authorization: Bearer $RELAY_AGENT_API_KEY`; diagnostic desktop bridge endpoints may also use the boot token header. In provider-gateway mode, Relay returns normalized OpenAI `tool_calls` and OpenCode/OpenWork executes them. Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
@@ -176,10 +181,10 @@ an OpenCode-owned `read` tool roundtrip.
 starts the gateway against a signed-in M365 Copilot tab and verifies both a
 plain provider response and an OpenCode-owned `read` tool loop.
 
-**Provider setup smoke:** `pnpm start:opencode-provider-gateway -- --print-config`
-prints the provider config without starting Edge, and
-`pnpm install:opencode-provider-config -- --workspace /path/to/workspace --dry-run`
-checks the workspace merge path.
+**Provider setup smoke:** `pnpm smoke:openwork-opencode-bootstrap-headless`
+checks the non-destructive bootstrap report, and
+`pnpm smoke:openwork-opencode-bootstrap-gateway` starts the bootstrap-managed
+provider gateway against deterministic local checks.
 
 ### Diagnostic Desktop Checks
 
@@ -203,7 +208,7 @@ RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 \
 Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs `original`, `repair1`, and `repair2` stage sends/replies. If it fails, the panic/log output now includes typed bridge metadata such as `failureClass`, `stageLabel`, and `requestChain`. Detailed prerequisites and failure meanings: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
 **Headless launched-app smoke:** `pnpm diag:desktop-launch` verifies the
-diagnostic `tauri:dev` shell can still launch under Linux/Xvfb.
+diagnostic `diag:tauri-dev` shell can still launch under Linux/Xvfb.
 
 **Live M365 provider smoke:** `pnpm live:m365:opencode-provider` validates the
 OpenAI-compatible provider path against signed-in M365 Copilot. This is the live

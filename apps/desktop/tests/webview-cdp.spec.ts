@@ -25,7 +25,7 @@ test.describe("Tauri WebView2 via CDP", () => {
       browser = await chromium.connectOverCDP(CDP_HTTP);
     } catch (e) {
       throw new Error(
-        `Could not connect to ${CDP_HTTP}. Start the app with: pnpm run tauri:dev:cdp (ensure port is free). Underlying: ${e}`,
+        `Could not connect to ${CDP_HTTP}. Start the app with: pnpm run diag:tauri-dev:cdp (ensure port is free). Underlying: ${e}`,
       );
     }
 

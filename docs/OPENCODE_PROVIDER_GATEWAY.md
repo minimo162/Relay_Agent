@@ -58,9 +58,27 @@ that started `copilot_server.js`. The startup script below uses
 `RELAY_AGENT_API_KEY` when set; otherwise it creates a stable local token at
 `~/.relay-agent/opencode-provider-token`.
 
-## Start The Gateway
+## Bootstrap First-Run Path
 
-Start the standalone provider gateway from the repo root:
+The production first-run entrypoint is the headless OpenWork/OpenCode
+bootstrap. It keeps Relay out of the desktop UX path while preparing the
+OpenCode provider handoff:
+
+```bash
+pnpm bootstrap:openwork-opencode -- --pretty
+pnpm bootstrap:openwork-opencode -- --download --workspace /path/to/workspace --start-provider-gateway
+```
+
+The second command verifies and extracts the pinned OpenCode artifact, merges
+Relay's provider block into the workspace config, starts the provider gateway,
+and reports the provider base URL, model, and API-key handoff. Opening the
+OpenWork Desktop MSI requires explicit operator approval with
+`--open-openwork-installer`.
+
+## Start The Gateway Manually
+
+The older standalone scripts remain low-level diagnostics and manual recovery
+tools. Start the provider gateway from the repo root:
 
 ```bash
 pnpm start:opencode-provider-gateway
@@ -94,7 +112,9 @@ RELAY_SKIP_PRESTART_EDGE=1
 
 ## OpenCode Config
 
-Install or update the provider config in an OpenCode/OpenWork workspace:
+The bootstrap command above is the preferred config path. For manual
+diagnostics, install or update the provider config in an OpenCode/OpenWork
+workspace:
 
 ```bash
 pnpm install:opencode-provider-config -- --workspace /path/to/workspace
@@ -215,6 +235,13 @@ It passes only if OpenCode reaches Relay through the configured
 receives the expected assistant text, receives an OpenAI `tool_calls` response
 for the `read` tool, executes that tool in OpenCode, and sends the tool result
 back to Relay in the follow-up provider turn.
+
+For the bootstrap-managed first-run path, also run:
+
+```bash
+pnpm smoke:openwork-opencode-bootstrap-headless
+pnpm smoke:openwork-opencode-bootstrap-gateway
+```
 
 ## Live M365 OpenCode Smoke
 

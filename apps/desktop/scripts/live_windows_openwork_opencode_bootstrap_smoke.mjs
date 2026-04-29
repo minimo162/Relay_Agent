@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,12 +12,16 @@ import { MODEL_REF, providerBaseURL, providerPort } from "./opencode_provider_co
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
+const repoRoot = resolve(appRoot, "../..");
 const manifestPath = resolve(appRoot, "src-tauri/bootstrap/openwork-opencode.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const rootPackage = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8"));
+const desktopPackage = JSON.parse(readFileSync(resolve(appRoot, "package.json"), "utf8"));
 const platform = "windows-x64";
 const platformManifest = manifest.platforms?.[platform];
 const shouldDownload = process.env.RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD === "1";
 const requireWindows = process.env.RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS !== "0";
+const skipRustPreflight = process.env.RELAY_LIVE_WINDOWS_BOOTSTRAP_SKIP_RUST_PREFLIGHT === "1";
 const cacheRoot = resolve(
   process.env.RELAY_LIVE_WINDOWS_BOOTSTRAP_CACHE ||
     join(tmpdir(), "relay-live-windows-openwork-opencode-bootstrap"),
@@ -64,6 +69,61 @@ function verifyFile(path, artifact) {
   };
 }
 
+function runBootstrapPreflight() {
+  if (skipRustPreflight) {
+    return {
+      skipped: true,
+      reason: "RELAY_LIVE_WINDOWS_BOOTSTRAP_SKIP_RUST_PREFLIGHT=1",
+    };
+  }
+
+  const result = spawnSync(
+    "cargo",
+    [
+      "run",
+      "--quiet",
+      "--manifest-path",
+      resolve(appRoot, "src-tauri/Cargo.toml"),
+      "--bin",
+      "relay-openwork-bootstrap",
+      "--",
+      "--platform",
+      platform,
+      "--cache-root",
+      cacheRoot,
+      "--json",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 20,
+    },
+  );
+
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      status: "failed",
+      exitCode: result.status,
+      stderr: result.stderr.trim(),
+      stdout: result.stdout.trim(),
+    };
+  }
+
+  const parsed = JSON.parse(result.stdout);
+  return {
+    ok: parsed.ok === true,
+    status: parsed.status,
+    mode: parsed.mode,
+    providerGatewayStatus: parsed.providerGateway?.status ?? null,
+    providerGatewaySkippedReason: parsed.providerGateway?.skippedReason ?? null,
+    installerSkippedReason: parsed.openworkInstallerHandoff?.skippedReason ?? null,
+    artifactStatuses: Object.fromEntries(
+      (parsed.artifacts ?? []).map((artifact) => [artifact.artifact, artifact.status]),
+    ),
+  };
+}
+
 if (!platformManifest) {
   throw new Error(`missing ${platform} bootstrap manifest`);
 }
@@ -77,10 +137,18 @@ const report = {
   ok: true,
   platform,
   hostPlatform: process.platform,
+  milestone: "B12-post-ux-removal-windows-bootstrap-e2e",
   mode: shouldDownload ? "download_verify" : "preflight",
   cacheRoot,
   windowsRequired: requireWindows,
   supportedHost: process.platform === "win32",
+  productionEntrypoint: {
+    rootDev: rootPackage.scripts?.dev ?? null,
+    rootBootstrap: rootPackage.scripts?.["bootstrap:openwork-opencode"] ?? null,
+    desktopBootstrap: desktopPackage.scripts?.["bootstrap:openwork-opencode"] ?? null,
+    desktopTauriDev: desktopPackage.scripts?.["tauri:dev"] ?? null,
+    desktopDiagTauriDev: desktopPackage.scripts?.["diag:tauri-dev"] ?? null,
+  },
   providerHandoff: {
     baseURL: providerBaseURL(providerPort()),
     model: MODEL_REF,
@@ -112,19 +180,41 @@ const report = {
     },
   },
   manualSteps: [
-    "Start Relay provider gateway and export RELAY_AGENT_API_KEY.",
-    "Download and verify OpenCode CLI and OpenWork Desktop artifacts.",
-    "Extract OpenCode CLI and install Relay provider config into the target workspace.",
-    "Open the verified OpenWork Desktop MSI only after explicit operator approval.",
-    "Configure/OpenWork OpenCode path for relay-agent/m365-copilot.",
+    "Run pnpm bootstrap:openwork-opencode -- --pretty and confirm Relay desktop UX is not the production entrypoint.",
+    "Run pnpm bootstrap:openwork-opencode -- --download --workspace <workspace> --start-provider-gateway.",
+    "Keep the printed RELAY_AGENT_API_KEY available to OpenCode/OpenWork.",
+    "Open the verified OpenWork Desktop MSI only with --open-openwork-installer after explicit operator approval.",
+    "Configure OpenWork/OpenCode for relay-agent/m365-copilot.",
     "Run one provider text turn and one OpenCode-owned read tool turn.",
   ],
 };
 
+report.bootstrapPreflight = runBootstrapPreflight();
+if (report.bootstrapPreflight.ok === false) {
+  report.ok = false;
+  report.status = "bootstrap_preflight_failed";
+  console.log(JSON.stringify(report, null, 2));
+  process.exit(1);
+}
+
+if (report.productionEntrypoint.rootDev !== "pnpm bootstrap:openwork-opencode -- --pretty") {
+  report.ok = false;
+  report.status = "production_entrypoint_not_bootstrap";
+  console.log(JSON.stringify(report, null, 2));
+  process.exit(1);
+}
+
+if (report.productionEntrypoint.desktopTauriDev !== null) {
+  report.ok = false;
+  report.status = "desktop_tauri_dev_still_primary";
+  console.log(JSON.stringify(report, null, 2));
+  process.exit(1);
+}
+
 if (requireWindows && process.platform !== "win32") {
   report.ok = false;
   report.status = "blocked_non_windows_host";
-  report.message = "B06 requires a clean Windows host with M365 Copilot sign-in; this run is preflight only.";
+  report.message = "B12 requires a clean Windows host with M365 Copilot sign-in; this run is post-UX-removal readiness preflight only.";
   console.log(JSON.stringify(report, null, 2));
   process.exit(0);
 }

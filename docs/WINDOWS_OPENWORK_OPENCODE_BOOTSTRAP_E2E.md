@@ -1,11 +1,11 @@
 # Windows OpenWork/OpenCode Bootstrap E2E
 
-Date: 2026-04-27
+Date: 2026-04-29
 
-This is the live B06 verification runbook. It requires a clean Windows 10/11
-x64 environment, network access to GitHub Releases, Microsoft Edge with M365
-Copilot signed in, and an operator who explicitly approves opening the
-OpenWork installer.
+This is the live B12 post-UX-removal verification runbook. It requires a clean
+Windows 10/11 x64 environment, network access to GitHub Releases, Microsoft
+Edge with M365 Copilot signed in, and an operator who explicitly approves
+opening the OpenWork installer.
 
 Relay must remain a provider gateway only. Do not use this run to reintroduce
 Relay-owned OpenCode runtime sidecars, tool execution, transcript state, or
@@ -18,14 +18,28 @@ From the Relay_Agent checkout:
 ```powershell
 pnpm install --frozen-lockfile
 pnpm check
+pnpm dev
 pnpm smoke:openwork-desktop-handoff
 pnpm smoke:opencode-bootstrap-config
 pnpm live:windows:openwork-bootstrap
 ```
 
-The last command is non-destructive by default. It prints the pinned artifact
-URLs, SHA256 values, expected app-local cache paths, and provider handoff
-settings.
+`pnpm dev` must run the headless bootstrap preflight, not the Relay desktop
+frontend. `pnpm live:windows:openwork-bootstrap` is non-destructive by default:
+it checks the post-UX-removal production entrypoint, runs the Rust bootstrap
+preflight, and prints the pinned artifact URLs, SHA256 values, expected
+app-local cache paths, and provider handoff settings.
+
+On non-Windows CI or local Linux/macOS verification, use this readiness-only
+variant to require the same entrypoint/bootstrap checks without pretending the
+live Windows acceptance turn has run:
+
+```powershell
+$env:RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS = "0"
+pnpm live:windows:openwork-bootstrap
+```
+
+Expected status is `ready_for_explicit_download`.
 
 ## Download And Verify
 
@@ -47,10 +61,10 @@ Expected pinned artifacts:
 
 ## Provider Handoff
 
-Start the Relay provider gateway:
+Run the bootstrap-managed provider handoff from a workspace:
 
 ```powershell
-pnpm start:opencode-provider-gateway
+pnpm bootstrap:openwork-opencode -- --download --workspace C:\RelayBootstrapSmoke\workspace --start-provider-gateway
 ```
 
 Keep the printed `RELAY_AGENT_API_KEY` export available for OpenCode/OpenWork.
@@ -68,11 +82,12 @@ http://127.0.0.1:18180/v1
 
 ## OpenCode Config
 
-Extract the verified OpenCode CLI zip and install Relay provider config into
-the test workspace:
+The bootstrap command extracts the verified OpenCode CLI zip, probes the
+entrypoint, and installs Relay provider config into the test workspace. For a
+non-destructive check before downloading or starting the provider, run:
 
 ```powershell
-pnpm install:opencode-provider-config -- --workspace C:\RelayBootstrapSmoke\workspace --opencode-bin <path-to-extracted-opencode.exe>
+pnpm bootstrap:openwork-opencode -- --workspace C:\RelayBootstrapSmoke\workspace --pretty
 ```
 
 Do not run Relay-owned tool execution. Tool execution must happen in
@@ -84,7 +99,7 @@ Open the verified MSI only after explicit operator approval. Do not silently
 install:
 
 ```powershell
-msiexec /i <path-to-openwork-desktop-windows-x64.msi>
+pnpm bootstrap:openwork-opencode -- --download --workspace C:\RelayBootstrapSmoke\workspace --open-openwork-installer
 ```
 
 Record the installer path, OpenWork version, and any prompts shown to the
@@ -108,4 +123,5 @@ Relay provider:
    - Any manual operator approval steps.
 
 After the run, append the result to `docs/IMPLEMENTATION.md` and mark B06
-complete only if both the provider text and OpenCode-owned `read` turn pass.
+or B12 complete only if both the provider text and OpenCode-owned `read` turn
+pass.

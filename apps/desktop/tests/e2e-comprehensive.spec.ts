@@ -23,9 +23,9 @@ test.describe("Diagnostic shell", () => {
     await injectRelayMock(page);
     await openApp(page);
 
-    await expect(page.getByText("pnpm start:opencode-provider-gateway")).toBeVisible();
-    await expect(page.getByText("pnpm install:opencode-provider-config -- --workspace /path/to/workspace")).toBeVisible();
-    await expect(page.getByText("pnpm smoke:opencode-provider")).toBeVisible();
+    await expect(page.getByText("pnpm bootstrap:openwork-opencode -- --pretty")).toBeVisible();
+    await expect(page.getByText("pnpm bootstrap:openwork-opencode -- --workspace /path/to/workspace --start-provider-gateway")).toBeVisible();
+    await expect(page.getByText("pnpm smoke:openwork-opencode-bootstrap-gateway")).toBeVisible();
     await expect(page.getByText("Model id:")).toBeVisible();
   });
 });

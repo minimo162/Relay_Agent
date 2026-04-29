@@ -57,7 +57,7 @@ async function main() {
     frontendReady: false,
     desktopBinaryLaunchDetected: false,
     workflowSummaryReceived: false,
-    launchCommand: "pnpm tauri:dev",
+    launchCommand: "pnpm diag:tauri-dev",
     workflowCommand: "pnpm workflow:test",
     appDataDir,
     summaryPath,
@@ -94,7 +94,7 @@ async function main() {
       tauriEnv.DISPLAY = display;
     }
 
-    const tauri = startProcess(pnpmCommand, ["tauri:dev"], {
+    const tauri = startProcess(pnpmCommand, ["diag:tauri-dev"], {
       env: tauriEnv
     });
 
@@ -103,7 +103,7 @@ async function main() {
 
       while (Date.now() < launchDeadline) {
         if (tauri.child.exitCode !== null) {
-          summary.reason = `tauri:dev exited early: ${tauri.readLogs().trim() || "unknown error"}`;
+          summary.reason = `diag:tauri-dev exited early: ${tauri.readLogs().trim() || "unknown error"}`;
           console.log(JSON.stringify(summary));
           process.exit(1);
         }
@@ -133,7 +133,7 @@ async function main() {
       }
 
       if (!summary.desktopBinaryLaunchDetected) {
-        summary.reason = "Desktop binary launch was not detected in tauri:dev logs.";
+        summary.reason = "Desktop binary launch was not detected in diag:tauri-dev logs.";
         console.log(JSON.stringify(summary));
         process.exit(1);
       }

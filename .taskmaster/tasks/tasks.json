@@ -833,8 +833,8 @@
         },
         {
           "id": "B06",
-          "title": "Run live Windows OpenWork/OpenCode bootstrap E2E smoke",
-          "description": "Run the managed bootstrap path on a clean Windows environment with real downloaded OpenCode CLI and OpenWork Desktop artifacts plus a signed-in M365 Copilot provider session. Record versions, artifact paths, explicit operator install steps, provider handoff, plain provider text, and an OpenCode-owned read tool turn.",
+          "title": "Prepare live Windows OpenWork/OpenCode bootstrap E2E smoke",
+          "description": "Prepared the original live Windows bootstrap preflight and runbook. The actual post-desktop-UX-removal acceptance run is now tracked by B12, which supersedes this earlier B06 live-run placeholder.",
           "files": [
             "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs",
             "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
@@ -845,11 +845,158 @@
             "scripts/check-hard-cut-guard.mjs",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "Windows bootstrap E2E preflight and runbook; live run pending",
+          "artifact": "Windows bootstrap E2E preflight and runbook; superseded by B12 live acceptance",
           "effort": "L",
           "priority": "high",
           "blockedBy": [
             "B05"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B07",
+          "title": "Add headless OpenWork/OpenCode bootstrap command",
+          "description": "Add a production bootstrap entrypoint that downloads and verifies the pinned OpenCode CLI and OpenWork Desktop artifacts from the manifest, stores them under app-local data, and emits structured diagnostics without relying on the Relay desktop chat UX.",
+          "files": [
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/src-tauri/src/bin/",
+            "apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs",
+            "apps/desktop/package.json",
+            "package.json",
+            "scripts/check-hard-cut-guard.mjs",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "headless bootstrap command and smoke",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "B03"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B08",
+          "title": "Automate OpenCode extraction and provider config handoff",
+          "description": "Extend the bootstrap flow so the verified OpenCode zip is extracted into the app-local cache, the entrypoint is probed, and Relay's OpenAI-compatible M365 Copilot provider config is installed into the target OpenCode/OpenWork workspace without executing OpenCode-owned tools.",
+          "files": [
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
+            "apps/desktop/src-tauri/Cargo.toml",
+            "Cargo.lock",
+            "apps/desktop/scripts/install_opencode_provider_config.mjs",
+            "apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "automatic OpenCode extract/config bootstrap",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "B07"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B09",
+          "title": "Add explicit OpenWork installer approval handoff",
+          "description": "Extend the bootstrap flow so the verified OpenWork Desktop MSI can be opened only after explicit operator approval, with installer path, version, SHA256, and provider handoff details recorded as diagnostics. Do not add silent install as the default path.",
+          "files": [
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
+            "apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs",
+            "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs",
+            "scripts/check-hard-cut-guard.mjs",
+            "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "explicit OpenWork installer approval handoff",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "B07"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B10",
+          "title": "Start Relay provider gateway from bootstrap",
+          "description": "Add a bootstrap-managed provider gateway startup path that creates or locates the Relay API key, starts the OpenAI-compatible provider endpoint, and returns the provider base URL, model, and API-key handoff expected by OpenCode/OpenWork.",
+          "files": [
+            "apps/desktop/scripts/start_opencode_provider_gateway.mjs",
+            "apps/desktop/src-tauri/binaries/copilot_server.js",
+            "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
+            "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
+            "apps/desktop/scripts/openwork_opencode_provider_gateway_bootstrap_smoke.mjs",
+            "apps/desktop/package.json",
+            "package.json",
+            "scripts/check-hard-cut-guard.mjs",
+            "docs/OPENCODE_PROVIDER_GATEWAY.md",
+            "docs/OPENWORK_OPENCODE_BOOTSTRAP_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "bootstrap-managed provider gateway startup",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "B07"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B11",
+          "title": "Remove Relay desktop UX from the production path",
+          "description": "Stop presenting the Solid/Tauri Relay desktop chat shell as a product UX. Keep only headless/bootstrap commands and diagnostic-only surfaces needed for provider gateway support, live M365 verification, and Windows packaging diagnostics.",
+          "files": [
+            "apps/desktop/src/",
+            "apps/desktop/src-tauri/",
+            "apps/desktop/scripts/",
+            "apps/desktop/tests/",
+            "apps/desktop/package.json",
+            "package.json",
+            "README.md",
+            "docs/OPENCODE_PROVIDER_GATEWAY.md",
+            "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Relay desktop UX removed or isolated as diagnostics-only",
+          "effort": "XL",
+          "priority": "critical",
+          "blockedBy": [
+            "B08",
+            "B09",
+            "B10"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "B12",
+          "title": "Run post-UX-removal Windows bootstrap E2E",
+          "description": "Run a clean Windows E2E after Relay desktop UX is removed from the production path. Confirm first-run bootstrap downloads/verifies OpenCode/OpenWork, hands off the OpenWork installer with explicit approval, starts the Relay provider gateway, and completes provider text plus OpenCode-owned read tool turns through M365 Copilot.",
+          "files": [
+            "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs",
+            "package.json",
+            "apps/desktop/package.json",
+            "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            "scripts/check-hard-cut-guard.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "post-UX-removal Windows bootstrap E2E readiness gate; live run pending",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "B11"
           ],
           "status": "pending"
         }

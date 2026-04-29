@@ -23,11 +23,236 @@
 
 ## Milestone Log
 
+### 2026-04-29 Readiness: Post-UX-removal Windows bootstrap E2E
+
+Started `B12`. A full acceptance run still requires a clean Windows 10/11 x64
+host with Edge signed in to M365 Copilot and operator approval for the
+OpenWork installer, which is not available in this Linux environment. The
+local part of the task now has a readiness gate.
+
+Changes:
+
+- Updated `live_windows_openwork_opencode_bootstrap_smoke.mjs` for B12
+  post-UX-removal semantics.
+- The preflight now verifies root `pnpm dev` is the headless bootstrap path,
+  confirms desktop `tauri:dev` has not returned as a primary script, and runs
+  `relay-openwork-bootstrap` preflight against the Windows artifact manifest.
+- Updated the Windows runbook so B12 starts from `bootstrap:openwork-opencode`
+  and records that OpenWork/OpenCode, not Relay desktop UX, owns the live
+  acceptance turns.
+
+Verification:
+
+- `node --check apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs`:
+  passed.
+- `pnpm live:windows:openwork-bootstrap`: passed as a Linux readiness
+  preflight; it verified the bootstrap-first production entrypoint and then
+  reported `blocked_non_windows_host` for the live Windows/M365-only portion.
+- `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0 pnpm live:windows:openwork-bootstrap`:
+  passed as a CI-safe readiness run with `ready_for_explicit_download`.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `.taskmaster/tasks/tasks.json` JSON parse: passed.
+- `pnpm check`: passed.
+
+### 2026-04-29 Implementation: Relay desktop UX isolated from production path
+
+Implemented `B11`. The normal repository entrypoint now starts from the
+headless OpenWork/OpenCode bootstrap path instead of the Relay desktop
+frontend, while the remaining Tauri/Solid surface is named and documented as
+diagnostic-only.
+
+Changes:
+
+- Changed root `pnpm dev` to run `pnpm bootstrap:openwork-opencode -- --pretty`.
+- Added `diag:frontend`, `diag:tauri-dev`, and `diag:tauri-dev:cdp` aliases and
+  moved launched-app diagnostics to those names.
+- Updated the diagnostic shell to show bootstrap-first commands instead of
+  manual gateway/config-install commands.
+- Updated README, provider gateway docs, and the Windows bootstrap E2E runbook
+  so first use starts with `bootstrap:openwork-opencode`.
+- Strengthened the hard-cut guard against returning Relay desktop launch to the
+  production path.
+- Marked `B11` completed. The next task is `B12`, the post-UX-removal Windows
+  bootstrap E2E run.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --nocapture`:
+  passed, 4 passed.
+- `pnpm dev`: passed; root dev now runs bootstrap preflight and exits
+  successfully.
+- `pnpm smoke:openwork-opencode-bootstrap-headless`: passed.
+- `pnpm smoke:openwork-opencode-bootstrap-gateway`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+- `pgrep -af '[c]opilot_server.js --port'`: no leftover gateway process.
+
+### 2026-04-29 Implementation: Bootstrap-managed provider gateway startup
+
+Implemented `B10` in `relay-openwork-bootstrap`. The headless bootstrap command
+now reports provider gateway state, creates or locates the Relay provider token,
+and can start `copilot_server.js` when `--start-provider-gateway` is explicitly
+supplied. The command returns the provider base URL, health URL, model, token
+source, and process ID. The default path remains non-starting and reports
+`use_--start-provider-gateway`.
+
+Changes:
+
+- Added provider port, Edge CDP port, provider token file, and copilot server
+  path options to `relay-openwork-bootstrap`.
+- Added bootstrap-managed provider gateway startup and `/health` readiness
+  polling.
+- Added `apps/desktop/scripts/openwork_opencode_provider_gateway_bootstrap_smoke.mjs`.
+- Added root and desktop `smoke:openwork-opencode-bootstrap-gateway` scripts.
+- Extended hard-cut guard coverage for bootstrap gateway startup.
+- Marked `B10` completed. The next task is `B11`, removing Relay desktop UX
+  from the production path.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --nocapture`:
+  passed.
+- `pnpm smoke:openwork-opencode-bootstrap-gateway`: passed.
+- `pnpm smoke:openwork-opencode-bootstrap-headless`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+- `pgrep -af '[c]opilot_server.js --port'`: no leftover gateway process.
+- `git diff --check`: passed.
+
+### 2026-04-29 Implementation: Explicit OpenWork installer approval handoff
+
+Implemented `B09` in the headless bootstrap command. `relay-openwork-bootstrap`
+now reports an `openworkInstallerHandoff` block with the pinned MSI path,
+version, SHA256, install mode, and the exact `msiexec /i` handoff command. The
+default path remains non-destructive and reports that operator approval is
+required. The installer is only opened when `--open-openwork-installer` is
+explicitly supplied and the OpenWork Desktop MSI has already been verified.
+
+Changes:
+
+- Added explicit OpenWork installer handoff reporting to
+  `relay-openwork-bootstrap`.
+- Added `--open-openwork-installer` as the only installer-open path.
+- Kept non-Windows and unverified MSI cases from silently launching anything.
+- Extended the headless smoke to require explicit operator approval by default.
+- Marked `B09` completed and set `B10` as the next bootstrap task.
+
+Relay still does not silently install OpenWork, own the OpenWork UX, own
+OpenCode sessions, own transcripts, or execute OpenCode tools.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --nocapture`:
+  passed, 4 tests.
+- `pnpm smoke:openwork-opencode-bootstrap-headless`: passed.
+- `cargo run --quiet --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --cache-root <temp> --json`:
+  passed and reported `operator_approval_required_use_--open-openwork-installer`.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 10 tests.
+- `pnpm check`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-29 Implementation: OpenCode extraction and provider config handoff
+
+Implemented `B08` on top of the headless bootstrap command. The bootstrap
+module can now safely extract verified OpenCode zip artifacts from the
+app-local cache, rejects path traversal and symlink entries, preserves
+executable permissions on Unix, and probes the extracted OpenCode entrypoint
+with `--version`. `relay-openwork-bootstrap --workspace <dir>` now writes or
+merges Relay's OpenAI-compatible provider config into the target workspace only
+after OpenCode has been verified, extracted, and probed.
+
+Changes:
+
+- Added `zip` extraction support to `apps/desktop/src-tauri/src/openwork_bootstrap.rs`.
+- Added `extract_zip_artifact` and `probe_opencode_entrypoint`.
+- Added safe archive path tests and an executable entrypoint probe test.
+- Extended `relay-openwork-bootstrap` with `--workspace` and `--config-output`.
+- Added provider config merge/write support in the headless command.
+- Marked `B08` completed and set `B09` as the next bootstrap task.
+
+The implementation still does not install OpenWork, start the provider gateway,
+own OpenCode sessions, own transcripts, or execute OpenCode tools.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 10 tests.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --nocapture`:
+  passed, 3 tests.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm smoke:openwork-opencode-bootstrap-headless`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-29 Implementation: Headless OpenWork/OpenCode bootstrap command
+
+Implemented `B07`, the first production-shaped bootstrap entrypoint that does
+not depend on the Relay desktop chat UX. `relay-openwork-bootstrap` loads the
+pinned OpenWork/OpenCode manifest, derives the app-local bootstrap cache,
+reports expected artifact paths and provider handoff details, verifies cached
+artifacts, and downloads/verifies pinned artifacts only when `--download` is
+explicitly supplied.
+
+Changes:
+
+- Added `apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs`.
+- Added `apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs`.
+- Added root and desktop `bootstrap:openwork-opencode` scripts.
+- Added root and desktop `smoke:openwork-opencode-bootstrap-headless` scripts.
+- Wired the headless smoke syntax check and hard-cut guard requirements.
+- Marked `B07` completed and set `B08` as the next bootstrap task.
+
+The command keeps Relay as a bootstrapper and provider gateway only. It does
+not extract OpenCode yet, write provider config, install OpenWork, start the
+gateway, own sessions, own transcripts, or execute OpenCode tools; those are
+separate follow-up tasks.
+
+Verification:
+
+- `pnpm smoke:openwork-opencode-bootstrap-headless`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap`:
+  passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 8 tests.
+- `cargo run --quiet --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --cache-root <temp> --json`:
+  passed and reported `ready_for_download` without downloading artifacts.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-29 Planning: Automatic OpenWork/OpenCode bootstrap and Relay desktop UX removal
+
+Set the next task sequence for moving from bootstrap readiness to production
+handoff. The target architecture is Relay as a headless/bootstrap-capable M365
+Copilot provider gateway only, with OpenWork/OpenCode owning the desktop UX,
+chat, sessions, tools, permissions, transcript, and execution.
+
+Planned tasks:
+
+- `B07`: add a headless OpenWork/OpenCode bootstrap command.
+- `B08`: automate OpenCode extraction and Relay provider config handoff.
+- `B09`: add explicit OpenWork installer approval handoff.
+- `B10`: start Relay provider gateway from bootstrap.
+- `B11`: remove Relay desktop UX from the production path.
+- `B12`: run the post-UX-removal Windows bootstrap E2E.
+
+`B06` is now treated as the original live Windows readiness preflight. The
+post-headless-bootstrap, post-desktop-UX-removal live acceptance run is tracked
+by `B12`.
+
 ### 2026-04-27 Readiness: Windows OpenWork/OpenCode bootstrap E2E
 
-Prepared the live B06 Windows bootstrap E2E path without marking it complete.
-The current workspace is Linux, so the actual acceptance run still requires a
-clean Windows 10/11 x64 host with M365 Copilot signed in and explicit operator
+Prepared the original live B06 Windows bootstrap E2E preflight and runbook.
+After B07-B12 introduced the headless bootstrap command, provider gateway
+startup, and Relay desktop UX removal, this B06 placeholder is superseded by
+the B12 live acceptance task. The actual acceptance run still requires a clean
+Windows 10/11 x64 host with M365 Copilot signed in and explicit operator
 approval before opening the OpenWork Desktop MSI.
 
 Changes:
@@ -39,9 +264,9 @@ Changes:
   `check:opencode-provider`.
 - Extended the hard-cut guard so the B06 runbook and script preserve the
   provider-only boundary.
-- Updated bootstrap planning and task metadata. `B06` remains pending until the
-  real Windows + M365 run records both provider text and an OpenCode-owned
-  `read` tool turn.
+- Updated bootstrap planning and task metadata. The later B12 task now owns the
+  real Windows + M365 run that must record both provider text and an
+  OpenCode-owned `read` tool turn.
 
 Verification:
 

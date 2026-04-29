@@ -156,8 +156,8 @@ export default function Shell(): JSX.Element {
               <div>
                 <h2 class="text-xl font-semibold">Provider Gateway Console</h2>
                 <p class="mt-2 max-w-2xl text-sm text-[var(--ra-color-text-muted)]">
-                  This desktop surface is diagnostic-only. Start the provider gateway, install the OpenCode/OpenWork
-                  provider config, then use OpenCode/OpenWork for chat, tool execution, approvals, and session history.
+                  This desktop surface is diagnostic-only. Production starts with the headless OpenWork/OpenCode
+                  bootstrap, then OpenCode/OpenWork owns chat, tool execution, approvals, and session history.
                 </p>
               </div>
               <span class="rounded-full border border-[var(--ra-color-border)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--ra-color-text-muted)]">
@@ -167,13 +167,13 @@ export default function Shell(): JSX.Element {
 
             <div class="mt-5 grid gap-3">
               <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm start:opencode-provider-gateway
+                pnpm bootstrap:openwork-opencode -- --pretty
               </code>
               <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm install:opencode-provider-config -- --workspace /path/to/workspace
+                pnpm bootstrap:openwork-opencode -- --workspace /path/to/workspace --start-provider-gateway
               </code>
               <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm smoke:opencode-provider
+                pnpm smoke:openwork-opencode-bootstrap-gateway
               </code>
             </div>
 

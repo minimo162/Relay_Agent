@@ -32,7 +32,7 @@ async function main() {
     status: "failed",
     platform: process.platform,
     frontendReady: false,
-    launchMode: useBuild ? "release-binary" : "tauri-dev",
+    launchMode: useBuild ? "release-binary" : "diag-tauri-dev",
     reason: ""
   };
 
@@ -56,7 +56,7 @@ async function main() {
 
       launched = startProcess(binaryPath, []);
     } else {
-      launched = startProcess(pnpmCommand, ["tauri:dev"]);
+      launched = startProcess(pnpmCommand, ["diag:tauri-dev"]);
     }
 
     const deadline = Date.now() + launchTimeoutMs;

@@ -1,12 +1,14 @@
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
+use zip::ZipArchive;
 
 const MANIFEST_JSON: &str = include_str!("../bootstrap/openwork-opencode.json");
 const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -81,6 +83,17 @@ pub struct VerifiedBootstrapArtifact {
     pub reused: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedBootstrapArtifact {
+    pub platform: String,
+    pub artifact: String,
+    pub version: String,
+    pub extract_dir: PathBuf,
+    pub entrypoint_path: PathBuf,
+    pub reused: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     #[error("bootstrap manifest is invalid: {0}")]
@@ -111,6 +124,18 @@ pub enum BootstrapError {
         expected: String,
         actual: String,
     },
+    #[error("bootstrap artifact format is not supported for extraction: {0}")]
+    UnsupportedArchiveFormat(String),
+    #[error("bootstrap archive entry has an unsafe path: {0}")]
+    UnsafeArchivePath(String),
+    #[error("bootstrap archive error at {path}: {source}")]
+    Archive {
+        path: PathBuf,
+        #[source]
+        source: zip::result::ZipError,
+    },
+    #[error("OpenCode CLI probe failed for {path}: {message}")]
+    Command { path: PathBuf, message: String },
 }
 
 impl BootstrapError {
@@ -125,6 +150,10 @@ impl BootstrapError {
             Self::HttpStatus { .. } => "http_status",
             Self::SizeMismatch { .. } => "size_mismatch",
             Self::Sha256Mismatch { .. } => "sha256_mismatch",
+            Self::UnsupportedArchiveFormat(_) => "unsupported_archive_format",
+            Self::UnsafeArchivePath(_) => "unsafe_archive_path",
+            Self::Archive { .. } => "archive",
+            Self::Command { .. } => "command",
         }
     }
 }
@@ -300,6 +329,149 @@ pub fn download_and_verify_artifact(
     verify_artifact_file(&destination, platform, key, artifact, false)
 }
 
+pub fn extract_zip_artifact(
+    cache_root: &Path,
+    platform: &str,
+    key: BootstrapArtifactKey,
+    artifact: &BootstrapArtifact,
+) -> Result<ExtractedBootstrapArtifact, BootstrapError> {
+    if artifact.format != "zip" {
+        return Err(BootstrapError::UnsupportedArchiveFormat(
+            artifact.format.clone(),
+        ));
+    }
+
+    let archive_path = artifact_cache_path(cache_root, platform, key, artifact)?;
+    verify_artifact_file(&archive_path, platform, key, artifact, true)?;
+    let extract_dir = artifact_extract_dir(cache_root, platform, key, artifact);
+    let entrypoint_path = artifact_entrypoint_path(cache_root, platform, key, artifact)?;
+    if entrypoint_path.exists() {
+        return Ok(ExtractedBootstrapArtifact {
+            platform: platform.to_string(),
+            artifact: key.as_str().to_string(),
+            version: artifact.version.clone(),
+            extract_dir,
+            entrypoint_path,
+            reused: true,
+        });
+    }
+
+    if extract_dir.exists() {
+        fs::remove_dir_all(&extract_dir).map_err(|source| BootstrapError::Io {
+            path: extract_dir.clone(),
+            source,
+        })?;
+    }
+    fs::create_dir_all(&extract_dir).map_err(|source| BootstrapError::Io {
+        path: extract_dir.clone(),
+        source,
+    })?;
+
+    let archive_file = File::open(&archive_path).map_err(|source| BootstrapError::Io {
+        path: archive_path.clone(),
+        source,
+    })?;
+    let mut archive = ZipArchive::new(archive_file).map_err(|source| BootstrapError::Archive {
+        path: archive_path.clone(),
+        source,
+    })?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|source| BootstrapError::Archive {
+                path: archive_path.clone(),
+                source,
+            })?;
+        let enclosed = entry
+            .enclosed_name()
+            .ok_or_else(|| BootstrapError::UnsafeArchivePath(entry.name().to_string()))?
+            .to_path_buf();
+        if is_zip_symlink(entry.unix_mode()) {
+            return Err(BootstrapError::UnsafeArchivePath(entry.name().to_string()));
+        }
+
+        let destination = extract_dir.join(enclosed);
+        if entry.is_dir() {
+            fs::create_dir_all(&destination).map_err(|source| BootstrapError::Io {
+                path: destination.clone(),
+                source,
+            })?;
+            continue;
+        }
+
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|source| BootstrapError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        let mut output = File::create(&destination).map_err(|source| BootstrapError::Io {
+            path: destination.clone(),
+            source,
+        })?;
+        io::copy(&mut entry, &mut output).map_err(|source| BootstrapError::Io {
+            path: destination.clone(),
+            source,
+        })?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&destination, fs::Permissions::from_mode(mode & 0o777)).map_err(
+                |source| BootstrapError::Io {
+                    path: destination.clone(),
+                    source,
+                },
+            )?;
+        }
+    }
+
+    if !entrypoint_path.exists() {
+        return Err(BootstrapError::Io {
+            path: entrypoint_path,
+            source: io::Error::new(io::ErrorKind::NotFound, "OpenCode entrypoint not found"),
+        });
+    }
+
+    Ok(ExtractedBootstrapArtifact {
+        platform: platform.to_string(),
+        artifact: key.as_str().to_string(),
+        version: artifact.version.clone(),
+        extract_dir,
+        entrypoint_path,
+        reused: false,
+    })
+}
+
+pub fn probe_opencode_entrypoint(path: &Path) -> Result<String, BootstrapError> {
+    let output = Command::new(path)
+        .arg("--version")
+        .output()
+        .map_err(|error| BootstrapError::Command {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(BootstrapError::Command {
+            path: path.to_path_buf(),
+            message: format!(
+                "exit {}: {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        });
+    }
+    Ok(format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .trim()
+    .to_string())
+}
+
 fn download_to_writer(
     artifact: &BootstrapArtifact,
     writer: &mut impl Write,
@@ -320,6 +492,12 @@ fn download_to_writer(
         source,
     })?;
     Ok(())
+}
+
+fn is_zip_symlink(mode: Option<u32>) -> bool {
+    const FILE_TYPE_MASK: u32 = 0o170000;
+    const SYMLINK: u32 = 0o120000;
+    mode.is_some_and(|mode| mode & FILE_TYPE_MASK == SYMLINK)
 }
 
 fn artifact_filename(artifact: &BootstrapArtifact) -> Result<String, BootstrapError> {
@@ -363,6 +541,8 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
 
     fn fixture_artifact(url: String, body: &[u8]) -> BootstrapArtifact {
         BootstrapArtifact {
@@ -384,6 +564,19 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         format!("{:x}", hasher.finalize())
+    }
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8], u32)]) {
+        let file = File::create(path).expect("create zip");
+        let mut writer = ZipWriter::new(file);
+        for (name, body, mode) in entries {
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(*mode);
+            writer.start_file(name, options).expect("start file");
+            writer.write_all(body).expect("write file");
+        }
+        writer.finish().expect("finish zip");
     }
 
     fn serve_once(body: &'static [u8], status: u16) -> String {
@@ -578,5 +771,94 @@ mod tests {
         )
         .expect("destination");
         assert!(!destination.exists());
+    }
+
+    #[test]
+    fn extract_zip_artifact_writes_safe_entrypoint_and_probe_runs_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archive_path = temp.path().join("opencode-windows-x64.zip");
+        write_zip(
+            &archive_path,
+            &[(
+                "opencode.exe",
+                b"#!/bin/sh\necho opencode fixture-1.0\n",
+                0o755,
+            )],
+        );
+        let body = fs::read(&archive_path).expect("read zip");
+        let artifact = BootstrapArtifact {
+            name: "OpenCode CLI Fixture".to_string(),
+            version: "1.0.0".to_string(),
+            kind: "archive".to_string(),
+            format: "zip".to_string(),
+            url: "https://example.invalid/opencode-windows-x64.zip".to_string(),
+            sha256: sha256_bytes(&body),
+            size: body.len() as u64,
+            entrypoint: "opencode.exe".to_string(),
+            license: "MIT".to_string(),
+            install_mode: None,
+            usage: Some("provider-config".to_string()),
+        };
+        let cached = artifact_cache_path(
+            temp.path(),
+            "windows-x64",
+            BootstrapArtifactKey::OpenCodeCli,
+            &artifact,
+        )
+        .expect("cache path");
+        fs::create_dir_all(cached.parent().expect("parent")).expect("create cache parent");
+        fs::copy(&archive_path, &cached).expect("copy archive");
+
+        let extracted = extract_zip_artifact(
+            temp.path(),
+            "windows-x64",
+            BootstrapArtifactKey::OpenCodeCli,
+            &artifact,
+        )
+        .expect("extract");
+        assert!(!extracted.reused);
+        assert!(extracted.entrypoint_path.exists());
+
+        let version = probe_opencode_entrypoint(&extracted.entrypoint_path).expect("probe");
+        assert_eq!(version, "opencode fixture-1.0");
+    }
+
+    #[test]
+    fn extract_zip_artifact_rejects_path_traversal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archive_path = temp.path().join("opencode-windows-x64.zip");
+        write_zip(&archive_path, &[("../opencode.exe", b"bad", 0o755)]);
+        let body = fs::read(&archive_path).expect("read zip");
+        let artifact = BootstrapArtifact {
+            name: "OpenCode CLI Fixture".to_string(),
+            version: "1.0.0".to_string(),
+            kind: "archive".to_string(),
+            format: "zip".to_string(),
+            url: "https://example.invalid/opencode-windows-x64.zip".to_string(),
+            sha256: sha256_bytes(&body),
+            size: body.len() as u64,
+            entrypoint: "opencode.exe".to_string(),
+            license: "MIT".to_string(),
+            install_mode: None,
+            usage: None,
+        };
+        let cached = artifact_cache_path(
+            temp.path(),
+            "windows-x64",
+            BootstrapArtifactKey::OpenCodeCli,
+            &artifact,
+        )
+        .expect("cache path");
+        fs::create_dir_all(cached.parent().expect("parent")).expect("create cache parent");
+        fs::copy(&archive_path, &cached).expect("copy archive");
+
+        let error = extract_zip_artifact(
+            temp.path(),
+            "windows-x64",
+            BootstrapArtifactKey::OpenCodeCli,
+            &artifact,
+        )
+        .expect_err("unsafe archive path");
+        assert_eq!(error.code(), "unsafe_archive_path");
     }
 }

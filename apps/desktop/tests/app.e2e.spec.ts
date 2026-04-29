@@ -13,7 +13,7 @@ test("desktop opens as a provider gateway diagnostic console", async ({ page }) 
   await expect(page.getByRole("heading", { name: "Provider Gateway Console" })).toBeVisible();
   await expect(page.getByText("OpenCode/OpenWork", { exact: true })).toBeVisible();
   await expect(page.getByText("http://127.0.0.1:18180/v1")).toBeVisible();
-  await expect(page.getByText("pnpm start:opencode-provider-gateway")).toBeVisible();
+  await expect(page.getByText("pnpm bootstrap:openwork-opencode -- --pretty")).toBeVisible();
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();

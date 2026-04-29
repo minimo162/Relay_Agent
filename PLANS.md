@@ -191,10 +191,15 @@ Acceptance criteria:
 - Provider gateway URL and API-key handoff expectations are recorded for the
   eventual real Windows run.
 
-## Next Task: Live Windows OpenWork/OpenCode Bootstrap E2E Smoke
+## Completed Task: Live Windows OpenWork/OpenCode Bootstrap E2E Smoke Preflight
 
 Goal: run the bootstrap path on a clean Windows environment with real
 downloaded artifacts and a signed-in M365 Copilot provider session.
+
+Status 2026-04-29: original B06 preflight and runbook were prepared, then
+superseded by B12 after the headless bootstrap command, provider gateway
+startup, and Relay desktop UX removal landed. The actual live Windows
+acceptance run is tracked only by B12 now.
 
 Acceptance criteria:
 
@@ -206,7 +211,150 @@ Acceptance criteria:
 - A provider text turn and an OpenCode-owned `read` tool turn pass through
   M365 Copilot.
 - The artifact paths, versions, run logs, and any manual operator steps are
-  recorded in `docs/IMPLEMENTATION.md`.
+  recorded in `docs/IMPLEMENTATION.md` through B12.
+
+## Completed Task: Headless OpenWork/OpenCode Bootstrap Command
+
+Goal: make OpenWork/OpenCode first-run setup runnable without the Relay desktop
+chat UX. Relay should behave as a bootstrapper and M365 Copilot provider
+gateway only.
+
+Status 2026-04-29: implemented as `relay-openwork-bootstrap`. The command
+prints structured JSON diagnostics, supports a non-destructive preflight mode,
+and downloads/verifies the pinned artifacts only when `--download` is supplied.
+The root `pnpm bootstrap:openwork-opencode` script exposes the command, and the
+headless smoke verifies the command without downloading artifacts.
+
+Acceptance criteria:
+
+- A headless bootstrap command downloads and verifies the pinned OpenCode CLI
+  zip and OpenWork Desktop MSI from the manifest.
+- Verified artifacts are stored under app-local data and reused on later runs.
+- OpenCode is extracted, probed with `--version`, and receives Relay's
+  OpenAI-compatible provider config for the target workspace.
+- OpenWork Desktop MSI handoff remains explicit-user-approved; Relay does not
+  silently install it by default.
+- The bootstrap returns provider gateway handoff details: base URL, model, and
+  API-key environment variable.
+- The implementation does not reintroduce Relay-owned chat, session, transcript,
+  tool execution, or OpenCode runtime sidecar ownership.
+
+## Completed Task: Automate OpenCode Extraction And Provider Config Handoff
+
+Goal: extend the headless bootstrap path so the verified OpenCode zip is
+extracted into the app-local cache, the `opencode.exe` entrypoint is probed,
+and Relay's OpenAI-compatible M365 Copilot provider config is installed into
+the target OpenCode/OpenWork workspace.
+
+Status 2026-04-29: implemented in the bootstrap layer and
+`relay-openwork-bootstrap`. Verified OpenCode zip artifacts can now be safely
+extracted with path traversal and symlink rejection, the extracted entrypoint
+can be probed with `--version`, and passing `--workspace` writes/merges
+Relay's OpenAI-compatible provider config into the target workspace after the
+OpenCode probe succeeds.
+
+Acceptance criteria:
+
+- The bootstrap command can extract the verified OpenCode zip without trusting
+  unsafe archive paths.
+- The extracted `opencode.exe` path is probed with `--version`.
+- The target workspace receives Relay's provider config through the existing
+  config merge path.
+- The smoke remains non-destructive and does not execute OpenCode-owned tools.
+- Relay still does not own OpenCode session state, transcript, or tool
+  execution.
+
+## Completed Task: Explicit OpenWork Installer Approval Handoff
+
+Goal: extend the headless bootstrap path so the verified OpenWork Desktop MSI
+can be opened only after explicit operator approval, while preserving Relay as
+a bootstrapper/provider gateway and leaving OpenWork as the UX owner.
+
+Status 2026-04-29: implemented in `relay-openwork-bootstrap`. The command now
+reports a dedicated `openworkInstallerHandoff` block with the pinned MSI path,
+version, SHA256, install mode, and `msiexec /i` command. The default path is
+non-destructive and reports `operator_approval_required`; the installer is only
+opened when `--open-openwork-installer` is explicitly supplied and the MSI is
+already verified.
+
+Acceptance criteria:
+
+- The bootstrap command reports the verified OpenWork MSI path, version,
+  SHA256, and install mode.
+- Opening the installer requires an explicit flag or operator action.
+- The default path remains non-silent install handoff.
+- Diagnostics record the operator-approved handoff without marking Relay as the
+  OpenWork UX or installer owner.
+- CI smoke remains non-destructive.
+
+## Completed Task: Start Relay Provider Gateway From Bootstrap
+
+Goal: add a bootstrap-managed provider gateway startup path so first-run setup
+can return live provider endpoint details without requiring the Relay desktop
+UX.
+
+Status 2026-04-29: implemented in `relay-openwork-bootstrap`. The command now
+creates or locates the Relay provider token, reports provider gateway state,
+and starts `copilot_server.js` when `--start-provider-gateway` is explicitly
+supplied. The smoke starts the gateway on a random local port, verifies
+`/health` and authenticated `/v1/models`, and terminates the process.
+
+Acceptance criteria:
+
+- The bootstrap command can create or locate the Relay API key.
+- The OpenAI-compatible provider gateway can be started or verified as running.
+- The report returns base URL, model, and API-key handoff details.
+- The gateway path remains provider-only and does not own OpenCode/OpenWork
+  sessions, transcripts, tools, or execution.
+
+## Completed Task: Remove Relay Desktop UX From Production Path
+
+Goal: remove or isolate the remaining Relay desktop chat shell so production
+first-run starts with headless OpenWork/OpenCode bootstrap plus provider
+gateway handoff.
+
+Status 2026-04-29: implemented. Root `pnpm dev` now runs the headless
+bootstrap preflight instead of the desktop frontend. Tauri/Solid launch scripts
+are exposed only as `diag:*` commands, the diagnostic shell displays
+bootstrap-first commands, and docs/hard-cut guards reject returning the Relay
+desktop UX to the primary product path.
+
+Acceptance criteria:
+
+- Production guidance starts with `bootstrap:openwork-opencode` and
+  OpenWork/OpenCode, not Relay desktop chat.
+- The Solid/Tauri shell is removed from the production path or retained only
+  behind diagnostic commands.
+- Packaging and hard-cut guards reject reintroducing Relay-owned chat/session
+  UX.
+- OpenWork/OpenCode remains the UX, session, tool, permission, and execution
+  owner.
+
+## Next Task: Run Post-UX-Removal Windows Bootstrap E2E
+
+Goal: run the clean Windows bootstrap path after Relay desktop UX isolation.
+Confirm the bootstrap downloads/verifies OpenCode/OpenWork, writes the Relay
+provider config, starts the provider gateway, hands off the OpenWork installer
+only after explicit approval, and completes provider text plus OpenCode-owned
+read-tool turns through M365 Copilot.
+
+Acceptance criteria:
+
+- The run starts from `pnpm bootstrap:openwork-opencode`, not the Relay
+  diagnostic desktop shell.
+- Verified OpenCode/OpenWork artifact paths, versions, and SHA256 values are
+  recorded.
+- The provider endpoint, model, and API-key handoff are recorded.
+- OpenCode/OpenWork owns the live UX and tool execution during the acceptance
+  turns.
+- Results are appended to `docs/IMPLEMENTATION.md`.
+
+Status 2026-04-29: readiness gate implemented locally. The
+`live:windows:openwork-bootstrap` preflight now verifies the post-UX-removal
+entrypoint, confirms `pnpm dev` is bootstrap-first, confirms desktop
+`tauri:dev` has not returned as a primary script, and runs the Rust bootstrap
+preflight. The live Windows/M365 acceptance run remains pending on a clean
+Windows host.
 
 ## Completed Task: Packaged Desktop Diagnostic Build Verification
 

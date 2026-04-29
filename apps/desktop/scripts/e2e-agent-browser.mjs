@@ -6,7 +6,7 @@
  * CLI (`connect` / `snapshot` / `eval`) routinely hangs or times out against WebView2 in
  * practice; Playwright is the reliable automation path for this host.
  *
- * Prerequisite: app started with `pnpm run tauri:dev:cdp` (default CDP port 9222),
+ * Prerequisite: app started with `pnpm run diag:tauri-dev:cdp` (default CDP port 9222),
  * unless you pass `--with-app` to spawn it from this script.
  *
  * By default, after a successful run the script stops the spawned Tauri tree (CI-friendly).
@@ -372,7 +372,7 @@ async function main() {
   /** @type {number | null} */
   let tauriLogFd = null;
   if (WITH_APP) {
-    console.log("[e2e-agent-browser] starting Tauri (tauri:dev:cdp)…");
+    console.log("[e2e-agent-browser] starting Tauri (diag:tauri-dev:cdp)...");
     console.log(
       `[e2e-agent-browser] note: first run can take many minutes while Cargo builds; script polls CDP for up to ${Math.round(CDP_WAIT_MS / 1000)}s.`,
     );
@@ -398,7 +398,7 @@ async function main() {
       env: process.env,
     };
     const shell = process.env.ComSpec || "cmd.exe";
-    appChild = spawn(shell, ["/d", "/c", "pnpm run tauri:dev:cdp"], spawnOpts);
+    appChild = spawn(shell, ["/d", "/c", "pnpm run diag:tauri-dev:cdp"], spawnOpts);
     appChild.on("error", (e) => console.error("[e2e-agent-browser] spawn error:", e));
   }
 
@@ -406,7 +406,7 @@ async function main() {
     const ok = await waitForCdp(CDP_WAIT_MS);
     if (!ok) {
       throw new Error(
-        `CDP not reachable at ${CDP_HTTP}. Run: cd apps/desktop && pnpm run tauri:dev:cdp`,
+        `CDP not reachable at ${CDP_HTTP}. Run: cd apps/desktop && pnpm run diag:tauri-dev:cdp`,
       );
     }
 
