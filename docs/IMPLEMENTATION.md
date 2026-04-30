@@ -33,6 +33,8 @@ top-level setup panel in the diagnostic shell. The panel collapses setup into
 `Setup needs attention`. It provides `Try Setup Again` for failed setup,
 `Refresh Setup` for normal rechecks, and `Open OpenWork/OpenCode` backed by
 `open_openwork_or_opencode` so the next action is visible after setup is ready.
+On Windows, the opener now prefers OpenWork Start Menu shortcuts and then falls
+back to common executable install paths.
 
 Changes:
 
@@ -42,6 +44,7 @@ Changes:
   failure states.
 - Added `retry_openwork_setup` and frontend `retryOpenworkSetup`.
 - Added `open_openwork_or_opencode` and frontend `openOpenworkOrOpencode`.
+- Added OpenWork Start Menu shortcut detection for Windows launch.
 - Updated the shell and E2E mocks/tests to show and verify the beginner state.
 
 Verification:

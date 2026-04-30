@@ -10,38 +10,38 @@ type RelayMockState = {
   callbackCounter: number;
 };
 
-function mockDiagnostics() {
-  return {
-    appVersion: "0.0.0-mock",
-    targetOs: "linux",
-    copilotNodeBridgePort: 18080,
-    defaultEdgeCdpPort: 9360,
-    relayAgentDevMode: false,
-    architectureNotes: "mock provider diagnostics",
-    processCwd: "/mock",
-    clawConfigHomeDisplay: "~/.claw (mock)",
-    maxTextFileReadBytes: 10485760,
-    doctorHints: ["mock"],
-    predictabilityNotes: ["mock"],
-    copilotRepairStageStats: [],
-    copilotBridgeRunning: true,
-    copilotBridgeConnected: true,
-    copilotBridgeLoginRequired: false,
-    opencodeRuntimeMessage: "mock runtime ready",
-    openworkSetup: {
-      status: "ready",
-      stage: "ready",
-      message: "OpenWork/OpenCode is configured to use M365 Copilot.",
-      actionLabel: "Open OpenWork/OpenCode",
-      launchLabel: "Open OpenWork/OpenCode",
-      providerBaseUrl: "http://127.0.0.1:18180/v1",
-      configPath: "~/.config/opencode/opencode.json",
-      updatedAt: "2026-04-29T00:00:00Z",
-    },
-  };
-}
-
 function initRelayMock(config: { copilotReady: boolean }) {
+  function mockDiagnostics() {
+    return {
+      appVersion: "0.0.0-mock",
+      targetOs: "linux",
+      copilotNodeBridgePort: 18080,
+      defaultEdgeCdpPort: 9360,
+      relayAgentDevMode: false,
+      architectureNotes: "mock provider diagnostics",
+      processCwd: "/mock",
+      clawConfigHomeDisplay: "~/.claw (mock)",
+      maxTextFileReadBytes: 10485760,
+      doctorHints: ["mock"],
+      predictabilityNotes: ["mock"],
+      copilotRepairStageStats: [],
+      copilotBridgeRunning: true,
+      copilotBridgeConnected: true,
+      copilotBridgeLoginRequired: false,
+      opencodeRuntimeMessage: "mock runtime ready",
+      openworkSetup: {
+        status: "ready",
+        stage: "ready",
+        message: "OpenWork/OpenCode is configured to use M365 Copilot.",
+        actionLabel: "Open OpenWork/OpenCode",
+        launchLabel: "Open OpenWork/OpenCode",
+        providerBaseUrl: "http://127.0.0.1:18180/v1",
+        configPath: "~/.config/opencode/opencode.json",
+        updatedAt: "2026-04-29T00:00:00Z",
+      },
+    };
+  }
+
   const state: RelayMockState = {
     invocations: [],
     callbacks: new Map(),

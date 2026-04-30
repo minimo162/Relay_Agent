@@ -336,6 +336,14 @@ const required = [
     text: "open_openwork_or_opencode",
   },
   {
+    path: "apps/desktop/src-tauri/src/openwork_autostart.rs",
+    text: "find_openwork_windows_shortcut",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/openwork_autostart.rs",
+    text: "Start Menu",
+  },
+  {
     path: "apps/desktop/src/shell/Shell.tsx",
     text: "Sign in to Microsoft 365",
   },

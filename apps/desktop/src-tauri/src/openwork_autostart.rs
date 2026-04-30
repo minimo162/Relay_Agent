@@ -16,6 +16,12 @@ const EDGE_CDP_PORT: u16 = 9360;
 const PROVIDER_BASE_URL: &str = "http://127.0.0.1:18180/v1";
 const PLATFORM: &str = "windows-x64";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WindowsLaunchTarget {
+    Executable(PathBuf),
+    Shortcut(PathBuf),
+}
+
 pub fn spawn(
     app: AppHandle,
     provider_bridge: Arc<CopilotBridgeManager>,
@@ -51,10 +57,8 @@ pub fn spawn(
 
 pub fn open_openwork_or_opencode() -> Result<(), String> {
     if cfg!(windows) {
-        if let Some(path) = find_openwork_windows_executable() {
-            std::process::Command::new(&path)
-                .spawn()
-                .map_err(|error| format!("open OpenWork at {}: {error}", path.display()))?;
+        if let Some(target) = find_openwork_windows_launch_target() {
+            open_windows_launch_target(&target)?;
             return Ok(());
         }
         if let Some(path) = find_cached_opencode_windows_executable() {
@@ -77,6 +81,26 @@ pub fn open_openwork_or_opencode() -> Result<(), String> {
         return Ok(());
     }
     Err("OpenWork/OpenCode is not installed or not on PATH yet.".to_string())
+}
+
+fn open_windows_launch_target(target: &WindowsLaunchTarget) -> Result<(), String> {
+    match target {
+        WindowsLaunchTarget::Executable(path) => {
+            std::process::Command::new(path)
+                .spawn()
+                .map_err(|error| format!("open OpenWork at {}: {error}", path.display()))?;
+        }
+        WindowsLaunchTarget::Shortcut(path) => {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", ""])
+                .arg(path)
+                .spawn()
+                .map_err(|error| {
+                    format!("open OpenWork shortcut at {}: {error}", path.display())
+                })?;
+        }
+    }
+    Ok(())
 }
 
 fn run(
@@ -295,6 +319,12 @@ fn default_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn find_openwork_windows_launch_target() -> Option<WindowsLaunchTarget> {
+    find_openwork_windows_shortcut()
+        .map(WindowsLaunchTarget::Shortcut)
+        .or_else(|| find_openwork_windows_executable().map(WindowsLaunchTarget::Executable))
+}
+
 fn find_openwork_windows_executable() -> Option<PathBuf> {
     let candidates = [
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
@@ -313,6 +343,70 @@ fn find_openwork_windows_executable() -> Option<PathBuf> {
         .flatten()
         .flat_map(|root| relative.iter().map(move |path| root.join(path)))
         .find(|path| path.exists())
+}
+
+fn find_openwork_windows_shortcut() -> Option<PathBuf> {
+    openwork_start_menu_roots()
+        .into_iter()
+        .find_map(find_openwork_shortcut_under)
+}
+
+fn openwork_start_menu_roots() -> Vec<PathBuf> {
+    [
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        std::env::var_os("PROGRAMDATA").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|root| {
+        root.join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+    })
+    .collect()
+}
+
+fn find_openwork_shortcut_under(root: PathBuf) -> Option<PathBuf> {
+    for relative in [
+        PathBuf::from("OpenWork.lnk"),
+        PathBuf::from("OpenWork Desktop.lnk"),
+        PathBuf::from("OpenWork").join("OpenWork.lnk"),
+        PathBuf::from("OpenWork Desktop").join("OpenWork.lnk"),
+    ] {
+        let candidate = root.join(relative);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    find_openwork_shortcut_recursive(&root, 0)
+}
+
+fn find_openwork_shortcut_recursive(dir: &Path, depth: usize) -> Option<PathBuf> {
+    if depth > 3 {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && is_openwork_shortcut(&path) {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = find_openwork_shortcut_recursive(&path, depth + 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn is_openwork_shortcut(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let lower = file_name.to_ascii_lowercase();
+    lower.ends_with(".lnk") && lower.contains("openwork")
 }
 
 fn find_cached_opencode_windows_executable() -> Option<PathBuf> {
@@ -366,5 +460,25 @@ mod tests {
             .join("OpenWork")
             .join("OpenWork.exe");
         assert!(local.ends_with(Path::new("Programs").join("OpenWork").join("OpenWork.exe")));
+    }
+
+    #[test]
+    fn openwork_shortcut_detection_matches_lnk_names() {
+        assert!(is_openwork_shortcut(Path::new("OpenWork.lnk")));
+        assert!(is_openwork_shortcut(Path::new("OpenWork Desktop.lnk")));
+        assert!(!is_openwork_shortcut(Path::new("OpenCode.lnk")));
+        assert!(!is_openwork_shortcut(Path::new("OpenWork.exe")));
+    }
+
+    #[test]
+    fn explicit_openwork_shortcut_is_found_before_recursive_scan() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let shortcut = temp.path().join("OpenWork").join("OpenWork.lnk");
+        std::fs::create_dir_all(shortcut.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&shortcut, b"shortcut").expect("shortcut");
+        assert_eq!(
+            find_openwork_shortcut_under(temp.path().to_path_buf()),
+            Some(shortcut)
+        );
     }
 }

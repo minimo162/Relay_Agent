@@ -432,6 +432,8 @@ Acceptance criteria:
   line usage.
 - The launch action gives beginners one obvious way to open OpenWork/OpenCode
   after setup is ready.
+- Windows launch detection checks Start Menu shortcuts before common executable
+  install paths.
 - Diagnostics still expose provider URL/config path for support, but they are
   not required to start using OpenWork/OpenCode.
 

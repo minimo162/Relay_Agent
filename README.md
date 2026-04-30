@@ -81,6 +81,8 @@ The canonical installed first-use path is:
 Relay shows setup progress in the installed app. If setup fails, use
 **Try Setup Again**; provider ports, tokens, and config files remain support
 details, not required setup steps.
+On Windows, Relay opens OpenWork from its Start Menu shortcut when available
+and falls back to common install paths.
 
 The desktop shell is not a supported execution fallback. Diagnostic commands
 are grouped under `diag:*` and are kept only to troubleshoot the provider
