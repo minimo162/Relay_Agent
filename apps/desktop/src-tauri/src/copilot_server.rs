@@ -612,13 +612,15 @@ impl CopilotServer {
                 );
             }
 
-            let mut child = match Command::new(&node)
+            let mut command = Command::new(&node);
+            command
                 .args(&args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-            {
+                .stderr(Stdio::piped());
+            crate::windows_command::no_console_window(&mut command);
+
+            let mut child = match command.spawn() {
                 Ok(c) => c,
                 Err(e) => return Err(CopilotError::Spawn(e)),
             };
@@ -1239,21 +1241,19 @@ fn bundled_node_path() -> Option<PathBuf> {
 
 fn find_node() -> Option<PathBuf> {
     if let Some(node) = bundled_node_path() {
-        if Command::new(&node)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-        {
+        let mut command = Command::new(&node);
+        command.arg("--version");
+        crate::windows_command::no_console_window(&mut command);
+        if command.output().is_ok_and(|o| o.status.success()) {
             return Some(node);
         }
     }
 
     for name in &["node", "node.exe"] {
-        if Command::new(name)
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-        {
+        let mut command = Command::new(name);
+        command.arg("--version");
+        crate::windows_command::no_console_window(&mut command);
+        if command.output().is_ok_and(|o| o.status.success()) {
             return Some(PathBuf::from(name));
         }
     }

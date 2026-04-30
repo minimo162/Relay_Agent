@@ -157,6 +157,7 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
         "--disable-crashpad",
         "--disable-features=RendererCodeIntegrity,EdgeEnclave,VbsEnclave",
     ]);
+    crate::windows_command::no_console_window(&mut cmd);
 
     let child = cmd
         .spawn()

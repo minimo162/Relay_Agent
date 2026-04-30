@@ -541,13 +541,13 @@ pub fn extract_zip_artifact(
 }
 
 pub fn probe_opencode_entrypoint(path: &Path) -> Result<String, BootstrapError> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
-        .map_err(|error| BootstrapError::Command {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?;
+    let mut command = Command::new(path);
+    command.arg("--version");
+    crate::windows_command::no_console_window(&mut command);
+    let output = command.output().map_err(|error| BootstrapError::Command {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
     if !output.status.success() {
         return Err(BootstrapError::Command {
             path: path.to_path_buf(),

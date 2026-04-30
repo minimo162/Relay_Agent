@@ -23,6 +23,26 @@
 
 ## Milestone Log
 
+### 2026-04-30 Fix: Suppress Windows startup console flashes
+
+Added a Windows-only child-process launch helper that applies
+`CREATE_NO_WINDOW` before spawning or probing background processes from the
+installed desktop app. Relay now uses it for the bundled Node provider gateway,
+Node version probes, OpenCode entrypoint probes, OpenWork shortcut/executable
+launches, OpenWork MSI handoff, and Edge CDP autolaunch. The release app itself
+already used `windows_subsystem = "windows"`; this closes the remaining console
+flash path from child processes.
+
+Verification:
+
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib copilot_server -- --nocapture`:
+  passed, 6 tests.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib openwork_autostart -- --nocapture`:
+  passed, 5 tests.
+- `pnpm check`: passed.
+- `pnpm --filter @relay-agent/desktop tauri:build`: passed.
+
 ### 2026-04-30 Implementation: Beginner-first setup shell
 
 Simplified the installed desktop shell so beginners see the next action instead

@@ -62,8 +62,10 @@ pub fn open_openwork_or_opencode() -> Result<(), String> {
             return Ok(());
         }
         if let Some(path) = find_cached_opencode_windows_executable() {
-            std::process::Command::new(&path)
-                .arg("--help")
+            let mut command = std::process::Command::new(&path);
+            command.arg("--help");
+            crate::windows_command::no_console_window(&mut command);
+            command
                 .spawn()
                 .map_err(|error| format!("open OpenCode at {}: {error}", path.display()))?;
             return Ok(());
@@ -86,18 +88,19 @@ pub fn open_openwork_or_opencode() -> Result<(), String> {
 fn open_windows_launch_target(target: &WindowsLaunchTarget) -> Result<(), String> {
     match target {
         WindowsLaunchTarget::Executable(path) => {
-            std::process::Command::new(path)
+            let mut command = std::process::Command::new(path);
+            crate::windows_command::no_console_window(&mut command);
+            command
                 .spawn()
                 .map_err(|error| format!("open OpenWork at {}: {error}", path.display()))?;
         }
         WindowsLaunchTarget::Shortcut(path) => {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", ""])
-                .arg(path)
-                .spawn()
-                .map_err(|error| {
-                    format!("open OpenWork shortcut at {}: {error}", path.display())
-                })?;
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "start", ""]).arg(path);
+            crate::windows_command::no_console_window(&mut command);
+            command.spawn().map_err(|error| {
+                format!("open OpenWork shortcut at {}: {error}", path.display())
+            })?;
         }
     }
     Ok(())
@@ -295,14 +298,13 @@ fn open_openwork_installer(path: &Path) -> Result<u32, BootstrapError> {
             "openwork_installer_handoff_requires_windows".to_string(),
         ));
     }
-    let child = std::process::Command::new("msiexec")
-        .arg("/i")
-        .arg(path)
-        .spawn()
-        .map_err(|error| BootstrapError::Command {
-            path: PathBuf::from("msiexec"),
-            message: error.to_string(),
-        })?;
+    let mut command = std::process::Command::new("msiexec");
+    command.arg("/i").arg(path);
+    crate::windows_command::no_console_window(&mut command);
+    let child = command.spawn().map_err(|error| BootstrapError::Command {
+        path: PathBuf::from("msiexec"),
+        message: error.to_string(),
+    })?;
     Ok(child.id())
 }
 

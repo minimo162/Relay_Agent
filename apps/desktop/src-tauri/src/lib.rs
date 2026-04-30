@@ -14,6 +14,7 @@ pub mod openwork_bootstrap;
 mod tauri_bridge;
 #[cfg(test)]
 pub mod test_support;
+mod windows_command;
 mod windows_job;
 
 use tauri::Manager;
