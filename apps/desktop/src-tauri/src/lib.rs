@@ -73,6 +73,7 @@ pub fn run() {
             commands::copilot::disconnect_cdp,
             commands::copilot::warmup_copilot_bridge,
             commands::diagnostics::get_relay_diagnostics,
+            commands::diagnostics::open_openwork_or_opencode,
             commands::diagnostics::retry_openwork_setup,
             commands::diagnostics::write_text_export,
         ])

@@ -321,15 +321,31 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Retry Setup",
+    text: "Try Setup Again",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Sign in to M365",
+    text: "Refresh Setup",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "Open OpenWork/OpenCode",
+  },
+  {
+    path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+    text: "open_openwork_or_opencode",
+  },
+  {
+    path: "apps/desktop/src/shell/Shell.tsx",
+    text: "Sign in to Microsoft 365",
   },
   {
     path: "README.md",
-    text: "**Retry Setup**",
+    text: "**Try Setup Again**",
+  },
+  {
+    path: "README.md",
+    text: "**Open OpenWork/OpenCode**",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",

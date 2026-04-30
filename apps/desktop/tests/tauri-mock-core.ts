@@ -25,6 +25,7 @@ function mockDiagnostics() {
       stage: "ready",
       message: "OpenWork/OpenCode is configured to use M365 Copilot.",
       actionLabel: "Open OpenWork/OpenCode",
+      launchLabel: "Open OpenWork/OpenCode",
       providerBaseUrl: "http://127.0.0.1:18180/v1",
       configPath: "~/.config/opencode/opencode.json",
       updatedAt: "2026-04-29T00:00:00Z",
@@ -61,6 +62,8 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
     case "get_relay_diagnostics":
       return mockDiagnostics();
     case "retry_openwork_setup":
+      return undefined;
+    case "open_openwork_or_opencode":
       return undefined;
     case "write_text_export":
       return undefined;

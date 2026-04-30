@@ -23,6 +23,11 @@ pub fn retry_openwork_setup(
 }
 
 #[tauri::command]
+pub fn open_openwork_or_opencode() -> Result<(), String> {
+    crate::openwork_autostart::open_openwork_or_opencode()
+}
+
+#[tauri::command]
 pub fn write_text_export(path: String, contents: String) -> Result<(), String> {
     crate::tauri_bridge::write_text_export(path, contents)
 }

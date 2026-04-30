@@ -49,6 +49,36 @@ pub fn spawn(
     });
 }
 
+pub fn open_openwork_or_opencode() -> Result<(), String> {
+    if cfg!(windows) {
+        if let Some(path) = find_openwork_windows_executable() {
+            std::process::Command::new(&path)
+                .spawn()
+                .map_err(|error| format!("open OpenWork at {}: {error}", path.display()))?;
+            return Ok(());
+        }
+        if let Some(path) = find_cached_opencode_windows_executable() {
+            std::process::Command::new(&path)
+                .arg("--help")
+                .spawn()
+                .map_err(|error| format!("open OpenCode at {}: {error}", path.display()))?;
+            return Ok(());
+        }
+        return Err(
+            "OpenWork is not installed yet. Approve the OpenWork installer, then try again."
+                .to_string(),
+        );
+    }
+
+    if std::process::Command::new("openwork").spawn().is_ok() {
+        return Ok(());
+    }
+    if std::process::Command::new("opencode").spawn().is_ok() {
+        return Ok(());
+    }
+    Err("OpenWork/OpenCode is not installed or not on PATH yet.".to_string())
+}
+
 fn run(
     app: AppHandle,
     provider_bridge: Arc<CopilotBridgeManager>,
@@ -265,6 +295,43 @@ fn default_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn find_openwork_windows_executable() -> Option<PathBuf> {
+    let candidates = [
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        std::env::var_os("PROGRAMFILES").map(PathBuf::from),
+        std::env::var_os("PROGRAMFILES(X86)").map(PathBuf::from),
+    ];
+    let relative = [
+        PathBuf::from("OpenWork").join("OpenWork.exe"),
+        PathBuf::from("OpenWork Desktop").join("OpenWork.exe"),
+        PathBuf::from("Programs")
+            .join("OpenWork")
+            .join("OpenWork.exe"),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .flat_map(|root| relative.iter().map(move |path| root.join(path)))
+        .find(|path| path.exists())
+}
+
+fn find_cached_opencode_windows_executable() -> Option<PathBuf> {
+    let root = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|path| bootstrap_cache_root(&path.join("com.relayagent.desktop")))?;
+    let manifest = load_manifest().ok()?;
+    let opencode =
+        platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenCodeCli).ok()?;
+    let path = crate::openwork_bootstrap::artifact_entrypoint_path(
+        &root,
+        PLATFORM,
+        BootstrapArtifactKey::OpenCodeCli,
+        opencode,
+    )
+    .ok()?;
+    path.exists().then_some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +357,14 @@ mod tests {
             config["provider"]["relay-agent"]["options"]["baseURL"],
             PROVIDER_BASE_URL
         );
+    }
+
+    #[test]
+    fn openwork_windows_candidates_include_common_install_paths() {
+        let local = PathBuf::from(r"C:\Users\relay\AppData\Local")
+            .join("Programs")
+            .join("OpenWork")
+            .join("OpenWork.exe");
+        assert!(local.ends_with(Path::new("Programs").join("OpenWork").join("OpenWork.exe")));
     }
 }

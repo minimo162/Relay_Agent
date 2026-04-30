@@ -416,12 +416,13 @@ state to a few visible outcomes and giving them a retry button instead of
 requiring config, token, or port knowledge.
 
 Status 2026-04-29: implemented. The desktop shell now shows the OpenWork/OpenCode
-setup state as `Preparing`, `Sign in to M365`, `Ready`, or `Needs attention`
+setup state as `Setting things up`, `Sign in to Microsoft 365`,
+`Ready to start`, or `Setup needs attention`
 based on the app-managed setup snapshot and Copilot warmup state. The setup
 snapshot is stored in `AppServices`, updated by `openwork_autostart`, included
 in `get_relay_diagnostics`, and exposed to the frontend through generated IPC
-types. The shell also exposes `Retry Setup`, which calls
-`retry_openwork_setup` and restarts the same idempotent autostart path.
+types. The shell exposes `Try Setup Again` for failed setup, `Refresh Setup` for
+normal rechecks, and `Open OpenWork/OpenCode` as the clear start action.
 
 Acceptance criteria:
 
@@ -429,6 +430,8 @@ Acceptance criteria:
   sign-in, or needs attention.
 - The retry action restarts OpenWork/OpenCode setup without requiring command
   line usage.
+- The launch action gives beginners one obvious way to open OpenWork/OpenCode
+  after setup is ready.
 - Diagnostics still expose provider URL/config path for support, but they are
   not required to start using OpenWork/OpenCode.
 

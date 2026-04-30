@@ -75,10 +75,11 @@ The canonical installed first-use path is:
    `~/.config/opencode/opencode.json`.
 3. On Windows, Relay downloads/verifies OpenWork/OpenCode and opens the
    verified OpenWork installer handoff for normal Windows approval.
-4. Start OpenCode/OpenWork. The Copilot provider is already configured.
+4. Press **Open OpenWork/OpenCode** in Relay. The Copilot provider is already
+   configured.
 
 Relay shows setup progress in the installed app. If setup fails, use
-**Retry Setup**; provider ports, tokens, and config files remain support
+**Try Setup Again**; provider ports, tokens, and config files remain support
 details, not required setup steps.
 
 The desktop shell is not a supported execution fallback. Diagnostic commands

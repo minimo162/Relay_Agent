@@ -47,6 +47,11 @@ export async function retryOpenworkSetup(): Promise<void> {
   return invoke<void>("retry_openwork_setup");
 }
 
+/** Open the prepared OpenWork/OpenCode app when available. */
+export async function openOpenworkOrOpencode(): Promise<void> {
+  return invoke<void>("open_openwork_or_opencode");
+}
+
 /** Write support text (e.g. diagnostics JSON) to a path from the native save dialog. */
 export async function writeTextExport(path: string, contents: string): Promise<void> {
   return invoke<void>("write_text_export", { path, contents });

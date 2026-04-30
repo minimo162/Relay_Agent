@@ -12,7 +12,7 @@ test.describe("Diagnostic shell", () => {
     await openApp(page);
 
     await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Retry Setup" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Refresh Setup" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Chats" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
     await expect(page.locator(".ra-session-row")).toHaveCount(0);

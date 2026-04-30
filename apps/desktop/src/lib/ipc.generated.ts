@@ -54,6 +54,7 @@ export interface OpenWorkSetupSnapshot {
   stage: string;
   message: string;
   actionLabel?: string | null;
+  launchLabel?: string | null;
   providerBaseUrl?: string | null;
   configPath?: string | null;
   updatedAt: string;

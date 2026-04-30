@@ -11,7 +11,8 @@ test("desktop opens as an OpenWork/OpenCode setup diagnostic console", async ({ 
   await openApp(page);
 
   await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry Setup" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open OpenWork/OpenCode" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh Setup" })).toBeVisible();
   await expect(page.getByText("OpenCode/OpenWork", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "http://127.0.0.1:18180/v1" })).toBeVisible();
   await expect(page.getByText("pnpm dev")).toBeVisible();
@@ -24,7 +25,7 @@ test("diagnostics panel reads provider bridge status", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);
 
-  await page.getByRole("button", { name: "Refresh" }).click();
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByText(/architecture:/)).toBeVisible();
   await expect(page.getByText(/OpenCode runtime:/)).toBeVisible();
   await expect(page.getByText(/bridge running:/)).toBeVisible();

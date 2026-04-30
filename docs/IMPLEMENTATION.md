@@ -29,8 +29,10 @@ Added a simple installed-app setup state for beginners. The app now tracks
 OpenWork/OpenCode setup as an `OpenWorkSetupSnapshot`, updates it from
 `openwork_autostart`, includes it in `get_relay_diagnostics`, and shows a
 top-level setup panel in the diagnostic shell. The panel collapses setup into
-`Preparing`, `Sign in to M365`, `Ready`, or `Needs attention` and provides a
-`Retry Setup` button backed by a new `retry_openwork_setup` IPC command.
+`Setting things up`, `Sign in to Microsoft 365`, `Ready to start`, or
+`Setup needs attention`. It provides `Try Setup Again` for failed setup,
+`Refresh Setup` for normal rechecks, and `Open OpenWork/OpenCode` backed by
+`open_openwork_or_opencode` so the next action is visible after setup is ready.
 
 Changes:
 
@@ -39,6 +41,7 @@ Changes:
 - Updated `openwork_autostart` to report preparation, ready, disabled, and
   failure states.
 - Added `retry_openwork_setup` and frontend `retryOpenworkSetup`.
+- Added `open_openwork_or_opencode` and frontend `openOpenworkOrOpencode`.
 - Updated the shell and E2E mocks/tests to show and verify the beginner state.
 
 Verification:
