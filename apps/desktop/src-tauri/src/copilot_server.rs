@@ -1175,28 +1175,38 @@ pub fn default_edge_profile_dir() -> PathBuf {
 }
 
 fn resolve_script_path() -> Option<PathBuf> {
-    let candidates: Vec<PathBuf> = [
-        // Dev mode: CARGO_MANIFEST_DIR/binaries/
-        option_env!("CARGO_MANIFEST_DIR")
-            .map(|d| PathBuf::from(d).join("binaries/copilot_server.js")),
-        // Next to the binary
-        env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join("binaries/copilot_server.js"))),
-        // Resource dir (Tauri bundles)
-        option_env!("CARGO_MANIFEST_DIR")
-            .map(|d| PathBuf::from(d).join("../../../src-tauri/binaries/copilot_server.js")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    if let Ok(path) = env::var("RELAY_COPILOT_SERVER_JS") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
 
-    candidates.into_iter().find(|p| p.exists()).or_else(|| {
-        // Try the same directory as Cargo.toml
-        option_env!("CARGO_MANIFEST_DIR")
-            .map(|d| PathBuf::from(d).join("binaries/copilot_server.js"))
-            .filter(|p| p.exists())
-    })
+    let candidates = resolve_script_path_candidates(env::current_exe().ok());
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn resolve_script_path_candidates(current_exe: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        let manifest_dir = PathBuf::from(manifest_dir);
+        candidates.push(manifest_dir.join("binaries/copilot_server.js"));
+    }
+
+    if let Some(exe) = current_exe {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("binaries/copilot_server.js"));
+            candidates.push(exe_dir.join("resources/binaries/copilot_server.js"));
+            candidates.push(exe_dir.join("../resources/binaries/copilot_server.js"));
+            candidates.push(exe_dir.join("../../resources/binaries/copilot_server.js"));
+            candidates.push(exe_dir.join("Resources/binaries/copilot_server.js"));
+            candidates.push(exe_dir.join("../Resources/binaries/copilot_server.js"));
+            candidates.push(exe_dir.join("../../Resources/binaries/copilot_server.js"));
+        }
+    }
+
+    candidates
 }
 
 fn sidecar_base_dir() -> Option<PathBuf> {
@@ -1253,10 +1263,12 @@ fn find_node() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_prompt_error_body, validate_health_body, CopilotError, CopilotPromptFailure,
-        CopilotSendPromptRequest, CopilotServer, HealthBody, RELAY_COPILOT_SERVICE_NAME,
+        parse_prompt_error_body, resolve_script_path_candidates, validate_health_body,
+        CopilotError, CopilotPromptFailure, CopilotSendPromptRequest, CopilotServer, HealthBody,
+        RELAY_COPILOT_SERVICE_NAME,
     };
     use reqwest::StatusCode;
+    use std::path::PathBuf;
 
     #[test]
     fn health_body_requires_service_and_matching_instance_id() {
@@ -1368,5 +1380,24 @@ mod tests {
         let body = CopilotServer::build_abort_prompt_body("session-1", "request-1");
         assert_eq!(body["relay_session_id"], serde_json::json!("session-1"));
         assert_eq!(body["relay_request_id"], serde_json::json!("request-1"));
+    }
+
+    #[test]
+    fn script_path_candidates_include_tauri_resource_layouts() {
+        let candidates = resolve_script_path_candidates(Some(PathBuf::from(
+            "/opt/Relay Agent/relay-agent-desktop",
+        )));
+
+        let rendered: Vec<String> = candidates
+            .iter()
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .collect();
+
+        assert!(rendered
+            .iter()
+            .any(|path| path.ends_with("resources/binaries/copilot_server.js")));
+        assert!(rendered
+            .iter()
+            .any(|path| path.ends_with("binaries/copilot_server.js")));
     }
 }

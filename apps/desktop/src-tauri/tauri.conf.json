@@ -29,6 +29,10 @@
     "externalBin": ["binaries/relay-node", "binaries/relay-rg"],
     "resources": {
       "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv",
+      "binaries/copilot_dom_poll.mjs": "binaries/copilot_dom_poll.mjs",
+      "binaries/copilot_send_timing.mjs": "binaries/copilot_send_timing.mjs",
+      "binaries/copilot_server.js": "binaries/copilot_server.js",
+      "binaries/copilot_wait_dom_response.mjs": "binaries/copilot_wait_dom_response.mjs",
       "liteparse-runner/": "liteparse-runner/"
     },
     "icon": [
