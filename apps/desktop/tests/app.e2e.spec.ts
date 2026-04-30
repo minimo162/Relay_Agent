@@ -3,28 +3,30 @@ import { injectRelayMock } from "./relay-e2e-harness";
 
 async function openApp(page: any) {
   await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
-  await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
 }
 
-test("desktop opens as an OpenWork/OpenCode setup diagnostic console", async ({ page }) => {
+test("desktop opens as a beginner OpenWork/OpenCode launcher", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);
 
-  await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open OpenWork/OpenCode" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh Setup" })).toBeVisible();
-  await expect(page.getByText("OpenCode/OpenWork", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "http://127.0.0.1:18180/v1" })).toBeVisible();
-  await expect(page.getByText("pnpm dev")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What happens next" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "If setup stops" })).toBeVisible();
+  await expect(page.getByText("http://127.0.0.1:18180/v1")).toBeHidden();
+  await expect(page.getByText("pnpm dev")).toHaveCount(0);
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
 });
 
-test("diagnostics panel reads provider bridge status", async ({ page }) => {
+test("advanced diagnostics panel reads provider bridge status", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);
 
+  await page.getByText("Advanced diagnostics").click();
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByText(/architecture:/)).toBeVisible();
   await expect(page.getByText(/OpenCode runtime:/)).toBeVisible();

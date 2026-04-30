@@ -40,7 +40,7 @@ test.describe("Tauri WebView2 via CDP", () => {
       await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible({
         timeout: 30_000,
       });
-      await expect(page.getByRole("heading", { name: "OpenWork/OpenCode Setup" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: /Ready to start|Setting things up|Sign in to Microsoft 365|Setup needs attention/ })).toBeVisible();
     } finally {
       await browser.close();
     }

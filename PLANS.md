@@ -415,14 +415,16 @@ Goal: make the installed app understandable for beginners by reducing setup
 state to a few visible outcomes and giving them a retry button instead of
 requiring config, token, or port knowledge.
 
-Status 2026-04-29: implemented. The desktop shell now shows the OpenWork/OpenCode
+Status 2026-04-30: implemented. The desktop shell now shows the OpenWork/OpenCode
 setup state as `Setting things up`, `Sign in to Microsoft 365`,
 `Ready to start`, or `Setup needs attention`
 based on the app-managed setup snapshot and Copilot warmup state. The setup
 snapshot is stored in `AppServices`, updated by `openwork_autostart`, included
 in `get_relay_diagnostics`, and exposed to the frontend through generated IPC
 types. The shell exposes `Try Setup Again` for failed setup, `Refresh Setup` for
-normal rechecks, and `Open OpenWork/OpenCode` as the clear start action.
+normal rechecks, and `Open OpenWork/OpenCode` as the clear start action. The
+default view hides provider URLs, CDP ports, workspace paths, and raw diagnostic
+lines behind `Advanced diagnostics`.
 
 Acceptance criteria:
 
@@ -435,7 +437,7 @@ Acceptance criteria:
 - Windows launch detection checks Start Menu shortcuts before common executable
   install paths.
 - Diagnostics still expose provider URL/config path for support, but they are
-  not required to start using OpenWork/OpenCode.
+  collapsed by default and are not required to start using OpenWork/OpenCode.
 
 ## Completed Task: Packaged Desktop Diagnostic Build Verification
 

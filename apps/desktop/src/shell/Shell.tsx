@@ -61,7 +61,7 @@ function setupTitle(diagnostics: RelayDiagnostics | null, copilotStatus: string)
 
 function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: string | null | undefined): string {
   const setup = diagnostics?.openworkSetup;
-  if (setup?.status === "needs_attention") return "Try setup again. Details are available in Diagnostics.";
+  if (setup?.status === "needs_attention") return "Relay could not finish setup. Try again, or open advanced details for support.";
   if (copilotMessage && copilotMessage.toLowerCase().includes("sign")) return copilotMessage;
   if (setup?.status === "ready" && copilotMessage) return "Open OpenWork/OpenCode to begin.";
   if (setup?.status === "ready") return "Open OpenWork/OpenCode to begin.";
@@ -279,113 +279,85 @@ export default function Shell(): JSX.Element {
           </div>
         </section>
 
-        <section class="grid gap-4 py-5 md:grid-cols-3">
-          <article class="ra-surface p-4">
-            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">Product UX</p>
-            <h2 class="mt-2 text-lg font-semibold">OpenCode/OpenWork</h2>
-            <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
-              Owns sessions, tools, permissions, transcript, MCP, plugins, skills, and workspace execution.
-            </p>
+        <section class="grid gap-4 pb-5 md:grid-cols-2">
+          <article class="ra-surface p-5">
+            <h2 class="text-xl font-semibold">What happens next</h2>
+            <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
+              <p>Relay prepares OpenWork/OpenCode and connects it to Microsoft 365 Copilot.</p>
+              <p>When the status is ready, press Open OpenWork/OpenCode and continue there.</p>
+              <p>OpenWork/OpenCode keeps the chat, tools, approvals, files, and session history.</p>
+            </div>
           </article>
-          <article class="ra-surface p-4">
-            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">Provider Endpoint</p>
-            <h2 class="mt-2 break-all font-mono text-base">{endpoint()}</h2>
-            <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
-              Model id: <span class="font-mono">relay-agent/m365-copilot</span>
-            </p>
-          </article>
-          <article class="ra-surface p-4">
-            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">Copilot Transport</p>
-            <h2 class="mt-2 text-lg font-semibold">
-              {copilotState().status === "ready"
-                ? "Ready"
-                : copilotState().status === "checking"
-                  ? "Checking"
-                  : copilotState().status === "needs_sign_in"
-                    ? "Sign in required"
-                    : "Needs attention"}
-            </h2>
-            <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
-              {copilotState().message ?? "Edge CDP and M365 Copilot readiness are checked through diagnostics."}
-            </p>
+          <article class="ra-surface p-5">
+            <h2 class="text-xl font-semibold">If setup stops</h2>
+            <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
+              <p>Use Try Setup Again first. Relay will restart the setup without command line steps.</p>
+              <p>If Microsoft 365 sign-in is needed, use Check Microsoft Sign-In.</p>
+              <p>Advanced details are only needed when sharing a support report.</p>
+            </div>
           </article>
         </section>
 
-        <section class="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-          <div class="ra-surface p-5">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 class="text-xl font-semibold">OpenWork/OpenCode Setup</h2>
-                <p class="mt-2 max-w-2xl text-sm text-[var(--ra-color-text-muted)]">
-                  This desktop surface is diagnostic-only. Production starts with the OpenWork/OpenCode auto
-                  bootstrap, then OpenWork/OpenCode owns chat, tool execution, approvals, and session history.
-                </p>
-              </div>
-              <span class="rounded-full border border-[var(--ra-color-border)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--ra-color-text-muted)]">
-                Diagnostic shell
-              </span>
-            </div>
-
-            <div class="mt-5 grid gap-3">
-              <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm dev
-              </code>
-              <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm bootstrap:openwork-opencode:auto
-              </code>
-              <code class="block overflow-x-auto rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3 text-sm">
-                pnpm smoke:openwork-opencode-bootstrap-gateway
-              </code>
-            </div>
-
-            <div class="mt-6 grid gap-3 md:grid-cols-2">
-              <div class="rounded border border-[var(--ra-color-border)] p-4">
-                <p class="text-sm font-semibold">Workspace</p>
-                <p class="mt-2 break-all text-sm text-[var(--ra-color-text-muted)]">{workspace()}</p>
-              </div>
-              <div class="rounded border border-[var(--ra-color-border)] p-4">
-                <p class="text-sm font-semibold">Diagnostic Defaults</p>
-                <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
-                  CDP {browserSettings().cdpPort} · timeout {browserSettings().timeoutMs} ms · max turns {maxTurns()}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <aside class="ra-surface p-5">
-            <div class="flex items-center justify-between gap-3">
-              <h2 class="text-lg font-semibold">Diagnostics</h2>
-              <button
-                type="button"
-                class="ra-button ra-button--secondary"
-                disabled={diagnosticsLoading()}
-                onClick={() => refreshDiagnostics()}
-              >
-                {diagnosticsLoading() ? "Refreshing" : "Refresh"}
-              </button>
-            </div>
-            <Show
-              when={diagnostics()}
-              fallback={
-                <p class="mt-4 text-sm text-[var(--ra-color-text-muted)]">
-                  Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and OpenCode/OpenWork status.
-                </p>
-              }
-            >
-              <div class="mt-4 grid gap-2 text-sm">
-                {diagLines().map((line) => (
-                  <p class="break-words rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-2">
-                    {line}
+        <section class="pb-5">
+          <details class="ra-surface p-5">
+            <summary class="cursor-pointer text-lg font-semibold">Advanced diagnostics</summary>
+            <div class="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+              <div class="grid gap-3">
+                <div class="rounded border border-[var(--ra-color-border)] p-4">
+                  <p class="text-sm font-semibold">Workspace</p>
+                  <p class="mt-2 break-all text-sm text-[var(--ra-color-text-muted)]">{workspace()}</p>
+                </div>
+                <div class="rounded border border-[var(--ra-color-border)] p-4">
+                  <p class="text-sm font-semibold">Provider</p>
+                  <p class="mt-2 break-all font-mono text-sm text-[var(--ra-color-text-muted)]">{endpoint()}</p>
+                  <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
+                    Model id: <span class="font-mono">relay-agent/m365-copilot</span>
                   </p>
-                ))}
+                </div>
+                <div class="rounded border border-[var(--ra-color-border)] p-4">
+                  <p class="text-sm font-semibold">Transport defaults</p>
+                  <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
+                    CDP {browserSettings().cdpPort} · timeout {browserSettings().timeoutMs} ms · max turns {maxTurns()}
+                  </p>
+                </div>
               </div>
-            </Show>
-            <Show when={diagnosticsError()}>
-              <p class="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-700">
-                {diagnosticsError()}
-              </p>
-            </Show>
-          </aside>
+
+              <aside>
+                <div class="flex items-center justify-between gap-3">
+                  <h2 class="text-lg font-semibold">Diagnostics</h2>
+                  <button
+                    type="button"
+                    class="ra-button ra-button--secondary"
+                    disabled={diagnosticsLoading()}
+                    onClick={() => refreshDiagnostics()}
+                  >
+                    {diagnosticsLoading() ? "Refreshing" : "Refresh"}
+                  </button>
+                </div>
+                <Show
+                  when={diagnostics()}
+                  fallback={
+                    <p class="mt-4 text-sm text-[var(--ra-color-text-muted)]">
+                      Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and OpenWork/OpenCode status.
+                    </p>
+                  }
+                >
+                  <div class="mt-4 grid gap-2 text-sm">
+                    {diagLines().map((line) => (
+                      <p class="break-words rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-2">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                </Show>
+                <Show when={diagnosticsError()}>
+                  <p class="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-700">
+                    {diagnosticsError()}
+                  </p>
+                </Show>
+              </aside>
+            </div>
+          </details>
         </section>
       </div>
 

@@ -97,11 +97,11 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "OpenWork/OpenCode Setup",
+    text: "What happens next",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Production starts with the OpenWork/OpenCode auto",
+    text: "Advanced diagnostics",
   },
   {
     path: "package.json",
@@ -365,7 +365,7 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "pnpm smoke:openwork-opencode-bootstrap-gateway",
+    text: "Advanced details are only needed",
   },
   {
     path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",

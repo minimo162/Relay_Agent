@@ -23,6 +23,24 @@
 
 ## Milestone Log
 
+### 2026-04-30 Implementation: Beginner-first setup shell
+
+Simplified the installed desktop shell so beginners see the next action instead
+of diagnostic internals. The default view now keeps provider URLs, CDP ports,
+workspace paths, model IDs, and support diagnostics inside a collapsed
+`Advanced diagnostics` section. The visible flow focuses on setup state,
+Microsoft 365 sign-in, `Open OpenWork/OpenCode`, `Refresh Setup`, and
+`Try Setup Again`.
+
+Verification:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `node scripts/check-hard-cut-guard.mjs`: passed.
+- `pnpm --filter @relay-agent/desktop build`: passed.
+- `E2E_SKIP_AUTH_SETUP=1 pnpm --filter @relay-agent/desktop test:e2e:local`:
+  passed, 3 tests.
+- `pnpm check`: passed.
+
 ### 2026-04-29 Implementation: Beginner setup status and retry
 
 Added a simple installed-app setup state for beginners. The app now tracks
