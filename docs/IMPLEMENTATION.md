@@ -23,6 +23,26 @@
 
 ## Milestone Log
 
+### 2026-04-30 Fix: Show desktop before Copilot warmup
+
+Fixed slow perceived startup for the installed desktop app. The main window is
+now shown immediately after the webview mounts, while Microsoft 365 Copilot
+warmup continues in the background. Previously the app waited for
+`warmup_copilot_bridge` to finish before calling `show()`, so a slow Edge/CDP
+or M365 sign-in probe could make launch appear to hang. Advanced diagnostics now
+also includes the OpenWork/OpenCode setup stage, detail message, and config path
+so `needs_attention` states show the actual setup failure instead of only the
+status.
+
+Verification:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `E2E_SKIP_AUTH_SETUP=1 pnpm --filter @relay-agent/desktop test:e2e:local`:
+  passed, 3 tests.
+- `pnpm diag:desktop-launch`: passed.
+- `pnpm check`: passed.
+- `pnpm --filter @relay-agent/desktop tauri:build`: passed.
+
 ### 2026-04-30 Fix: Suppress Windows startup console flashes
 
 Added a Windows-only child-process launch helper that applies

@@ -26,6 +26,16 @@ async function applyAlwaysOnTopSetting(enabled: boolean) {
   }
 }
 
+async function showMainWindow() {
+  try {
+    const win = getCurrentWindow();
+    await win.show();
+    await win.setFocus();
+  } catch (error) {
+    console.error("[Shell] window show/focus failed", error);
+  }
+}
+
 function providerBaseUrl(): string {
   const port = import.meta.env.VITE_RELAY_OPENCODE_PROVIDER_PORT || "18180";
   return `http://127.0.0.1:${port}/v1`;
@@ -38,6 +48,7 @@ function formatBool(value: boolean | null | undefined): string {
 
 function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
   if (!diagnostics) return [];
+  const setup = diagnostics.openworkSetup;
   return [
     `architecture: ${diagnostics.architectureNotes}`,
     `target OS: ${diagnostics.targetOs}`,
@@ -47,7 +58,10 @@ function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
     `bridge connected: ${formatBool(diagnostics.copilotBridgeConnected)}`,
     `M365 sign-in required: ${formatBool(diagnostics.copilotBridgeLoginRequired)}`,
     `OpenCode runtime: ${diagnostics.opencodeRuntimeMessage ?? "unknown"}`,
-    `OpenWork/OpenCode setup: ${diagnostics.openworkSetup?.status ?? "unknown"}`,
+    `OpenWork/OpenCode setup: ${setup?.status ?? "unknown"}`,
+    `setup stage: ${setup?.stage ?? "unknown"}`,
+    `setup detail: ${setup?.message ?? "unknown"}`,
+    `setup config: ${setup?.configPath ?? "unknown"}`,
   ];
 }
 
@@ -127,7 +141,8 @@ export default function Shell(): JSX.Element {
   });
 
   onMount(() => {
-    void runCopilotWarmup(true);
+    void showMainWindow();
+    void runCopilotWarmup(false);
     void refreshDiagnostics(false);
     const timer = window.setInterval(() => {
       const setup = diagnostics()?.openworkSetup?.status;

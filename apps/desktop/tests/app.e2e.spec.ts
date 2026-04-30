@@ -31,6 +31,7 @@ test("advanced diagnostics panel reads provider bridge status", async ({ page })
   await expect(page.getByText(/architecture:/)).toBeVisible();
   await expect(page.getByText(/OpenCode runtime:/)).toBeVisible();
   await expect(page.getByText(/bridge running:/)).toBeVisible();
+  await expect(page.getByText(/setup detail:/)).toBeVisible();
 });
 
 test("settings remain available for provider diagnostics", async ({ page }) => {
