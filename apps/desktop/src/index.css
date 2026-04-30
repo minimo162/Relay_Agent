@@ -125,6 +125,7 @@
   --ra-warning-text: #8c4108;
 
   --ra-color-page: var(--ra-surface);
+  --ra-color-bg: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);
   --ra-color-surface-sidebar: var(--ra-sidebar);
   --ra-color-border: var(--ra-border);
@@ -216,6 +217,7 @@
   --ra-warning-text: #ffd4bf;
 
   --ra-color-page: var(--ra-surface);
+  --ra-color-bg: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);
   --ra-color-surface-sidebar: var(--ra-sidebar);
   --ra-color-border: var(--ra-border);
@@ -752,6 +754,164 @@ body a:focus-visible {
   background: var(--ra-surface-card);
   border-radius: var(--ra-radius);
   box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-surface {
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-radius);
+  background: var(--ra-surface-card);
+  box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-setup-progress {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.ra-setup-progress__topline {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ra-setup-progress__eyebrow,
+.ra-setup-progress__hint,
+.ra-setup-step__detail,
+.ra-setup-step__value {
+  margin: 0;
+  color: var(--ra-text-muted);
+  font-size: var(--ra-text-caption);
+}
+
+.ra-setup-progress__eyebrow {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ra-setup-progress__current {
+  margin: 0.15rem 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.ra-setup-progress__percent {
+  margin: 0;
+  color: var(--ra-text-primary);
+  font-family: var(--ra-font-mono);
+  font-size: var(--ra-text-caption);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ra-setup-progress__bar {
+  overflow: hidden;
+  width: 100%;
+  height: 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--ra-border) 78%, transparent);
+  border-radius: var(--ra-radius-pill);
+  background: color-mix(in oklab, var(--ra-surface-400) 72%, transparent);
+}
+
+.ra-setup-progress__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--ra-accent) 0%, var(--ra-green) 100%);
+  transition: width 220ms ease;
+}
+
+.ra-setup-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.ra-setup-step {
+  display: grid;
+  grid-template-columns: 0.75rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-radius);
+  background: color-mix(in oklab, var(--ra-surface-card) 88%, var(--ra-surface-100));
+}
+
+.ra-setup-step__marker {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: var(--ra-radius-pill);
+  border: 1px solid var(--ra-border-medium);
+  background: var(--ra-surface-400);
+}
+
+.ra-setup-step__copy {
+  min-width: 0;
+}
+
+.ra-setup-step__label {
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: var(--ra-text-caption);
+  font-weight: 600;
+}
+
+.ra-setup-step__detail {
+  overflow-wrap: anywhere;
+  margin-top: 0.2rem;
+}
+
+.ra-setup-step__value {
+  justify-self: end;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ra-setup-step[data-state="done"] .ra-setup-step__marker {
+  border-color: var(--ra-green);
+  background: var(--ra-green);
+}
+
+.ra-setup-step[data-state="current"] {
+  border-color: color-mix(in oklab, var(--ra-accent) 42%, var(--ra-border));
+  background: color-mix(in oklab, var(--ra-accent) 7%, var(--ra-surface-card));
+}
+
+.ra-setup-step[data-state="current"] .ra-setup-step__marker {
+  border-color: var(--ra-accent);
+  background: var(--ra-accent);
+}
+
+.ra-setup-step[data-state="blocked"] {
+  border-color: color-mix(in oklab, var(--ra-red) 46%, var(--ra-border));
+  background: color-mix(in oklab, var(--ra-red) 8%, var(--ra-surface-card));
+}
+
+.ra-setup-step[data-state="blocked"] .ra-setup-step__marker {
+  border-color: var(--ra-red);
+  background: var(--ra-red);
+}
+
+.ra-setup-step[data-state="waiting"] {
+  opacity: 0.76;
+}
+
+@media (max-width: 760px) {
+  .ra-setup-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .ra-setup-step {
+    grid-template-columns: 0.75rem minmax(0, 1fr);
+  }
+
+  .ra-setup-step__value {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+  }
 }
 
 .ra-card--interactive {

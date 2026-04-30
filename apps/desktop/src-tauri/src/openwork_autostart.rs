@@ -114,12 +114,18 @@ fn run(
     tracing::info!("[openwork-autostart] starting OpenWork/OpenCode setup");
     set_status(
         &status,
-        OpenWorkSetupSnapshot::preparing("Starting the local Copilot provider gateway."),
+        OpenWorkSetupSnapshot::preparing_stage(
+            "provider_gateway",
+            "Starting the local Copilot provider gateway.",
+        ),
     );
     let provider_token = ensure_provider_gateway(provider_bridge)?;
     set_status(
         &status,
-        OpenWorkSetupSnapshot::preparing("Writing the OpenCode provider config."),
+        OpenWorkSetupSnapshot::preparing_stage(
+            "provider_config",
+            "Writing the OpenCode provider config.",
+        ),
     );
     let global_config = global_config_path()?;
     write_opencode_provider_config_file(&global_config, PROVIDER_BASE_URL, &provider_token)
@@ -156,6 +162,7 @@ fn ensure_provider_gateway(provider_bridge: Arc<CopilotBridgeManager>) -> Result
                 Some(edge_profile),
                 None,
             )
+            .map(crate::copilot_server::CopilotServer::with_orphan_node_port_range_reclaim)
             .map_err(|error| format!("provider gateway init failed: {error}"))?;
             let arc = Arc::new(Mutex::new(server));
             *slot = Some(CopilotServerState {
@@ -215,7 +222,10 @@ fn run_windows_first_run(
 ) -> Result<(), String> {
     set_status(
         status,
-        OpenWorkSetupSnapshot::preparing("Downloading and verifying OpenWork/OpenCode."),
+        OpenWorkSetupSnapshot::preparing_stage(
+            "download_openwork_opencode",
+            "Downloading and verifying OpenWork/OpenCode.",
+        ),
     );
     let app_local_data_dir = app
         .path()
@@ -246,7 +256,10 @@ fn run_windows_first_run(
 
     set_status(
         status,
-        OpenWorkSetupSnapshot::preparing("Preparing the OpenWork installer handoff."),
+        OpenWorkSetupSnapshot::preparing_stage(
+            "openwork_handoff",
+            "Preparing the OpenWork installer handoff.",
+        ),
     );
     let openwork = platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenWorkDesktop)
         .map_err(|error| format!("select OpenWork artifact: {error}"))?;

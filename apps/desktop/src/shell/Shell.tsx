@@ -82,10 +82,91 @@ function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: stri
   return "Relay is preparing OpenWork/OpenCode and the Copilot connection.";
 }
 
-function stepLabel(value: "ready" | "working" | "blocked"): string {
-  if (value === "ready") return "Ready";
-  if (value === "blocked") return "Needs attention";
-  return "Preparing";
+type SetupProgressStep = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+type SetupProgressState = "done" | "current" | "blocked" | "waiting";
+
+const OPENWORK_SETUP_STEPS: SetupProgressStep[] = [
+  {
+    id: "setup",
+    label: "Prepare Relay",
+    detail: "Create the setup workspace.",
+  },
+  {
+    id: "provider_gateway",
+    label: "Start provider",
+    detail: "Start the local Copilot gateway.",
+  },
+  {
+    id: "provider_config",
+    label: "Write config",
+    detail: "Connect OpenCode to Relay.",
+  },
+  {
+    id: "download_openwork_opencode",
+    label: "Get OpenWork/OpenCode",
+    detail: "Download and verify the tools.",
+  },
+  {
+    id: "openwork_handoff",
+    label: "Prepare OpenWork",
+    detail: "Finish the desktop handoff.",
+  },
+  {
+    id: "ready",
+    label: "Ready",
+    detail: "OpenWork/OpenCode can start.",
+  },
+];
+
+function inferSetupStage(diagnostics: RelayDiagnostics | null): string {
+  const setup = diagnostics?.openworkSetup;
+  if (!setup) return "setup";
+  if (setup.status === "ready") return "ready";
+  if (setup.stage && setup.stage !== "needs_attention") return setup.stage;
+
+  const detail = setup.message.toLowerCase();
+  if (detail.includes("provider gateway") || detail.includes("copilot_server") || detail.includes("18180")) {
+    return "provider_gateway";
+  }
+  if (detail.includes("config")) return "provider_config";
+  if (detail.includes("download") || detail.includes("extract") || detail.includes("probe opencode")) {
+    return "download_openwork_opencode";
+  }
+  if (detail.includes("installer") || detail.includes("handoff") || detail.includes("openwork")) {
+    return "openwork_handoff";
+  }
+  return "setup";
+}
+
+function setupProgressIndex(stage: string): number {
+  const index = OPENWORK_SETUP_STEPS.findIndex((step) => step.id === stage);
+  return index >= 0 ? index : 0;
+}
+
+function setupProgressPercent(index: number, status: string, needsAttention: boolean): number {
+  const maxIndex = OPENWORK_SETUP_STEPS.length - 1;
+  if (status === "ready") return 100;
+  if (needsAttention) return Math.round(Math.max(8, (index / maxIndex) * 100));
+  return Math.round(Math.min(95, ((index + 0.35) / maxIndex) * 100));
+}
+
+function setupStepState(index: number, currentIndex: number, status: string, needsAttention: boolean): SetupProgressState {
+  if (status === "ready") return "done";
+  if (index < currentIndex) return "done";
+  if (index === currentIndex) return needsAttention ? "blocked" : "current";
+  return "waiting";
+}
+
+function setupStepValue(state: SetupProgressState): string {
+  if (state === "done") return "Done";
+  if (state === "blocked") return "Needs attention";
+  if (state === "current") return "In progress";
+  return "Waiting";
 }
 
 export default function Shell(): JSX.Element {
@@ -112,10 +193,17 @@ export default function Shell(): JSX.Element {
     const copilotReady = copilot.status === "ready";
     const needsSignIn = copilot.status === "needs_sign_in";
     const needsAttention = setupStatus === "needs_attention";
+    const setupStage = inferSetupStage(report);
+    const progressIndex = setupProgressIndex(setupStage);
+    const progressPercent = setupProgressPercent(progressIndex, setupStatus, needsAttention);
+    const currentStep = OPENWORK_SETUP_STEPS[progressIndex] ?? OPENWORK_SETUP_STEPS[0];
     return {
       title: setupTitle(report, copilot.status),
       message: setupMessage(report, copilot.message),
       status: setupStatus,
+      setupStage,
+      progressPercent,
+      currentStep,
       setupReady,
       copilotReady,
       needsSignIn,
@@ -124,19 +212,22 @@ export default function Shell(): JSX.Element {
       providerBaseUrl: report?.openworkSetup?.providerBaseUrl ?? endpoint(),
       configPath: report?.openworkSetup?.configPath ?? "~/.config/opencode/opencode.json",
       steps: [
+        ...OPENWORK_SETUP_STEPS.map((step, index) => {
+          const state = setupStepState(index, progressIndex, setupStatus, needsAttention);
+          return {
+            ...step,
+            state,
+            value: setupStepValue(state),
+          };
+        }),
         {
-          label: "OpenWork/OpenCode",
-          value: stepLabel(needsAttention ? "blocked" : setupReady ? "ready" : "working"),
-        },
-        {
+          id: "m365",
           label: "Microsoft 365",
+          detail: "Check Copilot sign-in.",
+          state: copilotReady ? "done" : needsSignIn ? "blocked" : "current",
           value: copilotReady ? "Signed in" : needsSignIn ? "Sign-in needed" : "Checking",
         },
-        {
-          label: "Start",
-          value: setupReady && copilotReady ? "Open" : "Waiting",
-        },
-      ],
+      ] satisfies Array<SetupProgressStep & { state: SetupProgressState; value: string }>,
     };
   });
 
@@ -240,11 +331,35 @@ export default function Shell(): JSX.Element {
             <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">OpenWork/OpenCode</p>
             <h2 class="mt-2 text-2xl font-semibold">{setupState().title}</h2>
             <p class="mt-2 max-w-3xl text-sm text-[var(--ra-color-text-muted)]">{setupState().message}</p>
-            <div class="mt-4 grid gap-3 md:grid-cols-3">
+            <div class="ra-setup-progress mt-5" aria-label="OpenWork/OpenCode setup progress">
+              <div class="ra-setup-progress__topline">
+                <div>
+                  <p class="ra-setup-progress__eyebrow">Setup progress</p>
+                  <p class="ra-setup-progress__current">{setupState().currentStep.label}</p>
+                </div>
+                <p class="ra-setup-progress__percent">{setupState().progressPercent}%</p>
+              </div>
+              <div
+                class="ra-setup-progress__bar"
+                role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={setupState().progressPercent}
+                aria-label={`OpenWork/OpenCode setup is ${setupState().progressPercent}% complete`}
+              >
+                <div class="ra-setup-progress__fill" style={{ width: `${setupState().progressPercent}%` }} />
+              </div>
+              <p class="ra-setup-progress__hint">{setupState().currentStep.detail}</p>
+            </div>
+            <div class="ra-setup-steps mt-4">
               {setupState().steps.map((step) => (
-                <div class="rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-3">
-                  <p class="text-sm font-semibold">{step.label}</p>
-                  <p class="mt-1 text-sm text-[var(--ra-color-text-muted)]">{step.value}</p>
+                <div class="ra-setup-step" data-state={step.state}>
+                  <div class="ra-setup-step__marker" aria-hidden="true" />
+                  <div class="ra-setup-step__copy">
+                    <p class="ra-setup-step__label">{step.label}</p>
+                    <p class="ra-setup-step__detail">{step.detail}</p>
+                  </div>
+                  <p class="ra-setup-step__value">{step.value}</p>
                 </div>
               ))}
             </div>

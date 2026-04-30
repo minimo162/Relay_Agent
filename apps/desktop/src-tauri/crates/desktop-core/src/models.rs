@@ -70,9 +70,14 @@ pub struct OpenWorkSetupSnapshot {
 impl OpenWorkSetupSnapshot {
     #[must_use]
     pub fn preparing(message: impl Into<String>) -> Self {
+        Self::preparing_stage("setup", message)
+    }
+
+    #[must_use]
+    pub fn preparing_stage(stage: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status: "preparing".to_string(),
-            stage: "setup".to_string(),
+            stage: stage.into(),
             message: message.into(),
             action_label: None,
             launch_label: None,

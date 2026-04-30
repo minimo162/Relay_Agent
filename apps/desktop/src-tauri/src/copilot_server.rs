@@ -378,6 +378,7 @@ pub struct CopilotServer {
     edge_path: Option<String>,
     last_bridge_failure: Option<CopilotBridgeFailureInfo>,
     last_repair_stage_stats: Vec<CopilotRepairStageStats>,
+    reclaim_orphan_node_port_range: bool,
     #[allow(dead_code)]
     log_threads: Vec<thread::JoinHandle<()>>,
 }
@@ -470,8 +471,18 @@ impl CopilotServer {
             edge_path,
             last_bridge_failure: None,
             last_repair_stage_stats: Vec::new(),
+            reclaim_orphan_node_port_range: false,
             log_threads: Vec::new(),
         })
+    }
+
+    /// Enable provider-gateway recovery for the dedicated OpenWork/OpenCode port range.
+    ///
+    /// This is intentionally opt-in so the diagnostic Copilot bridge on `18080` keeps the stricter
+    /// `/health` fingerprint-only reclaim behavior.
+    pub fn with_orphan_node_port_range_reclaim(mut self) -> Self {
+        self.reclaim_orphan_node_port_range = true;
+        self
     }
 
     pub fn cdp_port(&self) -> u16 {
@@ -556,6 +567,13 @@ impl CopilotServer {
         })?;
 
         let preferred_port = self.port;
+        if self.reclaim_orphan_node_port_range {
+            crate::copilot_port_reclaim::maybe_reclaim_orphan_copilot_node_port_range(
+                preferred_port,
+                preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1),
+            )
+            .await;
+        }
 
         for offset in 0..COPILOT_HTTP_PORT_FALLBACKS {
             self.stop();

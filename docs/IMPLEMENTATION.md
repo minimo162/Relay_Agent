@@ -23,6 +23,47 @@
 
 ## Milestone Log
 
+### 2026-04-30 UX: OpenWork/OpenCode setup progress
+
+Added a beginner-friendly setup progress bar to the desktop launcher. The shell
+now shows the active OpenWork/OpenCode setup step, completion percentage, and a
+compact step list covering Relay preparation, provider gateway startup,
+OpenCode config, OpenWork/OpenCode download, OpenWork handoff, readiness, and
+Microsoft 365 sign-in. Backend setup snapshots now expose more specific stages
+for provider gateway, config writing, download/verify, and handoff work so the
+UI can explain what is happening instead of only showing `preparing`.
+
+Verification:
+
+- `cargo fmt --check`: passed.
+- `cargo check -p relay-agent-desktop`: passed.
+- `cargo test -p desktop-core copilot_port_reclaim`: passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `E2E_SKIP_AUTH_SETUP=1 pnpm --filter @relay-agent/desktop test:e2e:local`:
+  passed, 3 tests.
+- `pnpm smoke:openwork-opencode-bootstrap-gateway`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-30 Fix: Reclaim orphan provider gateway node processes
+
+Fixed an installed Windows setup failure where OpenWork/OpenCode bootstrap could
+stop at `provider gateway start failed` because stale `node.exe` /
+`relay-node.exe` processes still held every provider gateway port in the
+`18180-18211` range. The OpenWork/OpenCode provider gateway path now performs an
+opt-in range reclaim before spawning `copilot_server.js`: it only stops
+listeners that are clearly Relay-owned Node processes (`copilot_server.js` or
+the bundled `relay-node`), and it leaves the diagnostic `18080` bridge on the
+stricter `/health` fingerprint-only reclaim path. Set
+`RELAY_COPILOT_RECLAIM_ORPHAN_NODE=0` to disable the provider range fallback.
+
+Verification:
+
+- `cargo fmt --check`: passed.
+- `cargo check -p relay-agent-desktop`: passed.
+- `cargo test -p desktop-core copilot_port_reclaim`: passed.
+- `pnpm check`: passed.
+- `pnpm smoke:openwork-opencode-bootstrap-gateway`: passed.
+
 ### 2026-04-30 Fix: Show desktop before Copilot warmup
 
 Fixed slow perceived startup for the installed desktop app. The main window is
