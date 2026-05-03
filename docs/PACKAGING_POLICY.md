@@ -55,6 +55,10 @@ data-retention expectations for non-engineer operators.
 - Until Azure signing credentials are fully configured, the release workflow
   may still publish an unsigned fallback installer to preserve the current
   GitHub Releases path
+- Internal-only self-signed Authenticode testing with OpenSSL and
+  `signtool.exe` is documented in `docs/WINDOWS_SELF_SIGNED_SIGNING.md`; those
+  outputs are local `artifacts/` files or manually dispatched prerelease assets,
+  and must not be published as formal public releases
 
 ## Deferred
 

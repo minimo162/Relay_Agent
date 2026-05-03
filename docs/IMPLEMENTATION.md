@@ -23,6 +23,24 @@
 
 ## Milestone Log
 
+### 2026-05-03 Docs: self-signed Windows installer signing path
+
+Added an internal-only Windows signing helper for smoke testing unsigned NSIS
+installers with OpenSSL and `signtool.exe`. The script creates a local
+code-signing certificate, exports a PFX, optionally imports the test
+certificate into the current user's trust stores, signs a copied installer, and
+runs Authenticode verification. The Windows release workflow can now publish a
+self-signed internal prerelease asset from manual `workflow_dispatch` runs when
+Trusted Signing is absent; formal public releases still require Azure Artifact
+Signing or another public-trust certificate path.
+
+Verification:
+
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+- Windows Authenticode execution was not run in this Linux environment because
+  `pwsh` / `signtool.exe` are unavailable here.
+
 ### 2026-05-03 Fix: OpenWork/OpenCode setup progress uses real download bytes
 
 Reworked the desktop setup progress bar so long first-run downloads no longer

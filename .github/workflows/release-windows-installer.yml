@@ -14,6 +14,11 @@ on:
         description: "Optional GitHub Release name override"
         required: false
         type: string
+      self_signed_prerelease:
+        description: "When Trusted Signing is absent, publish a self-signed internal prerelease installer instead of unsigned."
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   publish-windows-installer:
@@ -102,12 +107,17 @@ jobs:
 
           if [ "$present" -eq 0 ]; then
             if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [[ "${{ steps.release_meta.outputs.tag }}" != *-* ]]; then
-              echo "Trusted Signing is required for formal v* releases. Use a prerelease tag via workflow_dispatch for unsigned internal builds." >&2
+              echo "Trusted Signing is required for formal v* releases. Use a prerelease tag via workflow_dispatch for internal fallback builds." >&2
               exit 1
             fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "mode=unsigned-prerelease" >> "$GITHUB_OUTPUT"
-            echo "summary=Trusted Signing is not configured; this workflow_dispatch prerelease will publish an unsigned installer asset marked as unsigned." >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.self_signed_prerelease }}" = "true" ]; then
+              echo "mode=self-signed-prerelease" >> "$GITHUB_OUTPUT"
+              echo "summary=Trusted Signing is not configured; this workflow_dispatch prerelease will publish a self-signed internal installer asset." >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=unsigned-prerelease" >> "$GITHUB_OUTPUT"
+              echo "summary=Trusted Signing is not configured; this workflow_dispatch prerelease will publish an unsigned installer asset marked as unsigned." >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
 
@@ -188,6 +198,47 @@ jobs:
           description: Relay Agent Windows installer
           description-url: https://github.com/${{ github.repository }}
 
+      - name: Sign installer with self-signed certificate
+        if: steps.signing_mode.outputs.mode == 'self-signed-prerelease'
+        id: self_signed
+        shell: pwsh
+        run: |
+          $outputDir = Join-Path $env:RUNNER_TEMP "relay-agent-self-signed"
+          & .\scripts\windows-self-sign-installer.ps1 `
+            -InstallerPath "${{ steps.installer.outputs.path }}" `
+            -OutputDirectory $outputDir `
+            -Organization "Relay Agent Dev" `
+            -CommonName "Relay Agent GitHub Actions Internal Test" `
+            -TrustCert
+
+          $signedInstaller = Get-ChildItem -Path $outputDir -Filter "*-selfsigned.exe" -File |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (-not $signedInstaller) {
+            throw "Self-signed installer was not created under $outputDir."
+          }
+
+          $certificatePath = Join-Path $outputDir "relay-agent-selfsigned.crt"
+          if (-not (Test-Path -LiteralPath $certificatePath)) {
+            throw "Self-signed public certificate was not created at $certificatePath."
+          }
+
+          $certificateAssetPath = Join-Path $outputDir "relay-agent-selfsigned-public-test-cert.crt"
+          Copy-Item -LiteralPath $certificatePath -Destination $certificateAssetPath -Force
+
+          $signature = Get-AuthenticodeSignature $signedInstaller.FullName
+          if ($signature.Status -ne "Valid") {
+            throw "Expected a locally trusted self-signed Authenticode signature, got '$($signature.Status)'."
+          }
+
+          "path=$($signedInstaller.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($signedInstaller.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cert_path=$certificateAssetPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cert_name=$([System.IO.Path]::GetFileName($certificateAssetPath))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "status=$($signature.Status)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Verify Authenticode signature
         if: steps.signing_mode.outputs.enabled == 'true'
         id: signature
@@ -208,8 +259,12 @@ jobs:
         run: |
           $path = "${{ steps.installer.outputs.path }}"
           $name = "${{ steps.installer.outputs.name }}"
+          $mode = "${{ steps.signing_mode.outputs.mode }}"
 
-          if ("${{ steps.signing_mode.outputs.enabled }}" -ne "true") {
+          if ($mode -eq "self-signed-prerelease") {
+            $path = "${{ steps.self_signed.outputs.path }}"
+            $name = "${{ steps.self_signed.outputs.name }}"
+          } elseif ("${{ steps.signing_mode.outputs.enabled }}" -ne "true") {
             $dir = Split-Path -Parent $path
             $stem = [System.IO.Path]::GetFileNameWithoutExtension($name)
             $unsignedName = "$stem-unsigned.exe"
@@ -237,6 +292,7 @@ jobs:
           RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
           RELEASE_PRERELEASE: ${{ contains(steps.release_meta.outputs.tag, '-') }}
           INSTALLER_PATH: ${{ steps.release_asset.outputs.path }}
+          SELF_SIGNED_CERT_PATH: ${{ steps.self_signed.outputs.cert_path }}
           SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
         run: |
           $releaseNotes = @"
@@ -247,11 +303,23 @@ jobs:
           Download the attached installer asset to install or upgrade Relay Agent on Windows 10/11 x64.
           "@
 
+          if ($env:SIGNING_MODE -eq "self-signed-prerelease") {
+            $releaseNotes += @"
+
+          Internal prerelease note: this installer is self-signed for smoke testing only. It does not provide public publisher trust or SmartScreen reputation.
+          "@
+          }
+
+          $assets = @($env:INSTALLER_PATH)
+          if ($env:SIGNING_MODE -eq "self-signed-prerelease" -and -not [string]::IsNullOrWhiteSpace($env:SELF_SIGNED_CERT_PATH)) {
+            $assets += $env:SELF_SIGNED_CERT_PATH
+          }
+
           gh release view $env:RELEASE_TAG *> $null
           $releaseExists = $LASTEXITCODE -eq 0
 
           if ($releaseExists) {
-            gh release upload $env:RELEASE_TAG $env:INSTALLER_PATH --clobber
+            gh release upload $env:RELEASE_TAG @assets --clobber
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
@@ -259,8 +327,10 @@ jobs:
             $args = @(
               "release",
               "create",
-              $env:RELEASE_TAG,
-              $env:INSTALLER_PATH,
+              $env:RELEASE_TAG
+            )
+            $args += $assets
+            $args += @(
               "--title",
               $env:RELEASE_NAME,
               "--notes",
@@ -292,6 +362,11 @@ jobs:
             if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
               echo "- Authenticode status: \`${{ steps.signature.outputs.status }}\`"
               echo "- Authenticode subject: \`${{ steps.signature.outputs.subject }}\`"
+            elif [ "${{ steps.signing_mode.outputs.mode }}" = "self-signed-prerelease" ]; then
+              echo "- Authenticode status: \`${{ steps.self_signed.outputs.status }}\`"
+              echo "- Authenticode subject: \`${{ steps.self_signed.outputs.subject }}\`"
+              echo "- Authenticode thumbprint: \`${{ steps.self_signed.outputs.thumbprint }}\`"
+              echo "- Self-signed certificate asset: \`${{ steps.self_signed.outputs.cert_name }}\`"
             else
               echo "- Authenticode status: \`not checked (unsigned prerelease)\`"
             fi

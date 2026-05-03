@@ -29,6 +29,17 @@ scripts/dist/
 target/
 apps/desktop/src-tauri/gen/schemas/windows-schema.json
 
+# Local signing artifacts
+artifacts/
+*.pfx
+*.p12
+*.pvk
+*.spc
+*.key
+*.pem
+*.cer
+*.crt
+
 # Editor directories and files
 .codex
 .codex/
