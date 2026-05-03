@@ -16,7 +16,8 @@ param(
   [switch] $TrustCert,
   [string] $TimestampUrl,
   [string] $Description = "Relay Agent internal test installer",
-  [string] $DescriptionUrl = "https://github.com/minimo162/Relay_Agent"
+  [string] $DescriptionUrl = "https://github.com/minimo162/Relay_Agent",
+  [switch] $SkipSignToolVerify
 )
 
 Set-StrictMode -Version Latest
@@ -109,7 +110,7 @@ function New-RandomPassword {
     $rng.Dispose()
   }
 
-  return [Convert]::ToBase64String($bytes)
+  return ([BitConverter]::ToString($bytes)).Replace("-", "")
 }
 
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
@@ -147,6 +148,7 @@ $shouldCreateCertificate = -not $ReuseCertificate -or
   -not (Test-Path -LiteralPath $pfxPath)
 
 if ($shouldCreateCertificate) {
+  Write-Host "Creating self-signed code signing certificate with OpenSSL..."
   @"
 [ req ]
 default_bits = 3072
@@ -186,6 +188,7 @@ authorityKeyIdentifier = keyid,issuer
     $openSslConfigPath
   )
 
+  Write-Host "Exporting self-signed certificate to PFX..."
   Invoke-External -FilePath $openSslExe -Arguments @(
     "pkcs12",
     "-export",
@@ -203,6 +206,7 @@ authorityKeyIdentifier = keyid,issuer
 }
 
 if ($TrustCert) {
+  Write-Host "Importing self-signed certificate into CurrentUser trust stores..."
   Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
   Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
 }
@@ -228,14 +232,21 @@ if (-not [string]::IsNullOrWhiteSpace($TimestampUrl)) {
 }
 
 $signArgs += $signedInstallerPath
+Write-Host "Signing copied installer with signtool.exe..."
 Invoke-External -FilePath $resolvedSignToolPath -Arguments $signArgs
 
-& $resolvedSignToolPath @("verify", "/pa", "/v", $signedInstallerPath)
-$verifyExitCode = $LASTEXITCODE
-if ($verifyExitCode -ne 0) {
-  Write-Warning "signtool verify returned $verifyExitCode. For self-signed certs this is expected unless -TrustCert imported the test cert for the current user."
+if ($SkipSignToolVerify) {
+  Write-Host "Skipping signtool verify because -SkipSignToolVerify was set."
+} else {
+  Write-Host "Verifying Authenticode signature with signtool.exe..."
+  & $resolvedSignToolPath @("verify", "/pa", "/v", $signedInstallerPath)
+  $verifyExitCode = $LASTEXITCODE
+  if ($verifyExitCode -ne 0) {
+    Write-Warning "signtool verify returned $verifyExitCode. For self-signed certs this is expected unless -TrustCert imported the test cert for the current user."
+  }
 }
 
+Write-Host "Reading Authenticode signature status..."
 $signature = Get-AuthenticodeSignature -LiteralPath $signedInstallerPath
 
 [pscustomobject]@{

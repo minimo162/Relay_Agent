@@ -38,6 +38,10 @@ The script writes all local signing material under
 `artifacts/` and certificate/key formats are ignored by git. Do not move these
 files into tracked source.
 
+Use `-SkipSignToolVerify` if local `signtool verify` is slow or blocked by
+certificate chain checks. The script still reports `Get-AuthenticodeSignature`
+status after signing.
+
 ## Publish a Self-Signed GitHub Prerelease
 
 The `release-windows-installer` workflow can publish a self-signed internal

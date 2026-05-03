@@ -40,6 +40,10 @@ Verification:
 - `pnpm check`: passed.
 - Windows Authenticode execution was not run in this Linux environment because
   `pwsh` / `signtool.exe` are unavailable here.
+- First GitHub Actions self-signed prerelease attempt was canceled after the
+  installer built successfully but the signing step stalled; the CI path now
+  uses an ASCII PFX password and skips embedded `signtool verify` in favor of
+  `Get-AuthenticodeSignature`.
 
 ### 2026-05-03 Fix: OpenWork/OpenCode setup progress uses real download bytes
 

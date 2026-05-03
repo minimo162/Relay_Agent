@@ -204,12 +204,15 @@ jobs:
         shell: pwsh
         run: |
           $outputDir = Join-Path $env:RUNNER_TEMP "relay-agent-self-signed"
+          $pfxPassword = "RelayAgentSelfSignedCi-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           & .\scripts\windows-self-sign-installer.ps1 `
             -InstallerPath "${{ steps.installer.outputs.path }}" `
             -OutputDirectory $outputDir `
             -Organization "Relay Agent Dev" `
             -CommonName "Relay Agent GitHub Actions Internal Test" `
-            -TrustCert
+            -PfxPassword $pfxPassword `
+            -TrustCert `
+            -SkipSignToolVerify
 
           $signedInstaller = Get-ChildItem -Path $outputDir -Filter "*-selfsigned.exe" -File |
             Sort-Object LastWriteTimeUtc -Descending |
