@@ -63,6 +63,11 @@ gh workflow run release-windows-installer.yml `
   -f self_signed_prerelease=true
 ```
 
+The workflow signs the installer without importing the self-signed certificate
+into the GitHub Actions runner trust store. It verifies that an Authenticode
+signer certificate is present, but the status is expected to be untrusted until
+the test certificate is imported on a local Windows test machine.
+
 The workflow uploads:
 
 - `<installer-name>-selfsigned.exe`

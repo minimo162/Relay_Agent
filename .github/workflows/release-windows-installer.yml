@@ -211,7 +211,6 @@ jobs:
             -Organization "Relay Agent Dev" `
             -CommonName "Relay Agent GitHub Actions Internal Test" `
             -PfxPassword $pfxPassword `
-            -TrustCert `
             -SkipSignToolVerify
 
           $signedInstaller = Get-ChildItem -Path $outputDir -Filter "*-selfsigned.exe" -File |
@@ -230,8 +229,8 @@ jobs:
           Copy-Item -LiteralPath $certificatePath -Destination $certificateAssetPath -Force
 
           $signature = Get-AuthenticodeSignature $signedInstaller.FullName
-          if ($signature.Status -ne "Valid") {
-            throw "Expected a locally trusted self-signed Authenticode signature, got '$($signature.Status)'."
+          if (-not $signature.SignerCertificate) {
+            throw "Expected an Authenticode signer certificate on the self-signed installer, got '$($signature.Status)'."
           }
 
           "path=$($signedInstaller.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append

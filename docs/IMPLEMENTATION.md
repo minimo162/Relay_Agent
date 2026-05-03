@@ -44,6 +44,10 @@ Verification:
   installer built successfully but the signing step stalled; the CI path now
   uses an ASCII PFX password and skips embedded `signtool verify` in favor of
   `Get-AuthenticodeSignature`.
+- Second attempt showed the stall was in CurrentUser certificate trust import
+  on the GitHub Actions runner; CI self-signing no longer imports the test
+  certificate and instead verifies that an Authenticode signer certificate is
+  present.
 
 ### 2026-05-03 Fix: OpenWork/OpenCode setup progress uses real download bytes
 
