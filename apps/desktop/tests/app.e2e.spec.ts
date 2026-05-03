@@ -24,6 +24,30 @@ test("desktop opens as a beginner OpenWork/OpenCode launcher", async ({ page }) 
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
 });
 
+test("desktop shows live OpenWork/OpenCode download progress", async ({ page }) => {
+  await injectRelayMock(page, {
+    openworkSetup: {
+      status: "preparing",
+      stage: "download_openwork_opencode",
+      message: "Downloading and verifying OpenWork/OpenCode.",
+      progressPercent: 42,
+      progressDetail: "Downloading OpenWork: 21.0 MB of 50.0 MB.",
+      actionLabel: null,
+      launchLabel: null,
+    },
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
+
+  await expect(page.getByRole("heading", { name: "Setting things up" })).toBeVisible();
+  await expect(page.locator(".ra-setup-progress__current")).toHaveText("Get OpenWork/OpenCode");
+  await expect(page.getByText("Downloading OpenWork: 21.0 MB of 50.0 MB.")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: /OpenWork\/OpenCode setup is 42% complete/ })).toHaveAttribute(
+    "aria-valuenow",
+    "42",
+  );
+});
+
 test("advanced diagnostics panel reads provider bridge status", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);

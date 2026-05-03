@@ -60,6 +60,8 @@ pub struct OpenWorkSetupSnapshot {
     pub status: String,
     pub stage: String,
     pub message: String,
+    pub progress_percent: Option<u8>,
+    pub progress_detail: Option<String>,
     pub action_label: Option<String>,
     pub launch_label: Option<String>,
     pub provider_base_url: Option<String>,
@@ -75,10 +77,22 @@ impl OpenWorkSetupSnapshot {
 
     #[must_use]
     pub fn preparing_stage(stage: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::preparing_stage_progress(stage, message, None, None)
+    }
+
+    #[must_use]
+    pub fn preparing_stage_progress(
+        stage: impl Into<String>,
+        message: impl Into<String>,
+        progress_percent: Option<u8>,
+        progress_detail: Option<String>,
+    ) -> Self {
         Self {
             status: "preparing".to_string(),
             stage: stage.into(),
             message: message.into(),
+            progress_percent: progress_percent.map(|value| value.min(100)),
+            progress_detail,
             action_label: None,
             launch_label: None,
             provider_base_url: None,
@@ -97,6 +111,8 @@ impl OpenWorkSetupSnapshot {
             status: "ready".to_string(),
             stage: "ready".to_string(),
             message: message.into(),
+            progress_percent: Some(100),
+            progress_detail: Some("OpenWork/OpenCode setup is complete.".to_string()),
             action_label: Some("Open OpenWork/OpenCode".to_string()),
             launch_label: Some("Open OpenWork/OpenCode".to_string()),
             provider_base_url: Some(provider_base_url.into()),
@@ -111,6 +127,8 @@ impl OpenWorkSetupSnapshot {
             status: "needs_attention".to_string(),
             stage: "needs_attention".to_string(),
             message: message.into(),
+            progress_percent: None,
+            progress_detail: None,
             action_label: Some("Retry setup".to_string()),
             launch_label: None,
             provider_base_url: None,

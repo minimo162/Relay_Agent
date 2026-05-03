@@ -53,6 +53,8 @@ export interface OpenWorkSetupSnapshot {
   status: string;
   stage: string;
   message: string;
+  progressPercent?: number | null;
+  progressDetail?: string | null;
   actionLabel?: string | null;
   launchLabel?: string | null;
   providerBaseUrl?: string | null;

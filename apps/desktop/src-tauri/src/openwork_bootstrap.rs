@@ -95,6 +95,16 @@ pub struct ExtractedBootstrapArtifact {
     pub reused: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct BootstrapDownloadProgress {
+    pub artifact: String,
+    pub artifact_name: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: u8,
+    pub reused: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     #[error("bootstrap manifest is invalid: {0}")]
@@ -385,7 +395,18 @@ pub fn download_and_verify_artifact(
     key: BootstrapArtifactKey,
     artifact: &BootstrapArtifact,
 ) -> Result<VerifiedBootstrapArtifact, BootstrapError> {
+    download_and_verify_artifact_with_progress(cache_root, platform, key, artifact, |_| {})
+}
+
+pub fn download_and_verify_artifact_with_progress(
+    cache_root: &Path,
+    platform: &str,
+    key: BootstrapArtifactKey,
+    artifact: &BootstrapArtifact,
+    mut on_progress: impl FnMut(BootstrapDownloadProgress),
+) -> Result<VerifiedBootstrapArtifact, BootstrapError> {
     if let Some(cached) = verify_cached_artifact(cache_root, platform, key, artifact)? {
+        on_progress(download_progress(key, artifact, artifact.size, true));
         return Ok(cached);
     }
 
@@ -409,7 +430,7 @@ pub fn download_and_verify_artifact(
         path: parent.to_path_buf(),
         source,
     })?;
-    download_to_writer(artifact, &mut temp)?;
+    download_to_writer(key, artifact, &mut temp, &mut on_progress)?;
     temp.flush().map_err(|source| BootstrapError::Io {
         path: temp.path().to_path_buf(),
         source,
@@ -569,8 +590,10 @@ pub fn probe_opencode_entrypoint(path: &Path) -> Result<String, BootstrapError> 
 }
 
 fn download_to_writer(
+    key: BootstrapArtifactKey,
     artifact: &BootstrapArtifact,
     writer: &mut impl Write,
+    on_progress: &mut impl FnMut(BootstrapDownloadProgress),
 ) -> Result<(), BootstrapError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(DEFAULT_DOWNLOAD_TIMEOUT)
@@ -583,11 +606,48 @@ fn download_to_writer(
             status: status.as_u16(),
         });
     }
-    io::copy(&mut response, writer).map_err(|source| BootstrapError::Io {
-        path: PathBuf::from("<download-stream>"),
-        source,
-    })?;
+    let mut downloaded = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    on_progress(download_progress(key, artifact, 0, false));
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|source| BootstrapError::Io {
+                path: PathBuf::from("<download-stream>"),
+                source,
+            })?;
+        if read == 0 {
+            break;
+        }
+        writer
+            .write_all(&buffer[..read])
+            .map_err(|source| BootstrapError::Io {
+                path: PathBuf::from("<download-stream>"),
+                source,
+            })?;
+        downloaded = downloaded.saturating_add(read as u64);
+        on_progress(download_progress(key, artifact, downloaded, false));
+    }
     Ok(())
+}
+
+fn download_progress(
+    key: BootstrapArtifactKey,
+    artifact: &BootstrapArtifact,
+    downloaded_bytes: u64,
+    reused: bool,
+) -> BootstrapDownloadProgress {
+    let total_bytes = artifact.size.max(1);
+    let clamped_downloaded = downloaded_bytes.min(total_bytes);
+    let percent = ((clamped_downloaded.saturating_mul(100)) / total_bytes).min(100) as u8;
+    BootstrapDownloadProgress {
+        artifact: key.as_str().to_string(),
+        artifact_name: artifact.name.clone(),
+        downloaded_bytes: clamped_downloaded,
+        total_bytes,
+        percent,
+        reused,
+    }
 }
 
 fn is_zip_symlink(mode: Option<u32>) -> bool {
@@ -841,6 +901,38 @@ mod tests {
         assert!(!verified.reused);
         assert!(verified.path.exists());
         assert_eq!(fs::read(&verified.path).expect("read artifact"), body);
+    }
+
+    #[test]
+    fn download_and_verify_reports_byte_progress() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let body = b"downloaded bootstrap artifact with progress";
+        let artifact = fixture_artifact(serve_once(body, 200), body);
+        let mut progress = Vec::new();
+
+        let verified = download_and_verify_artifact_with_progress(
+            temp.path(),
+            "windows-x64",
+            BootstrapArtifactKey::OpenCodeCli,
+            &artifact,
+            |event| progress.push(event),
+        )
+        .expect("download");
+
+        assert!(!verified.reused);
+        assert!(
+            progress.len() >= 2,
+            "expected initial and completed progress events"
+        );
+        assert_eq!(progress.first().expect("first").downloaded_bytes, 0);
+        let final_event = progress.last().expect("final");
+        assert_eq!(
+            final_event.artifact,
+            BootstrapArtifactKey::OpenCodeCli.as_str()
+        );
+        assert_eq!(final_event.downloaded_bytes, body.len() as u64);
+        assert_eq!(final_event.total_bytes, body.len() as u64);
+        assert_eq!(final_event.percent, 100);
     }
 
     #[test]

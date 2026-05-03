@@ -3,6 +3,21 @@
  */
 
 function mockDiagnostics() {
+  const config = (window as any).__RELAY_MOCK_CONFIG__ ?? {};
+  const openworkSetup = {
+    status: "ready",
+    stage: "ready",
+    message: "OpenWork/OpenCode is configured to use M365 Copilot.",
+    progressPercent: 100,
+    progressDetail: "OpenWork/OpenCode setup is complete.",
+    actionLabel: "Open OpenWork/OpenCode",
+    launchLabel: "Open OpenWork/OpenCode",
+    providerBaseUrl: "http://127.0.0.1:18180/v1",
+    configPath: "~/.config/opencode/opencode.json",
+    updatedAt: "2026-04-29T00:00:00Z",
+    ...config.openworkSetup,
+  };
+
   return {
     appVersion: "0.0.0-mock",
     targetOs: "linux",
@@ -20,16 +35,7 @@ function mockDiagnostics() {
     copilotBridgeConnected: true,
     copilotBridgeLoginRequired: false,
     opencodeRuntimeMessage: "mock runtime ready",
-    openworkSetup: {
-      status: "ready",
-      stage: "ready",
-      message: "OpenWork/OpenCode is configured to use M365 Copilot.",
-      actionLabel: "Open OpenWork/OpenCode",
-      launchLabel: "Open OpenWork/OpenCode",
-      providerBaseUrl: "http://127.0.0.1:18180/v1",
-      configPath: "~/.config/opencode/opencode.json",
-      updatedAt: "2026-04-29T00:00:00Z",
-    },
+    openworkSetup,
   };
 }
 
@@ -48,13 +54,15 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
 
   switch (cmd) {
     case "warmup_copilot_bridge":
+      const config = (window as any).__RELAY_MOCK_CONFIG__ ?? {};
+      const copilotReady = config.copilotReady ?? true;
       return {
-        connected: true,
+        connected: copilotReady,
         loginRequired: false,
         bootTokenPresent: true,
         cdpPort: 9360,
-        stage: "ready",
-        message: "Mock Copilot ready",
+        stage: copilotReady ? "ready" : "status_request",
+        message: copilotReady ? "Mock Copilot ready" : "Mock Copilot unavailable",
         failureCode: null,
         statusCode: 200,
         url: "https://m365.cloud.microsoft/chat",

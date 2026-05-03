@@ -6,15 +6,22 @@ use tauri::{AppHandle, Manager};
 use crate::app_services::{CopilotBridgeManager, CopilotServerState};
 use crate::models::OpenWorkSetupSnapshot;
 use crate::openwork_bootstrap::{
-    bootstrap_cache_root, default_global_opencode_config_path, download_and_verify_artifact,
-    extract_zip_artifact, load_manifest, platform_artifact, probe_opencode_entrypoint,
-    write_opencode_provider_config_file, BootstrapArtifactKey, BootstrapError,
+    bootstrap_cache_root, default_global_opencode_config_path,
+    download_and_verify_artifact_with_progress, extract_zip_artifact, load_manifest,
+    platform_artifact, probe_opencode_entrypoint, write_opencode_provider_config_file,
+    BootstrapArtifactKey, BootstrapDownloadProgress, BootstrapError,
 };
 
 const PROVIDER_PORT: u16 = 18180;
 const EDGE_CDP_PORT: u16 = 9360;
 const PROVIDER_BASE_URL: &str = "http://127.0.0.1:18180/v1";
 const PLATFORM: &str = "windows-x64";
+const PROGRESS_PROVIDER_GATEWAY: u8 = 8;
+const PROGRESS_PROVIDER_CONFIG: u8 = 16;
+const PROGRESS_DOWNLOAD_START: u8 = 24;
+const PROGRESS_DOWNLOAD_END: u8 = 88;
+const PROGRESS_EXTRACT: u8 = 91;
+const PROGRESS_HANDOFF: u8 = 96;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WindowsLaunchTarget {
@@ -41,7 +48,12 @@ pub fn spawn(
     std::thread::spawn(move || {
         set_status(
             &status,
-            OpenWorkSetupSnapshot::preparing("Preparing OpenWork/OpenCode for M365 Copilot."),
+            OpenWorkSetupSnapshot::preparing_stage_progress(
+                "setup",
+                "Preparing OpenWork/OpenCode for M365 Copilot.",
+                Some(2),
+                Some("Starting the setup checks.".to_string()),
+            ),
         );
         if let Err(error) = run(app, provider_bridge, Arc::clone(&status)) {
             tracing::warn!("[openwork-autostart] setup failed: {error}");
@@ -114,17 +126,21 @@ fn run(
     tracing::info!("[openwork-autostart] starting OpenWork/OpenCode setup");
     set_status(
         &status,
-        OpenWorkSetupSnapshot::preparing_stage(
+        OpenWorkSetupSnapshot::preparing_stage_progress(
             "provider_gateway",
             "Starting the local Copilot provider gateway.",
+            Some(PROGRESS_PROVIDER_GATEWAY),
+            Some("Starting Relay's local Copilot gateway.".to_string()),
         ),
     );
     let provider_token = ensure_provider_gateway(provider_bridge)?;
     set_status(
         &status,
-        OpenWorkSetupSnapshot::preparing_stage(
+        OpenWorkSetupSnapshot::preparing_stage_progress(
             "provider_config",
             "Writing the OpenCode provider config.",
+            Some(PROGRESS_PROVIDER_CONFIG),
+            Some("Writing the OpenCode provider configuration.".to_string()),
         ),
     );
     let global_config = global_config_path()?;
@@ -236,13 +252,35 @@ fn run_windows_first_run(
 
     let opencode = platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenCodeCli)
         .map_err(|error| format!("select OpenCode artifact: {error}"))?;
-    download_and_verify_artifact(
+    let openwork = platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenWorkDesktop)
+        .map_err(|error| format!("select OpenWork artifact: {error}"))?;
+    let total_download_bytes = opencode.size.saturating_add(openwork.size).max(1);
+    let mut completed_download_bytes = 0_u64;
+    download_and_verify_artifact_with_progress(
         &cache_root,
         PLATFORM,
         BootstrapArtifactKey::OpenCodeCli,
         opencode,
+        |progress| {
+            set_download_progress_status(
+                status,
+                completed_download_bytes.saturating_add(progress.downloaded_bytes),
+                total_download_bytes,
+                &progress,
+            );
+        },
     )
     .map_err(|error| format!("download OpenCode: {error}"))?;
+    completed_download_bytes = completed_download_bytes.saturating_add(opencode.size);
+    set_status(
+        status,
+        OpenWorkSetupSnapshot::preparing_stage_progress(
+            "download_openwork_opencode",
+            "Extracting and checking OpenCode.",
+            Some(PROGRESS_EXTRACT),
+            Some("OpenCode is downloaded. Checking the command now.".to_string()),
+        ),
+    );
     let extracted = extract_zip_artifact(
         &cache_root,
         PLATFORM,
@@ -256,24 +294,98 @@ fn run_windows_first_run(
 
     set_status(
         status,
-        OpenWorkSetupSnapshot::preparing_stage(
+        OpenWorkSetupSnapshot::preparing_stage_progress(
             "openwork_handoff",
             "Preparing the OpenWork installer handoff.",
+            Some(PROGRESS_HANDOFF),
+            Some("OpenCode is ready. Preparing OpenWork now.".to_string()),
         ),
     );
-    let openwork = platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenWorkDesktop)
-        .map_err(|error| format!("select OpenWork artifact: {error}"))?;
-    let verified = download_and_verify_artifact(
+    let verified = download_and_verify_artifact_with_progress(
         &cache_root,
         PLATFORM,
         BootstrapArtifactKey::OpenWorkDesktop,
         openwork,
+        |progress| {
+            set_download_progress_status(
+                status,
+                completed_download_bytes.saturating_add(progress.downloaded_bytes),
+                total_download_bytes,
+                &progress,
+            );
+        },
     )
     .map_err(|error| format!("download OpenWork: {error}"))?;
+    set_status(
+        status,
+        OpenWorkSetupSnapshot::preparing_stage_progress(
+            "openwork_handoff",
+            "Opening the OpenWork installer.",
+            Some(PROGRESS_HANDOFF),
+            Some("OpenWork is downloaded. Opening the installer.".to_string()),
+        ),
+    );
 
     open_openwork_installer_once(&app_local_data_dir, &verified.path, &openwork.version)
         .map_err(|error| format!("open OpenWork installer: {error}"))?;
     Ok(())
+}
+
+fn set_download_progress_status(
+    status: &Arc<Mutex<OpenWorkSetupSnapshot>>,
+    downloaded_bytes: u64,
+    total_download_bytes: u64,
+    progress: &BootstrapDownloadProgress,
+) {
+    let setup_percent = setup_download_percent(downloaded_bytes, total_download_bytes);
+    let action = if progress.reused {
+        "Using cached"
+    } else {
+        "Downloading"
+    };
+    let detail = format!(
+        "{action} {}: {} of {}.",
+        progress.artifact_name,
+        human_bytes(progress.downloaded_bytes),
+        human_bytes(progress.total_bytes)
+    );
+    set_status(
+        status,
+        OpenWorkSetupSnapshot::preparing_stage_progress(
+            "download_openwork_opencode",
+            "Downloading and verifying OpenWork/OpenCode.",
+            Some(setup_percent),
+            Some(detail),
+        ),
+    );
+}
+
+fn setup_download_percent(downloaded_bytes: u64, total_download_bytes: u64) -> u8 {
+    let span = PROGRESS_DOWNLOAD_END.saturating_sub(PROGRESS_DOWNLOAD_START) as u64;
+    if total_download_bytes == 0 {
+        return PROGRESS_DOWNLOAD_END;
+    }
+    let ratio = downloaded_bytes
+        .min(total_download_bytes)
+        .saturating_mul(span)
+        / total_download_bytes;
+    PROGRESS_DOWNLOAD_START.saturating_add(ratio as u8)
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let value = bytes as f64;
+    if value >= GB {
+        format!("{:.1} GB", value / GB)
+    } else if value >= MB {
+        format!("{:.1} MB", value / MB)
+    } else if value >= KB {
+        format!("{:.1} KB", value / KB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn set_status(status: &Arc<Mutex<OpenWorkSetupSnapshot>>, snapshot: OpenWorkSetupSnapshot) {

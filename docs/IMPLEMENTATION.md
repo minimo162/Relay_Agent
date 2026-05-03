@@ -23,6 +23,31 @@
 
 ## Milestone Log
 
+### 2026-05-03 Fix: OpenWork/OpenCode setup progress uses real download bytes
+
+Reworked the desktop setup progress bar so long first-run downloads no longer
+look stalled. `OpenWorkSetupSnapshot` now carries an optional
+`progressPercent` and `progressDetail` field, and the Windows bootstrap path
+updates those fields from actual downloaded bytes while fetching OpenCode and
+OpenWork. The UI uses backend progress when available, keeps the old
+stage-based estimate as a fallback, and changes the progress bar color when
+setup is blocked. The local E2E harness can now mock in-progress setup states,
+with coverage for a 42% OpenWork/OpenCode download state.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`:
+  passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_bootstrap -- --nocapture`:
+  passed, 11 tests.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen -- --nocapture`:
+  passed, 2 tests.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `E2E_SKIP_AUTH_SETUP=1 pnpm --filter @relay-agent/desktop test:e2e:local`:
+  passed, 4 tests.
+- `pnpm check`: passed.
+
 ### 2026-04-30 UX: OpenWork/OpenCode setup progress
 
 Added a beginner-friendly setup progress bar to the desktop launcher. The shell

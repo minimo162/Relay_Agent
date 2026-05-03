@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 
 type RelayMockConfig = {
   copilotReady?: boolean;
+  openworkSetup?: Record<string, unknown>;
 };
 
 type RelayMockState = {
@@ -10,8 +11,21 @@ type RelayMockState = {
   callbackCounter: number;
 };
 
-function initRelayMock(config: { copilotReady: boolean }) {
+function initRelayMock(config: { copilotReady: boolean; openworkSetup?: Record<string, unknown> }) {
   function mockDiagnostics() {
+    const openworkSetup = {
+      status: "ready",
+      stage: "ready",
+      message: "OpenWork/OpenCode is configured to use M365 Copilot.",
+      progressPercent: 100,
+      progressDetail: "OpenWork/OpenCode setup is complete.",
+      actionLabel: "Open OpenWork/OpenCode",
+      launchLabel: "Open OpenWork/OpenCode",
+      providerBaseUrl: "http://127.0.0.1:18180/v1",
+      configPath: "~/.config/opencode/opencode.json",
+      updatedAt: "2026-04-29T00:00:00Z",
+      ...config.openworkSetup,
+    };
     return {
       appVersion: "0.0.0-mock",
       targetOs: "linux",
@@ -29,16 +43,7 @@ function initRelayMock(config: { copilotReady: boolean }) {
       copilotBridgeConnected: true,
       copilotBridgeLoginRequired: false,
       opencodeRuntimeMessage: "mock runtime ready",
-      openworkSetup: {
-        status: "ready",
-        stage: "ready",
-        message: "OpenWork/OpenCode is configured to use M365 Copilot.",
-        actionLabel: "Open OpenWork/OpenCode",
-        launchLabel: "Open OpenWork/OpenCode",
-        providerBaseUrl: "http://127.0.0.1:18180/v1",
-        configPath: "~/.config/opencode/opencode.json",
-        updatedAt: "2026-04-29T00:00:00Z",
-      },
+      openworkSetup,
     };
   }
 
@@ -95,6 +100,7 @@ function initRelayMock(config: { copilotReady: boolean }) {
   };
 
   (window as any).__RELAY_MOCK__ = state;
+  (window as any).__RELAY_MOCK_CONFIG__ = config;
   (window as any).__TAURI_INTERNALS__ = {
     invoke,
     transformCallback(callback: (event: { event: string; id: number; payload: unknown }) => void) {
@@ -116,5 +122,6 @@ function initRelayMock(config: { copilotReady: boolean }) {
 export async function injectRelayMock(page: Page, config?: RelayMockConfig) {
   await page.addInitScript(initRelayMock, {
     copilotReady: config?.copilotReady ?? true,
+    openworkSetup: config?.openworkSetup,
   });
 }

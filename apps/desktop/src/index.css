@@ -818,7 +818,30 @@ body a:focus-visible {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--ra-accent) 0%, var(--ra-green) 100%);
-  transition: width 220ms ease;
+  transition: width 220ms ease, background-color 180ms ease;
+}
+
+.ra-setup-progress[data-state="current"] .ra-setup-progress__fill {
+  background:
+    linear-gradient(
+      90deg,
+      var(--ra-accent) 0%,
+      color-mix(in oklab, var(--ra-accent) 55%, var(--ra-green)) 62%,
+      var(--ra-green) 100%
+    );
+}
+
+.ra-setup-progress[data-state="blocked"] .ra-setup-progress__fill {
+  background: linear-gradient(90deg, var(--ra-red) 0%, color-mix(in oklab, var(--ra-red) 72%, var(--ra-yellow)) 100%);
+}
+
+.ra-setup-progress[data-state="blocked"] .ra-setup-progress__hint,
+.ra-setup-progress[data-state="blocked"] .ra-setup-progress__percent {
+  color: var(--ra-red);
+}
+
+.ra-setup-progress[data-state="done"] .ra-setup-progress__fill {
+  background: var(--ra-green);
 }
 
 .ra-setup-steps {

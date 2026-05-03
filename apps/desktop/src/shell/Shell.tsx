@@ -155,6 +155,11 @@ function setupProgressPercent(index: number, status: string, needsAttention: boo
   return Math.round(Math.min(95, ((index + 0.35) / maxIndex) * 100));
 }
 
+function normalizedProgressPercent(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function setupStepState(index: number, currentIndex: number, status: string, needsAttention: boolean): SetupProgressState {
   if (status === "ready") return "done";
   if (index < currentIndex) return "done";
@@ -195,14 +200,17 @@ export default function Shell(): JSX.Element {
     const needsAttention = setupStatus === "needs_attention";
     const setupStage = inferSetupStage(report);
     const progressIndex = setupProgressIndex(setupStage);
-    const progressPercent = setupProgressPercent(progressIndex, setupStatus, needsAttention);
+    const explicitProgressPercent = normalizedProgressPercent(report?.openworkSetup?.progressPercent);
+    const progressPercent = explicitProgressPercent ?? setupProgressPercent(progressIndex, setupStatus, needsAttention);
     const currentStep = OPENWORK_SETUP_STEPS[progressIndex] ?? OPENWORK_SETUP_STEPS[0];
+    const progressDetail = report?.openworkSetup?.progressDetail || currentStep.detail;
     return {
       title: setupTitle(report, copilot.status),
       message: setupMessage(report, copilot.message),
       status: setupStatus,
       setupStage,
       progressPercent,
+      progressDetail,
       currentStep,
       setupReady,
       copilotReady,
@@ -331,7 +339,11 @@ export default function Shell(): JSX.Element {
             <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">OpenWork/OpenCode</p>
             <h2 class="mt-2 text-2xl font-semibold">{setupState().title}</h2>
             <p class="mt-2 max-w-3xl text-sm text-[var(--ra-color-text-muted)]">{setupState().message}</p>
-            <div class="ra-setup-progress mt-5" aria-label="OpenWork/OpenCode setup progress">
+            <div
+              class="ra-setup-progress mt-5"
+              data-state={setupState().needsAttention ? "blocked" : setupState().status === "ready" ? "done" : "current"}
+              aria-label="OpenWork/OpenCode setup progress"
+            >
               <div class="ra-setup-progress__topline">
                 <div>
                   <p class="ra-setup-progress__eyebrow">Setup progress</p>
@@ -346,10 +358,11 @@ export default function Shell(): JSX.Element {
                 aria-valuemax="100"
                 aria-valuenow={setupState().progressPercent}
                 aria-label={`OpenWork/OpenCode setup is ${setupState().progressPercent}% complete`}
+                aria-valuetext={`${setupState().currentStep.label}: ${setupState().progressDetail}`}
               >
                 <div class="ra-setup-progress__fill" style={{ width: `${setupState().progressPercent}%` }} />
               </div>
-              <p class="ra-setup-progress__hint">{setupState().currentStep.detail}</p>
+              <p class="ra-setup-progress__hint">{setupState().progressDetail}</p>
             </div>
             <div class="ra-setup-steps mt-4">
               {setupState().steps.map((step) => (
