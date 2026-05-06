@@ -40,6 +40,15 @@ sidecars as Relay-owned listeners. This lets Retry Setup clear stale
 OpenWork/OpenCode provider gateways that hold ports `18180-18211` before Relay
 starts the new gateway.
 
+### 2026-05-06 Fix: Escape Windows reserved provider port ranges
+
+Relay no longer requires the OpenWork/OpenCode provider gateway to bind inside
+the fixed `18180-18211` range. After trying and reclaiming that preferred range,
+the desktop setup falls back to OS-assigned loopback ports, then writes the
+actual `http://127.0.0.1:<port>/v1` URL into the global OpenCode config and
+ready-state diagnostics. This covers Windows excluded port ranges where no
+killable process exists even though Node reports `EADDRINUSE`.
+
 ### 2026-05-03 Docs: self-signed Windows installer signing path
 
 Added an internal-only Windows signing helper for smoke testing unsigned NSIS

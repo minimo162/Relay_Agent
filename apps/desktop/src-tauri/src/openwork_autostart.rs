@@ -14,7 +14,6 @@ use crate::openwork_bootstrap::{
 
 const PROVIDER_PORT: u16 = 18180;
 const EDGE_CDP_PORT: u16 = 9360;
-const PROVIDER_BASE_URL: &str = "http://127.0.0.1:18180/v1";
 const PLATFORM: &str = "windows-x64";
 const PROGRESS_PROVIDER_GATEWAY: u8 = 8;
 const PROGRESS_PROVIDER_CONFIG: u8 = 16;
@@ -27,6 +26,12 @@ const PROGRESS_HANDOFF: u8 = 96;
 enum WindowsLaunchTarget {
     Executable(PathBuf),
     Shortcut(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+struct ProviderGatewayStart {
+    token: String,
+    base_url: String,
 }
 
 pub fn spawn(
@@ -128,7 +133,7 @@ fn run(
             Some("Starting Relay's local Copilot gateway.".to_string()),
         ),
     );
-    let provider_token = ensure_provider_gateway(provider_bridge)?;
+    let provider_gateway = ensure_provider_gateway(provider_bridge)?;
     set_status(
         &status,
         OpenWorkSetupSnapshot::preparing_stage_progress(
@@ -139,11 +144,16 @@ fn run(
         ),
     );
     let global_config = global_config_path()?;
-    write_opencode_provider_config_file(&global_config, PROVIDER_BASE_URL, &provider_token)
-        .map_err(|error| format!("write global OpenCode config: {error}"))?;
+    write_opencode_provider_config_file(
+        &global_config,
+        &provider_gateway.base_url,
+        &provider_gateway.token,
+    )
+    .map_err(|error| format!("write global OpenCode config: {error}"))?;
     tracing::info!(
-        "[openwork-autostart] installed global OpenCode provider config at {}",
-        global_config.display()
+        "[openwork-autostart] installed global OpenCode provider config at {} with provider {}",
+        global_config.display(),
+        provider_gateway.base_url
     );
 
     if cfg!(windows) {
@@ -154,14 +164,16 @@ fn run(
         &status,
         OpenWorkSetupSnapshot::ready(
             "OpenWork/OpenCode is configured to use M365 Copilot.",
-            PROVIDER_BASE_URL,
+            provider_gateway.base_url,
             global_config.display().to_string(),
         ),
     );
     Ok(())
 }
 
-fn ensure_provider_gateway(provider_bridge: Arc<CopilotBridgeManager>) -> Result<String, String> {
+fn ensure_provider_gateway(
+    provider_bridge: Arc<CopilotBridgeManager>,
+) -> Result<ProviderGatewayStart, String> {
     let server_arc = {
         let mut slot = provider_bridge.lock()?;
         if slot.is_none() {
@@ -221,10 +233,14 @@ fn ensure_provider_gateway(provider_bridge: Arc<CopilotBridgeManager>) -> Result
     let server = server_arc
         .lock()
         .map_err(|error| format!("provider gateway mutex poisoned: {error}"))?;
-    server
+    let token = server
         .boot_token()
         .map(str::to_string)
-        .ok_or_else(|| "provider gateway did not expose a boot token".to_string())
+        .ok_or_else(|| "provider gateway did not expose a boot token".to_string())?;
+    Ok(ProviderGatewayStart {
+        token,
+        base_url: server.openai_base_url(),
+    })
 }
 
 fn run_windows_first_run(
@@ -614,15 +630,16 @@ mod tests {
 
     #[test]
     fn provider_config_selects_relay_model_by_default() {
+        let provider_base_url = "http://127.0.0.1:18180/v1";
         let config = crate::openwork_bootstrap::merge_opencode_provider_config(
             json!({}),
-            PROVIDER_BASE_URL,
+            provider_base_url,
             "token",
         );
         assert_eq!(config["model"], "relay-agent/m365-copilot");
         assert_eq!(
             config["provider"]["relay-agent"]["options"]["baseURL"],
-            PROVIDER_BASE_URL
+            provider_base_url
         );
     }
 

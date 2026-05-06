@@ -102,6 +102,11 @@ Edge CDP port: 9360
 Token file: ~/.relay-agent/opencode-provider-token
 ```
 
+The installed desktop app treats `18180` as the preferred provider port. If
+Windows has reserved the whole `18180-18211` range or another service blocks it,
+Relay falls back to an OS-assigned loopback port and writes that actual
+`http://127.0.0.1:<port>/v1` URL into the OpenCode config.
+
 The script prints a manual `RELAY_AGENT_API_KEY` export and `opencode.json`
 provider block for diagnostic or recovery use. To print the config without
 starting Edge or the provider:

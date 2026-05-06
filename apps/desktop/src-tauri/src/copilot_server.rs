@@ -1,5 +1,6 @@
 use std::{
     env,
+    net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -24,6 +25,9 @@ const COMPLETION_REJOIN_TIMEOUT_SECS: u64 = 90;
 const ABORT_REQUEST_TIMEOUT_SECS: u64 = 5;
 /// If `127.0.0.1:18080` is held by a stray `node copilot_server.js` (e.g. after `--keep-app`), try the next ports.
 const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
+/// If the fixed range is unavailable due to Windows excluded port ranges or another local service,
+/// fall back to a handful of OS-assigned loopback ports and write the actual URL into OpenCode.
+const COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS: u8 = 8;
 pub(crate) const RELAY_COPILOT_SERVICE_NAME: &str = "relay_copilot_server";
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -442,6 +446,33 @@ impl std::fmt::Display for CopilotStatusCheckError {
     }
 }
 
+fn push_unique_port(candidates: &mut Vec<u16>, port: u16) {
+    if port > 0 && !candidates.contains(&port) {
+        candidates.push(port);
+    }
+}
+
+fn available_loopback_port() -> Option<u16> {
+    TcpListener::bind(("127.0.0.1", 0))
+        .ok()
+        .and_then(|listener| listener.local_addr().ok().map(|addr| addr.port()))
+}
+
+fn copilot_http_port_candidates(preferred_port: u16) -> Vec<u16> {
+    let mut candidates = Vec::with_capacity(
+        usize::from(COPILOT_HTTP_PORT_FALLBACKS) + usize::from(COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS),
+    );
+    for offset in 0..COPILOT_HTTP_PORT_FALLBACKS {
+        push_unique_port(&mut candidates, preferred_port.saturating_add(offset));
+    }
+    for _ in 0..COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS {
+        if let Some(port) = available_loopback_port() {
+            push_unique_port(&mut candidates, port);
+        }
+    }
+    candidates
+}
+
 impl CopilotServer {
     pub fn new(
         port: u16,
@@ -575,13 +606,21 @@ impl CopilotServer {
             .await;
         }
 
-        for offset in 0..COPILOT_HTTP_PORT_FALLBACKS {
+        let fixed_range_end = preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1);
+        let port_candidates = copilot_http_port_candidates(preferred_port);
+        for (attempt_index, candidate_port) in port_candidates.into_iter().enumerate() {
             self.stop();
-            self.port = preferred_port.saturating_add(offset);
+            self.port = candidate_port;
 
-            if offset > 0 {
+            let is_fixed_range_attempt = attempt_index < usize::from(COPILOT_HTTP_PORT_FALLBACKS);
+            if attempt_index > 0 && is_fixed_range_attempt {
                 warn!(
                     "[copilot] retrying copilot_server on HTTP port {} (previous port not usable)",
+                    self.port
+                );
+            } else if !is_fixed_range_attempt {
+                warn!(
+                    "[copilot] retrying copilot_server on OS-assigned HTTP port {} (fixed provider range not usable)",
                     self.port
                 );
             }
@@ -693,9 +732,8 @@ impl CopilotServer {
 
         Err(CopilotError::PromptError(Box::new(
             CopilotPromptFailure::Message(format!(
-                "copilot_server could not bind on ports {}–{}; stop orphan node.exe processes or free a port",
-                preferred_port,
-                preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1)
+                "copilot_server could not bind on fixed ports {}–{} or OS-assigned fallback ports; stop orphan node.exe processes, close other Relay windows, or check Windows excluded port ranges",
+                preferred_port, fixed_range_end
             )),
         )))
     }
@@ -1178,6 +1216,10 @@ impl CopilotServer {
         format!("http://127.0.0.1:{}", self.port)
     }
 
+    pub fn openai_base_url(&self) -> String {
+        format!("{}/v1", self.server_url())
+    }
+
     pub fn progress_probe(&self) -> CopilotProgressProbe {
         CopilotProgressProbe {
             server_url: self.server_url(),
@@ -1281,9 +1323,9 @@ fn find_node() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_prompt_error_body, resolve_script_path_candidates, validate_health_body,
-        CopilotError, CopilotPromptFailure, CopilotSendPromptRequest, CopilotServer, HealthBody,
-        RELAY_COPILOT_SERVICE_NAME,
+        copilot_http_port_candidates, parse_prompt_error_body, resolve_script_path_candidates,
+        validate_health_body, CopilotError, CopilotPromptFailure, CopilotSendPromptRequest,
+        CopilotServer, HealthBody, COPILOT_HTTP_PORT_FALLBACKS, RELAY_COPILOT_SERVICE_NAME,
     };
     use reqwest::StatusCode;
     use std::path::PathBuf;
@@ -1398,6 +1440,23 @@ mod tests {
         let body = CopilotServer::build_abort_prompt_body("session-1", "request-1");
         assert_eq!(body["relay_session_id"], serde_json::json!("session-1"));
         assert_eq!(body["relay_request_id"], serde_json::json!("request-1"));
+    }
+
+    #[test]
+    fn provider_port_candidates_try_fixed_range_before_dynamic_ports() {
+        let candidates = copilot_http_port_candidates(18180);
+        assert!(candidates.len() >= usize::from(COPILOT_HTTP_PORT_FALLBACKS));
+        assert_eq!(candidates[0], 18180);
+        assert_eq!(
+            candidates[usize::from(COPILOT_HTTP_PORT_FALLBACKS - 1)],
+            18211
+        );
+    }
+
+    #[test]
+    fn openai_base_url_tracks_actual_server_port() {
+        let server = CopilotServer::new(29123, 9360, None, None).expect("server");
+        assert_eq!(server.openai_base_url(), "http://127.0.0.1:29123/v1");
     }
 
     #[test]
