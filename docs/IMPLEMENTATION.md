@@ -31,6 +31,15 @@ desktop progress view shows the concrete blocked step and a visible recovery
 detail for provider gateway, config, download, and OpenWork handoff failures, so
 users do not need to open advanced diagnostics just to see what stopped.
 
+### 2026-05-06 Fix: Reclaim installed provider gateway port orphans
+
+Expanded the Windows provider gateway port reclaim path for installed Relay.
+The OpenWork/OpenCode provider range now combines `Get-NetTCPConnection` with a
+`netstat -ano` fallback and recognizes target-suffixed `relay-node*.exe`
+sidecars as Relay-owned listeners. This lets Retry Setup clear stale
+OpenWork/OpenCode provider gateways that hold ports `18180-18211` before Relay
+starts the new gateway.
+
 ### 2026-05-03 Docs: self-signed Windows installer signing path
 
 Added an internal-only Windows signing helper for smoke testing unsigned NSIS

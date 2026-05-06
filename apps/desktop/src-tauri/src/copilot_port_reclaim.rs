@@ -220,18 +220,44 @@ fn kill_orphan_copilot_node_listeners_windows(
         r#"
 $start = {start_port}
 $end = {end_port}
-$connections = Get-NetTCPConnection -LocalAddress 127.0.0.1 -State Listen -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.LocalPort -ge $start -and $_.LocalPort -le $end }}
-$owningPids = $connections | Select-Object -ExpandProperty OwningProcess -Unique
+$owningPids = New-Object 'System.Collections.Generic.HashSet[int]'
+function Add-RelayCandidatePid($value) {{
+  $parsedProcessId = 0
+  if ([int]::TryParse([string]$value, [ref]$parsedProcessId) -and $parsedProcessId -gt 0) {{
+    [void]$owningPids.Add($parsedProcessId)
+  }}
+}}
+
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.LocalPort -ge $start -and $_.LocalPort -le $end }} |
+  ForEach-Object {{ Add-RelayCandidatePid $_.OwningProcess }}
+
+netstat -ano 2>$null | ForEach-Object {{
+  $line = ([string]$_).Trim()
+  if (-not $line.StartsWith("TCP")) {{ return }}
+  $columns = $line -split "\s+"
+  if ($columns.Length -lt 5 -or $columns[3] -ne "LISTENING") {{ return }}
+  $localAddress = [string]$columns[1]
+  foreach ($port in $start..$end) {{
+    if ($localAddress.EndsWith(":$port")) {{
+      Add-RelayCandidatePid $columns[-1]
+      break
+    }}
+  }}
+}}
+
 foreach ($owningPid in $owningPids) {{
   $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $owningPid" -ErrorAction SilentlyContinue
   if ($null -eq $proc) {{ continue }}
   $name = [string]$proc.Name
   $cmd = [string]$proc.CommandLine
   $exe = [string]$proc.ExecutablePath
-  $isNode = $name -ieq "node.exe" -or $name -ieq "relay-node.exe" -or $exe -match "\\(?:node|relay-node)\.exe$"
-  $isRelayCopilot = $cmd -match "copilot_server\.js" -or $exe -match "\\relay-node\.exe$"
-  if ($isNode -and $isRelayCopilot) {{
+  $exeName = if ([string]::IsNullOrWhiteSpace($exe)) {{ "" }} else {{ [System.IO.Path]::GetFileName($exe) }}
+  $isNode = $name -ieq "node.exe" -or $name -like "relay-node*.exe" -or $exeName -ieq "node.exe" -or $exeName -like "relay-node*.exe"
+  $isBundledRelayNode = $name -like "relay-node*.exe" -or $exeName -like "relay-node*.exe"
+  $hasRelayBridgeArgs = $cmd -match "copilot_server\.js" -or (($cmd -match "--boot-token") -and ($cmd -match "--instance-id") -and ($cmd -match "--cdp-port"))
+  $isRelayCopilot = ($isNode -and $hasRelayBridgeArgs) -or $isBundledRelayNode
+  if ($isRelayCopilot) {{
     Stop-Process -Id $owningPid -Force -ErrorAction SilentlyContinue
     Write-Output $owningPid
   }}
