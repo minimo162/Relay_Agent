@@ -48,6 +48,33 @@ test("desktop shows live OpenWork/OpenCode download progress", async ({ page }) 
   );
 });
 
+test("desktop shows actionable provider gateway setup failure", async ({ page }) => {
+  await injectRelayMock(page, {
+    openworkSetup: {
+      status: "needs_attention",
+      stage: "provider_gateway",
+      message: "OpenWork/OpenCode setup needs attention: provider gateway start failed: copilot_server.js not found",
+      progressPercent: 8,
+      progressDetail:
+        "Relay could not find the bundled Copilot gateway file. Reinstall Relay from the latest installer, then try setup again. Detail: provider gateway start failed: copilot_server.js not found",
+      actionLabel: "Retry setup",
+      launchLabel: null,
+    },
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
+
+  await expect(page.getByRole("heading", { name: "Setup needs attention" })).toBeVisible();
+  await expect(page.locator(".ra-setup-progress__current")).toHaveText("Start provider");
+  await expect(page.getByText("Setup stopped here")).toBeVisible();
+  await expect(page.locator(".ra-setup-attention__detail")).toContainText(/bundled Copilot gateway file/);
+  await expect(page.getByRole("button", { name: "Try Setup Again" })).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: /OpenWork\/OpenCode setup is 8% complete/ })).toHaveAttribute(
+    "aria-valuenow",
+    "8",
+  );
+});
+
 test("advanced diagnostics panel reads provider bridge status", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);

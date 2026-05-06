@@ -75,7 +75,9 @@ function setupTitle(diagnostics: RelayDiagnostics | null, copilotStatus: string)
 
 function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: string | null | undefined): string {
   const setup = diagnostics?.openworkSetup;
-  if (setup?.status === "needs_attention") return "Relay could not finish setup. Try again, or open advanced details for support.";
+  if (setup?.status === "needs_attention") {
+    return "Relay could not finish setup. Review the stopped step below, then use Try Setup Again.";
+  }
   if (copilotMessage && copilotMessage.toLowerCase().includes("sign")) return copilotMessage;
   if (setup?.status === "ready" && copilotMessage) return "Open OpenWork/OpenCode to begin.";
   if (setup?.status === "ready") return "Open OpenWork/OpenCode to begin.";
@@ -174,6 +176,12 @@ function setupStepValue(state: SetupProgressState): string {
   return "Waiting";
 }
 
+function setupAttentionDetail(diagnostics: RelayDiagnostics | null): string | null {
+  const setup = diagnostics?.openworkSetup;
+  if (setup?.status !== "needs_attention") return null;
+  return setup.progressDetail || setup.message || "Relay could not finish setup.";
+}
+
 export default function Shell(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
@@ -204,6 +212,7 @@ export default function Shell(): JSX.Element {
     const progressPercent = explicitProgressPercent ?? setupProgressPercent(progressIndex, setupStatus, needsAttention);
     const currentStep = OPENWORK_SETUP_STEPS[progressIndex] ?? OPENWORK_SETUP_STEPS[0];
     const progressDetail = report?.openworkSetup?.progressDetail || currentStep.detail;
+    const attentionDetail = setupAttentionDetail(report);
     return {
       title: setupTitle(report, copilot.status),
       message: setupMessage(report, copilot.message),
@@ -211,6 +220,7 @@ export default function Shell(): JSX.Element {
       setupStage,
       progressPercent,
       progressDetail,
+      attentionDetail,
       currentStep,
       setupReady,
       copilotReady,
@@ -364,6 +374,12 @@ export default function Shell(): JSX.Element {
               </div>
               <p class="ra-setup-progress__hint">{setupState().progressDetail}</p>
             </div>
+            <Show when={setupState().attentionDetail}>
+              <div class="ra-setup-attention" role="status" aria-live="polite">
+                <p class="ra-setup-attention__label">Setup stopped here</p>
+                <p class="ra-setup-attention__detail">{setupState().attentionDetail}</p>
+              </div>
+            </Show>
             <div class="ra-setup-steps mt-4">
               {setupState().steps.map((step) => (
                 <div class="ra-setup-step" data-state={step.state}>

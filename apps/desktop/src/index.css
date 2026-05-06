@@ -844,6 +844,30 @@ body a:focus-visible {
   background: var(--ra-green);
 }
 
+.ra-setup-attention {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.9rem;
+  padding: 0.85rem 1rem;
+  border-left: 0.25rem solid var(--ra-red);
+  background: color-mix(in oklab, var(--ra-red) 7%, var(--ra-surface-card));
+}
+
+.ra-setup-attention__label {
+  margin: 0;
+  color: var(--ra-red);
+  font-size: var(--ra-text-caption);
+  font-weight: 700;
+}
+
+.ra-setup-attention__detail {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--ra-text-primary);
+  font-size: var(--ra-text-caption);
+  line-height: 1.5;
+}
+
 .ra-setup-steps {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

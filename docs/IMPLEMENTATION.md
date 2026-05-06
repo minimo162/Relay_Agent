@@ -23,6 +23,14 @@
 
 ## Milestone Log
 
+### 2026-05-06 Fix: Show actionable OpenWork/OpenCode setup failures
+
+Relay now preserves the failed OpenWork/OpenCode setup stage when setup enters
+`needs_attention`, instead of collapsing every failure into a generic stage. The
+desktop progress view shows the concrete blocked step and a visible recovery
+detail for provider gateway, config, download, and OpenWork handoff failures, so
+users do not need to open advanced diagnostics just to see what stopped.
+
 ### 2026-05-03 Docs: self-signed Windows installer signing path
 
 Added an internal-only Windows signing helper for smoke testing unsigned NSIS

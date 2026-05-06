@@ -123,12 +123,22 @@ impl OpenWorkSetupSnapshot {
 
     #[must_use]
     pub fn needs_attention(message: impl Into<String>) -> Self {
+        Self::needs_attention_stage_progress("needs_attention", message, None, None)
+    }
+
+    #[must_use]
+    pub fn needs_attention_stage_progress(
+        stage: impl Into<String>,
+        message: impl Into<String>,
+        progress_percent: Option<u8>,
+        progress_detail: Option<String>,
+    ) -> Self {
         Self {
             status: "needs_attention".to_string(),
-            stage: "needs_attention".to_string(),
+            stage: stage.into(),
             message: message.into(),
-            progress_percent: None,
-            progress_detail: None,
+            progress_percent: progress_percent.map(|value| value.min(100)),
+            progress_detail,
             action_label: Some("Retry setup".to_string()),
             launch_label: None,
             provider_base_url: None,

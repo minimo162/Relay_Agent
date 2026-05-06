@@ -57,12 +57,7 @@ pub fn spawn(
         );
         if let Err(error) = run(app, provider_bridge, Arc::clone(&status)) {
             tracing::warn!("[openwork-autostart] setup failed: {error}");
-            set_status(
-                &status,
-                OpenWorkSetupSnapshot::needs_attention(format!(
-                    "OpenWork/OpenCode setup needs attention: {error}"
-                )),
-            );
+            set_status(&status, setup_attention_snapshot(&status, error));
         }
     });
 }
@@ -392,6 +387,57 @@ fn set_status(status: &Arc<Mutex<OpenWorkSetupSnapshot>>, snapshot: OpenWorkSetu
     if let Ok(mut current) = status.lock() {
         *current = snapshot;
     }
+}
+
+fn setup_attention_snapshot(
+    status: &Arc<Mutex<OpenWorkSetupSnapshot>>,
+    error: String,
+) -> OpenWorkSetupSnapshot {
+    let current = status.lock().ok().map(|snapshot| snapshot.clone());
+    let stage = current
+        .as_ref()
+        .map(|snapshot| snapshot.stage.as_str())
+        .filter(|stage| !stage.is_empty() && *stage != "ready")
+        .unwrap_or("setup")
+        .to_string();
+    let progress_percent = current.and_then(|snapshot| snapshot.progress_percent);
+    let message = format!("OpenWork/OpenCode setup needs attention: {error}");
+    OpenWorkSetupSnapshot::needs_attention_stage_progress(
+        stage.clone(),
+        message,
+        progress_percent,
+        Some(setup_attention_detail(&stage, &error)),
+    )
+}
+
+fn setup_attention_detail(stage: &str, error: &str) -> String {
+    match stage {
+        "provider_gateway" => provider_gateway_attention_detail(error),
+        "provider_config" => format!(
+            "Relay could not write the OpenCode provider config. Check file permissions and try setup again. Detail: {error}"
+        ),
+        "download_openwork_opencode" => format!(
+            "Relay could not download or verify OpenWork/OpenCode. Check the network connection and try setup again. Detail: {error}"
+        ),
+        "openwork_handoff" => format!(
+            "Relay downloaded OpenWork/OpenCode but could not finish opening OpenWork. Try setup again, then use Open OpenWork/OpenCode. Detail: {error}"
+        ),
+        _ => format!("Relay could not finish setup. Try setup again. Detail: {error}"),
+    }
+}
+
+fn provider_gateway_attention_detail(error: &str) -> String {
+    let lower = error.to_lowercase();
+    let hint = if lower.contains("copilot_server.js not found") {
+        "Relay could not find the bundled Copilot gateway file. Reinstall Relay from the latest installer, then try setup again."
+    } else if lower.contains("node.js not found") || lower.contains("bundled relay-node") {
+        "Relay could not find its bundled Node runtime. Reinstall Relay from the latest installer, then try setup again."
+    } else if lower.contains("could not bind on ports") || lower.contains("orphan node.exe") {
+        "All local provider gateway ports are busy. Close other Relay windows, stop old node.exe or relay-node.exe processes, then try setup again."
+    } else {
+        "Relay could not start the local Copilot gateway. Try setup again; if it repeats, close other Relay windows and old node.exe or relay-node.exe processes."
+    };
+    format!("{hint} Detail: {error}")
 }
 
 fn open_openwork_installer_once(
