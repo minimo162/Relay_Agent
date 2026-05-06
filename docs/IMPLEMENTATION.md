@@ -49,6 +49,12 @@ actual `http://127.0.0.1:<port>/v1` URL into the global OpenCode config and
 ready-state diagnostics. This covers Windows excluded port ranges where no
 killable process exists even though Node reports `EADDRINUSE`.
 
+Follow-up: the OS-assigned fallback now lets `copilot_server.js` bind with
+`--port 0` and report the actual listener through a short-lived port file,
+instead of probing a supposedly-free port in Rust and racing another process or
+Windows policy. Relay also preserves a bounded startup stderr/stdout excerpt in
+the final setup error so non-port startup failures are visible in diagnostics.
+
 ### 2026-05-03 Docs: self-signed Windows installer signing path
 
 Added an internal-only Windows signing helper for smoke testing unsigned NSIS

@@ -1,6 +1,6 @@
 use std::{
     env,
-    net::TcpListener,
+    path::Path,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -27,8 +27,9 @@ const ABORT_REQUEST_TIMEOUT_SECS: u64 = 5;
 const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
 /// If the fixed range is unavailable due to Windows excluded port ranges or another local service,
 /// fall back to a handful of OS-assigned loopback ports and write the actual URL into OpenCode.
-const COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS: u8 = 8;
+const COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS: u8 = 3;
 pub(crate) const RELAY_COPILOT_SERVICE_NAME: &str = "relay_copilot_server";
+const STARTUP_LOG_LINE_LIMIT: usize = 80;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -383,6 +384,7 @@ pub struct CopilotServer {
     last_bridge_failure: Option<CopilotBridgeFailureInfo>,
     last_repair_stage_stats: Vec<CopilotRepairStageStats>,
     reclaim_orphan_node_port_range: bool,
+    startup_output: Arc<Mutex<Vec<String>>>,
     #[allow(dead_code)]
     log_threads: Vec<thread::JoinHandle<()>>,
 }
@@ -452,25 +454,55 @@ fn push_unique_port(candidates: &mut Vec<u16>, port: u16) {
     }
 }
 
-fn available_loopback_port() -> Option<u16> {
-    TcpListener::bind(("127.0.0.1", 0))
-        .ok()
-        .and_then(|listener| listener.local_addr().ok().map(|addr| addr.port()))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CopilotHttpPortCandidate {
+    Fixed(u16),
+    Dynamic,
 }
 
-fn copilot_http_port_candidates(preferred_port: u16) -> Vec<u16> {
+impl CopilotHttpPortCandidate {
+    fn listen_port(self) -> u16 {
+        match self {
+            Self::Fixed(port) => port,
+            Self::Dynamic => 0,
+        }
+    }
+
+    fn is_fixed(self) -> bool {
+        matches!(self, Self::Fixed(_))
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Fixed(port) => port.to_string(),
+            Self::Dynamic => "OS-assigned dynamic port".to_string(),
+        }
+    }
+}
+
+fn copilot_http_port_candidates(preferred_port: u16) -> Vec<CopilotHttpPortCandidate> {
     let mut candidates = Vec::with_capacity(
         usize::from(COPILOT_HTTP_PORT_FALLBACKS) + usize::from(COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS),
     );
+    let mut fixed_ports = Vec::with_capacity(usize::from(COPILOT_HTTP_PORT_FALLBACKS));
     for offset in 0..COPILOT_HTTP_PORT_FALLBACKS {
-        push_unique_port(&mut candidates, preferred_port.saturating_add(offset));
+        push_unique_port(&mut fixed_ports, preferred_port.saturating_add(offset));
     }
+    candidates.extend(fixed_ports.into_iter().map(CopilotHttpPortCandidate::Fixed));
     for _ in 0..COPILOT_HTTP_DYNAMIC_PORT_FALLBACKS {
-        if let Some(port) = available_loopback_port() {
-            push_unique_port(&mut candidates, port);
-        }
+        candidates.push(CopilotHttpPortCandidate::Dynamic);
     }
     candidates
+}
+
+fn record_startup_output(lines: &Arc<Mutex<Vec<String>>>, stream: &str, line: &str) {
+    if let Ok(mut output) = lines.lock() {
+        output.push(format!("{stream}: {line}"));
+        if output.len() > STARTUP_LOG_LINE_LIMIT {
+            let excess = output.len() - STARTUP_LOG_LINE_LIMIT;
+            output.drain(0..excess);
+        }
+    }
 }
 
 impl CopilotServer {
@@ -503,6 +535,7 @@ impl CopilotServer {
             last_bridge_failure: None,
             last_repair_stage_stats: Vec::new(),
             reclaim_orphan_node_port_range: false,
+            startup_output: Arc::new(Mutex::new(Vec::new())),
             log_threads: Vec::new(),
         })
     }
@@ -608,20 +641,19 @@ impl CopilotServer {
 
         let fixed_range_end = preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1);
         let port_candidates = copilot_http_port_candidates(preferred_port);
-        for (attempt_index, candidate_port) in port_candidates.into_iter().enumerate() {
+        let mut startup_failures = Vec::new();
+        for (attempt_index, candidate) in port_candidates.into_iter().enumerate() {
             self.stop();
-            self.port = candidate_port;
+            self.port = candidate.listen_port();
 
-            let is_fixed_range_attempt = attempt_index < usize::from(COPILOT_HTTP_PORT_FALLBACKS);
-            if attempt_index > 0 && is_fixed_range_attempt {
+            if attempt_index > 0 && candidate.is_fixed() {
                 warn!(
                     "[copilot] retrying copilot_server on HTTP port {} (previous port not usable)",
                     self.port
                 );
-            } else if !is_fixed_range_attempt {
+            } else if !candidate.is_fixed() {
                 warn!(
-                    "[copilot] retrying copilot_server on OS-assigned HTTP port {} (fixed provider range not usable)",
-                    self.port
+                    "[copilot] retrying copilot_server on OS-assigned HTTP port (fixed provider range not usable)"
                 );
             }
 
@@ -630,12 +662,14 @@ impl CopilotServer {
             self.boot_token = Some(boot_token.clone());
             self.instance_id = Some(instance_id.clone());
 
-            crate::copilot_port_reclaim::maybe_reclaim_stale_copilot_http_port(
-                &self.client,
-                self.port,
-                &instance_id,
-            )
-            .await;
+            if candidate.is_fixed() {
+                crate::copilot_port_reclaim::maybe_reclaim_stale_copilot_http_port(
+                    &self.client,
+                    self.port,
+                    &instance_id,
+                )
+                .await;
+            }
 
             let mut args = vec![
                 "--no-warnings".to_string(), // suppress ESM warnings
@@ -649,6 +683,19 @@ impl CopilotServer {
                 "--instance-id".to_string(),
                 instance_id,
             ];
+            let port_file = if candidate.is_fixed() {
+                None
+            } else {
+                let path = env::temp_dir().join(format!(
+                    "relay-copilot-port-{}-{}.txt",
+                    std::process::id(),
+                    Uuid::new_v4()
+                ));
+                let _ = std::fs::remove_file(&path);
+                args.push("--port-file".to_string());
+                args.push(path.to_string_lossy().to_string());
+                Some(path)
+            };
 
             if let Some(ref data_dir) = self.user_data_dir {
                 args.push("--user-data-dir".to_string());
@@ -684,32 +731,63 @@ impl CopilotServer {
 
             info!("[copilot] spawned node (pid: {})", child.id());
 
-            // Pipe stderr/stdout to tracing so we can see JS-side errors
+            // Pipe stderr/stdout to tracing and keep a short startup excerpt for user-facing errors.
             let mut log_threads = Vec::new();
+            let startup_output = Arc::new(Mutex::new(Vec::new()));
             if let Some(stderr) = child.stderr.take() {
+                let lines = Arc::clone(&startup_output);
                 log_threads.push(thread::spawn(move || {
                     use std::io::BufRead;
                     for line in std::io::BufReader::new(stderr)
                         .lines()
                         .map_while(Result::ok)
                     {
+                        record_startup_output(&lines, "stderr", &line);
                         tracing::info!("[copilot:err] {line}");
                     }
                 }));
             }
             if let Some(stdout) = child.stdout.take() {
+                let lines = Arc::clone(&startup_output);
                 log_threads.push(thread::spawn(move || {
                     use std::io::BufRead;
                     for line in std::io::BufReader::new(stdout)
                         .lines()
                         .map_while(Result::ok)
                     {
+                        record_startup_output(&lines, "stdout", &line);
                         tracing::info!("[copilot:out] {line}");
                     }
                 }));
             }
             self.log_threads = log_threads;
+            self.startup_output = startup_output;
             self.process = Some(Arc::new(Mutex::new(child)));
+
+            if let Some(path) = &port_file {
+                if let Err(error) = self
+                    .wait_for_assigned_port_file(path, READY_TIMEOUT_SECS)
+                    .await
+                {
+                    warn!(
+                        "[copilot] copilot_server did not report an OS-assigned port: {}",
+                        error
+                    );
+                    startup_failures.push(format!(
+                        "{}: {}; {}",
+                        candidate.label(),
+                        error,
+                        self.startup_output_excerpt()
+                    ));
+                    self.stop();
+                    let _ = std::fs::remove_file(path);
+                    match error {
+                        CopilotError::ProcessExited(_) | CopilotError::StartupTimeout => continue,
+                        _ => return Err(error),
+                    }
+                }
+                let _ = std::fs::remove_file(path);
+            }
 
             match self.wait_for_ready(READY_TIMEOUT_SECS).await {
                 Ok(()) => {
@@ -721,6 +799,12 @@ impl CopilotServer {
                         "[copilot] copilot_server on port {} did not become ready: {}",
                         self.port, e
                     );
+                    startup_failures.push(format!(
+                        "{}: {}; {}",
+                        candidate.label(),
+                        e,
+                        self.startup_output_excerpt()
+                    ));
                     self.stop();
                     match e {
                         CopilotError::ProcessExited(_) | CopilotError::StartupTimeout => {}
@@ -732,8 +816,13 @@ impl CopilotServer {
 
         Err(CopilotError::PromptError(Box::new(
             CopilotPromptFailure::Message(format!(
-                "copilot_server could not bind on fixed ports {}–{} or OS-assigned fallback ports; stop orphan node.exe processes, close other Relay windows, or check Windows excluded port ranges",
-                preferred_port, fixed_range_end
+                "copilot_server could not start on fixed ports {}–{} or dynamic OS-assigned port fallback; last startup failure: {}",
+                preferred_port,
+                fixed_range_end,
+                startup_failures
+                    .last()
+                    .map(String::as_str)
+                    .unwrap_or("no startup detail captured")
             )),
         )))
     }
@@ -1174,6 +1263,59 @@ impl CopilotServer {
         }
     }
 
+    async fn wait_for_assigned_port_file(
+        &mut self,
+        path: &Path,
+        timeout_secs: u64,
+    ) -> Result<(), CopilotError> {
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+
+        loop {
+            if Instant::now() > deadline {
+                return Err(CopilotError::StartupTimeout);
+            }
+
+            if let Some(arc_child) = &self.process {
+                if let Ok(mut child) = arc_child.lock() {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        return Err(CopilotError::ProcessExited(status.code()));
+                    }
+                }
+            }
+
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                if let Ok(port) = contents.trim().parse::<u16>() {
+                    if port > 0 {
+                        self.port = port;
+                        return Ok(());
+                    }
+                }
+            }
+
+            sleep(Duration::from_millis(HEALTH_POLL_INTERVAL_MS)).await;
+        }
+    }
+
+    fn startup_output_excerpt(&self) -> String {
+        self.startup_output
+            .lock()
+            .ok()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .rev()
+                    .take(12)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "startup output unavailable".to_string())
+    }
+
     async fn wait_for_ready(&self, timeout_secs: u64) -> Result<(), CopilotError> {
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
@@ -1324,8 +1466,9 @@ fn find_node() -> Option<PathBuf> {
 mod tests {
     use super::{
         copilot_http_port_candidates, parse_prompt_error_body, resolve_script_path_candidates,
-        validate_health_body, CopilotError, CopilotPromptFailure, CopilotSendPromptRequest,
-        CopilotServer, HealthBody, COPILOT_HTTP_PORT_FALLBACKS, RELAY_COPILOT_SERVICE_NAME,
+        validate_health_body, CopilotError, CopilotHttpPortCandidate, CopilotPromptFailure,
+        CopilotSendPromptRequest, CopilotServer, HealthBody, COPILOT_HTTP_PORT_FALLBACKS,
+        RELAY_COPILOT_SERVICE_NAME,
     };
     use reqwest::StatusCode;
     use std::path::PathBuf;
@@ -1446,11 +1589,15 @@ mod tests {
     fn provider_port_candidates_try_fixed_range_before_dynamic_ports() {
         let candidates = copilot_http_port_candidates(18180);
         assert!(candidates.len() >= usize::from(COPILOT_HTTP_PORT_FALLBACKS));
-        assert_eq!(candidates[0], 18180);
+        assert_eq!(candidates[0], CopilotHttpPortCandidate::Fixed(18180));
         assert_eq!(
             candidates[usize::from(COPILOT_HTTP_PORT_FALLBACKS - 1)],
-            18211
+            CopilotHttpPortCandidate::Fixed(18211)
         );
+        assert!(candidates
+            .iter()
+            .skip(usize::from(COPILOT_HTTP_PORT_FALLBACKS))
+            .all(|candidate| *candidate == CopilotHttpPortCandidate::Dynamic));
     }
 
     #[test]

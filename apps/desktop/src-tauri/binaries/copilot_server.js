@@ -5561,7 +5561,7 @@ function writeJson(res, code, body) {
 /* ─── Entry ─── */
 
 function parseArgs(argv) {
-  let port = DEFAULT_PORT, cdpPort = DEFAULT_CDP_PORT, userDataDir = null, bootToken = null, instanceId = null, help = false;
+  let port = DEFAULT_PORT, cdpPort = DEFAULT_CDP_PORT, userDataDir = null, bootToken = null, instanceId = null, portFile = null, help = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--help" || argv[i] === "-h") { help = true; continue; }
     if (argv[i] === "--port") { port = Number(argv[++i]); continue; }
@@ -5569,8 +5569,9 @@ function parseArgs(argv) {
     if (argv[i] === "--user-data-dir") { userDataDir = argv[++i] ?? null; continue; }
     if (argv[i] === "--boot-token") { bootToken = argv[++i] ?? null; continue; }
     if (argv[i] === "--instance-id") { instanceId = argv[++i] ?? null; continue; }
+    if (argv[i] === "--port-file") { portFile = argv[++i] ?? null; continue; }
   }
-  return { port, cdpPort, userDataDir, bootToken, instanceId, help };
+  return { port, cdpPort, userDataDir, bootToken, instanceId, portFile, help };
 }
 
 var globalOptions = parseArgs(process.argv.slice(2));
@@ -5581,7 +5582,7 @@ if (!globalOptions.userDataDir) {
 
 async function main() {
   if (globalOptions.help) {
-    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9360] [--user-data-dir <path>] [--boot-token <uuid>] [--instance-id <uuid>]");
+    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9360] [--user-data-dir <path>] [--boot-token <uuid>] [--instance-id <uuid>] [--port-file <path>]");
     return;
   }
   const session = new CopilotSession();
@@ -5596,6 +5597,17 @@ async function main() {
     throw err;
   });
   server.listen(globalOptions.port, "127.0.0.1", () => {
+    const address = server.address();
+    const actualPort = typeof address === "object" && address ? address.port : globalOptions.port;
+    globalOptions.port = actualPort;
+    if (globalOptions.portFile) {
+      try {
+        fs.writeFileSync(globalOptions.portFile, String(actualPort), "utf8");
+      } catch (error) {
+        console.error("[copilot] failed to write --port-file:", error?.message || error);
+        process.exit(1);
+      }
+    }
     console.error(`[copilot] listening on http://127.0.0.1:${globalOptions.port} (cdp:${globalOptions.cdpPort}, instance:${globalOptions.instanceId || "none"})`);
   });
   const shutdown = async () => { server.close(); process.exit(0); };

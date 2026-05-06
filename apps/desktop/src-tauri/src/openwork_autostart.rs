@@ -448,6 +448,10 @@ fn provider_gateway_attention_detail(error: &str) -> String {
         "Relay could not find the bundled Copilot gateway file. Reinstall Relay from the latest installer, then try setup again."
     } else if lower.contains("node.js not found") || lower.contains("bundled relay-node") {
         "Relay could not find its bundled Node runtime. Reinstall Relay from the latest installer, then try setup again."
+    } else if lower.contains("dynamic os-assigned port fallback")
+        || lower.contains("last startup failure")
+    {
+        "Relay's local Copilot gateway process could not stay running. Reinstall Relay from the latest installer, then try setup again. If it repeats, export diagnostics from Settings for support."
     } else if lower.contains("could not bind on ports") || lower.contains("orphan node.exe") {
         "All local provider gateway ports are busy. Relay tried to clean up old gateway processes automatically. Close other Relay windows, then try setup again."
     } else {

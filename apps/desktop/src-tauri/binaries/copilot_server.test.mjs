@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   buildOpenAiCompletionBody,
@@ -659,5 +661,55 @@ test("createServer aborts the Relay request when an OpenAI-compatible client dis
       body: { error: { message: "relay_copilot_aborted", type: "request_aborted", code: "relay_copilot_aborted" } },
     });
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("direct copilot_server writes the assigned port file for port 0", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "relay-copilot-port-file-"));
+  const portFile = path.join(tempDir, "port.txt");
+  const script = fileURLToPath(new URL("./copilot_server.js", import.meta.url));
+  const child = spawn(process.execPath, [
+    "--no-warnings",
+    script,
+    "--port",
+    "0",
+    "--port-file",
+    portFile,
+    "--instance-id",
+    "test-instance",
+  ], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+
+  try {
+    let port = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        const raw = await fs.readFile(portFile, "utf8");
+        port = Number.parseInt(raw.trim(), 10);
+        if (Number.isInteger(port) && port > 0) break;
+      } catch {
+        // wait below
+      }
+      if (child.exitCode !== null) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert.ok(port > 0, `expected assigned port file; stderr=${stderr}`);
+    const response = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.instanceId, "test-instance");
+  } finally {
+    if (child.exitCode === null) {
+      child.kill();
+      await new Promise((resolve) => child.once("close", resolve));
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
