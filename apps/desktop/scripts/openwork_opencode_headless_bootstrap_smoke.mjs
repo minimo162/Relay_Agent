@@ -47,18 +47,15 @@ try {
   if (report.providerHandoff?.model !== "relay-agent/m365-copilot") {
     throw new Error("missing provider handoff model");
   }
-  if (!report.relayBoundary?.includes("provider gateway only")) {
+  if (!report.relayBoundary?.includes("provider gateway")) {
     throw new Error("missing provider-only Relay boundary");
   }
-  if (report.openworkInstallerHandoff?.requested !== false) {
-    throw new Error("headless bootstrap smoke must not request OpenWork installer handoff");
-  }
-  if (!report.openworkInstallerHandoff?.skippedReason?.includes("operator_approval_required")) {
-    throw new Error("OpenWork installer handoff must require explicit operator approval");
+  if ("openworkInstallerHandoff" in report) {
+    throw new Error("headless bootstrap smoke must not expose removed installer handoff");
   }
 
   const artifacts = new Map(report.artifacts.map((artifact) => [artifact.artifact, artifact]));
-  for (const key of ["opencode-cli", "openwork-desktop"]) {
+  for (const key of ["opencode-cli"]) {
     const artifact = artifacts.get(key);
     if (!artifact) throw new Error(`missing artifact report: ${key}`);
     if (artifact.status !== "missing") {

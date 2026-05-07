@@ -39,7 +39,7 @@ impl AppServices {
             copilot_bridge: Arc::new(CopilotBridgeManager::new()),
             opencode_provider_bridge: Arc::new(CopilotBridgeManager::new()),
             openwork_setup: Arc::new(Mutex::new(OpenWorkSetupSnapshot::preparing(
-                "Preparing OpenWork/OpenCode for M365 Copilot.",
+                "Preparing OpenCode for M365 Copilot.",
             ))),
         }
     }
@@ -61,7 +61,7 @@ impl AppServices {
             .map(|status| status.clone())
             .unwrap_or_else(|error| {
                 OpenWorkSetupSnapshot::needs_attention(format!(
-                    "OpenWork/OpenCode setup status is unavailable: {error}"
+                    "OpenCode setup status is unavailable: {error}"
                 ))
             })
     }

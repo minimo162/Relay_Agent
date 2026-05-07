@@ -1,7 +1,7 @@
 /**
  * Tauri IPC bridge — provider diagnostics.
  *
- * Provider-mode execution does not use these commands. OpenCode/OpenWork calls
+ * Provider-mode execution does not use these commands. OpenCode calls
  * the OpenAI-compatible provider gateway directly and owns sessions, tools,
  * permissions, transcript state, and workspace execution.
  *
@@ -10,7 +10,7 @@
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
  * Legacy agent chat/session commands are intentionally not exported from this
- * frontend bridge. Provider-mode execution belongs to OpenCode/OpenWork.
+ * frontend bridge. Provider-mode execution belongs to OpenCode.
  *
  * Relay-owned agent events were removed with the hard-cut migration.
  */
@@ -42,14 +42,16 @@ export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
   return invoke<RelayDiagnostics>("get_relay_diagnostics");
 }
 
-/** Retry installed OpenWork/OpenCode provider setup. */
-export async function retryOpenworkSetup(): Promise<void> {
-  return invoke<void>("retry_openwork_setup");
+/** Retry installed OpenCode provider setup. */
+export async function retryOpencodeSetup(): Promise<void> {
+  return invoke<void>("retry_opencode_setup");
 }
 
-/** Open the prepared OpenWork/OpenCode app when available. */
-export async function openOpenworkOrOpencode(): Promise<void> {
-  return invoke<void>("open_openwork_or_opencode");
+/** Open the prepared OpenCode Web app when available. */
+export async function openOpencodeWeb(workspace?: string): Promise<void> {
+  return invoke<void>("open_opencode_web", {
+    workspace: workspace?.trim() || null,
+  });
 }
 
 /** Write support text (e.g. diagnostics JSON) to a path from the native save dialog. */

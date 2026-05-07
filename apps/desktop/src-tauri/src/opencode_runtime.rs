@@ -27,7 +27,7 @@ pub async fn snapshot() -> OpencodeRuntimeSnapshot {
         return OpencodeRuntimeSnapshot {
             url: None,
             running: false,
-            message: format!("{TOOL_RUNTIME_URL_ENV} is not set; OpenCode/OpenWork execution is expected to run outside Relay"),
+            message: format!("{TOOL_RUNTIME_URL_ENV} is not set; OpenCode execution is expected to run outside Relay"),
         };
     };
 
@@ -46,7 +46,7 @@ pub async fn snapshot() -> OpencodeRuntimeSnapshot {
                 return OpencodeRuntimeSnapshot {
                     url: Some(url),
                     running: true,
-                    message: "External OpenCode/OpenWork runtime responded to /path".to_string(),
+                    message: "External OpenCode runtime responded to /path".to_string(),
                 };
             }
             Ok(response) => {
@@ -54,7 +54,7 @@ pub async fn snapshot() -> OpencodeRuntimeSnapshot {
                     url: Some(url),
                     running: false,
                     message: format!(
-                        "External OpenCode/OpenWork runtime /path returned HTTP {}",
+                        "External OpenCode runtime /path returned HTTP {}",
                         response.status()
                     ),
                 };
@@ -72,13 +72,12 @@ pub async fn snapshot() -> OpencodeRuntimeSnapshot {
         Some(error) => OpencodeRuntimeSnapshot {
             url: Some(url),
             running: false,
-            message: format!("External OpenCode/OpenWork runtime probe failed: {error}"),
+            message: format!("External OpenCode runtime probe failed: {error}"),
         },
         None => OpencodeRuntimeSnapshot {
             url: Some(url),
             running: false,
-            message: "External OpenCode/OpenWork runtime probe failed before sending a request"
-                .to_string(),
+            message: "External OpenCode runtime probe failed before sending a request".to_string(),
         },
     }
 }

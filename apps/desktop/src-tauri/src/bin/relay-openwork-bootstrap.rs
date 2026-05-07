@@ -37,7 +37,6 @@ struct Options {
     start_provider_gateway: bool,
     download: bool,
     auto: bool,
-    open_openwork_installer: bool,
     json: bool,
     pretty: bool,
 }
@@ -62,7 +61,6 @@ struct BootstrapReport {
     provider_handoff: ProviderHandoff,
     provider_gateway: ProviderGatewayReport,
     provider_config: Option<ProviderConfigReport>,
-    openwork_installer_handoff: OpenWorkInstallerHandoffReport,
     artifacts: Vec<ArtifactReport>,
 }
 
@@ -116,20 +114,6 @@ struct ProviderGatewayReport {
     health_url: String,
     model: &'static str,
     token_source: PathBuf,
-    process_id: Option<u32>,
-    skipped_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenWorkInstallerHandoffReport {
-    requested: bool,
-    opened: bool,
-    path: PathBuf,
-    version: String,
-    sha256: String,
-    install_mode: Option<String>,
-    command: Vec<String>,
     process_id: Option<u32>,
     skipped_reason: Option<String>,
 }
@@ -191,10 +175,7 @@ fn run() -> Result<(BootstrapReport, OutputOptions), (BootstrapError, OutputOpti
     let cache_root = resolve_cache_root(&options);
     let provider_base_url = provider_base_url(options.provider_port);
     let token_file = resolve_provider_token_file(&options);
-    let keys = [
-        BootstrapArtifactKey::OpenCodeCli,
-        BootstrapArtifactKey::OpenWorkDesktop,
-    ];
+    let keys = [BootstrapArtifactKey::OpenCodeCli];
     let mut artifacts = Vec::with_capacity(keys.len());
     let mut all_verified = true;
     let mut opencode_probe_version = None;
@@ -229,8 +210,6 @@ fn run() -> Result<(BootstrapReport, OutputOptions), (BootstrapError, OutputOpti
     .map_err(|error| (error, output))?;
     let provider_gateway = provider_gateway_report(&options, &provider_base_url, &token_file)
         .map_err(|error| (error, output))?;
-    let openwork_installer_handoff =
-        openwork_installer_handoff_report(&options, &artifacts).map_err(|error| (error, output))?;
 
     let status = if all_verified {
         "verified"
@@ -253,7 +232,7 @@ fn run() -> Result<(BootstrapReport, OutputOptions), (BootstrapError, OutputOpti
         cache_root,
         ownership_boundary: manifest.ownership_boundary,
         relay_boundary:
-            "Relay is the OpenWork/OpenCode setup layer and provider gateway; OpenWork/OpenCode own UX, sessions, tools, and execution.",
+            "Relay is the OpenCode setup layer and provider gateway; OpenCode owns UX, sessions, tools, and execution.",
         provider_handoff: ProviderHandoff {
             base_url: provider_base_url,
             model: PROVIDER_MODEL,
@@ -261,7 +240,6 @@ fn run() -> Result<(BootstrapReport, OutputOptions), (BootstrapError, OutputOpti
         },
         provider_gateway,
         provider_config,
-        openwork_installer_handoff,
         artifacts,
     };
 
@@ -376,85 +354,6 @@ fn provider_config_report(
         output,
         skipped_reason: None,
     }))
-}
-
-fn openwork_installer_handoff_report(
-    options: &Options,
-    artifacts: &[ArtifactReport],
-) -> Result<OpenWorkInstallerHandoffReport, BootstrapError> {
-    let openwork = artifacts
-        .iter()
-        .find(|artifact| artifact.artifact == BootstrapArtifactKey::OpenWorkDesktop.as_str())
-        .expect("OpenWork artifact report exists");
-    let command = openwork_installer_command(&openwork.expected_path);
-
-    if !options.open_openwork_installer {
-        return Ok(OpenWorkInstallerHandoffReport {
-            requested: false,
-            opened: false,
-            path: openwork.expected_path.clone(),
-            version: openwork.version.clone(),
-            sha256: openwork.sha256.clone(),
-            install_mode: openwork.install_mode.clone(),
-            command,
-            process_id: None,
-            skipped_reason: Some(
-                "operator_approval_required_use_--open-openwork-installer".to_string(),
-            ),
-        });
-    }
-
-    if openwork.verified.is_none() {
-        return Ok(OpenWorkInstallerHandoffReport {
-            requested: true,
-            opened: false,
-            path: openwork.expected_path.clone(),
-            version: openwork.version.clone(),
-            sha256: openwork.sha256.clone(),
-            install_mode: openwork.install_mode.clone(),
-            command,
-            process_id: None,
-            skipped_reason: Some("openwork_desktop_msi_not_verified".to_string()),
-        });
-    }
-
-    let process_id = open_openwork_installer(&openwork.expected_path)?;
-    Ok(OpenWorkInstallerHandoffReport {
-        requested: true,
-        opened: true,
-        path: openwork.expected_path.clone(),
-        version: openwork.version.clone(),
-        sha256: openwork.sha256.clone(),
-        install_mode: openwork.install_mode.clone(),
-        command,
-        process_id: Some(process_id),
-        skipped_reason: None,
-    })
-}
-
-fn openwork_installer_command(path: &Path) -> Vec<String> {
-    vec![
-        "msiexec".to_string(),
-        "/i".to_string(),
-        path.display().to_string(),
-    ]
-}
-
-fn open_openwork_installer(path: &Path) -> Result<u32, BootstrapError> {
-    if !cfg!(windows) {
-        return Err(BootstrapError::UnsupportedPlatform(
-            "openwork_installer_handoff_requires_windows".to_string(),
-        ));
-    }
-    let child = Command::new("msiexec")
-        .arg("/i")
-        .arg(path)
-        .spawn()
-        .map_err(|error| BootstrapError::Command {
-            path: PathBuf::from("msiexec"),
-            message: error.to_string(),
-        })?;
-    Ok(child.id())
 }
 
 fn write_opencode_provider_config(
@@ -741,7 +640,6 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
         start_provider_gateway: false,
         download: false,
         auto: false,
-        open_openwork_installer: false,
         json: false,
         pretty: false,
     };
@@ -788,7 +686,6 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
                 options.start_provider_gateway = true;
                 if cfg!(windows) {
                     options.download = true;
-                    options.open_openwork_installer = true;
                 }
                 if options.workspace.is_none() {
                     options.workspace = Some(default_auto_workspace()?);
@@ -796,9 +693,6 @@ fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> 
             }
             "--download" => {
                 options.download = true;
-            }
-            "--open-openwork-installer" => {
-                options.open_openwork_installer = true;
             }
             "--json" => {
                 options.json = true;
@@ -844,7 +738,7 @@ fn next_arg(
 }
 
 fn usage() -> &'static str {
-    "Usage: relay-openwork-bootstrap [--auto] [--download] [--workspace PATH] [--config-output PATH] [--start-provider-gateway] [--provider-port PORT] [--edge-cdp-port PORT] [--provider-token-file PATH] [--copilot-server-js PATH] [--open-openwork-installer] [--platform windows-x64] [--cache-root PATH] [--app-local-data-dir PATH] [--json] [--pretty]"
+    "Usage: relay-openwork-bootstrap [--auto] [--download] [--workspace PATH] [--config-output PATH] [--start-provider-gateway] [--provider-port PORT] [--edge-cdp-port PORT] [--provider-token-file PATH] [--copilot-server-js PATH] [--platform windows-x64] [--cache-root PATH] [--app-local-data-dir PATH] [--json] [--pretty]"
 }
 
 fn print_json(value: &impl Serialize, pretty: bool) {
@@ -858,12 +752,11 @@ fn print_json(value: &impl Serialize, pretty: bool) {
 }
 
 fn print_human_report(report: &BootstrapReport) {
-    println!("OpenWork/OpenCode setup");
+    println!("OpenCode setup");
     println!("Status: {}", human_status(report));
     println!();
     println!("Workspace config: {}", human_provider_config(report));
     println!("Provider gateway: {}", human_provider_gateway(report));
-    println!("OpenWork installer: {}", human_installer(report));
     println!("Artifacts: {}", human_artifacts(report));
     println!();
     println!("Next:");
@@ -873,7 +766,7 @@ fn print_human_report(report: &BootstrapReport) {
 }
 
 fn print_human_error(report: &ErrorReport) {
-    eprintln!("OpenWork/OpenCode setup failed");
+    eprintln!("OpenCode setup failed");
     eprintln!("Reason: {}", report.error);
     eprintln!("Run with --json for diagnostics.");
 }
@@ -920,21 +813,6 @@ fn human_provider_gateway(report: &BootstrapReport) -> String {
     }
 }
 
-fn human_installer(report: &BootstrapReport) -> String {
-    let handoff = &report.openwork_installer_handoff;
-    if handoff.opened {
-        return "opened; follow the Windows installer prompts".to_string();
-    }
-    if cfg!(windows) && handoff.requested {
-        return handoff
-            .skipped_reason
-            .as_deref()
-            .unwrap_or("not opened")
-            .to_string();
-    }
-    "will be opened automatically on Windows after verification".to_string()
-}
-
 fn human_artifacts(report: &BootstrapReport) -> String {
     let ready = report
         .artifacts
@@ -957,9 +835,9 @@ fn human_next_steps(report: &BootstrapReport) -> Vec<String> {
         .as_ref()
         .is_some_and(|config| config.installed)
     {
-        steps.push("Open OpenWork/OpenCode in the workspace shown above.".to_string());
+        steps.push("Open OpenCode in the workspace shown above.".to_string());
     } else if cfg!(windows) {
-        steps.push("Wait for OpenCode verification, then open OpenWork/OpenCode.".to_string());
+        steps.push("Wait for OpenCode verification, then open OpenCode Web.".to_string());
     }
     if steps.is_empty() {
         steps.push("No action needed unless an error is shown.".to_string());
@@ -1056,19 +934,6 @@ mod tests {
     }
 
     #[test]
-    fn openwork_installer_command_uses_explicit_msiexec_handoff() {
-        let path = Path::new(r"C:\Relay\openwork-desktop-windows-x64.msi");
-        assert_eq!(
-            openwork_installer_command(path),
-            vec![
-                "msiexec".to_string(),
-                "/i".to_string(),
-                path.display().to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn auto_mode_sets_no_thinking_defaults() {
         let options = parse_options(["--auto".to_string()].into_iter()).expect("parse options");
         assert!(options.auto);
@@ -1076,10 +941,8 @@ mod tests {
         assert!(options.workspace.is_some());
         if cfg!(windows) {
             assert!(options.download);
-            assert!(options.open_openwork_installer);
         } else {
             assert!(!options.download);
-            assert!(!options.open_openwork_installer);
         }
     }
 

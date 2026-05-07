@@ -41,7 +41,7 @@ function printConfig(token, tokenSource) {
   console.log("[relay-opencode-provider] model:", MODEL_REF);
   console.log("[relay-opencode-provider] api key source:", tokenSource);
   console.log("");
-  console.log("Export this before starting OpenCode/OpenWork:");
+  console.log("Export this before starting OpenCode:");
   console.log(shellExportLine(token));
   console.log("");
   console.log("opencode.json:");

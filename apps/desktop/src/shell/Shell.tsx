@@ -3,8 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import {
   getRelayDiagnostics,
-  openOpenworkOrOpencode,
-  retryOpenworkSetup,
+  openOpencodeWeb,
+  retryOpencodeSetup,
   type RelayDiagnostics,
 } from "../lib/ipc";
 import {
@@ -58,7 +58,7 @@ function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
     `bridge connected: ${formatBool(diagnostics.copilotBridgeConnected)}`,
     `M365 sign-in required: ${formatBool(diagnostics.copilotBridgeLoginRequired)}`,
     `OpenCode runtime: ${diagnostics.opencodeRuntimeMessage ?? "unknown"}`,
-    `OpenWork/OpenCode setup: ${setup?.status ?? "unknown"}`,
+    `OpenCode setup: ${setup?.status ?? "unknown"}`,
     `setup stage: ${setup?.stage ?? "unknown"}`,
     `setup detail: ${setup?.message ?? "unknown"}`,
     `setup config: ${setup?.configPath ?? "unknown"}`,
@@ -79,9 +79,8 @@ function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: stri
     return "Relay could not finish setup. Review the stopped step below, then use Try Setup Again.";
   }
   if (copilotMessage && copilotMessage.toLowerCase().includes("sign")) return copilotMessage;
-  if (setup?.status === "ready" && copilotMessage) return "Open OpenWork/OpenCode to begin.";
-  if (setup?.status === "ready") return "Open OpenWork/OpenCode to begin.";
-  return "Relay is preparing OpenWork/OpenCode and the Copilot connection.";
+  if (setup?.status === "ready") return `${setup.launchLabel ?? "Open OpenCode Web"} to begin.`;
+  return "Relay is preparing OpenCode and the Copilot connection.";
 }
 
 type SetupProgressStep = {
@@ -109,19 +108,19 @@ const OPENWORK_SETUP_STEPS: SetupProgressStep[] = [
     detail: "Connect OpenCode to Relay.",
   },
   {
-    id: "download_openwork_opencode",
-    label: "Get OpenWork/OpenCode",
-    detail: "Download and verify the tools.",
+    id: "download_opencode",
+    label: "Get OpenCode",
+    detail: "Download and verify portable OpenCode.",
   },
   {
-    id: "openwork_handoff",
-    label: "Prepare OpenWork",
-    detail: "Finish the desktop handoff.",
+    id: "opencode_web",
+    label: "Prepare web",
+    detail: "Create the user workspace.",
   },
   {
     id: "ready",
     label: "Ready",
-    detail: "OpenWork/OpenCode can start.",
+    detail: "OpenCode can start.",
   },
 ];
 
@@ -137,10 +136,10 @@ function inferSetupStage(diagnostics: RelayDiagnostics | null): string {
   }
   if (detail.includes("config")) return "provider_config";
   if (detail.includes("download") || detail.includes("extract") || detail.includes("probe opencode")) {
-    return "download_openwork_opencode";
+    return "download_opencode";
   }
-  if (detail.includes("installer") || detail.includes("handoff") || detail.includes("openwork")) {
-    return "openwork_handoff";
+  if (detail.includes("web") || detail.includes("launch")) {
+    return "opencode_web";
   }
   return "setup";
 }
@@ -195,7 +194,7 @@ export default function Shell(): JSX.Element {
   const [setupRetrying, setSetupRetrying] = createSignal(false);
   const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
 
-  const workspace = createMemo(() => workspaceLabel() || "OpenCode/OpenWork workspace owns execution state");
+  const workspace = createMemo(() => workspaceLabel() || "OpenCode workspace owns execution state");
   const endpoint = createMemo(providerBaseUrl);
   const diagLines = createMemo(() => diagnosticsSummary(diagnostics()));
   const setupState = createMemo(() => {
@@ -226,7 +225,7 @@ export default function Shell(): JSX.Element {
       copilotReady,
       needsSignIn,
       needsAttention,
-      launchLabel: report?.openworkSetup?.launchLabel ?? "Open OpenWork/OpenCode",
+      launchLabel: report?.openworkSetup?.launchLabel ?? "Open OpenCode Web",
       providerBaseUrl: report?.openworkSetup?.providerBaseUrl ?? endpoint(),
       configPath: report?.openworkSetup?.configPath ?? "~/.config/opencode/opencode.json",
       steps: [
@@ -289,8 +288,8 @@ export default function Shell(): JSX.Element {
   const retrySetup = async () => {
     setSetupRetrying(true);
     try {
-      await retryOpenworkSetup();
-      showToast({ tone: "ok", message: "OpenWork/OpenCode setup restarted" });
+      await retryOpencodeSetup();
+      showToast({ tone: "ok", message: "OpenCode setup restarted" });
       await refreshDiagnostics(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -303,11 +302,11 @@ export default function Shell(): JSX.Element {
   const openWorkspace = async () => {
     setOpeningWorkspace(true);
     try {
-      await openOpenworkOrOpencode();
-      showToast({ tone: "ok", message: "Opening OpenWork/OpenCode" });
+      await openOpencodeWeb(workspaceLabel());
+      showToast({ tone: "ok", message: "Opening OpenCode Web" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      showToast({ tone: "danger", message: "OpenWork/OpenCode is not ready", detail: message });
+      showToast({ tone: "danger", message: "OpenCode is not ready", detail: message });
       await refreshDiagnostics(false);
     } finally {
       setOpeningWorkspace(false);
@@ -330,7 +329,7 @@ export default function Shell(): JSX.Element {
         >
           <div>
             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--ra-color-text-muted)]">
-              OpenWork/OpenCode setup + M365 Copilot gateway
+              OpenCode Web setup + M365 Copilot gateway
             </p>
             <h1 class="text-2xl font-semibold">Relay Agent</h1>
           </div>
@@ -346,13 +345,13 @@ export default function Shell(): JSX.Element {
 
         <section class="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <article class="ra-surface p-5">
-            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">OpenWork/OpenCode</p>
+            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">OpenCode</p>
             <h2 class="mt-2 text-2xl font-semibold">{setupState().title}</h2>
             <p class="mt-2 max-w-3xl text-sm text-[var(--ra-color-text-muted)]">{setupState().message}</p>
             <div
               class="ra-setup-progress mt-5"
               data-state={setupState().needsAttention ? "blocked" : setupState().status === "ready" ? "done" : "current"}
-              aria-label="OpenWork/OpenCode setup progress"
+              aria-label="OpenCode setup progress"
             >
               <div class="ra-setup-progress__topline">
                 <div>
@@ -367,7 +366,7 @@ export default function Shell(): JSX.Element {
                 aria-valuemin="0"
                 aria-valuemax="100"
                 aria-valuenow={setupState().progressPercent}
-                aria-label={`OpenWork/OpenCode setup is ${setupState().progressPercent}% complete`}
+                aria-label={`OpenCode setup is ${setupState().progressPercent}% complete`}
                 aria-valuetext={`${setupState().currentStep.label}: ${setupState().progressDetail}`}
               >
                 <div class="ra-setup-progress__fill" style={{ width: `${setupState().progressPercent}%` }} />
@@ -442,9 +441,9 @@ export default function Shell(): JSX.Element {
           <article class="ra-surface p-5">
             <h2 class="text-xl font-semibold">What happens next</h2>
             <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
-              <p>Relay prepares OpenWork/OpenCode and connects it to Microsoft 365 Copilot.</p>
-              <p>When the status is ready, press Open OpenWork/OpenCode and continue there.</p>
-              <p>OpenWork/OpenCode keeps the chat, tools, approvals, files, and session history.</p>
+              <p>Relay prepares portable OpenCode and connects it to Microsoft 365 Copilot.</p>
+              <p>When the status is ready, press Open OpenCode Web and continue in the browser.</p>
+              <p>OpenCode keeps the chat, tools, approvals, files, and session history.</p>
             </div>
           </article>
           <article class="ra-surface p-5">
@@ -497,7 +496,7 @@ export default function Shell(): JSX.Element {
                   when={diagnostics()}
                   fallback={
                     <p class="mt-4 text-sm text-[var(--ra-color-text-muted)]">
-                      Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and OpenWork/OpenCode status.
+                      Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and OpenCode status.
                     </p>
                   }
                 >

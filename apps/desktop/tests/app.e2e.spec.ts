@@ -6,14 +6,14 @@ async function openApp(page: any) {
   await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
 }
 
-test("desktop opens as a beginner OpenWork/OpenCode launcher", async ({ page }) => {
+test("desktop opens as a beginner OpenCode Web launcher", async ({ page }) => {
   await injectRelayMock(page);
   await openApp(page);
 
   await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
   await expect(page.getByText("Setup progress")).toBeVisible();
-  await expect(page.getByRole("progressbar", { name: /OpenWork\/OpenCode setup is 100% complete/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open OpenWork/OpenCode" })).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: /OpenCode setup is 100% complete/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open OpenCode Web" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh Setup" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "What happens next" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "If setup stops" })).toBeVisible();
@@ -24,14 +24,14 @@ test("desktop opens as a beginner OpenWork/OpenCode launcher", async ({ page }) 
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
 });
 
-test("desktop shows live OpenWork/OpenCode download progress", async ({ page }) => {
+test("desktop shows live OpenCode download progress", async ({ page }) => {
   await injectRelayMock(page, {
     openworkSetup: {
       status: "preparing",
-      stage: "download_openwork_opencode",
-      message: "Downloading and verifying OpenWork/OpenCode.",
+      stage: "download_opencode",
+      message: "Downloading and verifying OpenCode.",
       progressPercent: 42,
-      progressDetail: "Downloading OpenWork: 21.0 MB of 50.0 MB.",
+      progressDetail: "Downloading OpenCode CLI: 21.0 MB of 50.0 MB.",
       actionLabel: null,
       launchLabel: null,
     },
@@ -40,9 +40,9 @@ test("desktop shows live OpenWork/OpenCode download progress", async ({ page }) 
   await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
 
   await expect(page.getByRole("heading", { name: "Setting things up" })).toBeVisible();
-  await expect(page.locator(".ra-setup-progress__current")).toHaveText("Get OpenWork/OpenCode");
-  await expect(page.getByText("Downloading OpenWork: 21.0 MB of 50.0 MB.")).toBeVisible();
-  await expect(page.getByRole("progressbar", { name: /OpenWork\/OpenCode setup is 42% complete/ })).toHaveAttribute(
+  await expect(page.locator(".ra-setup-progress__current")).toHaveText("Get OpenCode");
+  await expect(page.getByText("Downloading OpenCode CLI: 21.0 MB of 50.0 MB.")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: /OpenCode setup is 42% complete/ })).toHaveAttribute(
     "aria-valuenow",
     "42",
   );
@@ -53,7 +53,7 @@ test("desktop shows actionable provider gateway setup failure", async ({ page })
     openworkSetup: {
       status: "needs_attention",
       stage: "provider_gateway",
-      message: "OpenWork/OpenCode setup needs attention: provider gateway start failed: copilot_server.js not found",
+      message: "OpenCode setup needs attention: provider gateway start failed: copilot_server.js not found",
       progressPercent: 8,
       progressDetail:
         "Relay could not find the bundled Copilot gateway file. Reinstall Relay from the latest installer, then try setup again. Detail: provider gateway start failed: copilot_server.js not found",
@@ -69,7 +69,7 @@ test("desktop shows actionable provider gateway setup failure", async ({ page })
   await expect(page.getByText("Setup stopped here")).toBeVisible();
   await expect(page.locator(".ra-setup-attention__detail")).toContainText(/bundled Copilot gateway file/);
   await expect(page.getByRole("button", { name: "Try Setup Again" })).toBeVisible();
-  await expect(page.getByRole("progressbar", { name: /OpenWork\/OpenCode setup is 8% complete/ })).toHaveAttribute(
+  await expect(page.getByRole("progressbar", { name: /OpenCode setup is 8% complete/ })).toHaveAttribute(
     "aria-valuenow",
     "8",
   );

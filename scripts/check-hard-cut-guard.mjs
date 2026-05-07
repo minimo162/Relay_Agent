@@ -25,7 +25,7 @@ const windowsBootstrapE2eDoc = read("docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2
 const required = [
   {
     path: "PLANS.md",
-    text: "Relay_Agent makes OpenWork/OpenCode easy to use with M365 Copilot",
+    text: "Relay_Agent makes OpenCode easy to use with M365 Copilot",
   },
   {
     path: "PLANS.md",
@@ -37,11 +37,11 @@ const required = [
   },
   {
     path: "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
-    text: "OpenCode/OpenWork session state.",
+    text: "OpenCode session state.",
   },
   {
     path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
-    text: "OpenCode/OpenWork\n  owns UX, sessions, tools, permissions, workspace execution, and event state",
+    text: "OpenCode Web\n  owns UX, sessions, tools, permissions, workspace execution, and event state",
   },
   {
     path: "docs/OPENCODE_PROVIDER_GATEWAY.md",
@@ -209,7 +209,7 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
-    text: "Relay downloads and verifies external OpenWork/OpenCode artifacts only.",
+    text: "Relay downloads and verifies external OpenCode artifacts for admin-free use.",
   },
   {
     path: "apps/desktop/src-tauri/bootstrap/openwork-opencode.json",
@@ -222,14 +222,6 @@ const required = [
   {
     path: "apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs",
     text: "fake opencode only supports --version in bootstrap smoke",
-  },
-  {
-    path: "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs",
-    text: "diagnostic_handoff_only",
-  },
-  {
-    path: "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs",
-    text: "explicit-user-approved-installer",
   },
   {
     path: "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs",
@@ -249,7 +241,7 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
-    text: "Relay is the OpenWork/OpenCode setup layer and provider gateway",
+    text: "Relay is the OpenCode setup layer and provider gateway",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
@@ -265,14 +257,6 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
-    text: "--open-openwork-installer",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
-    text: "operator_approval_required_use_--open-openwork-installer",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",
     text: "--start-provider-gateway",
   },
   {
@@ -282,10 +266,6 @@ const required = [
   {
     path: "apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs",
     text: "headless bootstrap smoke must not download artifacts",
-  },
-  {
-    path: "apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs",
-    text: "OpenWork installer handoff must require explicit operator approval",
   },
   {
     path: "apps/desktop/scripts/openwork_opencode_provider_gateway_bootstrap_smoke.mjs",
@@ -321,7 +301,7 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
-    text: "retry_openwork_setup",
+    text: "retry_opencode_setup",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
@@ -333,19 +313,11 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Open OpenWork/OpenCode",
+    text: "Open OpenCode Web",
   },
   {
     path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
-    text: "open_openwork_or_opencode",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/openwork_autostart.rs",
-    text: "find_openwork_windows_shortcut",
-  },
-  {
-    path: "apps/desktop/src-tauri/src/openwork_autostart.rs",
-    text: "Start Menu",
+    text: "open_opencode_web",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
@@ -357,7 +329,7 @@ const required = [
   },
   {
     path: "README.md",
-    text: "**Open OpenWork/OpenCode**",
+    text: "**Open OpenCode Web**",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
@@ -377,15 +349,11 @@ const required = [
   },
   {
     path: "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
-    text: "Relay must remain the OpenWork/OpenCode setup layer and provider gateway only.",
+    text: "Relay must remain the OpenCode setup layer and provider gateway only.",
   },
   {
     path: "apps/desktop/package.json",
     text: "\"smoke:opencode-bootstrap-config\"",
-  },
-  {
-    path: "apps/desktop/package.json",
-    text: "\"smoke:openwork-desktop-handoff\"",
   },
   {
     path: "apps/desktop/package.json",
@@ -410,10 +378,6 @@ const required = [
   {
     path: "package.json",
     text: "\"smoke:opencode-bootstrap-config\"",
-  },
-  {
-    path: "package.json",
-    text: "\"smoke:openwork-desktop-handoff\"",
   },
   {
     path: "package.json",
@@ -489,7 +453,7 @@ const required = [
   },
   {
     path: "apps/desktop/src-tauri/src/opencode_runtime.rs",
-    text: "OpenCode/OpenWork execution is expected to run outside Relay",
+    text: "OpenCode execution is expected to run outside Relay",
   },
   {
     path: "apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs",
@@ -1452,7 +1416,6 @@ const byPath = {
   "apps/desktop/scripts/opencode_provider_config.mjs": read("apps/desktop/scripts/opencode_provider_config.mjs"),
   "apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs": read("apps/desktop/scripts/openwork_opencode_bootstrap_manifest.test.mjs"),
   "apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs": read("apps/desktop/scripts/opencode_cli_bootstrap_config_smoke.mjs"),
-  "apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs": read("apps/desktop/scripts/openwork_desktop_handoff_smoke.mjs"),
   "apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs": read("apps/desktop/scripts/live_windows_openwork_opencode_bootstrap_smoke.mjs"),
   "apps/desktop/scripts/openwork_opencode_auto_bootstrap_smoke.mjs": read("apps/desktop/scripts/openwork_opencode_auto_bootstrap_smoke.mjs"),
   "apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs": read("apps/desktop/scripts/openwork_opencode_headless_bootstrap_smoke.mjs"),

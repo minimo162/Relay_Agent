@@ -544,11 +544,11 @@ fn relay_predictability_notes() -> Vec<String> {
     vec![
         "Edge CDP defaults to port 9360 for the M365 Copilot provider bridge unless RELAY_EDGE_CDP_PORT or a diagnostic browser setting overrides it."
             .into(),
-        "Provider-mode workspace state belongs to OpenCode/OpenWork; diagnostics processCwd is only the Relay process working directory."
+        "Provider-mode workspace state belongs to OpenCode; diagnostics processCwd is only the Relay process working directory."
             .into(),
-        "OpenCode/OpenWork owns tool permissions in provider mode; Relay does not expose a workspace approval allowlist."
+        "OpenCode owns tool permissions in provider mode; Relay does not expose a workspace approval allowlist."
             .into(),
-        "OpenCode/OpenWork owns slash commands, MCP, plugins, skills, and workspace config for the product path."
+        "OpenCode owns slash commands, MCP, plugins, skills, and workspace config for the product path."
             .into(),
     ]
 }
@@ -561,7 +561,7 @@ fn relay_doctor_hints() -> Vec<String> {
         crate::tauri_bridge::COPILOT_JS_CDP_PORT,
     ));
     hints.push(
-        "OpenCode/OpenWork provider mode uses Relay only as an OpenAI-compatible M365 Copilot gateway; UX, sessions, permissions, and tools live in OpenCode/OpenWork."
+        "OpenCode provider mode uses Relay only as an OpenAI-compatible M365 Copilot gateway; UX, sessions, permissions, and tools live in OpenCode."
             .into(),
     );
     if std::env::var("ANTHROPIC_API_KEY")
@@ -589,7 +589,7 @@ fn relay_doctor_hints() -> Vec<String> {
         }
     }
     hints.push(
-        "Office/PDF extraction is not a Relay provider fallback. Add it through OpenCode/OpenWork extension points when needed."
+        "Office/PDF extraction is not a Relay provider fallback. Add it through OpenCode extension points when needed."
             .into(),
     );
     hints
@@ -623,7 +623,7 @@ fn relay_diagnostics_base() -> RelayDiagnostics {
         copilot_node_bridge_port: crate::tauri_bridge::COPILOT_HTTP_PORT,
         default_edge_cdp_port: crate::tauri_bridge::COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
-        architecture_notes: "OpenCode/OpenWork owns UX, sessions, permissions, workspace tools, transcript, and execution state. Relay is an OpenAI-compatible M365 Copilot provider gateway plus diagnostics, not a desktop execution fallback.".to_string(),
+        architecture_notes: "OpenCode owns UX, sessions, permissions, workspace tools, transcript, and execution state. Relay is an OpenAI-compatible M365 Copilot provider gateway plus diagnostics, not a desktop execution fallback.".to_string(),
         process_cwd,
         claw_config_home_display,
         max_text_file_read_bytes: RELAY_MAX_TEXT_FILE_READ_BYTES,

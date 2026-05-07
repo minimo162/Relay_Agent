@@ -4,20 +4,20 @@ Date: 2026-04-14
 
 ## Current Product Baseline
 
-Relay_Agent is now the **OpenWork/OpenCode setup layer and OpenAI-compatible
+Relay_Agent is now the **OpenCode setup layer and OpenAI-compatible
 M365 Copilot provider gateway**. The historical Tauri desktop shell remains
 under `apps/desktop/` only for provider launch support, diagnostics, and live
 Copilot verification.
 
-- Primary UX and execution: OpenCode/OpenWork.
-- Setup + provider gateway: `pnpm dev` runs the OpenWork/OpenCode auto
+- Primary UX and execution: OpenCode Web.
+- Setup + provider gateway: `pnpm dev` runs the OpenCode auto
   bootstrap, and `apps/desktop/src-tauri/binaries/copilot_server.js` exposes
   the OpenAI-compatible provider endpoint.
 - Frontend: SolidJS + Vite diagnostic desktop shell.
 - Backend: Rust in `apps/desktop/src-tauri/`, with `crates/desktop-core` as the
   only active internal crate. Historical `runtime` / `tools` /
   `compat-harness` crates and the unused legacy `api` crate have been
-  physically removed as part of the OpenCode/OpenWork hard cut.
+  physically removed as part of the OpenCode hard cut.
 - Primary LLM path: M365 Copilot via Edge CDP and the Relay provider gateway.
 - Contract source of truth: Rust IPC types and command signatures; generated frontend bindings live in `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` kept thin.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
@@ -37,7 +37,7 @@ Planning and implementation references are ordered as follows:
 Additional rules:
 
 - Rust crate types and IPC signatures in `apps/desktop/src-tauri/` are canonical.
-- OpenCode/OpenWork session state is the canonical source for execution
+- OpenCode session state is the canonical source for execution
   transcript and runtime behavior. Relay-specific defaults live in the provider
   gateway and diagnostic desktop adapter/config modules.
 - `.taskmaster/tasks/tasks.json` must reflect real artifact state, not historical intent.
@@ -45,18 +45,18 @@ Additional rules:
 ## Delivery Priorities
 
 - Priority A: keep M365 Copilot via Edge CDP as the primary LLM surface.
-- Priority B: keep OpenCode/OpenWork as the external OSS owner for UX,
+- Priority B: keep OpenCode as the external OSS owner for UX,
   sessions, tools, permissions, events, MCP, plugins, skills, and workspace
   runtime behavior.
-- Priority C: keep Relay-specific code focused on the OpenWork/OpenCode setup
+- Priority C: keep Relay-specific code focused on the OpenCode setup
   path, OpenAI-compatible provider gateway, Copilot CDP transport, tool-call
   normalization, and diagnostics.
 
-## Strategic Reset: OpenCode/OpenWork Provider Gateway
+## Strategic Reset: OpenCode Provider Gateway
 
 The active architecture direction is a hard cut, not a compatibility migration:
-Relay_Agent makes OpenWork/OpenCode easy to use with M365 Copilot while staying
-out of UX and execution ownership. OpenCode/OpenWork owns UX and execution;
+Relay_Agent makes OpenCode easy to use with M365 Copilot while staying out of UX
+and execution ownership. OpenCode owns UX and execution;
 Copilot owns the LLM surface; Relay owns the setup path, M365 Copilot provider
 gateway, and diagnostics.
 
@@ -68,7 +68,25 @@ Implications:
 - Do not preserve legacy tool/runtime/session contracts for compatibility.
 - Do not reintroduce `office_search` as a model-facing tool.
 - Do not treat the Copilot browser thread as the execution source of truth.
-- New runtime work should target OpenCode/OpenWork APIs or extension points.
+- New runtime work should target OpenCode APIs or extension points.
+
+## Completed Task: OpenCode-only Web Bootstrap
+
+Goal: drop the OpenWork optional installer handoff and make the first-run path
+portable OpenCode plus OpenCode Web only.
+
+Status 2026-05-07: implemented. The bootstrap manifest now pins only the
+Windows x64 OpenCode CLI zip, the installed desktop setup downloads/verifies
+and extracts portable OpenCode without admin approval, and the launch action
+starts `opencode web` on loopback with the Relay M365 Copilot provider already
+configured.
+
+Acceptance criteria:
+
+- No OpenWork MSI or desktop handoff artifact is part of the current manifest.
+- The desktop launch action is **Open OpenCode Web**.
+- Relay remains setup, provider gateway, and diagnostics only; OpenCode owns
+  chat UX, sessions, tools, permissions, MCP, plugins, skills, and execution.
 
 ## Completed Task: OpenWork/OpenCode First-Run Bootstrap Feasibility
 

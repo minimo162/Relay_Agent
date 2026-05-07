@@ -1,14 +1,14 @@
-# OpenWork/OpenCode Setup And Provider Gateway
+# OpenCode Web Setup And Provider Gateway
 
-Date: 2026-04-25
+Date: 2026-05-07
 
-This document fixes the setup and provider contract for making OpenWork/OpenCode
-easy to start with Relay_Agent's M365 Copilot bridge as a custom provider.
+This document fixes the setup and provider contract for making OpenCode Web easy
+to start with Relay_Agent's M365 Copilot bridge as a custom provider.
 
 ## Role Split
 
 ```text
-OpenCode/OpenWork
+OpenCode Web
   owns UX, sessions, tools, permissions, workspace execution, and event state
 
 Relay_Agent copilot_server.js
@@ -17,8 +17,8 @@ Relay_Agent copilot_server.js
 
 Relay_Agent bootstrap
   starts the provider gateway, writes global OpenCode provider config,
-  downloads/verifies pinned OpenWork/OpenCode artifacts on Windows, and hands
-  Windows installer approval to the user
+  downloads/verifies the pinned portable OpenCode artifact on Windows, and
+  launches OpenCode Web without admin approval
 
 M365 Copilot
   produces assistant text or OpenAI-compatible tool calls
@@ -67,7 +67,7 @@ does the same for its generated config. Manual provider setup can still use
 ## Bootstrap First-Run Path
 
 The production first-run entrypoint is installing and launching Relay Agent.
-It keeps Relay out of the OpenWork/OpenCode UX path while preparing the
+It keeps Relay out of the OpenCode UX path while preparing the
 OpenCode provider handoff. The repo development equivalent is:
 
 ```bash
@@ -77,10 +77,10 @@ pnpm dev
 The installed desktop launch starts the provider gateway and writes
 `relay-agent/m365-copilot` as the default model in the global OpenCode config.
 On Windows, the auto path also verifies and downloads the pinned artifacts,
-extracts OpenCode, opens the verified OpenWork Desktop MSI for normal Windows
-installer approval, and leaves OpenCode/OpenWork ready to call Relay's provider
-endpoint. The generated config already contains the local provider token, so
-users do not need to export `RELAY_AGENT_API_KEY`. For diagnostics,
+extracts OpenCode, prepares the `opencode web` launch path, and leaves OpenCode
+ready to call Relay's provider endpoint. The generated config already contains
+the local provider token, so users do not need to export `RELAY_AGENT_API_KEY`.
+For diagnostics,
 `pnpm bootstrap:openwork-opencode -- --pretty` still prints a non-destructive
 preflight report.
 
@@ -127,8 +127,7 @@ RELAY_SKIP_PRESTART_EDGE=1
 ## OpenCode Config
 
 The bootstrap command above is the preferred config path. For manual
-diagnostics, install or update the provider config in an OpenCode/OpenWork
-workspace:
+diagnostics, install or update the provider config in an OpenCode workspace:
 
 ```bash
 pnpm install:opencode-provider-config -- --workspace /path/to/workspace

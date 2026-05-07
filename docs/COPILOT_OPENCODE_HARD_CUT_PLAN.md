@@ -1,13 +1,13 @@
-# OpenCode/OpenWork Provider Hard-Cut Plan
+# OpenCode Provider Hard-Cut Plan
 
 Date: 2026-04-24
 
 ## Decision
 
 Relay_Agent will keep M365 Copilot over Edge CDP as the primary LLM surface, but
-will expose it to OpenCode/OpenWork as an OpenAI-compatible provider gateway.
+will expose it to OpenCode as an OpenAI-compatible provider gateway.
 Relay will stop treating its Rust agent runtime or desktop shell as the source
-of truth. OpenCode/OpenWork will own UX, sessions, tools, permissions, events,
+of truth. OpenCode will own UX, sessions, tools, permissions, events,
 and workspace runtime behavior.
 
 This is a hard cut. Compatibility with the current Relay tool runtime,
@@ -20,12 +20,12 @@ Target role split:
 M365 Copilot CDP
   LLM surface. Produces assistant text and structured tool-call candidates.
 
-OpenCode/OpenWork
+OpenCode
   Product UX and execution substrate. Owns sessions, tools, permissions, MCP,
   plugins, workspace config, events, and tool result state.
 
 Relay_Agent
-  OpenAI-compatible provider gateway. Connects OpenCode/OpenWork provider
+  OpenAI-compatible provider gateway. Connects OpenCode provider
   requests to M365 Copilot over CDP, normalizes tool calls, and owns
   Copilot-specific diagnostics.
 ```
@@ -33,7 +33,7 @@ Relay_Agent
 ## Non-Negotiable Constraints
 
 - Copilot CDP remains the product's primary LLM path.
-- OpenCode/OpenWork is used as external OSS execution infrastructure, not
+- OpenCode is used as external OSS execution infrastructure, not
   copied into Relay as another custom runtime.
 - Relay does not preserve old runtime contracts for the sake of compatibility.
 - Relay does not keep parallel execution sources of truth.
@@ -43,13 +43,13 @@ Relay_Agent
 ## Target Architecture
 
 ```text
-OpenCode/OpenWork UX
+OpenCode Web UX
   |
   v
-OpenCode/OpenWork Provider Loop
+OpenCode Provider Loop
   - owns session state, tools, permissions, events, and execution
   - sends OpenAI-compatible chat requests to Relay
-  - executes returned tool_calls through OpenCode/OpenWork
+  - executes returned tool_calls through OpenCode
   |
   v
 Relay OpenAI-Compatible Provider Gateway
@@ -65,13 +65,13 @@ M365 Copilot
 
 Canonical source of truth:
 
-1. OpenCode/OpenWork session state.
-2. OpenCode/OpenWork UX projection of that state.
+1. OpenCode session state.
+2. OpenCode UX projection of that state.
 3. Copilot thread/tab binding as disposable transport state.
 
 Copilot thread history is never the authoritative execution history. If a
 Copilot tab is reset or a new chat is opened, Relay reconstructs the next
-prompt from OpenCode/OpenWork session state.
+prompt from OpenCode session state.
 
 ## Deletion Targets
 
@@ -91,7 +91,7 @@ The retained Relay-specific code should be:
 
 - Copilot CDP bridge and DOM interaction.
 - Copilot response extraction and transport diagnostics.
-- Prompt adapter that asks Copilot for OpenCode/OpenWork-compatible tool calls.
+- Prompt adapter that asks Copilot for OpenCode-compatible tool calls.
 - OpenAI-compatible provider facade, diagnostics, and live Copilot smoke
   coverage.
 - Transition desktop shell only where still needed for provider launch support
@@ -107,14 +107,14 @@ second UX or execution runtime.
 
 Tasks:
 
-- Make README and package scripts present OpenCode/OpenWork plus
+- Make README and package scripts present OpenCode plus
   `start:opencode-provider-gateway` as the first-use route.
 - Move desktop launch and smoke commands under `diag:*` diagnostics wording.
 - Remove or quarantine old Relay desktop chat/session/execution claims from
   live docs.
 - Treat `office_search`, Relay-owned repair strategy, and Relay-owned
   transcript/tool execution as unsupported compatibility leftovers unless they
-  are moved into OpenCode/OpenWork extension points.
+  are moved into OpenCode extension points.
 - Update doctor wording so provider readiness is the canonical health check and
   desktop-shell checks are diagnostic.
 

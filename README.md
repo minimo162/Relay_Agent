@@ -1,7 +1,7 @@
 # Relay Agent
 
-Relay Agent is now the **OpenWork/OpenCode setup layer and OpenAI-compatible
-M365 Copilot provider gateway**. OpenWork/OpenCode owns the primary UX,
+Relay Agent is now the **OpenCode setup layer and OpenAI-compatible
+M365 Copilot provider gateway**. OpenCode owns the primary UX,
 sessions, tools, permissions, and workspace execution; Relay makes that path
 easy to start and connects the provider loop to M365 Copilot in Edge over CDP.
 
@@ -21,7 +21,7 @@ pnpm install
 
 - **Installed desktop first run:** launch Relay Agent. It starts the provider
   gateway, writes the global OpenCode provider config, and on Windows prepares
-  OpenWork/OpenCode automatically.
+  portable OpenCode automatically.
 - **One-command repo first run:** `pnpm dev`.
 - **Explicit auto bootstrap:** `pnpm bootstrap:openwork-opencode:auto`.
 - **Deterministic bootstrap smoke:** `pnpm smoke:openwork-opencode-bootstrap-gateway`.
@@ -38,27 +38,27 @@ override with `CDP_ENDPOINT`).
 
 | Layer | Technology |
 |-------|------------|
-| Primary UX / execution | OpenCode/OpenWork. It owns chat UX, sessions, tool execution, permissions, MCP/plugins/skills, workspace config, and event state. |
-| Setup + provider gateway | `pnpm dev` runs the OpenWork/OpenCode auto bootstrap. Node `copilot_server.js` exposes `/v1/models` and `/v1/chat/completions` as an OpenAI-compatible provider, with bearer auth and streaming SSE. |
+| Primary UX / execution | OpenCode Web. It owns chat UX, sessions, tool execution, permissions, MCP/plugins/skills, workspace config, and event state. |
+| Setup + provider gateway | `pnpm dev` runs the OpenCode auto bootstrap. Node `copilot_server.js` exposes `/v1/models` and `/v1/chat/completions` as an OpenAI-compatible provider, with bearer auth and streaming SSE. |
 | LLM surface | M365 Copilot in Edge over CDP. Relay forwards provider turns to Copilot and normalizes structured tool-call output into OpenAI `tool_calls`; it does not execute tools in provider mode. |
 | Diagnostic desktop shell | SolidJS, Vite, TypeScript, Tailwind, Tauri v2, and Rust IPC remain under `apps/desktop/` for provider launch support, diagnostics, and live Copilot smoke coverage. |
 
 ## What Relay Does
 
 - **No-thinking setup** — the installed desktop launch and `pnpm dev` choose
-  the normal OpenWork/OpenCode first-run path, start the provider gateway, write
-  the provider config, and on Windows download/verify the pinned artifacts
-  before the installer handoff.
+  the normal OpenCode Web first-run path, start the provider gateway, write
+  the provider config, and on Windows download/verify portable OpenCode without
+  requiring an installer or admin approval.
 - **Beginner setup state** — the installed app shows setup as `Preparing`,
   `Sign in to M365`, `Ready`, or `Needs attention`, with a single retry action
   for recovery.
-- **Provider facade** — OpenCode/OpenWork can call Relay as
+- **Provider facade** — OpenCode can call Relay as
   `relay-agent/m365-copilot` through an OpenAI-compatible endpoint.
 - **Copilot transport** — Relay manages Edge/CDP lifecycle, Copilot readiness,
   request isolation, streaming, aborts, and diagnostics.
 - **Tool-call normalization** — Relay accepts structured Copilot output such as
   `tool_calls`, `tool_uses`, or `relay_tool` and returns OpenAI-compatible
-  `tool_calls` for OpenCode/OpenWork to execute.
+  `tool_calls` for OpenCode to execute.
 - **Repair without execution** — When Copilot returns prose/code instead of a
   required tool call, Relay performs one constrained repair retry and records
   artifacts if repair still fails. Relay does not infer or run arbitrary code.
@@ -73,16 +73,15 @@ The canonical installed first-use path is:
 2. Launch Relay Agent. It starts the local provider gateway and writes
    `relay-agent/m365-copilot` into the global OpenCode config at
    `~/.config/opencode/opencode.json`.
-3. On Windows, Relay downloads/verifies OpenWork/OpenCode and opens the
-   verified OpenWork installer handoff for normal Windows approval.
-4. Press **Open OpenWork/OpenCode** in Relay. The Copilot provider is already
+3. On Windows, Relay downloads/verifies portable OpenCode in the user profile.
+4. Press **Open OpenCode Web** in Relay. The Copilot provider is already
    configured.
 
 Relay shows setup progress in the installed app. If setup fails, use
 **Try Setup Again**; provider ports, tokens, and config files remain support
 details, not required setup steps.
-On Windows, Relay opens OpenWork from its Start Menu shortcut when available
-and falls back to common install paths.
+On Windows, Relay opens the cached portable OpenCode CLI as `opencode web` in a
+normal user workspace.
 
 The desktop shell is not a supported execution fallback. Diagnostic commands
 are grouped under `diag:*` and are kept only to troubleshoot the provider
@@ -93,7 +92,7 @@ Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTA
 ## Architecture (high level)
 
 ```
-OpenCode/OpenWork UX + execution
+OpenCode Web UX + execution
   |
   | OpenAI-compatible provider API
   v
@@ -140,7 +139,7 @@ coverage live under `apps/desktop/scripts/`:
 
 The Tauri IPC surface remains for doctor, CDP inspection, warmup, and support
 bundles. It is not the provider-mode
-execution contract. In provider mode, OpenCode/OpenWork calls
+execution contract. In provider mode, OpenCode calls
 `/v1/chat/completions`, receives OpenAI-compatible assistant messages or
 `tool_calls`, executes tools itself, and sends tool results back in the next
 provider request.
@@ -148,22 +147,22 @@ provider request.
 ## Configuration
 
 **Runtime defaults:** provider-mode execution, turn limits, permissions, and
-transcript state live in OpenCode/OpenWork. Relay keeps only provider gateway
+transcript state live in OpenCode. Relay keeps only provider gateway
 and diagnostic configuration.
 
-**Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md). The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. Runtime behavior should come from OpenCode/OpenWork wherever practical.
+**Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md). The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. Runtime behavior should come from OpenCode wherever practical.
 
 **Diagnostics:** `get_relay_diagnostics` still exists in IPC, the Settings modal exposes **Export diagnostics** for a text bundle, and the repo ships a headless provider/transport doctor entrypoint: `pnpm doctor -- --json`.
 
-**OpenWork/OpenCode bootstrap:** installed Relay starts the provider gateway
+**OpenCode bootstrap:** installed Relay starts the provider gateway
 and writes the global OpenCode config at `~/.config/opencode/opencode.json` on
 app launch. `pnpm dev` runs the repo no-thinking auto path. On Windows the auto
-path downloads and verifies pinned artifacts, extracts OpenCode, opens the
-OpenWork installer handoff, and writes the local provider token into config.
+path downloads and verifies the pinned OpenCode artifact, extracts OpenCode,
+prepares the admin-free Web launch path, and writes the local provider token into config.
 For diagnostics, `pnpm bootstrap:openwork-opencode -- --pretty` still prints a
 non-destructive preflight report.
 
-**Environment (Copilot):** Default CDP base **9360**. Provider startup uses `RELAY_EDGE_CDP_PORT` unless overridden by script flags. Linux requires Edge + `DISPLAY`; the Relay Edge profile lives at `~/RelayAgentEdgeProfile`. Anonymous `GET /health` returns only a non-secret Relay fingerprint (`status`, `service`, `instanceId`). OpenAI-compatible provider requests should use `Authorization: Bearer $RELAY_AGENT_API_KEY`; diagnostic desktop bridge endpoints may also use the boot token header. In provider-gateway mode, Relay returns normalized OpenAI `tool_calls` and OpenCode/OpenWork executes them. Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
+**Environment (Copilot):** Default CDP base **9360**. Provider startup uses `RELAY_EDGE_CDP_PORT` unless overridden by script flags. Linux requires Edge + `DISPLAY`; the Relay Edge profile lives at `~/RelayAgentEdgeProfile`. Anonymous `GET /health` returns only a non-secret Relay fingerprint (`status`, `service`, `instanceId`). OpenAI-compatible provider requests should use `Authorization: Bearer $RELAY_AGENT_API_KEY`; diagnostic desktop bridge endpoints may also use the boot token header. In provider-gateway mode, Relay returns normalized OpenAI `tool_calls` and OpenCode executes them. Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
 ## Development
 
@@ -187,7 +186,7 @@ checkout, Bun, Edge, or a live M365 session.
 
 ### Canonical Provider Checks
 
-These are the current acceptance checks for the OpenCode/OpenWork direction.
+These are the current acceptance checks for the OpenCode Web direction.
 
 **OpenCode provider smoke:** `pnpm smoke:opencode-provider` verifies the
 OpenAI-compatible provider contract with deterministic Copilot stubs, including
@@ -228,7 +227,7 @@ diagnostic `diag:tauri-dev` shell can still launch under Linux/Xvfb.
 
 **Live M365 provider smoke:** `pnpm live:m365:opencode-provider` validates the
 OpenAI-compatible provider path against signed-in M365 Copilot. This is the live
-execution smoke for OpenCode/OpenWork provider mode.
+execution smoke for OpenCode provider mode.
 
 **Live Copilot response probe:** `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --prompt "<prompt>"` drives the signed-in Copilot web UI over CDP and records response artifacts without invoking Relay-owned desktop execution.
 

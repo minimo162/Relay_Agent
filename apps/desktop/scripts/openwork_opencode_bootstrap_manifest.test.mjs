@@ -28,34 +28,21 @@ function assertArtifact(artifact, expected) {
   assert.equal(typeof artifact.license, "string");
 }
 
-test("OpenWork/OpenCode bootstrap manifest pins Windows x64 artifacts", () => {
+test("OpenCode bootstrap manifest pins Windows x64 artifact", () => {
   const manifest = loadManifest();
 
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(
     manifest.selectedTrack,
-    "windows-x64-openwork-desktop-plus-opencode-cli",
+    "windows-x64-opencode-cli-web",
   );
-  assert.match(manifest.ownershipBoundary, /external OpenWork\/OpenCode/);
-  assert.match(manifest.ownershipBoundary, /own UX, sessions, permissions, tools/);
+  assert.match(manifest.ownershipBoundary, /external OpenCode artifacts/);
+  assert.match(manifest.ownershipBoundary, /owns UX, sessions, permissions, tools/);
 
   const windows = manifest.platforms?.["windows-x64"];
   assert.ok(windows, "windows-x64 platform entry is required");
 
-  assertArtifact(windows.openworkDesktop, {
-    version: "0.11.212",
-    kind: "installer",
-    format: "msi",
-    url: "https://github.com/different-ai/openwork/releases/download/v0.11.212/openwork-desktop-windows-x64.msi",
-    sha256: "e52d020a1f6c2073164ed06279c441869844cb07a396bffac0789d63a4b7f486",
-    size: 218517504,
-    entrypoint: "msiexec",
-  });
-  assert.equal(
-    windows.openworkDesktop.installMode,
-    "explicit-user-approved-installer",
-  );
-  assert.match(windows.openworkDesktop.license, /\/ee/);
+  assert.equal(windows.openworkDesktop, undefined);
 
   assertArtifact(windows.opencodeCli, {
     version: "1.14.25",
@@ -69,7 +56,7 @@ test("OpenWork/OpenCode bootstrap manifest pins Windows x64 artifacts", () => {
   assert.equal(windows.opencodeCli.license, "MIT");
 });
 
-test("OpenWork/OpenCode bootstrap manifest preserves provider-only boundary", () => {
+test("OpenCode bootstrap manifest preserves provider-only boundary", () => {
   const serialized = JSON.stringify(loadManifest());
 
   assert.doesNotMatch(serialized, /resources\/opencode-runtime/);

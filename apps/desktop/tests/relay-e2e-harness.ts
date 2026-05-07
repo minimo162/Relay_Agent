@@ -16,11 +16,11 @@ function initRelayMock(config: { copilotReady: boolean; openworkSetup?: Record<s
     const openworkSetup = {
       status: "ready",
       stage: "ready",
-      message: "OpenWork/OpenCode is configured to use M365 Copilot.",
+      message: "OpenCode Web is configured to use M365 Copilot.",
       progressPercent: 100,
-      progressDetail: "OpenWork/OpenCode setup is complete.",
-      actionLabel: "Open OpenWork/OpenCode",
-      launchLabel: "Open OpenWork/OpenCode",
+      progressDetail: "OpenCode setup is complete.",
+      actionLabel: "Open OpenCode Web",
+      launchLabel: "Open OpenCode Web",
       providerBaseUrl: "http://127.0.0.1:18180/v1",
       configPath: "~/.config/opencode/opencode.json",
       updatedAt: "2026-04-29T00:00:00Z",
@@ -71,9 +71,9 @@ function initRelayMock(config: { copilotReady: boolean; openworkSetup?: Record<s
         };
       case "get_relay_diagnostics":
         return mockDiagnostics();
-      case "retry_openwork_setup":
+      case "retry_opencode_setup":
         return undefined;
-      case "open_openwork_or_opencode":
+      case "open_opencode_web":
         return undefined;
       case "write_text_export":
         return undefined;

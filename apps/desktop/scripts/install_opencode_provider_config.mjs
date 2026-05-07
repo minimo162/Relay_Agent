@@ -142,7 +142,7 @@ function main() {
     console.log("[relay-opencode-provider] opencode version:", opencodeProbe.version);
   }
   console.log("");
-  console.log("Export this before starting OpenCode/OpenWork:");
+  console.log("Export this before starting OpenCode:");
   console.log(shellExportLine(token));
   if (options.dryRun) {
     console.log("");

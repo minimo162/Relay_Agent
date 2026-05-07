@@ -36,7 +36,6 @@ pub struct BootstrapPlatforms {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapPlatform {
-    pub openwork_desktop: BootstrapArtifact,
     pub opencode_cli: BootstrapArtifact,
 }
 
@@ -60,7 +59,6 @@ pub struct BootstrapArtifact {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapArtifactKey {
-    OpenWorkDesktop,
     OpenCodeCli,
 }
 
@@ -68,7 +66,6 @@ impl BootstrapArtifactKey {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::OpenWorkDesktop => "openwork-desktop",
             Self::OpenCodeCli => "opencode-cli",
         }
     }
@@ -295,7 +292,6 @@ pub fn platform_artifact<'a>(
     };
 
     Ok(match key {
-        BootstrapArtifactKey::OpenWorkDesktop => &platform.openwork_desktop,
         BootstrapArtifactKey::OpenCodeCli => &platform.opencode_cli,
     })
 }
@@ -621,7 +617,7 @@ fn download_to_writer(
 ) -> Result<(), BootstrapError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(DEFAULT_DOWNLOAD_TIMEOUT)
-        .user_agent("Relay Agent OpenWork/OpenCode bootstrap")
+        .user_agent("Relay Agent OpenCode bootstrap")
         .build()
         .map_err(download_http_error)?;
     let mut response = client
@@ -822,19 +818,6 @@ mod tests {
     #[test]
     fn manifest_pins_windows_artifacts() {
         let manifest = load_manifest().expect("manifest parses");
-        let openwork = platform_artifact(
-            &manifest,
-            "windows-x64",
-            BootstrapArtifactKey::OpenWorkDesktop,
-        )
-        .expect("openwork artifact");
-        assert_eq!(openwork.version, "0.11.212");
-        assert_eq!(openwork.format, "msi");
-        assert_eq!(
-            openwork.sha256,
-            "e52d020a1f6c2073164ed06279c441869844cb07a396bffac0789d63a4b7f486"
-        );
-
         let opencode =
             platform_artifact(&manifest, "windows-x64", BootstrapArtifactKey::OpenCodeCli)
                 .expect("opencode artifact");

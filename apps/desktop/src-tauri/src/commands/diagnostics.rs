@@ -10,7 +10,7 @@ pub async fn get_relay_diagnostics(
 }
 
 #[tauri::command]
-pub fn retry_openwork_setup(
+pub fn retry_opencode_setup(
     app: AppHandle,
     services: State<'_, AppServices>,
 ) -> Result<(), String> {
@@ -23,8 +23,12 @@ pub fn retry_openwork_setup(
 }
 
 #[tauri::command]
-pub fn open_openwork_or_opencode() -> Result<(), String> {
-    crate::openwork_autostart::open_openwork_or_opencode()
+pub fn open_opencode_web(app: AppHandle, workspace: Option<String>) -> Result<(), String> {
+    let workspace = workspace
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from);
+    crate::openwork_autostart::open_prepared_opencode_web(&app, workspace)
 }
 
 #[tauri::command]

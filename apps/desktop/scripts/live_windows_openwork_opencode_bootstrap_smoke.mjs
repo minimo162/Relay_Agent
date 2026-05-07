@@ -117,7 +117,6 @@ function runBootstrapPreflight() {
     mode: parsed.mode,
     providerGatewayStatus: parsed.providerGateway?.status ?? null,
     providerGatewaySkippedReason: parsed.providerGateway?.skippedReason ?? null,
-    installerSkippedReason: parsed.openworkInstallerHandoff?.skippedReason ?? null,
     artifactStatuses: Object.fromEntries(
       (parsed.artifacts ?? []).map((artifact) => [artifact.artifact, artifact.status]),
     ),
@@ -129,7 +128,6 @@ if (!platformManifest) {
 }
 
 const artifacts = {
-  openworkDesktop: platformManifest.openworkDesktop,
   opencodeCli: platformManifest.opencodeCli,
 };
 
@@ -155,14 +153,6 @@ const report = {
     apiKeyEnv: "RELAY_AGENT_API_KEY",
   },
   artifacts: {
-    openworkDesktop: {
-      version: artifacts.openworkDesktop.version,
-      url: artifacts.openworkDesktop.url,
-      sha256: artifacts.openworkDesktop.sha256,
-      size: artifacts.openworkDesktop.size,
-      installMode: artifacts.openworkDesktop.installMode,
-      expectedPath: artifactPath("openwork-desktop", artifacts.openworkDesktop),
-    },
     opencodeCli: {
       version: artifacts.opencodeCli.version,
       url: artifacts.opencodeCli.url,
@@ -181,10 +171,9 @@ const report = {
   },
   manualSteps: [
     "Run pnpm dev and confirm Relay desktop UX is not the production entrypoint.",
-    "Confirm the auto bootstrap downloads/verifies artifacts on Windows, writes global OpenCode config, and starts the provider gateway.",
+    "Confirm the auto bootstrap downloads/verifies portable OpenCode on Windows, writes global OpenCode config, and starts the provider gateway.",
     "Confirm the generated global config contains the Relay provider token without a manual RELAY_AGENT_API_KEY export.",
-    "Approve the verified OpenWork Desktop MSI only when the Windows installer prompt appears.",
-    "Open OpenWork/OpenCode and confirm relay-agent/m365-copilot is already available.",
+    "Open OpenCode Web and confirm relay-agent/m365-copilot is already available.",
     "Run one provider text turn and one OpenCode-owned read tool turn.",
   ],
 };
@@ -222,7 +211,6 @@ if (requireWindows && process.platform !== "win32") {
 if (shouldDownload) {
   report.downloads = {
     opencodeCli: await downloadAndVerify("opencode-cli", artifacts.opencodeCli),
-    openworkDesktop: await downloadAndVerify("openwork-desktop", artifacts.openworkDesktop),
   };
   report.status = "download_verified";
 } else {

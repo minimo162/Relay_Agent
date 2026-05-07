@@ -59,7 +59,7 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Cool operational palette — flat-first, OpenWork-aligned */
+  /* Cool operational palette — flat-first, diagnostic shell aligned */
   --ra-surface-100: #ffffff;
   --ra-surface-200: #f5f7fb;
   --ra-surface-300: #f9fafc;

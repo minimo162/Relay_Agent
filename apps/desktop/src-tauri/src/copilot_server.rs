@@ -540,7 +540,7 @@ impl CopilotServer {
         })
     }
 
-    /// Enable provider-gateway recovery for the dedicated OpenWork/OpenCode port range.
+    /// Enable provider-gateway recovery for the dedicated OpenCode port range.
     ///
     /// This is intentionally opt-in so the diagnostic Copilot bridge on `18080` keeps the stricter
     /// `/health` fingerprint-only reclaim behavior.

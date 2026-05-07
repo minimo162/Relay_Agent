@@ -3,7 +3,7 @@
 ## Status
 
 - Current phase: Relay_Agent is being cut over to an OpenAI-compatible M365
-  Copilot provider gateway for OpenCode/OpenWork. OpenCode/OpenWork owns the
+  Copilot provider gateway for OpenCode. OpenCode owns the
   primary UX, sessions, permissions, tools, and execution; Relay owns the
   Copilot CDP provider bridge, normalization, and diagnostics.
 - Repository state: pnpm workspace, OpenCode provider gateway scripts, SolidJS
@@ -22,6 +22,25 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-07 Change: OpenCode-only Web launcher
+
+Installed Windows setup no longer includes the OpenWork Desktop MSI or optional
+installer handoff. Relay now downloads and verifies only the pinned portable
+OpenCode CLI zip, writes the M365 Copilot provider config, creates a normal
+user workspace, and marks setup ready without UAC or admin approval. The
+desktop action is **Open OpenCode Web** and starts the cached portable OpenCode
+as `opencode web --hostname 127.0.0.1 --port <free loopback port>` from the
+user workspace.
+
+Implementation notes:
+
+- Removed the `openworkDesktop` manifest artifact and the
+  `openworkInstallerHandoff` bootstrap report.
+- Removed the OpenWork MSI approval/opening path and deleted the OpenWork
+  desktop handoff smoke.
+- Renamed the desktop launch IPC to `open_opencode_web` and the retry IPC to
+  `retry_opencode_setup`.
 
 ### 2026-05-07 Fix: Harden OpenWork/OpenCode downloads on Windows
 

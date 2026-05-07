@@ -1,4 +1,6 @@
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
@@ -9,24 +11,20 @@ use crate::openwork_bootstrap::{
     bootstrap_cache_root, default_global_opencode_config_path,
     download_and_verify_artifact_with_progress, extract_zip_artifact, load_manifest,
     platform_artifact, probe_opencode_entrypoint, write_opencode_provider_config_file,
-    BootstrapArtifactKey, BootstrapDownloadProgress, BootstrapError,
+    BootstrapArtifactKey, BootstrapDownloadProgress,
 };
 
 const PROVIDER_PORT: u16 = 18180;
 const EDGE_CDP_PORT: u16 = 9360;
 const PLATFORM: &str = "windows-x64";
+const OPENCODE_WEB_PORT_START: u16 = 4096;
+const OPENCODE_WEB_PORT_END: u16 = 4127;
 const PROGRESS_PROVIDER_GATEWAY: u8 = 8;
 const PROGRESS_PROVIDER_CONFIG: u8 = 16;
 const PROGRESS_DOWNLOAD_START: u8 = 24;
 const PROGRESS_DOWNLOAD_END: u8 = 88;
 const PROGRESS_EXTRACT: u8 = 91;
 const PROGRESS_HANDOFF: u8 = 96;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum WindowsLaunchTarget {
-    Executable(PathBuf),
-    Shortcut(PathBuf),
-}
 
 #[derive(Debug, Clone)]
 struct ProviderGatewayStart {
@@ -44,7 +42,7 @@ pub fn spawn(
         set_status(
             &status,
             OpenWorkSetupSnapshot::needs_attention(
-                "Automatic OpenWork/OpenCode setup is disabled for diagnostics.",
+                "Automatic OpenCode setup is disabled for diagnostics.",
             ),
         );
         return;
@@ -55,7 +53,7 @@ pub fn spawn(
             &status,
             OpenWorkSetupSnapshot::preparing_stage_progress(
                 "setup",
-                "Preparing OpenWork/OpenCode for M365 Copilot.",
+                "Preparing OpenCode for M365 Copilot.",
                 Some(2),
                 Some("Starting the setup checks.".to_string()),
             ),
@@ -67,55 +65,34 @@ pub fn spawn(
     });
 }
 
-pub fn open_openwork_or_opencode() -> Result<(), String> {
+pub fn open_prepared_opencode_web(
+    app: &AppHandle,
+    workspace: Option<PathBuf>,
+) -> Result<(), String> {
     if cfg!(windows) {
-        if let Some(target) = find_openwork_windows_launch_target() {
-            open_windows_launch_target(&target)?;
-            return Ok(());
-        }
-        if let Some(path) = find_cached_opencode_windows_executable() {
-            let mut command = std::process::Command::new(&path);
-            command.arg("--help");
-            crate::windows_command::no_console_window(&mut command);
-            command
-                .spawn()
-                .map_err(|error| format!("open OpenCode at {}: {error}", path.display()))?;
-            return Ok(());
-        }
-        return Err(
-            "OpenWork is not installed yet. Approve the OpenWork installer, then try again."
-                .to_string(),
-        );
-    }
-
-    if std::process::Command::new("openwork").spawn().is_ok() {
+        let app_local_data_dir = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| format!("resolve app data dir: {error}"))?;
+        let workspace = resolve_workspace_for_launch(Some(&app_local_data_dir), workspace)?;
+        let path = find_cached_opencode_windows_executable(&app_local_data_dir)
+            .ok_or_else(|| "OpenCode is not ready yet. Use Try Setup Again first.".to_string())?;
+        spawn_opencode_web(&path, &workspace)?;
         return Ok(());
     }
-    if std::process::Command::new("opencode").spawn().is_ok() {
+
+    let workspace = resolve_workspace_for_launch(None, workspace)?;
+    let mut command = std::process::Command::new("opencode");
+    command
+        .args(opencode_web_args(choose_opencode_web_port()?))
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if command.spawn().is_ok() {
         return Ok(());
     }
-    Err("OpenWork/OpenCode is not installed or not on PATH yet.".to_string())
-}
-
-fn open_windows_launch_target(target: &WindowsLaunchTarget) -> Result<(), String> {
-    match target {
-        WindowsLaunchTarget::Executable(path) => {
-            let mut command = std::process::Command::new(path);
-            crate::windows_command::no_console_window(&mut command);
-            command
-                .spawn()
-                .map_err(|error| format!("open OpenWork at {}: {error}", path.display()))?;
-        }
-        WindowsLaunchTarget::Shortcut(path) => {
-            let mut command = std::process::Command::new("cmd");
-            command.args(["/C", "start", ""]).arg(path);
-            crate::windows_command::no_console_window(&mut command);
-            command.spawn().map_err(|error| {
-                format!("open OpenWork shortcut at {}: {error}", path.display())
-            })?;
-        }
-    }
-    Ok(())
+    Err("OpenCode is not installed or not on PATH yet.".to_string())
 }
 
 fn run(
@@ -123,7 +100,7 @@ fn run(
     provider_bridge: Arc<CopilotBridgeManager>,
     status: Arc<Mutex<OpenWorkSetupSnapshot>>,
 ) -> Result<(), String> {
-    tracing::info!("[openwork-autostart] starting OpenWork/OpenCode setup");
+    tracing::info!("[openwork-autostart] starting OpenCode setup");
     set_status(
         &status,
         OpenWorkSetupSnapshot::preparing_stage_progress(
@@ -160,14 +137,16 @@ fn run(
         run_windows_first_run(&app, &status)?;
     }
 
-    set_status(
-        &status,
-        OpenWorkSetupSnapshot::ready(
-            "OpenWork/OpenCode is configured to use M365 Copilot.",
-            provider_gateway.base_url,
-            global_config.display().to_string(),
-        ),
+    let mut ready = OpenWorkSetupSnapshot::ready(
+        "OpenCode Web is configured to use M365 Copilot without an admin install.",
+        provider_gateway.base_url,
+        global_config.display().to_string(),
     );
+    ready.progress_detail =
+        Some("Portable OpenCode is ready. Open OpenCode Web to start in your browser.".to_string());
+    ready.action_label = Some("Open OpenCode Web".to_string());
+    ready.launch_label = Some("Open OpenCode Web".to_string());
+    set_status(&status, ready);
     Ok(())
 }
 
@@ -250,8 +229,8 @@ fn run_windows_first_run(
     set_status(
         status,
         OpenWorkSetupSnapshot::preparing_stage(
-            "download_openwork_opencode",
-            "Downloading and verifying OpenWork/OpenCode.",
+            "download_opencode",
+            "Downloading and verifying OpenCode.",
         ),
     );
     let app_local_data_dir = app
@@ -263,10 +242,7 @@ fn run_windows_first_run(
 
     let opencode = platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenCodeCli)
         .map_err(|error| format!("select OpenCode artifact: {error}"))?;
-    let openwork = platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenWorkDesktop)
-        .map_err(|error| format!("select OpenWork artifact: {error}"))?;
-    let total_download_bytes = opencode.size.saturating_add(openwork.size).max(1);
-    let mut completed_download_bytes = 0_u64;
+    let total_download_bytes = opencode.size.max(1);
     download_and_verify_artifact_with_progress(
         &cache_root,
         PLATFORM,
@@ -275,18 +251,17 @@ fn run_windows_first_run(
         |progress| {
             set_download_progress_status(
                 status,
-                completed_download_bytes.saturating_add(progress.downloaded_bytes),
+                progress.downloaded_bytes,
                 total_download_bytes,
                 &progress,
             );
         },
     )
     .map_err(|error| format!("download OpenCode: {error}"))?;
-    completed_download_bytes = completed_download_bytes.saturating_add(opencode.size);
     set_status(
         status,
         OpenWorkSetupSnapshot::preparing_stage_progress(
-            "download_openwork_opencode",
+            "download_opencode",
             "Extracting and checking OpenCode.",
             Some(PROGRESS_EXTRACT),
             Some("OpenCode is downloaded. Checking the command now.".to_string()),
@@ -306,39 +281,19 @@ fn run_windows_first_run(
     set_status(
         status,
         OpenWorkSetupSnapshot::preparing_stage_progress(
-            "openwork_handoff",
-            "Preparing the OpenWork installer handoff.",
+            "opencode_web",
+            "Preparing OpenCode Web.",
             Some(PROGRESS_HANDOFF),
-            Some("OpenCode is ready. Preparing OpenWork now.".to_string()),
+            Some("OpenCode is ready. No installer or admin approval is required.".to_string()),
         ),
     );
-    let verified = download_and_verify_artifact_with_progress(
-        &cache_root,
-        PLATFORM,
-        BootstrapArtifactKey::OpenWorkDesktop,
-        openwork,
-        |progress| {
-            set_download_progress_status(
-                status,
-                completed_download_bytes.saturating_add(progress.downloaded_bytes),
-                total_download_bytes,
-                &progress,
-            );
-        },
-    )
-    .map_err(|error| format!("download OpenWork: {error}"))?;
-    set_status(
-        status,
-        OpenWorkSetupSnapshot::preparing_stage_progress(
-            "openwork_handoff",
-            "Opening the OpenWork installer.",
-            Some(PROGRESS_HANDOFF),
-            Some("OpenWork is downloaded. Opening the installer.".to_string()),
-        ),
-    );
-
-    open_openwork_installer_once(&app_local_data_dir, &verified.path, &openwork.version)
-        .map_err(|error| format!("open OpenWork installer: {error}"))?;
+    let workspace = resolve_workspace_for_launch(Some(&app_local_data_dir), None)?;
+    std::fs::create_dir_all(&workspace).map_err(|error| {
+        format!(
+            "create OpenCode workspace at {}: {error}",
+            workspace.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -363,8 +318,8 @@ fn set_download_progress_status(
     set_status(
         status,
         OpenWorkSetupSnapshot::preparing_stage_progress(
-            "download_openwork_opencode",
-            "Downloading and verifying OpenWork/OpenCode.",
+            "download_opencode",
+            "Downloading and verifying OpenCode.",
             Some(setup_percent),
             Some(detail),
         ),
@@ -417,7 +372,7 @@ fn setup_attention_snapshot(
         .unwrap_or("setup")
         .to_string();
     let progress_percent = current.and_then(|snapshot| snapshot.progress_percent);
-    let message = format!("OpenWork/OpenCode setup needs attention: {error}");
+    let message = format!("OpenCode setup needs attention: {error}");
     OpenWorkSetupSnapshot::needs_attention_stage_progress(
         stage.clone(),
         message,
@@ -432,11 +387,11 @@ fn setup_attention_detail(stage: &str, error: &str) -> String {
         "provider_config" => format!(
             "Relay could not write the OpenCode provider config. Check file permissions and try setup again. Detail: {error}"
         ),
-        "download_openwork_opencode" => format!(
-            "Relay could not download or verify OpenWork/OpenCode. Relay retries downloads automatically, but GitHub release downloads may still be blocked by a proxy, VPN, firewall, or TLS inspection. Check the network connection and try setup again. Detail: {error}"
+        "download_opencode" => format!(
+            "Relay could not download or verify OpenCode. Relay retries downloads automatically, but GitHub release downloads may still be blocked by a proxy, VPN, firewall, or TLS inspection. Check the network connection and try setup again. Detail: {error}"
         ),
-        "openwork_handoff" => format!(
-            "Relay downloaded OpenWork/OpenCode but could not finish opening OpenWork. Try setup again, then use Open OpenWork/OpenCode. Detail: {error}"
+        "opencode_web" => format!(
+            "Relay prepared OpenCode but could not finish the Web launch setup. Try setup again, then use Open OpenCode Web. Detail: {error}"
         ),
         _ => format!("Relay could not finish setup. Try setup again. Detail: {error}"),
     }
@@ -460,45 +415,6 @@ fn provider_gateway_attention_detail(error: &str) -> String {
     format!("{hint} Detail: {error}")
 }
 
-fn open_openwork_installer_once(
-    app_local_data_dir: &Path,
-    installer_path: &Path,
-    version: &str,
-) -> Result<(), BootstrapError> {
-    let stamp = app_local_data_dir.join(format!("openwork-installer-opened-{version}.stamp"));
-    if stamp.exists() {
-        tracing::info!(
-            "[openwork-autostart] OpenWork installer handoff already recorded at {}",
-            stamp.display()
-        );
-        return Ok(());
-    }
-    open_openwork_installer(installer_path)?;
-    std::fs::write(&stamp, installer_path.display().to_string()).map_err(|source| {
-        BootstrapError::Io {
-            path: stamp,
-            source,
-        }
-    })?;
-    Ok(())
-}
-
-fn open_openwork_installer(path: &Path) -> Result<u32, BootstrapError> {
-    if !cfg!(windows) {
-        return Err(BootstrapError::UnsupportedPlatform(
-            "openwork_installer_handoff_requires_windows".to_string(),
-        ));
-    }
-    let mut command = std::process::Command::new("msiexec");
-    command.arg("/i").arg(path);
-    crate::windows_command::no_console_window(&mut command);
-    let child = command.spawn().map_err(|error| BootstrapError::Command {
-        path: PathBuf::from("msiexec"),
-        message: error.to_string(),
-    })?;
-    Ok(child.id())
-}
-
 fn global_config_path() -> Result<PathBuf, String> {
     std::env::var_os("RELAY_OPENCODE_GLOBAL_CONFIG")
         .map(PathBuf::from)
@@ -512,100 +428,69 @@ fn default_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn find_openwork_windows_launch_target() -> Option<WindowsLaunchTarget> {
-    find_openwork_windows_shortcut()
-        .map(WindowsLaunchTarget::Shortcut)
-        .or_else(|| find_openwork_windows_executable().map(WindowsLaunchTarget::Executable))
+fn spawn_opencode_web(path: &Path, workspace: &Path) -> Result<(), String> {
+    let port = choose_opencode_web_port()?;
+    std::fs::create_dir_all(workspace).map_err(|error| {
+        format!(
+            "create OpenCode workspace at {}: {error}",
+            workspace.display()
+        )
+    })?;
+    let mut command = std::process::Command::new(path);
+    command
+        .args(opencode_web_args(port))
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::windows_command::no_console_window(&mut command);
+    command
+        .spawn()
+        .map_err(|error| format!("open OpenCode Web at {}: {error}", path.display()))?;
+    Ok(())
 }
 
-fn find_openwork_windows_executable() -> Option<PathBuf> {
-    let candidates = [
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-        std::env::var_os("PROGRAMFILES").map(PathBuf::from),
-        std::env::var_os("PROGRAMFILES(X86)").map(PathBuf::from),
-    ];
-    let relative = [
-        PathBuf::from("OpenWork").join("OpenWork.exe"),
-        PathBuf::from("OpenWork Desktop").join("OpenWork.exe"),
-        PathBuf::from("Programs")
-            .join("OpenWork")
-            .join("OpenWork.exe"),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .flat_map(|root| relative.iter().map(move |path| root.join(path)))
-        .find(|path| path.exists())
-}
-
-fn find_openwork_windows_shortcut() -> Option<PathBuf> {
-    openwork_start_menu_roots()
-        .into_iter()
-        .find_map(find_openwork_shortcut_under)
-}
-
-fn openwork_start_menu_roots() -> Vec<PathBuf> {
+fn opencode_web_args(port: u16) -> [String; 5] {
     [
-        std::env::var_os("APPDATA").map(PathBuf::from),
-        std::env::var_os("PROGRAMDATA").map(PathBuf::from),
+        "web".to_string(),
+        "--hostname".to_string(),
+        "127.0.0.1".to_string(),
+        "--port".to_string(),
+        port.to_string(),
     ]
-    .into_iter()
-    .flatten()
-    .map(|root| {
-        root.join("Microsoft")
-            .join("Windows")
-            .join("Start Menu")
-            .join("Programs")
-    })
-    .collect()
 }
 
-fn find_openwork_shortcut_under(root: PathBuf) -> Option<PathBuf> {
-    for relative in [
-        PathBuf::from("OpenWork.lnk"),
-        PathBuf::from("OpenWork Desktop.lnk"),
-        PathBuf::from("OpenWork").join("OpenWork.lnk"),
-        PathBuf::from("OpenWork Desktop").join("OpenWork.lnk"),
-    ] {
-        let candidate = root.join(relative);
-        if candidate.exists() {
-            return Some(candidate);
+fn choose_opencode_web_port() -> Result<u16, String> {
+    for port in OPENCODE_WEB_PORT_START..=OPENCODE_WEB_PORT_END {
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return Ok(port);
         }
     }
-    find_openwork_shortcut_recursive(&root, 0)
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("find OpenCode Web port: {error}"))?;
+    listener
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|error| format!("read OpenCode Web port: {error}"))
 }
 
-fn find_openwork_shortcut_recursive(dir: &Path, depth: usize) -> Option<PathBuf> {
-    if depth > 3 {
-        return None;
+fn resolve_workspace_for_launch(
+    app_local_data_dir: Option<&Path>,
+    workspace: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = workspace.filter(|path| !path.as_os_str().is_empty()) {
+        return Ok(path);
     }
-    let entries = std::fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() && is_openwork_shortcut(&path) {
-            return Some(path);
-        }
-        if path.is_dir() {
-            if let Some(found) = find_openwork_shortcut_recursive(&path, depth + 1) {
-                return Some(found);
-            }
-        }
+    if let Some(home) = default_home_dir() {
+        return Ok(home.join("Relay Agent Workspace"));
     }
-    None
+    app_local_data_dir
+        .map(|path| path.join("workspace"))
+        .ok_or_else(|| "could not resolve a workspace for OpenCode".to_string())
 }
 
-fn is_openwork_shortcut(path: &Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let lower = file_name.to_ascii_lowercase();
-    lower.ends_with(".lnk") && lower.contains("openwork")
-}
-
-fn find_cached_opencode_windows_executable() -> Option<PathBuf> {
-    let root = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|path| bootstrap_cache_root(&path.join("com.relayagent.desktop")))?;
+fn find_cached_opencode_windows_executable(app_local_data_dir: &Path) -> Option<PathBuf> {
+    let root = bootstrap_cache_root(app_local_data_dir);
     let manifest = load_manifest().ok()?;
     let opencode =
         platform_artifact(&manifest, PLATFORM, BootstrapArtifactKey::OpenCodeCli).ok()?;
@@ -648,31 +533,16 @@ mod tests {
     }
 
     #[test]
-    fn openwork_windows_candidates_include_common_install_paths() {
-        let local = PathBuf::from(r"C:\Users\relay\AppData\Local")
-            .join("Programs")
-            .join("OpenWork")
-            .join("OpenWork.exe");
-        assert!(local.ends_with(Path::new("Programs").join("OpenWork").join("OpenWork.exe")));
-    }
-
-    #[test]
-    fn openwork_shortcut_detection_matches_lnk_names() {
-        assert!(is_openwork_shortcut(Path::new("OpenWork.lnk")));
-        assert!(is_openwork_shortcut(Path::new("OpenWork Desktop.lnk")));
-        assert!(!is_openwork_shortcut(Path::new("OpenCode.lnk")));
-        assert!(!is_openwork_shortcut(Path::new("OpenWork.exe")));
-    }
-
-    #[test]
-    fn explicit_openwork_shortcut_is_found_before_recursive_scan() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let shortcut = temp.path().join("OpenWork").join("OpenWork.lnk");
-        std::fs::create_dir_all(shortcut.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&shortcut, b"shortcut").expect("shortcut");
+    fn opencode_web_args_bind_localhost_with_explicit_port() {
         assert_eq!(
-            find_openwork_shortcut_under(temp.path().to_path_buf()),
-            Some(shortcut)
+            opencode_web_args(4096),
+            [
+                "web".to_string(),
+                "--hostname".to_string(),
+                "127.0.0.1".to_string(),
+                "--port".to_string(),
+                "4096".to_string()
+            ]
         );
     }
 }
