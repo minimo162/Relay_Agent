@@ -345,7 +345,7 @@ function hasBalancedStructuredPayload(text) {
 // surfaced. Keep this list aligned with the tool-object key names the Rust
 // side tolerates in `parse_initial`.
 const INCOMPLETE_TOOL_KEY_RE =
-  /"(?:name|input|path|content|arguments|parameters|relay_tool_call)"\s*:/u;
+  /"(?:name|input|path|content|arguments|parameters|relay_tool_call|tool_calls|tool_uses|recipient_name|function)"\s*:/u;
 
 function assistantReplyLooksIncompleteRelayTool(text) {
   const cleaned = normalizeCopilotVisibleText(text);
@@ -356,7 +356,7 @@ function assistantReplyLooksIncompleteRelayTool(text) {
   if (!looksLikeToolShape) return false;
   if (assistantReplyHasClosedFence(cleaned) && hasBalancedStructuredPayload(cleaned)) return false;
   const sentinelIndex = cleaned.search(
-    /relay_tool_call|"(?:name|input|path|content|arguments|parameters)"\s*:/u,
+    /relay_tool_call|"(?:name|input|path|content|arguments|parameters|tool_calls|tool_uses|recipient_name|function)"\s*:/u,
   );
   if (sentinelIndex < 0) return false;
   const objectStart = cleaned.lastIndexOf("{", sentinelIndex);
@@ -364,6 +364,19 @@ function assistantReplyLooksIncompleteRelayTool(text) {
   const payloadStart = Math.max(objectStart, arrayStart);
   if (payloadStart < 0) return false;
   return !hasBalancedStructuredPayload(cleaned.slice(payloadStart));
+}
+
+function assistantReplyHasCompleteToolCallJson(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned || assistantReplyLooksIncompleteRelayTool(cleaned)) return false;
+  if (
+    !/"(?:tool_calls|tool_uses|recipient_name|relay_tool_call)"\s*:/u.test(cleaned) &&
+    !/```relay_tool/u.test(cleaned)
+  ) {
+    return false;
+  }
+  if (assistantReplyHasClosedFence(cleaned)) return true;
+  return hasBalancedStructuredPayload(cleaned);
 }
 
 function assistantReplyHasStrongCompletionSignal(text) {
@@ -375,6 +388,7 @@ function assistantReplyHasStrongCompletionSignal(text) {
     return /<\/html>/i.test(cleaned);
   }
   if (assistantReplyLooksIncompleteRelayTool(cleaned)) return false;
+  if (assistantReplyHasCompleteToolCallJson(cleaned)) return true;
   if (assistantReplyHasClosedFence(cleaned)) return true;
   if (assistantTextHasStructuredContent(cleaned) && cleaned.length >= 180) return true;
   return false;
@@ -454,14 +468,25 @@ function assistantReplyAddsOnlySuggestionSuffix(candidate, baseline = "") {
 function findProgressToolCutoff(text) {
   const raw = String(text ?? "");
   if (!raw) return -1;
+  if (
+    /^\s*[\[{]/u.test(raw) &&
+    /"(?:tool_calls|tool_uses|recipient_name|relay_tool_call)"\s*:/u.test(raw)
+  ) {
+    return 0;
+  }
   const candidates = [
     raw.indexOf("```relay_tool"),
     raw.indexOf("relay_tool_call"),
+    raw.indexOf('"tool_calls"'),
+    raw.indexOf('"tool_uses"'),
+    raw.indexOf('"recipient_name"'),
     raw.indexOf("```json"),
   ].filter((index) => index >= 0);
   for (const pattern of [
     /\n\s*\[\s*\{\s*"name"\s*:/u,
     /\n\s*\{\s*"name"\s*:/u,
+    /\n\s*\{\s*"tool_(?:calls|uses)"\s*:/u,
+    /\n\s*\{\s*"recipient_name"\s*:/u,
     /\n\s*`?relay_tool`?/iu,
   ]) {
     const match = pattern.exec(raw);
@@ -506,6 +531,16 @@ async function pollCopilotGeneratingAndReply(session) {
   const gen = v?.generating === true;
   const reply = stripM365CopilotReplyChrome(typeof v?.reply === "string" ? v.reply : "");
   const progressOnly = v?.progressOnly === true;
+  const rawButtonState =
+    v?.composerButtonState && typeof v.composerButtonState === "object"
+      ? v.composerButtonState
+      : {};
+  const composerButtonState = {
+    hasStopButton: rawButtonState.hasStopButton === true,
+    hasReadySendButton: rawButtonState.hasReadySendButton === true,
+    hasDisabledSendButton: rawButtonState.hasDisabledSendButton === true,
+    hasStopVisualInDisabledSendButton: rawButtonState.hasStopVisualInDisabledSendButton === true,
+  };
   const hasVisibleAssistantChat =
     typeof v?.hasVisibleAssistantChat === "boolean"
       ? v.hasVisibleAssistantChat
@@ -513,6 +548,7 @@ async function pollCopilotGeneratingAndReply(session) {
   return {
     generating: gen,
     strongGeneratingSignal: v?.strongGeneratingSignal === true,
+    composerButtonState,
     reply,
     progressOnly,
     hasVisibleAssistantChat,
@@ -865,6 +901,7 @@ function assistantReplyNeedsExpansionProbe(text, submittedPromptLen) {
   if (assistantReplyLooksIncompleteRelayTool(cleaned)) return true;
   if (replyIsOnlyReasoningDisclosurePlaceholder(cleaned)) return true;
   if (domExtractLooksLikeSubmittedPrompt(cleaned.length, submittedPromptLen)) return true;
+  if (assistantReplyHasCompleteToolCallJson(cleaned)) return false;
   return cleaned.length < 220 && !assistantTextHasStructuredContent(cleaned);
 }
 
@@ -1137,6 +1174,8 @@ async function waitForDomResponse(
   let quietGen = 0;
   /** Phantom “stop generating” in DOM keeps this true forever — ignore after N seconds. */
   let genStreak = 0;
+  /** Consecutive polls where the composer is clearly back to idle send state. */
+  let readySendStreak = 0;
   /** Long code replies may hide trailing lines behind a one-shot expansion control. */
   let expandAttempted = false;
   /** M365 reply-div yields short answers (e.g. "OK"); keep floor low but still require growth vs baseline. */
@@ -1151,6 +1190,7 @@ async function waitForDomResponse(
     const {
       generating: generatingRaw,
       strongGeneratingSignal,
+      composerButtonState,
       reply: replyRaw,
       progressOnly,
       hasVisibleAssistantChat,
@@ -1175,8 +1215,18 @@ async function waitForDomResponse(
     } else {
       genStreak = 0;
     }
+    const composerIdleSignal =
+      composerButtonState?.hasReadySendButton === true &&
+      composerButtonState?.hasStopButton !== true &&
+      composerButtonState?.hasStopVisualInDisabledSendButton !== true;
+    if (composerIdleSignal) {
+      readySendStreak++;
+    } else {
+      readySendStreak = 0;
+    }
     const ignorePhantomStop =
-      genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS && strongGeneratingSignal !== true;
+      strongGeneratingSignal !== true &&
+      (genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS || readySendStreak >= 2);
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
     const reasoningDisclosurePlaceholder = replyIsOnlyReasoningDisclosurePlaceholder(reply);
     const generating =
@@ -1184,6 +1234,22 @@ async function waitForDomResponse(
       reasoningDisclosurePlaceholder ||
       (generatingRaw && !ignorePhantomStop);
     await emitProgress(progressReply, generating || progressOnly);
+    if (
+      assistantReplyHasCompleteToolCallJson(progressReply) &&
+      normalizeCopilotVisibleText(progressReply) !== baselineProgressText &&
+      !domExtractLooksLikeSubmittedPrompt(normalizeCopilotVisibleText(progressReply).length, submittedPromptLen)
+    ) {
+      const toolJsonResolved = await resolveAssistantReplyForReturn(
+        session,
+        progressReply,
+        submittedPromptLen,
+        netCapture,
+      );
+      if (toolJsonResolved != null && assistantReplyHasCompleteToolCallJson(toolJsonResolved)) {
+        console.error("[copilot:response] done (complete tool-call JSON) len=", toolJsonResolved.length);
+        return await finalize("stable_tool_json", toolJsonResolved);
+      }
+    }
     if (generating) quietGen = 0;
     else quietGen++;
     if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {
@@ -1218,6 +1284,8 @@ async function waitForDomResponse(
         generatingRaw,
         streamingPlaceholderTail,
         genStreak,
+        readySendStreak,
+        composerIdleSignal,
         streamed,
         stable,
         baselineLen,

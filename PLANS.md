@@ -4,15 +4,17 @@ Date: 2026-04-14
 
 ## Current Product Baseline
 
-Relay_Agent is now the **OpenCode setup layer and OpenAI-compatible
-M365 Copilot provider gateway**. The historical Tauri desktop shell remains
-under `apps/desktop/` only for provider launch support, diagnostics, and live
-Copilot verification.
+Relay_Agent is moving to an **AionUi-first Relay-branded desktop shell** while
+keeping the existing OpenAI-compatible M365 Copilot provider gateway and Tool
+Call Emulation Layer. The current OpenCode Web path remains implementation
+history and diagnostic reference until the AionUi shell takes over first run.
 
-- Primary UX and execution: OpenCode Web.
-- Setup + provider gateway: `pnpm dev` runs the OpenCode auto
-  bootstrap, and `apps/desktop/src-tauri/binaries/copilot_server.js` exposes
-  the OpenAI-compatible provider endpoint.
+- Target primary UX and execution: Relay-branded AionUi with OfficeCLI skills.
+- Current primary UX and execution until the cutover lands: OpenCode Web.
+- Setup + provider gateway: `apps/desktop/src-tauri/binaries/copilot_server.js`
+  exposes the OpenAI-compatible provider endpoint. The current `pnpm dev`
+  still runs the OpenCode auto bootstrap; the target path starts the provider
+  before the Relay-branded AionUi shell.
 - Frontend: SolidJS + Vite diagnostic desktop shell.
 - Backend: Rust in `apps/desktop/src-tauri/`, with `crates/desktop-core` as the
   only active internal crate. Historical `runtime` / `tools` /
@@ -23,7 +25,9 @@ Copilot verification.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
 - PDF reads: LiteParse via bundled `relay-node`.
 
-Historical workbook / CSV planning artifacts are no longer completion gates for this repository. Older implementation log entries remain preserved in `docs/IMPLEMENTATION.md` as history only.
+Historical workbook / CSV planning artifacts and the OpenCode-only product path
+are no longer completion gates for the target product. Older implementation log
+entries remain preserved in `docs/IMPLEMENTATION.md` as history only.
 
 ## Source Of Truth
 
@@ -37,30 +41,52 @@ Planning and implementation references are ordered as follows:
 Additional rules:
 
 - Rust crate types and IPC signatures in `apps/desktop/src-tauri/` are canonical.
-- OpenCode session state is the canonical source for execution
-  transcript and runtime behavior. Relay-specific defaults live in the provider
-  gateway and diagnostic desktop adapter/config modules.
+- AionUi session state is the target canonical source for execution transcript
+  and workspace behavior. Until the cutover lands, OpenCode session state
+  remains the current implementation's source of truth. Relay-specific defaults
+  live in the provider gateway and seed/bootstrap modules.
 - `.taskmaster/tasks/tasks.json` must reflect real artifact state, not historical intent.
 
 ## Delivery Priorities
 
 - Priority A: keep M365 Copilot via Edge CDP as the primary LLM surface.
-- Priority B: keep OpenCode as the external OSS owner for UX,
-  sessions, tools, permissions, events, MCP, plugins, skills, and workspace
-  runtime behavior.
-- Priority C: keep Relay-specific code focused on the OpenCode setup
-  path, OpenAI-compatible provider gateway, Copilot CDP transport, tool-call
-  normalization, and diagnostics.
+- Priority B: move product UX to AionUi and use AionUi/OfficeCLI for sessions,
+  tools, approvals, skills, Office previews, and workspace behavior.
+- Priority C: keep Relay-specific code focused on the OpenAI-compatible
+  provider gateway, Copilot CDP transport, tool-call normalization, diagnostics,
+  AionUi provider seeding, and user-local OfficeCLI bootstrap.
+
+## Strategic Reset: AionUi-First Relay Agent
+
+The active architecture direction is now an AionUi-first rebuild, not another
+OpenCode Web iteration. Relay_Agent makes AionUi easy to use with M365 Copilot
+and OfficeCLI while keeping M365 Copilot behind Relay's provider gateway and
+Tool Call Emulation Layer.
+
+Detailed plan: `docs/AIONUI_RELAY_MIGRATION.md`.
+
+Implications:
+
+- Relay-branded AionUi owns the first-run product UX.
+- Relay seeds the M365 Copilot provider automatically.
+- Relay manages portable OfficeCLI without admin approval.
+- OpenWork remains removed.
+- OpenCode Web is demoted to optional future backend capacity.
+- Do not add new production features to the Relay-owned Rust execution runtime.
 
 ## Strategic Reset: OpenCode Provider Gateway
 
-The active architecture direction is a hard cut, not a compatibility migration:
+The previous architecture direction was a hard cut, not a compatibility migration:
 Relay_Agent makes OpenCode easy to use with M365 Copilot while staying out of UX
 and execution ownership. OpenCode owns UX and execution;
 Copilot owns the LLM surface; Relay owns the setup path, M365 Copilot provider
 gateway, and diagnostics.
 
 Detailed plan: `docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md`.
+
+This remains valuable as the provider-gateway reference and because
+Relay_Agent makes OpenCode easy to use with M365 Copilot in the current
+implementation. It is no longer the target first-run product UX.
 
 Implications:
 

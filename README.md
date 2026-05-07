@@ -1,10 +1,10 @@
 # Relay Agent
 
-Relay Agent is now the **OpenCode setup layer, Tool Call Emulation Layer, and
-OpenAI-compatible M365 Copilot provider gateway**. OpenCode owns the primary
-UX, sessions, tools, permissions, and workspace execution; Relay makes that
-path easy to start and connects the provider loop to M365 Copilot in Edge over
-CDP.
+Relay Agent is moving to an **AionUi-first Relay-branded desktop shell** with
+OfficeCLI skills, while retaining the existing **Tool Call Emulation Layer** and
+OpenAI-compatible M365 Copilot provider gateway. The current OpenCode Web path
+remains the working implementation and diagnostic reference until the AionUi
+cutover lands.
 
 The historical **Tauri v2 / SolidJS / Rust** desktop shell remains in the repo
 only for provider launch support, diagnostics, and live Copilot verification.
@@ -20,9 +20,12 @@ cd Relay_Agent
 pnpm install
 ```
 
-- **Installed desktop first run:** launch Relay Agent. It starts the provider
+- **Installed desktop first run:** launch Relay Agent. Current builds start the provider
   gateway, writes the global OpenCode provider config, and on Windows prepares
   portable OpenCode automatically.
+- **Target first run:** launch Relay Agent. It starts the provider gateway,
+  seeds Relay as AionUi's selected custom provider, prepares portable
+  OfficeCLI, and opens the Relay-branded AionUi shell.
 - **One-command repo first run:** `pnpm dev`.
 - **Explicit auto bootstrap:** `pnpm bootstrap:openwork-opencode:auto`.
 - **Deterministic bootstrap smoke:** `pnpm smoke:openwork-opencode-bootstrap-gateway`.
@@ -39,7 +42,8 @@ override with `CDP_ENDPOINT`).
 
 | Layer | Technology |
 |-------|------------|
-| Primary UX / execution | OpenCode Web. It owns chat UX, sessions, tool execution, permissions, MCP/plugins/skills, workspace config, and event state. |
+| Target primary UX / execution | Relay-branded AionUi. It owns chat UX, sessions, tool execution, approvals, OfficeCLI skills, previews, workspace config, and event state. |
+| Current primary UX / execution | OpenCode Web until the AionUi cutover is implemented. |
 | Setup + provider gateway | `pnpm dev` runs the OpenCode auto bootstrap. Node `copilot_server.js` exposes `/v1/models` and `/v1/chat/completions` as an OpenAI-compatible provider, with bearer auth and buffered streaming SSE. |
 | Tool Call Emulation Layer | Relay constrains M365 Copilot into either strict JSON planner output or final-answer writing. It rejects prose/code when a tool call is required, performs one strict repair retry, and returns OpenAI `tool_calls` only when the response is structured. |
 | LLM surface | M365 Copilot in Edge over CDP. Relay forwards provider turns to Copilot as planner/final-writer prompts and normalizes structured output into OpenAI `tool_calls`; M365 Copilot does not execute tools in provider mode. |
@@ -72,6 +76,7 @@ override with `CDP_ENDPOINT`).
   does not infer or run arbitrary code.
 
 Details: **[docs/OPENCODE_PROVIDER_GATEWAY.md](docs/OPENCODE_PROVIDER_GATEWAY.md)**.
+Target AionUi migration: **[docs/AIONUI_RELAY_MIGRATION.md](docs/AIONUI_RELAY_MIGRATION.md)**.
 
 ## Provider Gateway Operations
 

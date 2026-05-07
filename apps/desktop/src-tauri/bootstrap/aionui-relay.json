@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "selectedTrack": "windows-x64-aionui-relay-officecli",
+  "ownershipBoundary": "Relay-branded AionUi owns UX, conversations, workspace files, skills, approvals, OfficeCLI assistants, and previews. Relay owns only the local OpenAI-compatible M365 Copilot provider gateway, tool-call emulation, diagnostics, and user-local portable tool bootstrap.",
+  "upstreams": {
+    "aionUi": {
+      "name": "AionUi",
+      "repository": "https://github.com/iOfficeAI/AionUi",
+      "version": "1.9.25",
+      "tag": "v1.9.25",
+      "commit": "bbada2a9268060d2b41ddf1d885a9b27ecd2103d",
+      "license": "Apache-2.0",
+      "integrationMode": "relay-branded-fork-or-wrapper",
+      "notes": [
+        "AionUi is the source baseline for the Relay Agent product UX.",
+        "Relay must replace app name, icons, protocol, installer metadata, update metadata, and first-run provider defaults before distribution.",
+        "Relay must not ship upstream remote/channel/provider onboarding defaults as beginner-facing product flow."
+      ]
+    },
+    "officeCli": {
+      "name": "OfficeCLI",
+      "repository": "https://github.com/iOfficeAI/OfficeCLI",
+      "version": "1.0.76",
+      "tag": "v1.0.76",
+      "commit": "958717ea25351b8920a3d8313d46e08b24b9c95b",
+      "license": "Apache-2.0",
+      "installMode": "relay-managed-portable-user-local",
+      "artifacts": {
+        "windows-x64": {
+          "name": "officecli-win-x64.exe",
+          "kind": "binary",
+          "format": "exe",
+          "url": "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe",
+          "sha256": "f9e4895505858ab813e133d4d1f9f01004c7b4b08397408487f534caf9e2ec58",
+          "size": 30433916,
+          "entrypoint": "officecli.exe"
+        }
+      },
+      "notes": [
+        "Relay stores OfficeCLI under app-local data and prepends that directory to the AionUi child-process PATH.",
+        "Relay does not use the upstream PowerShell or shell install scripts in the product first-run path.",
+        "The SHA256 value is cross-checked against the upstream OfficeCLI v1.0.76 SHA256SUMS release asset."
+      ]
+    }
+  },
+  "branding": {
+    "productName": "Relay Agent",
+    "executableName": "Relay Agent",
+    "windowTitle": "Relay Agent",
+    "protocol": "relay-agent",
+    "installerArtifactPrefix": "Relay.Agent",
+    "iconSource": "apps/desktop/src-tauri/icons/source/relay-agent.svg",
+    "browserTitle": "Relay Agent",
+    "supportName": "Relay Agent"
+  },
+  "providerSeed": {
+    "id": "relay-agent",
+    "platform": "custom",
+    "name": "Relay Agent / M365 Copilot",
+    "baseUrlTemplate": "http://127.0.0.1:${port}/v1",
+    "apiKeySource": "Relay local provider token",
+    "model": "m365-copilot",
+    "displayModelRef": "relay-agent/m365-copilot",
+    "capabilities": [
+      "text",
+      "function_calling"
+    ],
+    "contextLimit": 128000
+  },
+  "disabledByDefault": [
+    "remote access",
+    "channel bots",
+    "manual provider onboarding",
+    "OpenWork handoff",
+    "OpenCode Web first-run launcher"
+  ],
+  "enabledByDefaultSkills": [
+    "officecli-docx",
+    "officecli-xlsx",
+    "officecli-pptx",
+    "officecli-financial-model",
+    "officecli-data-dashboard"
+  ],
+  "compatibilityNotes": [
+    "This track intentionally replaces the OpenCode Web first-run UX. OpenCode may return later as an optional ACP backend.",
+    "M365 Copilot remains an untrusted planner/final-answer writer behind Relay's Tool Call Emulation Layer.",
+    "Office file editing must use AionUi skills and OfficeCLI workflows rather than generic OpenCode file-edit tools."
+  ]
+}

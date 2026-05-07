@@ -183,6 +183,15 @@ test("normalizeProgressTextForUi trims relay_tool blocks from streamed text", ()
   );
 });
 
+test("normalizeProgressTextForUi hides raw OpenAI tool_uses JSON", () => {
+  assert.equal(
+    normalizeProgressTextForUi(
+      'Copilot{"tool_uses":[{"recipient_name":"functions.glob","parameters":{"pattern":"**/キャッシュフロー.*","path":"H:/shr1/05_経理部/03_連結財務G"}}]}',
+    ),
+    "",
+  );
+});
+
 test("normalizeCopilotVisibleText strips transient image status noise and duplicate paragraphs", () => {
   assert.equal(
     normalizeCopilotVisibleText(
@@ -333,6 +342,18 @@ test("assistantReplyHasStrongCompletionSignal still accepts a real fenced relay_
     "```",
   ].join("\n");
   assert.equal(assistantReplyHasStrongCompletionSignal(completed), true);
+});
+
+test("assistantReplyHasStrongCompletionSignal accepts short OpenAI tool_uses JSON with Copilot label", () => {
+  const completed =
+    'Copilot{"tool_uses":[{"recipient_name":"functions.glob","parameters":{"pattern":"**/キャッシュフロー.*","path":"H:/shr1/05_経理部/03_連結財務G"}}]}';
+  assert.equal(assistantReplyHasStrongCompletionSignal(completed), true);
+  assert.equal(
+    assistantReplyHasStrongCompletionSignal(
+      'Copilot{"tool_uses":[{"recipient_name":"functions.glob","parameters":{"pattern":"**/キャッシュフロー.*",',
+    ),
+    false,
+  );
 });
 
 test("normalizeCopilotVisibleText strips M365 Show/Hide reasoning disclosure from real bodies", () => {
@@ -538,6 +559,37 @@ test("waitForDomResponse streams Chathub progress when DOM text stalls", async (
   assert.deepEqual(
     progress.map((snapshot) => snapshot.visibleText),
     ["検索しています。", "キャッシュフロー関連ファイルを確認しています。"],
+  );
+});
+
+test("waitForDomResponse finalizes complete OpenAI tool_uses JSON even while DOM is progress-only", async () => {
+  const toolJson =
+    'Copilot{"tool_uses":[{"recipient_name":"functions.glob","parameters":{"pattern":"**/キャッシュフロー.*","path":"H:/shr1/05_経理部/03_連結財務G"}}]}';
+  const snapshots = [
+    { generating: false, reply: "" },
+    {
+      generating: false,
+      reply: toolJson,
+      progressOnly: true,
+      hasVisibleAssistantChat: false,
+    },
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate() {
+      const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+      pollIndex += 1;
+      return { value: snapshot };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 2_500,
+  });
+
+  assert.equal(
+    response,
+    '{"tool_uses":[{"recipient_name":"functions.glob","parameters":{"pattern":"**/キャッシュフロー.*","path":"H:/shr1/05_経理部/03_連結財務G"}}]}',
   );
 });
 
@@ -995,6 +1047,60 @@ test("waitForDomResponse finalizes long HTML replies after phantom generating wi
   assert.equal(response, fullReply);
   assert.equal(finalizationMode, "stable_strong_signal");
   assert.ok(pollIndex >= 12);
+});
+
+test("waitForDomResponse treats a ready send button as idle when stale generating remains", async () => {
+  const finalReply = "検索結果を整理しました。対象ファイルは 3 件です。";
+  const snapshots = [
+    {
+      generating: false,
+      strongGeneratingSignal: false,
+      composerButtonState: { hasReadySendButton: true },
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    ...Array.from({ length: 8 }, () => ({
+      generating: true,
+      strongGeneratingSignal: false,
+      composerButtonState: { hasReadySendButton: true },
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+  ];
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: finalReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 5_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.equal(finalizationMode, "stable_resolved");
+  assert.ok(pollIndex < 8);
 });
 
 test("waitForDomResponse does not ignore a structural stop-button generating signal", async () => {

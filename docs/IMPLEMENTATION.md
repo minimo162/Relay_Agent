@@ -2,10 +2,10 @@
 
 ## Status
 
-- Current phase: Relay_Agent is being cut over to an OpenAI-compatible M365
-  Copilot provider gateway for OpenCode. OpenCode owns the
-  primary UX, sessions, permissions, tools, and execution; Relay owns the
-  Copilot CDP provider bridge, normalization, and diagnostics.
+- Current phase: Relay_Agent is moving to a Relay-branded AionUi shell while
+  retaining the OpenAI-compatible M365 Copilot provider gateway and Tool Call
+  Emulation Layer. The current OpenCode Web implementation remains the working
+  provider-gateway reference until the AionUi cutover lands.
 - Repository state: pnpm workspace, OpenCode provider gateway scripts, SolidJS
   + Vite diagnostic desktop shell, Tauri v2 shell, Rust-source IPC contracts
   with generated TS bindings, shared doctor service, and deterministic
@@ -15,13 +15,89 @@
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `docs/CLAW_CODE_ALIGNMENT.md`
-- Active task graph: `.taskmaster/tasks/tasks.json` now describes the OpenCode
-  provider gateway product path plus diagnostic desktop support instead of
-  historical desktop-runtime or workbook-era phases.
+- Active task graph: `.taskmaster/tasks/tasks.json` still describes the
+  OpenCode provider gateway product path plus diagnostic desktop support; the
+  AionUi-first migration baseline is now captured in
+  `docs/AIONUI_RELAY_MIGRATION.md`.
 - Packaging policy: `docs/PACKAGING_POLICY.md` still fixes the packaged end-user release path to Windows 10/11 x64 via NSIS, with installer-driven updates and preserved app-local storage across upgrades.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-08 Direction: AionUi-first Relay Agent migration baseline
+
+Relay now has a source-controlled AionUi migration baseline. The target product
+path moves the first-run UX from OpenCode Web to a Relay-branded AionUi shell,
+keeps the existing M365 Copilot provider gateway and Tool Call Emulation Layer,
+and adds a Relay-owned OfficeCLI portable bootstrap boundary. OpenCode Web
+remains the current implementation and diagnostic reference until the cutover
+lands; OpenWork remains out of scope.
+
+Implementation artifacts:
+
+- `docs/AIONUI_RELAY_MIGRATION.md` fixes the role split, guardrails, upstream
+  baselines, and verification gates.
+- `apps/desktop/src-tauri/bootstrap/aionui-relay.json` pins AionUi `v1.9.25`
+  and OfficeCLI `v1.0.76`, including the Windows x64 OfficeCLI checksum and
+  Relay Agent branding values.
+- `apps/desktop/scripts/aionui_provider_seed.mjs` generates the AionUi provider
+  seed for `relay-agent/m365-copilot`, disables beginner-hostile surfaces, and
+  preserves Aionrs' `/v1` stripping rule. It also carries the default OfficeCLI
+  assistant/skill policy for Word, Excel, and PowerPoint.
+- `apps/desktop/scripts/officecli_bootstrap.mjs` derives the Relay-managed
+  user-local OfficeCLI cache path, verifies size/SHA256, and computes the PATH
+  prepend used by the future AionUi child-process environment.
+- `pnpm check` now includes the AionUi Relay manifest and provider seed tests.
+
+### 2026-05-08 Fix: Use turn-completion signals for Copilot response finalization
+
+The Copilot DOM wait loop no longer treats a single button transition as the
+source of truth for response completion. Relay now treats the assistant turn as
+complete only after the reply body is returnable, the text has settled, the
+turn is not progress-only, and final extraction succeeds. Stop controls remain
+a strong "still generating" signal, while a ready Send button is used as an
+idle signal to suppress stale generating selectors that can linger in M365
+Copilot's DOM.
+
+This keeps the older button-change heuristic, but demotes it into a lifecycle
+signal: visible Stop means wait; repeated ready Send with no structural Stop
+means the UI is idle; final completion still requires stable assistant content.
+Balanced tool-call JSON remains a hard completion signal so short
+`tool_uses`/`tool_calls` outputs can flow to OpenCode without waiting for prose
+stability.
+
+Verification:
+
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`:
+  passed, 42 tests.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`:
+  passed, 34 tests.
+- `pnpm --filter @relay-agent/desktop check:opencode-provider`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-07 Fix: Finalize short OpenAI tool JSON from Copilot DOM
+
+M365 Copilot can render a valid `tool_uses` JSON object with the visible
+assistant label glued to it, for example `Copilot{"tool_uses":[...]}`. The
+provider extractor could already normalize that into OpenAI `tool_calls`, but
+the DOM wait loop still treated short JSON payloads as weak/incomplete prose in
+some progress-only states. That left OpenCode waiting even though the Copilot
+tab visibly contained the required tool plan.
+
+The DOM response wait now treats balanced `tool_calls` / `tool_uses` /
+`recipient_name` JSON as a strong completion signal, rejects incomplete
+fragments with those keys, finalizes complete tool JSON even when the current
+DOM state is marked progress-only, and hides raw OpenAI tool JSON from progress
+text. This keeps the provider boundary responsible for converting M365's text
+output into OpenCode tool calls instead of exposing the raw JSON in the UI.
+
+Verification:
+
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`:
+  passed, 41 tests.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`:
+  passed, 34 tests.
+- `pnpm --filter @relay-agent/desktop check:opencode-provider`: passed.
 
 ### 2026-05-07 Fix: Tolerate Copilot prose around emulated tool calls
 
