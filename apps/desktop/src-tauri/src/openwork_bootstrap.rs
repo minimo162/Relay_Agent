@@ -1,3 +1,4 @@
+use std::error::Error as StdError;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use zip::ZipArchive;
 
 const MANIFEST_JSON: &str = include_str!("../bootstrap/openwork-opencode.json");
 const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+const DOWNLOAD_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,8 +121,12 @@ pub enum BootstrapError {
         #[source]
         source: io::Error,
     },
-    #[error("bootstrap artifact download failed: {0}")]
-    Http(#[from] reqwest::Error),
+    #[error("bootstrap artifact download failed: {message}")]
+    Http {
+        message: String,
+        #[source]
+        source: reqwest::Error,
+    },
     #[error("bootstrap artifact download returned HTTP {status} for {url}")]
     HttpStatus { url: String, status: u16 },
     #[error("bootstrap artifact size mismatch for {path}: expected {expected}, actual {actual}")]
@@ -157,7 +163,7 @@ impl BootstrapError {
             Self::UnsupportedPlatform(_) => "unsupported_platform",
             Self::UnsafeFileName(_) => "unsafe_file_name",
             Self::Io { .. } => "filesystem",
-            Self::Http(_) => "network",
+            Self::Http { .. } => "network",
             Self::HttpStatus { .. } => "http_status",
             Self::SizeMismatch { .. } => "size_mismatch",
             Self::Sha256Mismatch { .. } => "sha256_mismatch",
@@ -426,24 +432,42 @@ pub fn download_and_verify_artifact_with_progress(
         })?;
     }
 
-    let mut temp = NamedTempFile::new_in(parent).map_err(|source| BootstrapError::Io {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    download_to_writer(key, artifact, &mut temp, &mut on_progress)?;
-    temp.flush().map_err(|source| BootstrapError::Io {
-        path: temp.path().to_path_buf(),
-        source,
-    })?;
-
-    verify_artifact_file(temp.path(), platform, key, artifact, false)?;
-    temp.persist(&destination)
-        .map_err(|error| BootstrapError::Io {
-            path: destination.clone(),
-            source: error.error,
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        let mut temp = NamedTempFile::new_in(parent).map_err(|source| BootstrapError::Io {
+            path: parent.to_path_buf(),
+            source,
         })?;
+        match download_to_writer(key, artifact, &mut temp, &mut on_progress)
+            .and_then(|()| {
+                temp.flush().map_err(|source| BootstrapError::Io {
+                    path: temp.path().to_path_buf(),
+                    source,
+                })
+            })
+            .and_then(|()| verify_artifact_file(temp.path(), platform, key, artifact, false))
+        {
+            Ok(_) => {
+                temp.persist(&destination)
+                    .map_err(|error| BootstrapError::Io {
+                        path: destination.clone(),
+                        source: error.error,
+                    })?;
+                return verify_artifact_file(&destination, platform, key, artifact, false);
+            }
+            Err(error) => {
+                if attempt >= DOWNLOAD_ATTEMPTS || !is_retryable_download_error(&error) {
+                    return Err(error);
+                }
+                tracing::warn!(
+                    "[openwork-bootstrap] download attempt {attempt}/{DOWNLOAD_ATTEMPTS} failed for {}: {error}",
+                    artifact.url
+                );
+                std::thread::sleep(Duration::from_millis(750 * attempt as u64));
+            }
+        }
+    }
 
-    verify_artifact_file(&destination, platform, key, artifact, false)
+    unreachable!("download loop must return on success or final error")
 }
 
 pub fn extract_zip_artifact(
@@ -597,8 +621,13 @@ fn download_to_writer(
 ) -> Result<(), BootstrapError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(DEFAULT_DOWNLOAD_TIMEOUT)
-        .build()?;
-    let mut response = client.get(&artifact.url).send()?;
+        .user_agent("Relay Agent OpenWork/OpenCode bootstrap")
+        .build()
+        .map_err(download_http_error)?;
+    let mut response = client
+        .get(&artifact.url)
+        .send()
+        .map_err(download_http_error)?;
     let status = response.status();
     if !status.is_success() {
         return Err(BootstrapError::HttpStatus {
@@ -629,6 +658,35 @@ fn download_to_writer(
         on_progress(download_progress(key, artifact, downloaded, false));
     }
     Ok(())
+}
+
+fn download_http_error(error: reqwest::Error) -> BootstrapError {
+    BootstrapError::Http {
+        message: describe_reqwest_error(&error),
+        source: error,
+    }
+}
+
+fn describe_reqwest_error(error: &reqwest::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(current) = source {
+        parts.push(current.to_string());
+        source = current.source();
+    }
+    parts.dedup();
+    parts.join("; caused by: ")
+}
+
+fn is_retryable_download_error(error: &BootstrapError) -> bool {
+    match error {
+        BootstrapError::Http { .. } => true,
+        BootstrapError::HttpStatus { status, .. } => {
+            *status == 408 || *status == 429 || *status >= 500
+        }
+        BootstrapError::Io { path, .. } => path == Path::new("<download-stream>"),
+        _ => false,
+    }
 }
 
 fn download_progress(
@@ -736,21 +794,27 @@ mod tests {
     }
 
     fn serve_once(body: &'static [u8], status: u16) -> String {
+        serve_sequence(vec![(status, body)])
+    }
+
+    fn serve_sequence(responses: Vec<(u16, &'static [u8])>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let address = listener.local_addr().expect("local addr");
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept request");
-            let mut request = [0_u8; 1024];
-            let _ = stream.read(&mut request);
-            let status_text = if status == 200 { "OK" } else { "Test Error" };
-            let response = format!(
-                "HTTP/1.1 {status} {status_text}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("write headers");
-            stream.write_all(body).expect("write body");
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let status_text = if status == 200 { "OK" } else { "Test Error" };
+                let response = format!(
+                    "HTTP/1.1 {status} {status_text}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write headers");
+                stream.write_all(body).expect("write body");
+            }
         });
         format!("http://{address}/fixture.zip")
     }
@@ -933,6 +997,27 @@ mod tests {
         assert_eq!(final_event.downloaded_bytes, body.len() as u64);
         assert_eq!(final_event.total_bytes, body.len() as u64);
         assert_eq!(final_event.percent, 100);
+    }
+
+    #[test]
+    fn download_and_verify_retries_transient_http_status() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let body = b"downloaded bootstrap artifact after retry";
+        let artifact = fixture_artifact(
+            serve_sequence(vec![(503, b"temporary unavailable"), (200, body)]),
+            body,
+        );
+
+        let verified = download_and_verify_artifact(
+            temp.path(),
+            "windows-x64",
+            BootstrapArtifactKey::OpenCodeCli,
+            &artifact,
+        )
+        .expect("download retry");
+
+        assert_eq!(verified.size, body.len() as u64);
+        assert_eq!(verified.sha256, artifact.sha256);
     }
 
     #[test]

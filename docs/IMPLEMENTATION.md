@@ -23,6 +23,18 @@
 
 ## Milestone Log
 
+### 2026-05-07 Fix: Harden OpenWork/OpenCode downloads on Windows
+
+The OpenCode release asset URL was valid, but installed Windows setup could
+still fail with a generic `error sending request` before OpenCode downloaded.
+Relay now builds reqwest with native OS root certificates and system proxy
+support for the bootstrap downloader, which is more compatible with Windows
+corporate proxy, VPN, and TLS-inspection environments. Download attempts now
+retry transient network failures and HTTP 408/429/5xx responses with fresh temp
+files, while deterministic size/checksum validation failures still stop
+immediately. The download setup message now calls out proxy, VPN, firewall, and
+TLS inspection as likely repeat-failure causes.
+
 ### 2026-05-07 Fix: Packaged Copilot gateway module mode
 
 Fixed an installed Windows startup failure where the bundled

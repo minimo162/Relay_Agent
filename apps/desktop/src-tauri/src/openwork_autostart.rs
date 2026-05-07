@@ -433,7 +433,7 @@ fn setup_attention_detail(stage: &str, error: &str) -> String {
             "Relay could not write the OpenCode provider config. Check file permissions and try setup again. Detail: {error}"
         ),
         "download_openwork_opencode" => format!(
-            "Relay could not download or verify OpenWork/OpenCode. Check the network connection and try setup again. Detail: {error}"
+            "Relay could not download or verify OpenWork/OpenCode. Relay retries downloads automatically, but GitHub release downloads may still be blocked by a proxy, VPN, firewall, or TLS inspection. Check the network connection and try setup again. Detail: {error}"
         ),
         "openwork_handoff" => format!(
             "Relay downloaded OpenWork/OpenCode but could not finish opening OpenWork. Try setup again, then use Open OpenWork/OpenCode. Detail: {error}"
