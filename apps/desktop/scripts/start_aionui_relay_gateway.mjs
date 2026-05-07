@@ -19,6 +19,10 @@ import {
   aionuiRelaySeedBundle,
   writeAionuiProviderSeedFile,
 } from "./aionui_provider_seed.mjs";
+import {
+  officeCliCachedPath,
+  officeCliPathEnv,
+} from "./officecli_bootstrap.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(__dirname, "..");
@@ -41,7 +45,7 @@ function usage() {
   ].join("\n");
 }
 
-function parseArgs(raw) {
+export function parseArgs(raw) {
   const parsed = {
     printSeed: false,
     aionuiBin: null,
@@ -65,6 +69,79 @@ function parseArgs(raw) {
     throw new Error(`Unknown argument: ${arg}`);
   }
   return parsed;
+}
+
+export function aionuiBinCandidates({
+  env = process.env,
+  platform = process.platform,
+} = {}) {
+  const candidates = [];
+  if (env.RELAY_AIONUI_BIN) candidates.push(env.RELAY_AIONUI_BIN);
+
+  if (platform === "win32") {
+    if (env.LOCALAPPDATA) {
+      candidates.push(join(env.LOCALAPPDATA, "Programs", "Relay Agent", "Relay Agent.exe"));
+      candidates.push(join(env.LOCALAPPDATA, "Relay Agent", "Relay Agent.exe"));
+    }
+    if (env.ProgramFiles) {
+      candidates.push(join(env.ProgramFiles, "Relay Agent", "Relay Agent.exe"));
+    }
+    if (env["ProgramFiles(x86)"]) {
+      candidates.push(join(env["ProgramFiles(x86)"], "Relay Agent", "Relay Agent.exe"));
+    }
+    return candidates;
+  }
+
+  if (platform === "darwin") {
+    candidates.push("/Applications/Relay Agent.app/Contents/MacOS/Relay Agent");
+    return candidates;
+  }
+
+  candidates.push("/usr/local/bin/relay-agent-aionui");
+  candidates.push("/opt/Relay Agent/Relay Agent");
+  return candidates;
+}
+
+export function resolveAionuiBin(explicitPath, {
+  env = process.env,
+  platform = process.platform,
+  exists = existsSync,
+} = {}) {
+  if (explicitPath) {
+    const absolute = resolve(explicitPath);
+    if (!exists(absolute)) {
+      throw new Error(`AionUi shell executable was not found: ${absolute}`);
+    }
+    return absolute;
+  }
+
+  for (const candidate of aionuiBinCandidates({ env, platform })) {
+    const absolute = resolve(candidate);
+    if (exists(absolute)) return absolute;
+  }
+  return null;
+}
+
+export function aionuiLaunchEnv({
+  baseEnv = process.env,
+  seedFile,
+  officeCliPath = officeCliCachedPath(),
+  platform = process.platform,
+  exists = existsSync,
+} = {}) {
+  const env = {
+    ...baseEnv,
+    RELAY_AIONUI_PROVIDER_SEED_FILE: seedFile,
+  };
+
+  if (officeCliPath && exists(officeCliPath)) {
+    env.RELAY_OFFICECLI_PATH = officeCliPath;
+    env.PATH = officeCliPathEnv(baseEnv.PATH, officeCliPath, platform);
+  } else if (officeCliPath) {
+    env.RELAY_OFFICECLI_EXPECTED_PATH = officeCliPath;
+  }
+
+  return env;
 }
 
 function prestartEdge(cdpPort) {
@@ -118,16 +195,9 @@ function startProvider({ token, cdpPort, httpPort }) {
 
 function startAionuiShell(aionuiBin, seedFile) {
   if (!aionuiBin) return null;
-  const absolute = resolve(aionuiBin);
-  if (!existsSync(absolute)) {
-    throw new Error(`AionUi shell executable was not found: ${absolute}`);
-  }
-  return spawn(absolute, [], {
+  return spawn(aionuiBin, [], {
     cwd: repoRoot,
-    env: {
-      ...process.env,
-      RELAY_AIONUI_PROVIDER_SEED_FILE: seedFile,
-    },
+    env: aionuiLaunchEnv({ seedFile }),
     stdio: "inherit",
   });
 }
@@ -163,7 +233,13 @@ function main() {
 
   prestartEdge(cdpPort);
   const provider = startProvider({ token, cdpPort, httpPort });
-  const shell = startAionuiShell(options.aionuiBin, seedFile);
+  const aionuiBin = resolveAionuiBin(options.aionuiBin);
+  if (aionuiBin) {
+    console.log("[relay-aionui-provider] shell:", aionuiBin);
+  } else {
+    console.log("[relay-aionui-provider] shell: not found; gateway and seed are running for diagnostics");
+  }
+  const shell = startAionuiShell(aionuiBin, seedFile);
 
   const stop = (signal) => {
     if (!provider.killed) provider.kill(signal);
@@ -181,9 +257,11 @@ function main() {
   });
 }
 
-try {
-  main();
-} catch (error) {
-  console.error("[relay-aionui-provider] start failed:", error instanceof Error ? error.message : String(error));
-  process.exit(1);
+if (import.meta.url === `file://${process.argv[1]}`) {
+  try {
+    main();
+  } catch (error) {
+    console.error("[relay-aionui-provider] start failed:", error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
