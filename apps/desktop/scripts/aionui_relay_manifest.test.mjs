@@ -80,12 +80,16 @@ test("AionUi Relay manifest fixes Relay product branding", () => {
   const manifest = loadManifest();
 
   assert.deepEqual(manifest.branding, {
+    packageName: "relay-agent-aionui",
+    appId: "com.relayagent.app",
     productName: "Relay Agent",
     executableName: "Relay Agent",
     windowTitle: "Relay Agent",
     protocol: "relay-agent",
     installerArtifactPrefix: "Relay.Agent",
     iconSource: "apps/desktop/src-tauri/icons/source/relay-agent.svg",
+    publishOwner: "minimo162",
+    publishRepo: "Relay_Agent",
     browserTitle: "Relay Agent",
     supportName: "Relay Agent",
   });
