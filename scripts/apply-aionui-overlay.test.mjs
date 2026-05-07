@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -116,4 +117,13 @@ test("patchDeepLinkContent switches the registered deep-link scheme", () => {
   assert.match(patched, /relay-agent:\/\/add-provider/);
   assert.doesNotMatch(patched, /aionui:\/\//);
   assert.doesNotMatch(patched, /an relay-agent:\/\//);
+});
+
+test("Relay seed overlay persists OfficeCLI assistant defaults into AionUi config", () => {
+  const relaySeed = readFileSync("integrations/aionui/overlay/src/process/utils/relaySeed.ts", "utf8");
+
+  assert.match(relaySeed, /relay\.defaultEnabledSkills/);
+  assert.match(relaySeed, /relay\.defaultAssistantPresetIds/);
+  assert.match(relaySeed, /builtin-\$\{preset\.id\}/);
+  assert.match(relaySeed, /await configFile\.set\('assistants', updated\)/);
 });

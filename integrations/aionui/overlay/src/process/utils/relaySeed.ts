@@ -84,6 +84,8 @@ export async function applyRelayProviderSeed(configFile: ConfigStore): Promise<v
     'webui.desktop.allowRemote',
     'skillsMarket.enabled',
     'system.autoPreviewOfficeFiles',
+    'relay.defaultEnabledSkills',
+    'relay.defaultAssistantPresetIds',
   ];
 
   for (const key of keysToForce) {
