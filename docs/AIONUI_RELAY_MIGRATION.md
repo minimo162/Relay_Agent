@@ -110,19 +110,22 @@ The Relay fork/wrapper must apply these fixed branding values from
 ## Implementation Phases
 
 1. Add a source-controlled AionUi/OfficeCLI manifest and provider seed helpers.
-2. Fork or vendor AionUi under a separated source directory and apply Relay
+2. Apply the Relay AionUi overlay to a fork or checkout. The overlay copies
+   `relaySeed.ts` into AionUi and patches `initStorage.ts` so the Relay seed is
+   imported during startup.
+3. Fork or vendor AionUi under a separated source directory and apply Relay
    branding.
-3. Add a Relay bootstrap step that starts the provider gateway, writes the
+4. Add a Relay bootstrap step that starts the provider gateway, writes the
    AionUi provider seed, and launches the Relay-branded AionUi shell.
-4. Replace AionUi's OfficeCLI auto-install bridge with the Relay-managed
+5. Replace AionUi's OfficeCLI auto-install bridge with the Relay-managed
    portable OfficeCLI cache.
-5. Enable OfficeCLI assistants and skills by default for Word, Excel,
+6. Enable OfficeCLI assistants and skills by default for Word, Excel,
    PowerPoint, and Office file preview.
-6. Hide remote/channel/provider onboarding surfaces unless explicitly enabled
+7. Hide remote/channel/provider onboarding surfaces unless explicitly enabled
    for diagnostics.
-7. Remove or demote the OpenCode Web launcher and OpenWork/OpenCode naming from
+8. Remove or demote the OpenCode Web launcher and OpenWork/OpenCode naming from
    the installed first-run UI.
-8. Add Windows validation for first install, M365 sign-in, provider readiness,
+9. Add Windows validation for first install, M365 sign-in, provider readiness,
    OfficeCLI download, Office document creation/editing, and Defender behavior.
 
 ## Compatibility Position
@@ -162,6 +165,10 @@ Linux/CI-safe gates:
 - Relay writes a seed bundle before shell startup that records the provider
   base URL, selected model, Aionrs base URL, and the provider-before-shell
   lifecycle requirement.
+- `node scripts/apply-aionui-overlay.mjs --aionui-dir <checkout>` copies
+  Relay's `relaySeed.ts` into AionUi and patches AionUi startup to apply the
+  provider seed before MCP/model initialization and the assistant seed after
+  built-in assistants are created.
 - OfficeCLI bootstrap derives a user-local cache path from the pinned manifest,
   verifies size/SHA256, and produces a PATH value without requiring admin
   approval.

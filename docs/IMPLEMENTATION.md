@@ -47,6 +47,9 @@ Implementation artifacts:
 - `apps/desktop/scripts/officecli_bootstrap.mjs` derives the Relay-managed
   user-local OfficeCLI cache path, verifies size/SHA256, and computes the PATH
   prepend used by the future AionUi child-process environment.
+- `scripts/apply-aionui-overlay.mjs` applies the Relay overlay to an AionUi
+  checkout by copying `relaySeed.ts` and patching `initStorage.ts` to import
+  the Relay provider/assistant seed during startup.
 - `pnpm check` now includes the AionUi Relay manifest and provider seed tests.
 
 ### 2026-05-08 Fix: Use turn-completion signals for Copilot response finalization
