@@ -20,6 +20,7 @@ import {
   writeAionuiProviderSeedFile,
 } from "./aionui_provider_seed.mjs";
 import {
+  downloadOfficeCliArtifact,
   officeCliCachedPath,
   officeCliPathEnv,
 } from "./officecli_bootstrap.mjs";
@@ -41,6 +42,8 @@ function usage() {
     "  RELAY_OPENCODE_PROVIDER_PORT       Provider HTTP port, default 18180",
     "  RELAY_AGENT_API_KEY                Provider API key; otherwise a stable local token file is used",
     "  RELAY_AIONUI_PROVIDER_SEED_FILE    Seed JSON path, default ~/.relay-agent/aionui-provider-seed.json",
+    "  RELAY_OFFICECLI_CACHE_DIR          OfficeCLI cache root, default ~/.relay-agent/tools/officecli",
+    "  RELAY_SKIP_OFFICECLI_BOOTSTRAP=1   Skip OfficeCLI download/verify for diagnostics",
     "  RELAY_SKIP_PRESTART_EDGE=1         Skip starting Edge before the provider",
   ].join("\n");
 }
@@ -49,6 +52,7 @@ export function parseArgs(raw) {
   const parsed = {
     printSeed: false,
     aionuiBin: null,
+    skipOfficeCliBootstrap: process.env.RELAY_SKIP_OFFICECLI_BOOTSTRAP === "1",
     help: false,
   };
   for (let index = 0; index < raw.length; index += 1) {
@@ -64,6 +68,10 @@ export function parseArgs(raw) {
     }
     if (arg === "--aionui-bin") {
       parsed.aionuiBin = raw[++index];
+      continue;
+    }
+    if (arg === "--skip-officecli-bootstrap") {
+      parsed.skipOfficeCliBootstrap = true;
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -144,6 +152,36 @@ export function aionuiLaunchEnv({
   return env;
 }
 
+export async function bootstrapOfficeCliForLaunch({
+  skip = process.env.RELAY_SKIP_OFFICECLI_BOOTSTRAP === "1",
+  platform = process.platform,
+  download = downloadOfficeCliArtifact,
+} = {}) {
+  const expectedPath = officeCliCachedPath();
+  if (skip) {
+    return {
+      status: "skipped",
+      path: expectedPath,
+      reason: "disabled",
+    };
+  }
+  if (platform !== "win32" && process.env.RELAY_OFFICECLI_BOOTSTRAP_NON_WINDOWS !== "1") {
+    return {
+      status: "skipped",
+      path: expectedPath,
+      reason: "non-windows-host",
+    };
+  }
+
+  const verified = await download();
+  return {
+    status: verified.reused ? "ready-reused" : "ready-downloaded",
+    path: verified.path,
+    sha256: verified.sha256,
+    size: verified.size,
+  };
+}
+
 function prestartEdge(cdpPort) {
   if (process.env.RELAY_SKIP_PRESTART_EDGE === "1") return;
   if (process.platform === "win32") {
@@ -193,16 +231,16 @@ function startProvider({ token, cdpPort, httpPort }) {
   );
 }
 
-function startAionuiShell(aionuiBin, seedFile) {
+function startAionuiShell(aionuiBin, seedFile, officeCliPath) {
   if (!aionuiBin) return null;
   return spawn(aionuiBin, [], {
     cwd: repoRoot,
-    env: aionuiLaunchEnv({ seedFile }),
+    env: aionuiLaunchEnv({ seedFile, officeCliPath }),
     stdio: "inherit",
   });
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(usage());
@@ -231,6 +269,14 @@ function main() {
     return;
   }
 
+  const officeCli = await bootstrapOfficeCliForLaunch({
+    skip: options.skipOfficeCliBootstrap,
+  });
+  console.log("[relay-aionui-provider] OfficeCLI:", officeCli.status, officeCli.path);
+  if (officeCli.reason) {
+    console.log("[relay-aionui-provider] OfficeCLI reason:", officeCli.reason);
+  }
+
   prestartEdge(cdpPort);
   const provider = startProvider({ token, cdpPort, httpPort });
   const aionuiBin = resolveAionuiBin(options.aionuiBin);
@@ -239,7 +285,7 @@ function main() {
   } else {
     console.log("[relay-aionui-provider] shell: not found; gateway and seed are running for diagnostics");
   }
-  const shell = startAionuiShell(aionuiBin, seedFile);
+  const shell = startAionuiShell(aionuiBin, seedFile, officeCli.path);
 
   const stop = (signal) => {
     if (!provider.killed) provider.kill(signal);
@@ -259,7 +305,7 @@ function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error("[relay-aionui-provider] start failed:", error instanceof Error ? error.message : String(error));
     process.exit(1);

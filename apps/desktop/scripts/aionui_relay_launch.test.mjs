@@ -4,14 +4,16 @@ import test from "node:test";
 import {
   aionuiBinCandidates,
   aionuiLaunchEnv,
+  bootstrapOfficeCliForLaunch,
   parseArgs,
   resolveAionuiBin,
 } from "./start_aionui_relay_gateway.mjs";
 
-test("AionUi launch args accept explicit shell path and seed printing", () => {
-  assert.deepEqual(parseArgs(["--print-seed", "--aionui-bin", "C:/Relay Agent/Relay Agent.exe"]), {
+test("AionUi launch args accept explicit shell path, seed printing, and OfficeCLI skip", () => {
+  assert.deepEqual(parseArgs(["--print-seed", "--aionui-bin", "C:/Relay Agent/Relay Agent.exe", "--skip-officecli-bootstrap"]), {
     printSeed: true,
     aionuiBin: "C:/Relay Agent/Relay Agent.exe",
+    skipOfficeCliBootstrap: true,
     help: false,
   });
 });
@@ -73,4 +75,34 @@ test("AionUi launch env records expected OfficeCLI path when it has not been dow
   assert.equal(env.RELAY_OFFICECLI_EXPECTED_PATH, "/tmp/missing-officecli");
   assert.equal(env.RELAY_OFFICECLI_PATH, undefined);
   assert.equal(env.PATH, "/usr/bin");
+});
+
+test("OfficeCLI bootstrap skips non-Windows hosts by default", async () => {
+  const result = await bootstrapOfficeCliForLaunch({
+    platform: "linux",
+    download: async () => {
+      throw new Error("should not download");
+    },
+  });
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "non-windows-host");
+  assert.match(result.path, /officecli/);
+});
+
+test("OfficeCLI bootstrap downloads and reports verified Windows artifact for launch", async () => {
+  const result = await bootstrapOfficeCliForLaunch({
+    platform: "win32",
+    download: async () => ({
+      reused: false,
+      path: "C:/Users/example/.relay-agent/tools/officecli/1.0.76/officecli.exe",
+      sha256: "a".repeat(64),
+      size: 1234,
+    }),
+  });
+
+  assert.equal(result.status, "ready-downloaded");
+  assert.equal(result.path, "C:/Users/example/.relay-agent/tools/officecli/1.0.76/officecli.exe");
+  assert.equal(result.sha256, "a".repeat(64));
+  assert.equal(result.size, 1234);
 });
