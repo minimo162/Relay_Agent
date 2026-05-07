@@ -1,0 +1,363 @@
+name: release-aionui-windows-installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish, for example v0.2.0-aionui.1"
+        required: true
+        type: string
+      release_name:
+        description: "Optional GitHub Release name override"
+        required: false
+        type: string
+      self_signed_prerelease:
+        description: "When Trusted Signing is absent, publish a self-signed internal prerelease installer instead of unsigned."
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  publish-aionui-windows-installer:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      AIONUI_REPOSITORY: https://github.com/iOfficeAI/AionUi
+      AIONUI_TAG: v1.9.25
+      AIONUI_COMMIT: bbada2a9268060d2b41ddf1d885a9b27ecd2103d
+      AZURE_CODESIGN_ENDPOINT: ${{ vars.AZURE_CODESIGN_ENDPOINT }}
+      AZURE_CODESIGN_ACCOUNT_NAME: ${{ vars.AZURE_CODESIGN_ACCOUNT_NAME }}
+      AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+
+    steps:
+      - name: Check out Relay repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          tag="${{ inputs.release_tag }}"
+          release_name="${{ inputs.release_name }}"
+
+          if [ -z "$tag" ]; then
+            echo "Release tag is required." >&2
+            exit 1
+          fi
+
+          if [ -z "$release_name" ]; then
+            release_name="Relay Agent ${tag}"
+          fi
+
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Trusted Signing mode
+        id: signing_mode
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          required=(
+            AZURE_CLIENT_ID
+            AZURE_TENANT_ID
+            AZURE_SUBSCRIPTION_ID
+            AZURE_CODESIGN_ENDPOINT
+            AZURE_CODESIGN_ACCOUNT_NAME
+            AZURE_CODESIGN_CERT_PROFILE_NAME
+          )
+
+          missing=()
+          present=0
+
+          for var_name in "${required[@]}"; do
+            if [ -n "${!var_name:-}" ]; then
+              present=$((present + 1))
+            else
+              missing+=("$var_name")
+            fi
+          done
+
+          if [ "$present" -eq 0 ]; then
+            if [[ "${{ steps.release_meta.outputs.tag }}" != *-* ]]; then
+              echo "Trusted Signing is required for formal releases. Use a prerelease tag for internal fallback builds." >&2
+              exit 1
+            fi
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.self_signed_prerelease }}" = "true" ]; then
+              echo "mode=self-signed-prerelease" >> "$GITHUB_OUTPUT"
+              echo "summary=Trusted Signing is not configured; this prerelease will publish a self-signed internal installer asset." >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=unsigned-prerelease" >> "$GITHUB_OUTPUT"
+              echo "summary=Trusted Signing is not configured; this prerelease will publish an unsigned installer asset marked as unsigned." >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Trusted Signing configuration is partial. Missing: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "mode=trusted-signing" >> "$GITHUB_OUTPUT"
+          echo "summary=Trusted Signing is configured, so the workflow will sign the installer before upload." >> "$GITHUB_OUTPUT"
+
+      - name: Check overlay scripts
+        run: |
+          node --check scripts/apply-aionui-overlay.mjs
+          node --test scripts/apply-aionui-overlay.test.mjs
+
+      - name: Check out pinned AionUi
+        shell: bash
+        run: |
+          git clone --branch "$AIONUI_TAG" --depth 1 "$AIONUI_REPOSITORY" aionui
+          actual_commit="$(git -C aionui rev-parse HEAD)"
+          if [ "$actual_commit" != "$AIONUI_COMMIT" ]; then
+            echo "AionUi baseline drift: expected $AIONUI_COMMIT, got $actual_commit" >&2
+            exit 1
+          fi
+
+      - name: Install AionUi dependencies
+        working-directory: aionui
+        run: bun install --frozen-lockfile
+
+      - name: Apply Relay overlay
+        run: node scripts/apply-aionui-overlay.mjs --aionui-dir aionui
+
+      - name: Build Relay-branded AionUi Windows installer
+        working-directory: aionui
+        env:
+          CI: true
+        run: bun run build-win:x64
+
+      - name: Locate AionUi installer artifact
+        id: installer
+        shell: pwsh
+        run: |
+          $installerDir = Join-Path $env:GITHUB_WORKSPACE "aionui\out"
+          if (-not (Test-Path $installerDir)) {
+            throw "AionUi output directory was not created: $installerDir"
+          }
+
+          $installer = Get-ChildItem -Path $installerDir -Filter "*.exe" -File |
+            Where-Object { $_.Name -like "Relay Agent-*-win-x64.exe" } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "No Relay Agent AionUi Windows installer `.exe` was found in $installerDir"
+          }
+
+          "path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Azure login for Trusted Signing
+        if: steps.signing_mode.outputs.enabled == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign installer with Trusted Signing
+        if: steps.signing_mode.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ vars.AZURE_CODESIGN_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_CODESIGN_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+          files: ${{ steps.installer.outputs.path }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Relay Agent AionUi Windows installer
+          description-url: https://github.com/${{ github.repository }}
+
+      - name: Sign installer with self-signed certificate
+        if: steps.signing_mode.outputs.mode == 'self-signed-prerelease'
+        id: self_signed
+        shell: pwsh
+        run: |
+          $outputDir = Join-Path $env:RUNNER_TEMP "relay-agent-aionui-self-signed"
+          $pfxPassword = "RelayAgentAionUiSelfSignedCi-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          & .\scripts\windows-self-sign-installer.ps1 `
+            -InstallerPath "${{ steps.installer.outputs.path }}" `
+            -OutputDirectory $outputDir `
+            -Organization "Relay Agent Dev" `
+            -CommonName "Relay Agent AionUi GitHub Actions Internal Test" `
+            -PfxPassword $pfxPassword `
+            -SkipSignToolVerify
+
+          $signedInstaller = Get-ChildItem -Path $outputDir -Filter "*-selfsigned.exe" -File |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (-not $signedInstaller) {
+            throw "Self-signed installer was not created under $outputDir."
+          }
+
+          $certificatePath = Join-Path $outputDir "relay-agent-selfsigned.crt"
+          if (-not (Test-Path -LiteralPath $certificatePath)) {
+            throw "Self-signed public certificate was not created at $certificatePath."
+          }
+
+          $certificateAssetPath = Join-Path $outputDir "relay-agent-aionui-selfsigned-public-test-cert.crt"
+          Copy-Item -LiteralPath $certificatePath -Destination $certificateAssetPath -Force
+
+          $signature = Get-AuthenticodeSignature $signedInstaller.FullName
+          if (-not $signature.SignerCertificate) {
+            throw "Expected an Authenticode signer certificate on the self-signed installer, got '$($signature.Status)'."
+          }
+
+          "path=$($signedInstaller.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($signedInstaller.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cert_path=$certificateAssetPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cert_name=$([System.IO.Path]::GetFileName($certificateAssetPath))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "status=$($signature.Status)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Verify Authenticode signature
+        if: steps.signing_mode.outputs.enabled == 'true'
+        id: signature
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature "${{ steps.installer.outputs.path }}"
+          if ($signature.Status -ne "Valid") {
+            throw "Expected a valid Authenticode signature, got '$($signature.Status)'."
+          }
+
+          "status=$($signature.Status)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Prepare release asset
+        id: release_asset
+        shell: pwsh
+        run: |
+          $path = "${{ steps.installer.outputs.path }}"
+          $name = "${{ steps.installer.outputs.name }}"
+          $mode = "${{ steps.signing_mode.outputs.mode }}"
+
+          if ($mode -eq "self-signed-prerelease") {
+            $path = "${{ steps.self_signed.outputs.path }}"
+            $name = "${{ steps.self_signed.outputs.name }}"
+          } elseif ("${{ steps.signing_mode.outputs.enabled }}" -ne "true") {
+            $dir = Split-Path -Parent $path
+            $stem = [System.IO.Path]::GetFileNameWithoutExtension($name)
+            $unsignedName = "$stem-unsigned.exe"
+            $unsignedPath = Join-Path $dir $unsignedName
+            Copy-Item -Path $path -Destination $unsignedPath -Force
+            $path = $unsignedPath
+            $name = $unsignedName
+          }
+
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Collect installer digest
+        id: installer_digest
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash "${{ steps.release_asset.outputs.path }}" -Algorithm SHA256
+          "sha256=$($hash.Hash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish installer to GitHub Releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
+          RELEASE_PRERELEASE: ${{ contains(steps.release_meta.outputs.tag, '-') }}
+          INSTALLER_PATH: ${{ steps.release_asset.outputs.path }}
+          INSTALLER_SHA256: ${{ steps.installer_digest.outputs.sha256 }}
+          SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
+          SELF_SIGNED_CERT_PATH: ${{ steps.self_signed.outputs.cert_path }}
+        run: |
+          $assets = @($env:INSTALLER_PATH)
+          $releaseNotes = @"
+          Relay-branded AionUi Windows NSIS installer for Relay Agent.
+
+          - AionUi baseline: $env:AIONUI_TAG / $env:AIONUI_COMMIT
+          - Overlay: Relay provider seed, Relay branding, relay-agent protocol, Relay icons
+          - Installer SHA256: $env:INSTALLER_SHA256
+
+          Download the attached installer asset to install or upgrade Relay Agent on Windows 10/11 x64.
+          "@
+
+          if ($env:SIGNING_MODE -eq "self-signed-prerelease") {
+            $releaseNotes += @"
+
+          Internal prerelease note: this installer is self-signed for smoke testing only. It does not provide public publisher trust or SmartScreen reputation.
+          "@
+          }
+
+          if ($env:SIGNING_MODE -eq "self-signed-prerelease" -and -not [string]::IsNullOrWhiteSpace($env:SELF_SIGNED_CERT_PATH)) {
+            $assets += $env:SELF_SIGNED_CERT_PATH
+          }
+
+          gh release view $env:RELEASE_TAG *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if ($releaseExists) {
+            gh release upload $env:RELEASE_TAG @assets --clobber
+            gh release edit $env:RELEASE_TAG --title $env:RELEASE_NAME --notes $releaseNotes
+          } else {
+            $args = @(
+              "release",
+              "create",
+              $env:RELEASE_TAG,
+              "--target",
+              $env:GITHUB_SHA,
+              "--title",
+              $env:RELEASE_NAME,
+              "--notes",
+              $releaseNotes
+            )
+            if ($env:RELEASE_PRERELEASE -eq "true") {
+              $args += "--prerelease"
+            }
+            $args += $assets
+            gh @args
+          }
+
+      - name: Summarize release publication
+        shell: bash
+        run: |
+          {
+            echo "### Relay-branded AionUi Windows release"
+            echo "- Release tag: \`${{ steps.release_meta.outputs.tag }}\`"
+            echo "- Release name: \`${{ steps.release_meta.outputs.release_name }}\`"
+            echo "- AionUi baseline: \`${{ env.AIONUI_TAG }} / ${{ env.AIONUI_COMMIT }}\`"
+            echo "- Installer asset: \`${{ steps.release_asset.outputs.name }}\`"
+            echo "- Installer SHA256: \`${{ steps.installer_digest.outputs.sha256 }}\`"
+            echo "- Signing mode: \`${{ steps.signing_mode.outputs.mode }}\`"
+            if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
+              echo "- Authenticode status: \`${{ steps.signature.outputs.status }}\`"
+              echo "- Signer: \`${{ steps.signature.outputs.subject }}\`"
+              echo "- Thumbprint: \`${{ steps.signature.outputs.thumbprint }}\`"
+            elif [ "${{ steps.signing_mode.outputs.mode }}" = "self-signed-prerelease" ]; then
+              echo "- Authenticode status: \`${{ steps.self_signed.outputs.status }}\`"
+              echo "- Signer: \`${{ steps.self_signed.outputs.subject }}\`"
+              echo "- Thumbprint: \`${{ steps.self_signed.outputs.thumbprint }}\`"
+              echo "- Test certificate asset: \`${{ steps.self_signed.outputs.cert_name }}\`"
+            else
+              echo "- Authenticode status: \`not checked (unsigned prerelease)\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
