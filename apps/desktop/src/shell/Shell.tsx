@@ -67,9 +67,11 @@ function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
 
 function setupTitle(diagnostics: RelayDiagnostics | null, copilotStatus: string): string {
   const setup = diagnostics?.openworkSetup;
+  const providerReady = diagnostics?.copilotBridgeConnected === true;
+  const providerNeedsSignIn = diagnostics?.copilotBridgeLoginRequired === true;
   if (setup?.status === "needs_attention") return "Setup needs attention";
-  if (copilotStatus === "needs_sign_in") return "Sign in to Microsoft 365";
-  if (setup?.status === "ready" && copilotStatus === "ready") return "Ready to start";
+  if (copilotStatus === "needs_sign_in" || providerNeedsSignIn) return "Sign in to Microsoft 365";
+  if (setup?.status === "ready" && (copilotStatus === "ready" || providerReady)) return "Ready to start";
   return "Setting things up";
 }
 
@@ -78,8 +80,13 @@ function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: stri
   if (setup?.status === "needs_attention") {
     return "Relay could not finish setup. Review the stopped step below, then use Try Setup Again.";
   }
+  if (diagnostics?.copilotBridgeLoginRequired) {
+    return "Sign in to Microsoft 365 Copilot in Edge, then use Check Microsoft Sign-In.";
+  }
   if (copilotMessage && copilotMessage.toLowerCase().includes("sign")) return copilotMessage;
-  if (setup?.status === "ready") return `${setup.launchLabel ?? "Open OpenCode Web"} to begin.`;
+  if (setup?.status === "ready") {
+    return "Relay Agent Web opens automatically. Use Open Relay Agent Web if the browser did not appear.";
+  }
   return "Relay is preparing OpenCode and the Copilot connection.";
 }
 
@@ -106,6 +113,11 @@ const OPENWORK_SETUP_STEPS: SetupProgressStep[] = [
     id: "provider_config",
     label: "Write config",
     detail: "Connect OpenCode to Relay.",
+  },
+  {
+    id: "provider_warmup",
+    label: "Connect Copilot",
+    detail: "Prepare Microsoft 365 Copilot before OpenCode opens.",
   },
   {
     id: "download_opencode",
@@ -135,6 +147,9 @@ function inferSetupStage(diagnostics: RelayDiagnostics | null): string {
     return "provider_gateway";
   }
   if (detail.includes("config")) return "provider_config";
+  if (detail.includes("sign-in") || detail.includes("microsoft 365") || detail.includes("m365 copilot")) {
+    return "provider_warmup";
+  }
   if (detail.includes("download") || detail.includes("extract") || detail.includes("probe opencode")) {
     return "download_opencode";
   }
@@ -202,8 +217,8 @@ export default function Shell(): JSX.Element {
     const report = diagnostics();
     const setupStatus = report?.openworkSetup?.status ?? "preparing";
     const setupReady = setupStatus === "ready";
-    const copilotReady = copilot.status === "ready";
-    const needsSignIn = copilot.status === "needs_sign_in";
+    const copilotReady = copilot.status === "ready" || report?.copilotBridgeConnected === true;
+    const needsSignIn = copilot.status === "needs_sign_in" || report?.copilotBridgeLoginRequired === true;
     const needsAttention = setupStatus === "needs_attention";
     const setupStage = inferSetupStage(report);
     const progressIndex = setupProgressIndex(setupStage);
@@ -225,7 +240,7 @@ export default function Shell(): JSX.Element {
       copilotReady,
       needsSignIn,
       needsAttention,
-      launchLabel: report?.openworkSetup?.launchLabel ?? "Open OpenCode Web",
+      launchLabel: report?.openworkSetup?.launchLabel ?? "Open Relay Agent Web",
       providerBaseUrl: report?.openworkSetup?.providerBaseUrl ?? endpoint(),
       configPath: report?.openworkSetup?.configPath ?? "~/.config/opencode/opencode.json",
       steps: [
@@ -250,7 +265,6 @@ export default function Shell(): JSX.Element {
 
   onMount(() => {
     void showMainWindow();
-    void runCopilotWarmup(false);
     void refreshDiagnostics(false);
     const timer = window.setInterval(() => {
       const setup = diagnostics()?.openworkSetup?.status;
@@ -303,7 +317,7 @@ export default function Shell(): JSX.Element {
     setOpeningWorkspace(true);
     try {
       await openOpencodeWeb(workspaceLabel());
-      showToast({ tone: "ok", message: "Opening OpenCode Web" });
+      showToast({ tone: "ok", message: "Opening Relay Agent Web" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       showToast({ tone: "danger", message: "OpenCode is not ready", detail: message });
@@ -329,7 +343,7 @@ export default function Shell(): JSX.Element {
         >
           <div>
             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--ra-color-text-muted)]">
-              OpenCode Web setup + M365 Copilot gateway
+              Relay Agent Web setup + M365 Copilot gateway
             </p>
             <h1 class="text-2xl font-semibold">Relay Agent</h1>
           </div>
@@ -442,8 +456,9 @@ export default function Shell(): JSX.Element {
             <h2 class="text-xl font-semibold">What happens next</h2>
             <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
               <p>Relay prepares portable OpenCode and connects it to Microsoft 365 Copilot.</p>
-              <p>When the status is ready, press Open OpenCode Web and continue in the browser.</p>
-              <p>OpenCode keeps the chat, tools, approvals, files, and session history.</p>
+              <p>When the status is ready, Relay opens Relay Agent Web automatically in the browser.</p>
+              <p>Use Open Relay Agent Web only if the browser did not appear or was closed.</p>
+              <p>Relay Agent Web is powered by OpenCode, which keeps the chat, tools, approvals, files, and session history.</p>
             </div>
           </article>
           <article class="ra-surface p-5">

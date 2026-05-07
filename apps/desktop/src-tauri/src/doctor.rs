@@ -1,7 +1,7 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use desktop_core::doctor::{
@@ -160,6 +160,103 @@ pub async fn warmup_copilot_bridge(
     tokio::task::spawn_blocking(move || run_copilot_warmup_blocking(bridge, settings, request_id))
         .await
         .map_err(|e| format!("copilot warmup task: {e}"))?
+}
+
+async fn warmup_existing_copilot_bridge(
+    bridge: Arc<CopilotBridgeManager>,
+    browser_settings: Option<BrowserAutomationSettings>,
+) -> Result<Option<CopilotWarmupResult>, String> {
+    let settings = browser_settings.unwrap_or_else(default_browser_settings);
+    let server_arc = {
+        let slot = bridge.lock()?;
+        slot.as_ref().map(|state| Arc::clone(&state.server))
+    };
+    let Some(server_arc) = server_arc else {
+        return Ok(None);
+    };
+
+    let request_id = Uuid::new_v4().to_string();
+    tokio::task::spawn_blocking(move || {
+        run_existing_copilot_warmup_blocking(server_arc, settings, request_id).map(Some)
+    })
+    .await
+    .map_err(|e| format!("copilot warmup task: {e}"))?
+}
+
+fn run_existing_copilot_warmup_blocking(
+    server_arc: Arc<Mutex<crate::copilot_server::CopilotServer>>,
+    browser_settings: BrowserAutomationSettings,
+    request_id: String,
+) -> Result<CopilotWarmupResult, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("copilot warmup runtime: {e}"))?;
+    let mut guard = server_arc
+        .lock()
+        .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+    let cdp_port = guard.cdp_port();
+    let boot_token_present = guard.boot_token().is_some();
+
+    tracing::info!(
+        "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+        request_id,
+        cdp_port,
+        "health_check",
+        boot_token_present,
+    );
+    if !guard.is_running() {
+        return Ok(warmup_result(
+            &request_id,
+            cdp_port,
+            boot_token_present,
+            CopilotWarmupStage::EnsureServer,
+            "Copilot provider gateway is not running yet.",
+            CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::EnsureServerFailed)),
+        ));
+    }
+    if let Err(error) = runtime.block_on(guard.health_check()) {
+        tracing::warn!(
+            "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} boot_token_present={} message={}",
+            request_id,
+            cdp_port,
+            "health_check",
+            "health_check_failed",
+            boot_token_present,
+            error
+        );
+        return Ok(warmup_result(
+            &request_id,
+            cdp_port,
+            boot_token_present,
+            CopilotWarmupStage::HealthCheck,
+            error.to_string(),
+            CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::HealthCheckFailed)),
+        ));
+    }
+
+    tracing::info!(
+        "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+        request_id,
+        cdp_port,
+        "status_request",
+        boot_token_present,
+    );
+    let result = match runtime.block_on(
+        guard.status_with_timeout_detailed(status_timeout_secs(browser_settings.timeout_ms)),
+    ) {
+        Ok(response) => {
+            classify_warmup_status_response(&request_id, cdp_port, boot_token_present, response)
+        }
+        Err(CopilotStatusCheckError::Http(error)) => {
+            classify_warmup_status_http_error(&request_id, cdp_port, boot_token_present, error)
+        }
+        Err(CopilotStatusCheckError::Transport(error)) => {
+            classify_warmup_status_transport_error(&request_id, cdp_port, boot_token_present, error)
+        }
+    };
+    log_warmup_result(&result);
+    Ok(result)
 }
 
 pub fn run_copilot_warmup_blocking(
@@ -1121,14 +1218,33 @@ pub async fn warmup_copilot_bridge_from_state(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<CopilotWarmupResult, String> {
-    warmup_copilot_bridge(services.copilot_bridge(), browser_settings).await
+    let request_settings = browser_settings.clone();
+    if let Some(result) = warmup_existing_copilot_bridge(
+        services.opencode_provider_bridge(),
+        request_settings.clone(),
+    )
+    .await?
+    {
+        return Ok(result);
+    }
+
+    let settings = request_settings.unwrap_or_else(default_browser_settings);
+    let cdp_port = crate::tauri_bridge::effective_cdp_port(Some(&settings));
+    Ok(warmup_result(
+        &Uuid::new_v4().to_string(),
+        cdp_port,
+        false,
+        CopilotWarmupStage::EnsureServer,
+        "OpenCode provider gateway is still starting. Wait for setup to continue, or use Try Setup Again if setup stopped.",
+        CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::EnsureServerFailed)),
+    ))
 }
 
 pub async fn get_relay_diagnostics_from_state(
     services: State<'_, AppServices>,
 ) -> RelayDiagnostics {
     let openwork_setup = services.openwork_setup_status();
-    let mut diagnostics = get_relay_diagnostics(services.copilot_bridge()).await;
+    let mut diagnostics = get_relay_diagnostics(services.opencode_provider_bridge()).await;
     diagnostics.openwork_setup = Some(openwork_setup);
     diagnostics
 }

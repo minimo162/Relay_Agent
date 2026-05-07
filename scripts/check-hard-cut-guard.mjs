@@ -313,7 +313,7 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Open OpenCode Web",
+    text: "Open Relay Agent Web",
   },
   {
     path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
@@ -329,7 +329,7 @@ const required = [
   },
   {
     path: "README.md",
-    text: "**Open OpenCode Web**",
+    text: "**Open Relay Agent Web**",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",

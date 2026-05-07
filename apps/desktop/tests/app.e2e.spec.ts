@@ -13,7 +13,7 @@ test("desktop opens as a beginner OpenCode Web launcher", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
   await expect(page.getByText("Setup progress")).toBeVisible();
   await expect(page.getByRole("progressbar", { name: /OpenCode setup is 100% complete/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open OpenCode Web" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open Relay Agent Web" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh Setup" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "What happens next" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "If setup stops" })).toBeVisible();
@@ -45,6 +45,30 @@ test("desktop shows live OpenCode download progress", async ({ page }) => {
   await expect(page.getByRole("progressbar", { name: /OpenCode setup is 42% complete/ })).toHaveAttribute(
     "aria-valuenow",
     "42",
+  );
+});
+
+test("desktop shows provider warmup before opening OpenCode Web", async ({ page }) => {
+  await injectRelayMock(page, {
+    openworkSetup: {
+      status: "preparing",
+      stage: "provider_warmup",
+      message: "Connecting to Microsoft 365 Copilot.",
+      progressPercent: 22,
+      progressDetail: "Preparing the Copilot connection before Relay Agent Web opens.",
+      actionLabel: null,
+      launchLabel: null,
+    },
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded", timeout: 15000 });
+
+  await expect(page.getByRole("heading", { name: "Setting things up" })).toBeVisible();
+  await expect(page.locator(".ra-setup-progress__current")).toHaveText("Connect Copilot");
+  await expect(page.getByText("Preparing the Copilot connection before Relay Agent Web opens.")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: /OpenCode setup is 22% complete/ })).toHaveAttribute(
+    "aria-valuenow",
+    "22",
   );
 });
 

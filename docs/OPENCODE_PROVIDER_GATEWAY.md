@@ -12,21 +12,26 @@ OpenCode Web
   owns UX, sessions, tools, permissions, workspace execution, and event state
 
 Relay_Agent copilot_server.js
-  exposes an OpenAI-compatible provider facade and forwards model turns to
-  M365 Copilot over Edge CDP
+  exposes an OpenAI-compatible provider facade, acts as the Tool Call
+  Emulation Layer, and forwards planner/final-writer turns to M365 Copilot
+  over Edge CDP
 
 Relay_Agent bootstrap
   starts the provider gateway, writes global OpenCode provider config,
+  warms the provider gateway against Microsoft 365 Copilot before handoff,
   downloads/verifies the pinned portable OpenCode artifact on Windows, and
   launches OpenCode Web without admin approval
 
 M365 Copilot
-  produces assistant text or OpenAI-compatible tool calls
+  produces strict JSON tool plans or final answers only
 ```
 
 Relay_Agent must not be the execution source of truth in this mode. OpenCode
 receives `tool_calls`, executes them through its own tool layer, and sends the
 next provider turn with tool results in the message history.
+M365 Copilot is treated as an untrusted text planner/final writer, not as a
+tool runtime. Relay explicitly tells Copilot not to use Microsoft 365 built-in
+tools, browsing, search, code execution, file uploads, or workspace claims.
 
 ## Required Relay Endpoints
 
@@ -68,7 +73,11 @@ does the same for its generated config. Manual provider setup can still use
 
 The production first-run entrypoint is installing and launching Relay Agent.
 It keeps Relay out of the OpenCode UX path while preparing the
-OpenCode provider handoff. The repo development equivalent is:
+OpenCode provider handoff. On Windows, the installed app opens Relay Agent Web
+automatically after the provider gateway reports that Microsoft 365 Copilot is
+ready. Relay Agent Web is a local branded browser wrapper around OpenCode, so
+the browser tab title and favicon match Relay Agent while OpenCode still owns
+the workspace UX and tool execution. The repo development equivalent is:
 
 ```bash
 pnpm dev
@@ -77,9 +86,10 @@ pnpm dev
 The installed desktop launch starts the provider gateway and writes
 `relay-agent/m365-copilot` as the default model in the global OpenCode config.
 On Windows, the auto path also verifies and downloads the pinned artifacts,
-extracts OpenCode, prepares the `opencode web` launch path, and leaves OpenCode
-ready to call Relay's provider endpoint. The generated config already contains
-the local provider token, so users do not need to export `RELAY_AGENT_API_KEY`.
+extracts OpenCode, starts `opencode serve` on a loopback port, opens Relay
+Agent Web on a separate loopback port, and leaves OpenCode ready to call Relay's
+provider endpoint. The generated config already contains the local provider
+token, so users do not need to export `RELAY_AGENT_API_KEY`.
 For diagnostics,
 `pnpm bootstrap:openwork-opencode -- --pretty` still prints a non-destructive
 preflight report.
@@ -182,12 +192,44 @@ binding as disposable transport state.
 Relay supports:
 
 - non-streaming `chat.completion` responses
-- streaming `chat.completion.chunk` SSE responses
-- `tools` prompt injection for Copilot
+- buffered streaming `chat.completion.chunk` SSE responses
+- `tools` prompt injection for Copilot through a Tool Call Emulation Layer
 - response normalization from `relay_tool`, `tool_calls`, or `tool_uses` into
   OpenAI `tool_calls`
 - client disconnect cancellation mapped to Relay abort
 - OpenAI-shaped error bodies
+
+## Tool Call Emulation Layer
+
+M365 Copilot does not provide a reliable native tool-calling contract in this
+integration. Relay therefore emulates the contract at the provider boundary:
+
+- `final_answer`: Copilot may write prose only when no further environment
+  access is needed, or after OpenCode has sent tool/function results.
+- `tool_planning`: when the user asks for local files, repo/workspace access,
+  command execution, edits, tests, or another available tool, Copilot must
+  return only OpenAI-compatible JSON with a non-empty `tool_calls` array.
+- `specified_tool`: when the OpenAI-compatible request selects a specific
+  function tool, Copilot must call that function and cannot answer in prose.
+- `repair`: if Copilot answers with prose, code, markdown, or claims about its
+  own Microsoft 365 tools during a required tool-planning turn, Relay performs
+  one same-thread retry that asks for strict JSON only.
+
+Relay accepts only structured tool evidence in strict modes. A valid tool plan
+must have no assistant prose outside the JSON. If the repair retry still mixes
+prose with a tool call or fails to produce tool JSON, Relay fail-closes with
+`relay_tool_call_repair_failed` and writes a support artifact instead of
+guessing or executing code itself.
+
+## Streaming Display Policy
+
+Relay preserves OpenAI-compatible streaming SSE for clients such as OpenCode,
+but it does not forward live M365 Copilot DOM progress as assistant content.
+Copilot frequently rewrites intermediate text while generating, so forwarding
+those snapshots can duplicate paragraphs or leave the client with a truncated
+prefix. Relay now sends the initial assistant role chunk, waits for the final
+normalized Copilot response, and then emits exactly that final text or the
+structured `tool_calls` chunk.
 
 ## Smoke Checklist
 
@@ -221,7 +263,8 @@ Expected:
 
 - `/v1/models` returns `m365-copilot`
 - non-streaming returns `object: "chat.completion"`
-- streaming returns `data:` SSE chunks and `[DONE]`
+- streaming returns `data:` SSE chunks and `[DONE]`, with assistant text
+  buffered until the final normalized response
 - tool-producing replies return `finish_reason: "tool_calls"` with OpenAI
   `tool_calls`
 - cancelling the OpenCode request closes the Relay request instead of leaving a

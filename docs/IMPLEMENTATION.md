@@ -23,15 +23,74 @@
 
 ## Milestone Log
 
+### 2026-05-07 UX: Relay Agent branded browser tab for OpenCode
+
+The installed browser handoff no longer opens OpenCode directly with
+`opencode web`. Relay now starts the cached portable OpenCode CLI as
+`opencode serve` on a loopback port, starts a small Relay-owned loopback
+wrapper, and opens that wrapper in the default browser. The wrapper sets the
+browser tab title to `Relay Agent`, serves the Relay Agent favicon, and embeds
+the OpenCode workspace in a full-viewport iframe. OpenCode still owns the
+workspace UI, sessions, permissions, tools, and execution state; the wrapper is
+only for user-facing browser identity.
+
+Verification:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml openwork_autostart`:
+  passed, 4 tests.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `E2E_SKIP_AUTH_SETUP=1 pnpm --filter @relay-agent/desktop test:e2e:local`:
+  passed, 6 tests.
+
+### 2026-05-07 Fix: Buffer OpenAI streaming text until final Copilot response
+
+Relay's OpenAI-compatible streaming endpoint now preserves SSE compatibility
+without forwarding live M365 Copilot DOM progress snapshots as assistant text.
+The gateway sends the initial assistant role chunk, waits for the final
+normalized Copilot response, then emits exactly that final answer or the
+structured `tool_calls` chunk. This avoids duplicated paragraphs and truncated
+assistant text caused by Copilot rewriting intermediate draft content during
+generation.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`:
+  passed, 27 tests.
+
+### 2026-05-07 Change: Tool Call Emulation Layer for M365 Copilot
+
+Relay's OpenAI-compatible provider gateway now treats M365 Copilot as a strict
+JSON planner or final-answer writer only. Provider turns with OpenCode tools are
+classified as final answer, tool planning, specified tool, or repair. Local
+file/workspace, command, edit, test, and explicit tool requests require
+OpenAI-compatible `tool_calls` JSON with no assistant prose; tool-result turns
+return to final-answer mode. If Copilot writes prose, code, markdown, or claims
+to use Microsoft 365 tools during a required tool-planning turn, Relay performs
+one strict repair retry and fail-closes with a repair artifact if the response is
+still not structured. Relay still does not execute tools; OpenCode owns tool
+execution and sends tool results back through the provider loop.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`:
+  passed, 27 tests.
+- `pnpm check`: passed.
+
 ### 2026-05-07 Change: OpenCode-only Web launcher
 
 Installed Windows setup no longer includes the OpenWork Desktop MSI or optional
 installer handoff. Relay now downloads and verifies only the pinned portable
 OpenCode CLI zip, writes the M365 Copilot provider config, creates a normal
 user workspace, and marks setup ready without UAC or admin approval. The
-desktop action is **Open OpenCode Web** and starts the cached portable OpenCode
-as `opencode web --hostname 127.0.0.1 --port <free loopback port>` from the
-user workspace.
+installed desktop path now warms the provider gateway against Microsoft 365
+Copilot before handoff, then starts the cached portable OpenCode server
+automatically as `opencode serve --hostname 127.0.0.1 --port <free loopback
+port>` from the user workspace. Relay opens a separate local Relay Agent Web
+wrapper tab, so the browser title and favicon are Relay Agent while OpenCode
+still owns the workspace UI and tool execution. The **Open Relay Agent Web**
+action remains as a manual reopen fallback.
 
 Implementation notes:
 

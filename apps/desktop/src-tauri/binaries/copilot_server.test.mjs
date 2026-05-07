@@ -14,6 +14,15 @@ import {
   shouldStartNewChatForRequest,
 } from "./copilot_server.mjs";
 
+function collectSseContentDeltas(text) {
+  return String(text || "")
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+    .map((line) => JSON.parse(line.slice(6)))
+    .map((event) => event?.choices?.[0]?.delta?.content)
+    .filter((content) => typeof content === "string" && content.length);
+}
+
 test("shouldStartNewChatForRequest opens a new chat only for uninitialized or forced fresh-chat cases", () => {
   assert.equal(
     shouldStartNewChatForRequest({
@@ -133,8 +142,49 @@ test("parseOpenAiRequest injects tool protocol instructions for OpenAI tools", (
   });
 
   assert.match(parsed.systemPrompt, /Tool invocation protocol:/);
+  assert.match(parsed.systemPrompt, /Tool Call Emulation Layer:/);
   assert.match(parsed.systemPrompt, /Available tools: read/);
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
   assert.equal(parsed.tools[0].function.name, "read");
+});
+
+test("parseOpenAiRequest allows final answers when tools are available but no environment access is requested", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "Explain recursion in one sentence." }],
+    tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "final_answer");
+  assert.equal(parsed.requiresStrictToolCalls, false);
+  assert.match(parsed.systemPrompt, /Mode: final_answer/);
+});
+
+test("parseOpenAiRequest treats tool results as final-answer mode", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "Read README." },
+      { role: "tool", content: "README contents", tool_call_id: "call_read" },
+    ],
+    tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.hasToolResultMessages, true);
+  assert.equal(parsed.toolProtocolMode, "final_answer");
+  assert.equal(parsed.requiresStrictToolCalls, false);
+  assert.match(parsed.systemPrompt, /Answer only from the provided TOOL\/FUNCTION results/);
+});
+
+test("parseOpenAiRequest honors explicit no-tool choice", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "Read README.md." }],
+    tool_choice: "none",
+    tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.openAiToolChoice, "none");
+  assert.equal(parsed.toolProtocolMode, "final_answer");
+  assert.equal(parsed.requiresStrictToolCalls, false);
 });
 
 test("parseOpenAiRequest tracks tool result messages and explicit tool choice", () => {
@@ -212,6 +262,7 @@ test("buildOpenAiCompletionBody returns finish_reason tool_calls when a tool is 
 
   assert.equal(body.object, "chat.completion");
   assert.equal(body.choices[0].finish_reason, "tool_calls");
+  assert.equal(body.choices[0].message.content, null);
   assert.equal(body.choices[0].message.tool_calls[0].id, "call_1");
   assert.equal(body.choices[0].message.tool_calls[0].function.name, "read");
 });
@@ -306,6 +357,59 @@ test("createServer repairs explicit OpenAI-compatible tool requests once", async
     assert.match(prompts[1].userPrompt, /Previous invalid response:/);
     assert.equal(body.choices[0].finish_reason, "tool_calls");
     assert.equal(body.choices[0].message.tool_calls[0].function.name, "read");
+    assert.equal(prompts[0].toolProtocolMode, "tool_planning");
+    assert.equal(prompts[0].requiresStrictToolCalls, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer emulates tool calling for environment-access prompts in auto mode", async () => {
+  const prompts = [];
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: true };
+    },
+    async startOrJoinDescribe(prompt) {
+      prompts.push(prompt);
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody(
+          prompt.openAiToolRepairAttempt
+            ? '{"tool_calls":[{"id":"call_read","function":{"name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}}]}'
+            : "I will use Microsoft 365 Copilot to inspect the workspace.",
+          prompt,
+        ),
+      };
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "m365-copilot",
+        messages: [{ role: "user", content: "README.md を読んで要約して" }],
+        tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(prompts.length, 2);
+    assert.equal(prompts[0].toolProtocolMode, "tool_planning");
+    assert.equal(prompts[0].requiresStrictToolCalls, true);
+    assert.match(prompts[0].systemPrompt, /Natural language is invalid/);
+    assert.equal(prompts[1].openAiToolRepairAttempt, true);
+    assert.equal(body.choices[0].finish_reason, "tool_calls");
+    assert.equal(body.choices[0].message.tool_calls[0].function.name, "read");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -355,6 +459,62 @@ test("createServer repairs explicit tool requests after an empty first response"
     assert.equal(body.choices[0].finish_reason, "tool_calls");
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer fail-closes strict tool planning when repair mixes prose with tool calls", async () => {
+  const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "relay-tool-repair-artifacts-"));
+  const previousArtifactDir = process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR;
+  process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR = artifactDir;
+  const prompts = [];
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: true };
+    },
+    async startOrJoinDescribe(prompt) {
+      prompts.push(prompt);
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody(
+          prompt.openAiToolRepairAttempt
+            ? 'Here is the call: {"tool_calls":[{"id":"call_read","function":{"name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}}]}'
+            : "I can inspect the file with my own tools.",
+          prompt,
+        ),
+      };
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "m365-copilot",
+        messages: [{ role: "user", content: "Read README.md." }],
+        tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+      }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(body.error.code, "relay_tool_call_repair_failed");
+    assert.equal(prompts.length, 2);
+    assert.equal(prompts[1].requiresStrictToolCalls, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (previousArtifactDir == null) {
+      delete process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR;
+    } else {
+      process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR = previousArtifactDir;
+    }
+    await fs.rm(artifactDir, { recursive: true, force: true });
   }
 });
 
@@ -522,22 +682,22 @@ test("createServer accepts OpenAI-compatible bearer API key auth", async () => {
   }
 });
 
-test("createServer streams live progress snapshots before final completion", async () => {
+test("createServer buffers streaming text until the final completion", async () => {
   const progress = { visibleText: "", done: false, phase: "queued" };
   const server = createServer({
     async inspectStatus() {
       return { connected: true };
     },
     async startOrJoinDescribe(prompt) {
-      progress.visibleText = "First chunk";
+      progress.visibleText = "Draft duplicated text";
       await new Promise((resolve) => setTimeout(resolve, 260));
-      progress.visibleText = "First chunk and second chunk";
+      progress.visibleText = "Draft duplicated text Draft duplicated text";
       await new Promise((resolve) => setTimeout(resolve, 260));
       progress.done = true;
       progress.phase = "completed";
       return {
         status: 200,
-        body: buildOpenAiCompletionBody("First chunk and second chunk final", prompt),
+        body: buildOpenAiCompletionBody("Final stable answer", prompt),
       };
     },
     abortRequest() {
@@ -561,9 +721,8 @@ test("createServer streams live progress snapshots before final completion", asy
     });
     assert.equal(response.status, 200);
     const text = await response.text();
-    assert.match(text, /First chunk/);
-    assert.match(text, / and second chunk/);
-    assert.match(text, / final/);
+    assert.deepEqual(collectSseContentDeltas(text), ["Final stable answer"]);
+    assert.doesNotMatch(text, /Draft duplicated text/);
     assert.match(text, /finish_reason":"stop"/);
   } finally {
     await new Promise((resolve) => server.close(resolve));

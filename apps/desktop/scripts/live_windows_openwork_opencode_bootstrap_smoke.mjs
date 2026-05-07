@@ -173,7 +173,7 @@ const report = {
     "Run pnpm dev and confirm Relay desktop UX is not the production entrypoint.",
     "Confirm the auto bootstrap downloads/verifies portable OpenCode on Windows, writes global OpenCode config, and starts the provider gateway.",
     "Confirm the generated global config contains the Relay provider token without a manual RELAY_AGENT_API_KEY export.",
-    "Open OpenCode Web and confirm relay-agent/m365-copilot is already available.",
+    "Let Relay open Relay Agent Web automatically, then confirm relay-agent/m365-copilot is already available.",
     "Run one provider text turn and one OpenCode-owned read tool turn.",
   ],
 };

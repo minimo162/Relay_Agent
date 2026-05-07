@@ -248,6 +248,12 @@ WS = await resolveWebSocketCtor();
 var DEFAULT_PORT = 18080;
 var DEFAULT_CDP_PORT = 9360;
 var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
+var TOOL_PROTOCOL_MODES = Object.freeze({
+  FINAL_ANSWER: "final_answer",
+  TOOL_PLANNING: "tool_planning",
+  SPECIFIED_TOOL: "specified_tool",
+  REPAIR: "repair",
+});
 
 /**
  * When RELAY_COPILOT_NO_WINDOW_FOCUS=1, skip CDP Target.activateTarget / Page.bringToFront
@@ -3031,7 +3037,12 @@ function isRecoverableLongContinuationFailure(error, promptLen, phase) {
 }
 
 function isRepairStageLabel(stageLabel) {
-  return stageLabel === "repair1" || stageLabel === "repair2" || stageLabel === "repair3";
+  return (
+    stageLabel === "repair1" ||
+    stageLabel === "repair2" ||
+    stageLabel === "repair3" ||
+    /^tool_repair\d+$/u.test(String(stageLabel || ""))
+  );
 }
 
 function bridgeResponseTimeoutMs(stageLabel, probeMode) {
@@ -4596,7 +4607,6 @@ function findEdgePath() {
 /* ─── HTTP server ─── */
 const RELAY_COPILOT_SERVICE_NAME = "relay_copilot_server";
 const OPENAI_COMPAT_DEFAULT_MODEL = "m365-copilot";
-const OPENAI_STREAM_PROGRESS_POLL_MS = 200;
 
 function requireBridgeAuth(req, res, options = globalOptions) {
   if (!options.bootToken) return true;
@@ -4755,8 +4765,6 @@ function parseOpenAiRequest(payload) {
     .filter(Boolean)
     .join("\n\n");
   const tools = normalizeOpenAiTools(payload.tools);
-  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
-  const systemPrompt = [systemPromptBase, toolProtocolPrompt].filter(Boolean).join("\n\n");
   const hasToolResultMessages = msgs.some((m) => m?.role === "tool" || m?.role === "function");
   const openAiToolChoice = normalizeOpenAiToolChoice(payload.tool_choice);
   let userPrompt = "";
@@ -4806,6 +4814,21 @@ function parseOpenAiRequest(payload) {
   const relayNewChat = payload.relay_new_chat === true;
   const relayForceFreshChat = payload.relay_force_fresh_chat === true;
   const model = String(payload.model || OPENAI_COMPAT_DEFAULT_MODEL).trim() || OPENAI_COMPAT_DEFAULT_MODEL;
+  const toolProtocolMode = decideToolProtocolMode({
+    tools,
+    hasToolResultMessages,
+    openAiToolChoice,
+    userPrompt,
+    relayStageLabel,
+  });
+  const requiresStrictToolCalls = toolProtocolModeRequiresStrict(toolProtocolMode);
+  const systemPrompt = buildToolProtocolSystemPrompt({
+    basePrompt: systemPromptBase,
+    tools,
+    mode: toolProtocolMode,
+    openAiToolChoice,
+    hasToolResultMessages,
+  });
   return {
     model,
     systemPrompt,
@@ -4815,6 +4838,8 @@ function parseOpenAiRequest(payload) {
     tools,
     hasToolResultMessages,
     openAiToolChoice,
+    toolProtocolMode,
+    requiresStrictToolCalls,
     stream: payload.stream === true,
     relayNewChat,
     relayForceFreshChat,
@@ -4885,15 +4910,116 @@ function normalizeOpenAiToolChoice(rawChoice) {
   return null;
 }
 
+function decideToolProtocolMode(prompt = {}) {
+  const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
+  if (!tools.length) return TOOL_PROTOCOL_MODES.FINAL_ANSWER;
+  if (isRepairStageLabel(prompt.relayStageLabel) || prompt.openAiToolRepairAttempt === true) {
+    return TOOL_PROTOCOL_MODES.REPAIR;
+  }
+  if (prompt.hasToolResultMessages) return TOOL_PROTOCOL_MODES.FINAL_ANSWER;
+  const choice = prompt.openAiToolChoice;
+  if (choice === "none") return TOOL_PROTOCOL_MODES.FINAL_ANSWER;
+  if (typeof choice === "object" && choice?.function?.name) return TOOL_PROTOCOL_MODES.SPECIFIED_TOOL;
+  if (openAiToolChoiceRequiresTool(choice, tools)) return TOOL_PROTOCOL_MODES.TOOL_PLANNING;
+  if (promptNeedsExternalToolAccess(prompt)) return TOOL_PROTOCOL_MODES.TOOL_PLANNING;
+  return TOOL_PROTOCOL_MODES.FINAL_ANSWER;
+}
+
+function toolProtocolModeRequiresStrict(mode) {
+  return (
+    mode === TOOL_PROTOCOL_MODES.TOOL_PLANNING ||
+    mode === TOOL_PROTOCOL_MODES.SPECIFIED_TOOL ||
+    mode === TOOL_PROTOCOL_MODES.REPAIR
+  );
+}
+
+function promptNeedsExternalToolAccess(prompt = {}) {
+  const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
+  if (!tools.length) return false;
+  if (promptExplicitlyRequestsAvailableTool(prompt)) return true;
+  const text = String(prompt.userPrompt || "");
+  const lower = text.toLowerCase();
+  const pathLike =
+    /(?:^|[\s"'(:])(?:[a-zA-Z]:[\\/]|\.{1,2}[\\/]|~[\\/]|[\w@.-]+[\\/][\w@./-]+|[\w@.-]+\.(?:md|mdx|txt|json|jsonc|lock|toml|ya?ml|xml|html?|css|scss|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|cs|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|sql|env|ini|cfg|conf|log))(?=$|[\s"',).:])/iu;
+  if (pathLike.test(text) || /\b(?:readme|package\.json|cargo\.toml|tsconfig\.json|pnpm-lock\.yaml)\b/iu.test(lower)) {
+    return true;
+  }
+  const actionHint =
+    /\b(read|open|inspect|search|find|grep|list|scan|check|review|edit|write|patch|modify|fix|run|execute|test|build|commit)\b|読んで|開いて|確認|調べ|検索|探して|一覧|修正|編集|書いて|実行|テスト|ビルド/iu;
+  const targetHint =
+    /\b(file|files|folder|directory|workspace|repo|repository|codebase|project|source|local|path|diff|branch|terminal|shell|command|test|build)\b|ファイル|フォルダ|ディレクトリ|ワークスペース|リポジトリ|コードベース|プロジェクト|ローカル|パス|差分|ブランチ|端末|コマンド/iu;
+  if (actionHint.test(text) && targetHint.test(text)) return true;
+  const externalToolNames = new Set([
+    "read",
+    "grep",
+    "glob",
+    "list",
+    "ls",
+    "search",
+    "find",
+    "edit",
+    "write",
+    "patch",
+    "bash",
+    "shell",
+    "run",
+    "exec",
+  ]);
+  const availableExternal = tools.some((tool) => externalToolNames.has(normalizeToolName(tool?.function?.name || "")));
+  return availableExternal && actionHint.test(text) && /\b(this|that|it|the|current|workspace|repo|code|project)\b|これ|それ|この|現在|コード/iu.test(text);
+}
+
+function buildToolProtocolSystemPrompt({
+  basePrompt = "",
+  tools = [],
+  mode = TOOL_PROTOCOL_MODES.FINAL_ANSWER,
+  openAiToolChoice = null,
+  hasToolResultMessages = false,
+} = {}) {
+  const parts = [basePrompt].filter(Boolean);
+  if (!tools.length) return parts.join("\n\n");
+  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
+  const selectedTool =
+    typeof openAiToolChoice === "object" ? String(openAiToolChoice?.function?.name || "").trim() : "";
+  const modePrompt = [
+    "Tool Call Emulation Layer:",
+    "M365 Copilot is used only as a text planner/final-answer writer. It is not a tool executor.",
+    "Do not use Microsoft 365 Copilot built-in tools, browsing, search, code execution, file upload prompts, or workspace claims.",
+  ];
+  if (mode === TOOL_PROTOCOL_MODES.FINAL_ANSWER) {
+    modePrompt.push(
+      hasToolResultMessages
+        ? "Mode: final_answer. Answer only from the provided TOOL/FUNCTION results and conversation. If more environment access is needed, return tool_calls JSON instead of prose."
+        : "Mode: final_answer. Answer normally only when no external tool or environment access is needed. If tool access is needed, return tool_calls JSON instead of prose.",
+    );
+  } else {
+    modePrompt.push(
+      `Mode: ${mode}. Natural language is invalid in this mode.`,
+      "Return only OpenAI-compatible JSON containing a non-empty tool_calls array. No markdown, no explanation, no code fences.",
+    );
+    if (selectedTool) {
+      modePrompt.push(`The selected tool is ${selectedTool}; call that tool unless the request is impossible with the provided schema.`);
+    }
+  }
+  parts.push(modePrompt.join("\n"), toolProtocolPrompt);
+  return parts.filter(Boolean).join("\n\n");
+}
+
 function formatOpenAiToolProtocolPrompt(tools) {
   if (!tools.length) return "";
   const names = tools.map((tool) => tool.function.name).join(", ");
+  const catalog = tools.map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description || "",
+    parameters: tool.function.parameters || { type: "object" },
+  }));
   return [
     "Tool invocation protocol:",
     "When a tool is needed, return only JSON in one of these OpenAI-compatible shapes, with no prose before or after it:",
     '{"tool_calls":[{"id":"call_1","function":{"name":"tool_name","arguments":"{\\"key\\":\\"value\\"}"}}]}',
     '{"tool_uses":[{"recipient_name":"functions.tool_name","parameters":{"key":"value"}}]}',
     `Available tools: ${names}`,
+    `Tool catalog: ${JSON.stringify(catalog)}`,
   ].join("\n");
 }
 
@@ -4914,7 +5040,9 @@ async function startOpenAiCompletionWithToolRepair(session, prompt) {
     JSON.stringify(prompt.openAiToolChoice || null),
   );
   const repairRecord = await session.startOrJoinDescribe(repairPrompt);
-  if (recordHasOpenAiToolCalls(repairRecord) || repairRecord.status !== 200) return repairRecord;
+  if (repairRecord.status !== 200 || recordSatisfiesOpenAiToolProtocol(repairRecord, repairPrompt)) {
+    return repairRecord;
+  }
 
   const repairText = openAiMessageContent(repairRecord);
   const artifactPath = await writeOpenAiToolRepairFailureArtifact({
@@ -4944,13 +5072,20 @@ function shouldAttemptOpenAiToolRepair(record, prompt = {}) {
   if (!Array.isArray(prompt.tools) || !prompt.tools.length) return false;
   if (prompt.hasToolResultMessages) return false;
   if (prompt.openAiToolRepairAttempt === true) return false;
-  if (recordHasOpenAiToolCalls(record)) return false;
+  if (recordSatisfiesOpenAiToolProtocol(record, prompt)) return false;
   const requiresTool =
+    prompt.requiresStrictToolCalls === true ||
     openAiToolChoiceRequiresTool(prompt.openAiToolChoice, prompt.tools) ||
     promptExplicitlyRequestsAvailableTool(prompt);
   const content = openAiMessageContent(record);
   if (!content.trim()) return requiresTool;
   return requiresTool;
+}
+
+function recordSatisfiesOpenAiToolProtocol(record, prompt = {}) {
+  if (!recordHasOpenAiToolCalls(record)) return false;
+  if (prompt.requiresStrictToolCalls !== true) return true;
+  return openAiMessageContent(record).trim() === "";
 }
 
 function openAiToolChoiceRequiresTool(toolChoice, tools = []) {
@@ -4984,11 +5119,17 @@ function buildOpenAiToolRepairPrompt(prompt, invalidText) {
     description: tool.function.description || "",
     parameters: tool.function.parameters || { type: "object" },
   }));
-  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(repairTools);
+  const toolProtocolPrompt = buildToolProtocolSystemPrompt({
+    tools: repairTools,
+    mode: TOOL_PROTOCOL_MODES.REPAIR,
+    openAiToolChoice: prompt.openAiToolChoice,
+  });
   return {
     ...prompt,
     tools: repairTools,
     openAiToolRepairAttempt: true,
+    toolProtocolMode: TOOL_PROTOCOL_MODES.REPAIR,
+    requiresStrictToolCalls: true,
     relayRequestId: `${prompt.relayRequestId || openAiCompatRequestId({})}:tool-repair1`,
     relayRequestChain: String(prompt.relayRequestChain || prompt.relayRequestId || "").trim() || prompt.relayRequestId,
     relayRequestAttempt: Number.isFinite(prompt.relayRequestAttempt) ? prompt.relayRequestAttempt + 1 : 2,
@@ -4998,9 +5139,9 @@ function buildOpenAiToolRepairPrompt(prompt, invalidText) {
     systemPrompt: [
       toolProtocolPrompt,
       "Tool-call repair instruction:",
-      "The previous answer was invalid because tools were required but the response was prose or code.",
-      "Do not write code, explanations, markdown, or natural language.",
-      "Return only OpenAI-compatible JSON with a tool_calls array.",
+      "The previous answer was invalid because tools were required but the response was prose, code, markdown, a Microsoft 365 built-in tool claim, or otherwise not strict tool_calls JSON.",
+      "Do not write code, explanations, markdown, natural language, file-upload requests, or claims that you can use Microsoft 365 tools.",
+      "Return only OpenAI-compatible JSON with a non-empty tool_calls array.",
     ].filter(Boolean).join("\n\n"),
     userPrompt: [
       "Repair the previous response by returning the required tool call as JSON only.",
@@ -5160,6 +5301,7 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
   const raw = String(text || "");
   const candidates = [];
   let displayText = raw;
+  const trimmedRaw = raw.trim();
   const relayFence = /```relay_tool\s*([\s\S]*?)```/giu;
   displayText = displayText.replace(relayFence, (_match, json) => {
     candidates.push(json);
@@ -5173,7 +5315,7 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
     }
     return match;
   });
-  if (looksLikeToolJson(raw.trim())) candidates.push(raw.trim());
+  if (looksLikeToolJson(trimmedRaw)) candidates.push(trimmedRaw);
   if (textContainsToolJsonMarkers(raw)) {
     candidates.push(...extractBalancedJsonCandidates(raw));
   }
@@ -5182,7 +5324,9 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
   for (const candidate of candidates) {
     const parsed = parseJsonCandidate(candidate);
     if (parsed === undefined) continue;
-    toolCalls.push(...extractToolCallsFromJsonValue(parsed, allowed));
+    const parsedCalls = extractToolCallsFromJsonValue(parsed, allowed);
+    if (parsedCalls.length && candidate.trim() === trimmedRaw) displayText = "";
+    toolCalls.push(...parsedCalls);
   }
   toolCalls.push(...extractMalformedOpenAiToolCalls(raw, allowed));
   return { displayText: displayText.trim(), toolCalls: dedupeOpenAiToolCalls(toolCalls) };
@@ -5399,31 +5543,14 @@ async function writeOpenAiChatCompletionLiveStream(res, session, params = {}) {
   writeOpenAiSseHeaders(res);
   writeSseData(res, { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
 
-  let lastText = "";
-  let settled = false;
   let record;
-  const requestPromise = startOpenAiCompletionWithToolRepair(session, params)
-    .then((result) => {
-      record = result;
-    })
-    .catch((error) => {
-      record = responseRecordFromError(error);
-    })
-    .finally(() => {
-      settled = true;
-    });
-
-  while (!settled && !res.destroyed) {
-    const snapshot = session.getRequestProgress(params.relaySessionId, params.relayActiveRequestId || params.relayRequestId);
-    const visible = normalizeStreamableProgressText(snapshot?.visibleText);
-    if (visible && shouldStreamProgressText(visible, params)) {
-      lastText = writeOpenAiTextDelta(res, { id, created, model }, visible, lastText);
-    }
-    await sleep(OPENAI_STREAM_PROGRESS_POLL_MS);
+  try {
+    record = await startOpenAiCompletionWithToolRepair(session, params);
+  } catch (error) {
+    record = responseRecordFromError(error);
   }
-  await requestPromise;
   if (res.destroyed) return;
-  writeOpenAiFinalStreamRecord(res, record, params, { id, created, model, lastText });
+  writeOpenAiFinalStreamRecord(res, record, params, { id, created, model, lastText: "" });
 }
 
 function writeOpenAiChatCompletionStream(res, record, params = {}) {
@@ -5489,25 +5616,6 @@ function writeOpenAiFinalStreamRecord(res, record, params = {}, streamState = {}
   }
   res.write("data: [DONE]\n\n");
   res.end();
-}
-
-function normalizeStreamableProgressText(text) {
-  return String(text || "").trim();
-}
-
-function shouldStreamProgressText(text, params = {}) {
-  if (!text) return false;
-  if (
-    Array.isArray(params.tools) &&
-    params.tools.length &&
-    !params.hasToolResultMessages &&
-    (openAiToolChoiceRequiresTool(params.openAiToolChoice, params.tools) || promptExplicitlyRequestsAvailableTool(params))
-  ) {
-    return false;
-  }
-  if (looksLikeToolJson(text)) return false;
-  if (/```relay_tool|relay_tool_call|"tool_calls"|"tool_uses"/u.test(text)) return false;
-  return true;
 }
 
 function writeOpenAiTextDelta(res, streamInfo, nextText, previousText = "") {

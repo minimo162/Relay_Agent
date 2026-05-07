@@ -1,9 +1,10 @@
 # Relay Agent
 
-Relay Agent is now the **OpenCode setup layer and OpenAI-compatible
-M365 Copilot provider gateway**. OpenCode owns the primary UX,
-sessions, tools, permissions, and workspace execution; Relay makes that path
-easy to start and connects the provider loop to M365 Copilot in Edge over CDP.
+Relay Agent is now the **OpenCode setup layer, Tool Call Emulation Layer, and
+OpenAI-compatible M365 Copilot provider gateway**. OpenCode owns the primary
+UX, sessions, tools, permissions, and workspace execution; Relay makes that
+path easy to start and connects the provider loop to M365 Copilot in Edge over
+CDP.
 
 The historical **Tauri v2 / SolidJS / Rust** desktop shell remains in the repo
 only for provider launch support, diagnostics, and live Copilot verification.
@@ -39,8 +40,9 @@ override with `CDP_ENDPOINT`).
 | Layer | Technology |
 |-------|------------|
 | Primary UX / execution | OpenCode Web. It owns chat UX, sessions, tool execution, permissions, MCP/plugins/skills, workspace config, and event state. |
-| Setup + provider gateway | `pnpm dev` runs the OpenCode auto bootstrap. Node `copilot_server.js` exposes `/v1/models` and `/v1/chat/completions` as an OpenAI-compatible provider, with bearer auth and streaming SSE. |
-| LLM surface | M365 Copilot in Edge over CDP. Relay forwards provider turns to Copilot and normalizes structured tool-call output into OpenAI `tool_calls`; it does not execute tools in provider mode. |
+| Setup + provider gateway | `pnpm dev` runs the OpenCode auto bootstrap. Node `copilot_server.js` exposes `/v1/models` and `/v1/chat/completions` as an OpenAI-compatible provider, with bearer auth and buffered streaming SSE. |
+| Tool Call Emulation Layer | Relay constrains M365 Copilot into either strict JSON planner output or final-answer writing. It rejects prose/code when a tool call is required, performs one strict repair retry, and returns OpenAI `tool_calls` only when the response is structured. |
+| LLM surface | M365 Copilot in Edge over CDP. Relay forwards provider turns to Copilot as planner/final-writer prompts and normalizes structured output into OpenAI `tool_calls`; M365 Copilot does not execute tools in provider mode. |
 | Diagnostic desktop shell | SolidJS, Vite, TypeScript, Tailwind, Tauri v2, and Rust IPC remain under `apps/desktop/` for provider launch support, diagnostics, and live Copilot smoke coverage. |
 
 ## What Relay Does
@@ -48,20 +50,26 @@ override with `CDP_ENDPOINT`).
 - **No-thinking setup** — the installed desktop launch and `pnpm dev` choose
   the normal OpenCode Web first-run path, start the provider gateway, write
   the provider config, and on Windows download/verify portable OpenCode without
-  requiring an installer or admin approval.
+  requiring an installer or admin approval. The installed Windows path also
+  warms the provider connection and opens a Relay Agent branded browser tab.
 - **Beginner setup state** — the installed app shows setup as `Preparing`,
   `Sign in to M365`, `Ready`, or `Needs attention`, with a single retry action
   for recovery.
 - **Provider facade** — OpenCode can call Relay as
   `relay-agent/m365-copilot` through an OpenAI-compatible endpoint.
 - **Copilot transport** — Relay manages Edge/CDP lifecycle, Copilot readiness,
-  request isolation, streaming, aborts, and diagnostics.
+  request isolation, buffered streaming responses, aborts, and diagnostics.
+- **Tool-call emulation** — Relay classifies each OpenCode provider turn as
+  final answer, tool planning, specified tool, or repair. Tool-planning turns
+  require strict JSON; final-answer turns are allowed only when no further
+  environment access is needed or after OpenCode sends tool results.
 - **Tool-call normalization** — Relay accepts structured Copilot output such as
   `tool_calls`, `tool_uses`, or `relay_tool` and returns OpenAI-compatible
   `tool_calls` for OpenCode to execute.
-- **Repair without execution** — When Copilot returns prose/code instead of a
-  required tool call, Relay performs one constrained repair retry and records
-  artifacts if repair still fails. Relay does not infer or run arbitrary code.
+- **Repair without execution** — When Copilot returns prose/code or claims to
+  use Microsoft 365 tools instead of a required tool call, Relay performs one
+  constrained repair retry and records artifacts if repair still fails. Relay
+  does not infer or run arbitrary code.
 
 Details: **[docs/OPENCODE_PROVIDER_GATEWAY.md](docs/OPENCODE_PROVIDER_GATEWAY.md)**.
 
@@ -73,15 +81,19 @@ The canonical installed first-use path is:
 2. Launch Relay Agent. It starts the local provider gateway and writes
    `relay-agent/m365-copilot` into the global OpenCode config at
    `~/.config/opencode/opencode.json`.
-3. On Windows, Relay downloads/verifies portable OpenCode in the user profile.
-4. Press **Open OpenCode Web** in Relay. The Copilot provider is already
-   configured.
+3. Relay checks the provider gateway against Microsoft 365 Copilot before
+   handing off to OpenCode, so the first OpenCode prompt does not spend minutes
+   doing hidden connection setup.
+4. On Windows, Relay downloads/verifies portable OpenCode in the user profile
+   and opens Relay Agent Web automatically.
 
 Relay shows setup progress in the installed app. If setup fails, use
 **Try Setup Again**; provider ports, tokens, and config files remain support
 details, not required setup steps.
-On Windows, Relay opens the cached portable OpenCode CLI as `opencode web` in a
-normal user workspace.
+On Windows, Relay starts the cached portable OpenCode CLI as `opencode serve`
+in a normal user workspace, then opens a Relay Agent branded browser tab that
+hosts the OpenCode workspace. Use **Open Relay Agent Web** only if the browser
+did not appear or was closed.
 
 The desktop shell is not a supported execution fallback. Diagnostic commands
 are grouped under `diag:*` and are kept only to troubleshoot the provider
@@ -96,9 +108,9 @@ OpenCode Web UX + execution
   |
   | OpenAI-compatible provider API
   v
-Relay copilot_server.js provider gateway
+Relay copilot_server.js Tool Call Emulation Layer
   |
-  | Edge CDP
+  | strict planner / final-writer prompts over Edge CDP
   v
 M365 Copilot
 ```
