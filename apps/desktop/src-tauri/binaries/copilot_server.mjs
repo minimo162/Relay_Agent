@@ -1326,7 +1326,7 @@ class CopilotSession {
             hadAttachments,
           );
 
-          const fullPrompt = params.systemPrompt ? `${params.systemPrompt}\n\n${params.userPrompt}` : params.userPrompt;
+          const fullPrompt = formatPromptForCopilot(params);
           let continuationRetryUsed = false;
           while (true) {
             let phase = "paste";
@@ -4940,14 +4940,14 @@ function promptNeedsExternalToolAccess(prompt = {}) {
   const text = String(prompt.userPrompt || "");
   const lower = text.toLowerCase();
   const pathLike =
-    /(?:^|[\s"'(:])(?:[a-zA-Z]:[\\/]|\.{1,2}[\\/]|~[\\/]|[\w@.-]+[\\/][\w@./-]+|[\w@.-]+\.(?:md|mdx|txt|json|jsonc|lock|toml|ya?ml|xml|html?|css|scss|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|cs|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|sql|env|ini|cfg|conf|log))(?=$|[\s"',).:])/iu;
+    /(?:^|[\s"'(:])(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\.{1,2}[\\/]|~[\\/]|[\w@.-]+[\\/][\w@./-]+|[\w@.-]+\.(?:md|mdx|txt|csv|json|jsonc|lock|toml|ya?ml|xml|html?|css|scss|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|cs|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|sql|env|ini|cfg|conf|log|xlsx?|xlsm|docx?|pptx?|pdf))(?=$|[\s"',).:])/iu;
   if (pathLike.test(text) || /\b(?:readme|package\.json|cargo\.toml|tsconfig\.json|pnpm-lock\.yaml)\b/iu.test(lower)) {
     return true;
   }
   const actionHint =
-    /\b(read|open|inspect|search|find|grep|list|scan|check|review|edit|write|patch|modify|fix|run|execute|test|build|commit)\b|読んで|開いて|確認|調べ|検索|探して|一覧|修正|編集|書いて|実行|テスト|ビルド/iu;
+    /\b(read|open|inspect|search|find|grep|list|scan|check|review|edit|write|patch|modify|fix|run|execute|test|build|commit|implement|add|remove|rename|replace)\b|読んで|開いて|確認|調べ|検索|探して|探す|一覧|修正|編集|変更|置換|追加|削除|実装|直して|書いて|作成|生成|保存|実行|テスト|ビルド|コミット|プッシュ/iu;
   const targetHint =
-    /\b(file|files|folder|directory|workspace|repo|repository|codebase|project|source|local|path|diff|branch|terminal|shell|command|test|build)\b|ファイル|フォルダ|ディレクトリ|ワークスペース|リポジトリ|コードベース|プロジェクト|ローカル|パス|差分|ブランチ|端末|コマンド/iu;
+    /\b(file|files|folder|directory|workspace|repo|repository|codebase|project|source|local|path|diff|branch|terminal|shell|command|test|build|code|config|document|spreadsheet|excel|word|pdf|xlsx?|xlsm|docx?|pptx?|component|button|label|modal|ui)\b|ファイル|フォルダ|ディレクトリ|ワークスペース|リポジトリ|コードベース|プロジェクト|ローカル|パス|差分|ブランチ|端末|コマンド|コード|ソース|設定|ドキュメント|資料|Excel|エクセル|Word|PDF|ブック|シート|セル|画面|ボタン|ラベル|表示|文言|コンポーネント/iu;
   if (actionHint.test(text) && targetHint.test(text)) return true;
   const externalToolNames = new Set([
     "read",
@@ -4978,31 +4978,111 @@ function buildToolProtocolSystemPrompt({
 } = {}) {
   const parts = [basePrompt].filter(Boolean);
   if (!tools.length) return parts.join("\n\n");
-  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
   const selectedTool =
     typeof openAiToolChoice === "object" ? String(openAiToolChoice?.function?.name || "").trim() : "";
+  if (mode !== TOOL_PROTOCOL_MODES.FINAL_ANSWER) {
+    parts.push(formatStrictToolCompilerPrompt({ tools, mode, selectedTool }));
+    return parts.filter(Boolean).join("\n\n");
+  }
+  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
   const modePrompt = [
     "Tool Call Emulation Layer:",
     "M365 Copilot is used only as a text planner/final-answer writer. It is not a tool executor.",
     "Do not use Microsoft 365 Copilot built-in tools, browsing, search, code execution, file upload prompts, or workspace claims.",
   ];
-  if (mode === TOOL_PROTOCOL_MODES.FINAL_ANSWER) {
-    modePrompt.push(
-      hasToolResultMessages
-        ? "Mode: final_answer. Answer only from the provided TOOL/FUNCTION results and conversation. If more environment access is needed, return tool_calls JSON instead of prose."
-        : "Mode: final_answer. Answer normally only when no external tool or environment access is needed. If tool access is needed, return tool_calls JSON instead of prose.",
-    );
-  } else {
-    modePrompt.push(
-      `Mode: ${mode}. Natural language is invalid in this mode.`,
-      "Return only OpenAI-compatible JSON containing a non-empty tool_calls array. No markdown, no explanation, no code fences.",
-    );
-    if (selectedTool) {
-      modePrompt.push(`The selected tool is ${selectedTool}; call that tool unless the request is impossible with the provided schema.`);
-    }
-  }
+  modePrompt.push(
+    hasToolResultMessages
+      ? "Mode: final_answer. Answer only from the provided TOOL/FUNCTION results and conversation. If more environment access is needed, return tool_uses JSON instead of prose."
+      : "Mode: final_answer. Answer normally only when no external tool or environment access is needed. If tool access is needed, return tool_uses JSON instead of prose.",
+  );
   parts.push(modePrompt.join("\n"), toolProtocolPrompt);
   return parts.filter(Boolean).join("\n\n");
+}
+
+function formatStrictToolCompilerPrompt({ tools = [], mode = TOOL_PROTOCOL_MODES.TOOL_PLANNING, selectedTool = "" } = {}) {
+  const names = tools.map((tool) => tool.function.name).join(", ");
+  const catalog = tools.map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description || "",
+    parameters: tool.function.parameters || { type: "object" },
+  }));
+  const lines = [
+    "RELAY AGENT TOOL CALL JSON COMPILER",
+    "Tool invocation protocol:",
+    `Mode: ${mode}. This is a compiler task, not a chat-answer task.`,
+    "Your only job is to convert the user request into tool call JSON for the external OpenCode executor.",
+    "Do not answer the user's request. Do not summarize, search, browse, inspect files, run code, or claim any result yourself.",
+    "Do not use Microsoft 365 Copilot built-in tools, browsing, search, file lookup, code execution, plugins, connectors, or file upload prompts.",
+    "The only valid action is selecting one or more tools from the TOOL CATALOG below.",
+    "Natural language is invalid in this mode.",
+    "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
+    "Use this shape only:",
+    '{"tool_uses":[{"recipient_name":"functions.tool_name","parameters":{"key":"value"}}]}',
+    "Do not return markdown, prose, headings, bullets, code fences, comments, explanations, citations, or partial JSON.",
+    "Do not use OpenAI `tool_calls` with nested JSON strings unless the caller explicitly requested that shape; `tool_uses.parameters` must be a normal JSON object.",
+    "Use only double quotes for JSON strings and property names. Escape backslashes if you keep Windows separators, or prefer forward slashes in Windows paths.",
+    "For local file or folder requests, never answer from memory or Microsoft 365 search. Emit a file tool call such as glob, grep, read, list, or shell according to the catalog.",
+    "For requests that mention a folder/path and ask to search/find/list candidate files, emit `glob` with the folder in `path` when the schema supports it and a filename-oriented `pattern`.",
+    formatReliableToolPolicy(tools),
+    `Available tools: ${names}`,
+    `TOOL CATALOG: ${JSON.stringify(catalog)}`,
+  ];
+  if (selectedTool) {
+    lines.push(`Selected tool constraint: call ${selectedTool} unless the request is impossible with that tool schema.`);
+  }
+  return lines.join("\n");
+}
+
+function formatReliableToolPolicy(tools = []) {
+  const available = new Set(tools.map((tool) => normalizeToolName(tool?.function?.name || "")).filter(Boolean));
+  const lines = [
+    "RELAY RELIABLE TOOL POLICY:",
+    "Use only capabilities that are reliable in the current OpenCode tool catalog. Prefer the smallest safe first tool call over a large speculative plan.",
+    "Never claim completion before a tool result exists. If evidence is needed, emit a tool call instead of prose.",
+  ];
+  if (available.has("glob")) {
+    lines.push(
+      "File discovery: use `glob` for filename/path lookup. Put a user-supplied root folder in `path` when supported. Use simple patterns such as `**/*keyword*.ext`; do not rely on brace expansion for important searches.",
+    );
+  }
+  if (available.has("grep")) {
+    lines.push(
+      "Plaintext/code content search: use `grep` with `pattern`, optional `path`, and optional `include`. Do not use `grep` for Office/PDF binary containers.",
+    );
+  }
+  if (available.has("read")) {
+    lines.push(
+      "Reading: use `read` only for exact files or directories. If the target path is not exact, call `glob` or `grep` first.",
+    );
+  }
+  if (available.has("edit") || available.has("write") || available.has("apply_patch")) {
+    lines.push(
+      "Code/config/document text changes: read the target first, then use `edit`, `write`, or `apply_patch`. Do not edit binary Office/PDF files with text tools.",
+    );
+  }
+  if (available.has("bash") || available.has("shell") || available.has("run") || available.has("exec")) {
+    lines.push(
+      "Command execution: use `bash` only for explicit tests, builds, git inspection, or safe project commands. Do not use destructive commands, package installation, network mutation, or arbitrary scripts unless the user explicitly requested them.",
+    );
+  }
+  if (available.has("question")) {
+    lines.push(
+      "Unsupported or ambiguous operations: use `question` instead of pretending. This includes Excel cell formatting, Office GUI automation, OCR, Outlook .msg handling, protected/shared workbook edits, and binary document mutation without a dedicated tool.",
+    );
+  } else {
+    lines.push(
+      "Unsupported operations: do not route Excel cell formatting, Office GUI automation, OCR, Outlook .msg handling, or binary document mutation to bash/edit/write unless a dedicated tool exists.",
+    );
+  }
+  if (available.has("websearch") || available.has("webfetch")) {
+    lines.push(
+      "Web tools: use web tools only when the user asks for current external information or gives a URL. Do not use web/Microsoft 365 search for local file requests.",
+    );
+  }
+  lines.push(
+    "Normal reliable sequences: discover -> read -> edit -> test for code changes; discover -> read exact candidates -> summarize for local file investigations; command -> summarize output for explicit test/build requests.",
+  );
+  return lines.join("\n");
 }
 
 function formatOpenAiToolProtocolPrompt(tools) {
@@ -5015,12 +5095,41 @@ function formatOpenAiToolProtocolPrompt(tools) {
   }));
   return [
     "Tool invocation protocol:",
-    "When a tool is needed, return only JSON in one of these OpenAI-compatible shapes, with no prose before or after it:",
-    '{"tool_calls":[{"id":"call_1","function":{"name":"tool_name","arguments":"{\\"key\\":\\"value\\"}"}}]}',
+    "When a tool is needed, return only JSON in one of these shapes, with no prose before or after it.",
+    "Prefer tool_uses because its parameters are a normal JSON object and do not require escaping nested JSON strings:",
     '{"tool_uses":[{"recipient_name":"functions.tool_name","parameters":{"key":"value"}}]}',
+    "OpenAI-compatible tool_calls are also accepted when arguments is a JSON-encoded string:",
+    '{"tool_calls":[{"id":"call_1","function":{"name":"tool_name","arguments":"{\\"key\\":\\"value\\"}"}}]}',
     `Available tools: ${names}`,
     `Tool catalog: ${JSON.stringify(catalog)}`,
   ].join("\n");
+}
+
+function formatPromptForCopilot(params = {}) {
+  const userPrompt = String(params.userPrompt || "");
+  if (params.requiresStrictToolCalls === true) {
+    return [
+      params.systemPrompt || "",
+      "USER REQUEST DATA:",
+      JSON.stringify(userPrompt),
+      "Compile the USER REQUEST DATA into the required JSON object now.",
+    ].filter(Boolean).join("\n\n");
+  }
+  if (params.hasToolResultMessages === true) {
+    return [
+      params.systemPrompt || "",
+      "RELAY AGENT FINAL ANSWER WRITER",
+      "The OpenCode executor has already produced tool/function results in TRANSCRIPT DATA.",
+      "Write the final user-facing answer only from TRANSCRIPT DATA and the provided tool/function results.",
+      "Do not use Microsoft 365 Copilot built-in tools, browsing, search, code execution, plugins, connectors, file lookup, or memory.",
+      "Do not invent file paths, command output, edits, test results, or document contents.",
+      "If the tool/function results are incomplete for the user's request, say exactly what evidence is missing instead of guessing.",
+      "TRANSCRIPT DATA:",
+      JSON.stringify(userPrompt),
+      "Write the final answer now.",
+    ].filter(Boolean).join("\n\n");
+  }
+  return params.systemPrompt ? `${params.systemPrompt}\n\n${userPrompt}` : userPrompt;
 }
 
 async function startOpenAiCompletionWithToolRepair(session, prompt) {
@@ -5272,11 +5381,12 @@ function escapeRegex(value) {
 function buildOpenAiCompletionBody(description, params = {}) {
   const model = String(params.model || OPENAI_COMPAT_DEFAULT_MODEL);
   const extracted = extractOpenAiToolCallsFromText(description, params.tools || []);
+  const hasToolCalls = extracted.toolCalls.length > 0;
   const message = {
     role: "assistant",
-    content: extracted.toolCalls.length ? (extracted.displayText || null) : String(description || ""),
+    content: hasToolCalls ? null : String(description || ""),
   };
-  if (extracted.toolCalls.length) message.tool_calls = extracted.toolCalls;
+  if (hasToolCalls) message.tool_calls = extracted.toolCalls;
   return {
     id: `chatcmpl-${randomBytes(12).toString("hex")}`,
     object: "chat.completion",
@@ -5286,7 +5396,7 @@ function buildOpenAiCompletionBody(description, params = {}) {
       {
         index: 0,
         message,
-        finish_reason: extracted.toolCalls.length ? "tool_calls" : "stop",
+        finish_reason: hasToolCalls ? "tool_calls" : "stop",
       },
     ],
   };
@@ -5744,6 +5854,7 @@ export {
   buildOpenAiCompletionBody,
   createServer,
   extractOpenAiToolCallsFromText,
+  formatPromptForCopilot,
   main,
   parseOpenAiRequest,
   writeOpenAiChatCompletionStream,

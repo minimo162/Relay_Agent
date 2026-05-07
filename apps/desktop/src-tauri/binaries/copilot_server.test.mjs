@@ -10,6 +10,7 @@ import {
   buildOpenAiCompletionBody,
   createServer,
   extractOpenAiToolCallsFromText,
+  formatPromptForCopilot,
   parseOpenAiRequest,
   shouldStartNewChatForRequest,
 } from "./copilot_server.mjs";
@@ -142,11 +143,116 @@ test("parseOpenAiRequest injects tool protocol instructions for OpenAI tools", (
   });
 
   assert.match(parsed.systemPrompt, /Tool invocation protocol:/);
-  assert.match(parsed.systemPrompt, /Tool Call Emulation Layer:/);
+  assert.match(parsed.systemPrompt, /RELAY AGENT TOOL CALL JSON COMPILER/);
+  assert.match(parsed.systemPrompt, /Do not answer the user's request/);
+  assert.match(parsed.systemPrompt, /Do not use Microsoft 365 Copilot built-in tools/);
+  assert.match(parsed.systemPrompt, /Use this shape only:/);
+  assert.match(parsed.systemPrompt, /"tool_uses"/);
   assert.match(parsed.systemPrompt, /Available tools: read/);
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
   assert.equal(parsed.tools[0].function.name, "read");
+});
+
+test("parseOpenAiRequest treats Windows folder search as first-pass tool planning", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "user",
+        content: '"H:\\shr1\\05_経理部\\03_連結財務G" 内でキャッシュフロー計算書の作成に使用するファイルを検索して。',
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "glob",
+          description: "Find files by glob pattern",
+          parameters: {
+            type: "object",
+            properties: {
+              pattern: { type: "string" },
+              path: { type: "string" },
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.match(parsed.systemPrompt, /For requests that mention a folder\/path and ask to search\/find\/list candidate files/);
+  assert.match(parsed.systemPrompt, /emit `glob`/);
+  assert.match(parsed.systemPrompt, /File discovery: use `glob`/);
+  assert.match(parsed.systemPrompt, /do not rely on brace expansion/);
+});
+
+test("parseOpenAiRequest routes Office filename lookup but warns away from Office binary content tools", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "sample.xlsx を探して" }],
+    tools: [
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+      { type: "function", function: { name: "grep", parameters: { type: "object" } } },
+      { type: "function", function: { name: "read", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.match(parsed.systemPrompt, /File discovery: use `glob`/);
+  assert.match(parsed.systemPrompt, /Do not use `grep` for Office\/PDF binary containers/);
+});
+
+test("parseOpenAiRequest routes code edit requests through read/edit/test policy", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "SettingsModal の保存ボタンを Apply に変更してテストして" }],
+    tools: [
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+      { type: "function", function: { name: "grep", parameters: { type: "object" } } },
+      { type: "function", function: { name: "read", parameters: { type: "object" } } },
+      { type: "function", function: { name: "edit", parameters: { type: "object" } } },
+      { type: "function", function: { name: "bash", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.match(parsed.systemPrompt, /Code\/config\/document text changes: read the target first/);
+  assert.match(parsed.systemPrompt, /Command execution: use `bash` only for explicit tests/);
+  assert.match(parsed.systemPrompt, /discover -> read -> edit -> test/);
+});
+
+test("parseOpenAiRequest keeps unsupported Excel formatting away from bash and text edits", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: String.raw`H:\reports\sample.xlsx の Sheet1!B4 に黄色を付けて保存して` }],
+    tools: [
+      { type: "function", function: { name: "read", parameters: { type: "object" } } },
+      { type: "function", function: { name: "edit", parameters: { type: "object" } } },
+      { type: "function", function: { name: "bash", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.match(parsed.systemPrompt, /Unsupported or ambiguous operations: use `question` instead of pretending/);
+  assert.match(parsed.systemPrompt, /Excel cell formatting/);
+  assert.match(parsed.systemPrompt, /Do not edit binary Office\/PDF files with text tools/);
+});
+
+test("formatPromptForCopilot wraps strict tool planning as compiler input data", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "Read README.md." }],
+    tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+  });
+  const prompt = formatPromptForCopilot(parsed);
+
+  assert.match(prompt, /RELAY AGENT TOOL CALL JSON COMPILER/);
+  assert.match(prompt, /USER REQUEST DATA:/);
+  assert.match(prompt, /"Read README\.md\."/);
+  assert.match(prompt, /Compile the USER REQUEST DATA into the required JSON object now\./);
+  assert.doesNotMatch(prompt, /\n\nRead README\.md\.\s*$/);
 });
 
 test("parseOpenAiRequest allows final answers when tools are available but no environment access is requested", () => {
@@ -173,6 +279,25 @@ test("parseOpenAiRequest treats tool results as final-answer mode", () => {
   assert.equal(parsed.toolProtocolMode, "final_answer");
   assert.equal(parsed.requiresStrictToolCalls, false);
   assert.match(parsed.systemPrompt, /Answer only from the provided TOOL\/FUNCTION results/);
+});
+
+test("formatPromptForCopilot wraps tool results as final-answer transcript data", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "Read README." },
+      { role: "tool", content: "README contents", tool_call_id: "call_read" },
+    ],
+    tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+  });
+  const prompt = formatPromptForCopilot(parsed);
+
+  assert.equal(parsed.hasToolResultMessages, true);
+  assert.match(prompt, /RELAY AGENT FINAL ANSWER WRITER/);
+  assert.match(prompt, /TRANSCRIPT DATA:/);
+  assert.match(prompt, /"USER:\\nRead README\./);
+  assert.match(prompt, /TOOL:\\nREADME contents/);
+  assert.match(prompt, /Do not invent file paths, command output, edits, test results, or document contents/);
+  assert.doesNotMatch(prompt, /\n\nUSER:\nRead README\.\s*$/);
 });
 
 test("parseOpenAiRequest honors explicit no-tool choice", () => {
@@ -265,6 +390,28 @@ test("buildOpenAiCompletionBody returns finish_reason tool_calls when a tool is 
   assert.equal(body.choices[0].message.content, null);
   assert.equal(body.choices[0].message.tool_calls[0].id, "call_1");
   assert.equal(body.choices[0].message.tool_calls[0].function.name, "read");
+});
+
+test("buildOpenAiCompletionBody suppresses Copilot prose around extracted tool calls", () => {
+  const body = buildOpenAiCompletionBody(
+    [
+      "指定フォルダ直下を完全には特定できませんでした。",
+      '{"tool_calls":[{"id":"call_1","function":{"name":"glob","arguments":"{"pattern":"**/CF.{xlsx,xlsm,pdf,docx}","path":"H:/shr1/05_経理部/03_連結財務G"}"}}]}',
+    ].join("\n\n"),
+    {
+      model: "m365-copilot",
+      tools: [{ type: "function", function: { name: "glob" } }],
+    },
+  );
+
+  assert.equal(body.choices[0].finish_reason, "tool_calls");
+  assert.equal(body.choices[0].message.content, null);
+  assert.equal(body.choices[0].message.tool_calls[0].id, "call_1");
+  assert.equal(body.choices[0].message.tool_calls[0].function.name, "glob");
+  assert.deepEqual(JSON.parse(body.choices[0].message.tool_calls[0].function.arguments), {
+    pattern: "**/CF.{xlsx,xlsm,pdf,docx}",
+    path: "H:/shr1/05_経理部/03_連結財務G",
+  });
 });
 
 test("createServer exposes OpenAI-compatible models and streaming chat endpoints", async () => {
@@ -462,10 +609,7 @@ test("createServer repairs explicit tool requests after an empty first response"
   }
 });
 
-test("createServer fail-closes strict tool planning when repair mixes prose with tool calls", async () => {
-  const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), "relay-tool-repair-artifacts-"));
-  const previousArtifactDir = process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR;
-  process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR = artifactDir;
+test("createServer emits tool calls when Copilot mixes prose with a repair tool call", async () => {
   const prompts = [];
   const server = createServer({
     async inspectStatus() {
@@ -502,19 +646,15 @@ test("createServer fail-closes strict tool planning when repair mixes prose with
         tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
       }),
     });
-    assert.equal(response.status, 502);
+    assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.error.code, "relay_tool_call_repair_failed");
     assert.equal(prompts.length, 2);
     assert.equal(prompts[1].requiresStrictToolCalls, true);
+    assert.equal(body.choices[0].finish_reason, "tool_calls");
+    assert.equal(body.choices[0].message.content, null);
+    assert.equal(body.choices[0].message.tool_calls[0].function.name, "read");
   } finally {
     await new Promise((resolve) => server.close(resolve));
-    if (previousArtifactDir == null) {
-      delete process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR;
-    } else {
-      process.env.RELAY_OPENAI_TOOL_REPAIR_ARTIFACT_DIR = previousArtifactDir;
-    }
-    await fs.rm(artifactDir, { recursive: true, force: true });
   }
 });
 

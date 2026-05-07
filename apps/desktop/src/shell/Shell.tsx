@@ -51,6 +51,8 @@ function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
   const setup = diagnostics.openworkSetup;
   return [
     `architecture: ${diagnostics.architectureNotes}`,
+    "provider policy: OpenCode owns tools and execution; Relay asks M365 Copilot only for strict tool JSON or final answers from tool results.",
+    "tool scope: reliable OpenCode-standard file discovery, text search, code/text edits, and explicit test/build commands; unsupported binary Office/PDF edits are not routed to generic tools.",
     `target OS: ${diagnostics.targetOs}`,
     `process cwd: ${diagnostics.processCwd}`,
     `CDP port: ${diagnostics.defaultEdgeCdpPort}`,

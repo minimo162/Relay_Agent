@@ -23,6 +23,60 @@
 
 ## Milestone Log
 
+### 2026-05-07 Fix: Tolerate Copilot prose around emulated tool calls
+
+M365 Copilot can return a usable JSON tool call inside normal answer text, and
+can also produce malformed OpenAI `arguments` strings with unescaped nested JSON.
+Relay already repaired the nested JSON shape, but strict tool-planning still
+rejected the result when Copilot-visible prose, titles, or transcript text
+surrounded the extracted call. The provider gateway now treats any supported
+extracted tool call as the authoritative assistant output for OpenCode and
+emits `content: null` plus `finish_reason: "tool_calls"`, discarding surrounding
+Copilot prose so OpenCode executes the tool instead of showing a repair failure.
+
+The tool protocol prompt now also prefers the `tool_uses` shape with a normal
+`parameters` object, reducing Copilot's need to escape nested JSON strings while
+still accepting OpenAI-compatible `tool_calls`.
+
+Follow-up in the same area: required tool-planning turns are now sent to M365
+Copilot as a dedicated "Relay Agent tool call JSON compiler" task instead of a
+normal chat question plus instructions. The user request is wrapped as JSON
+string data under `USER REQUEST DATA`, and the compiler prompt states that
+M365 Copilot must not answer, search, browse, inspect files, use Microsoft 365
+tools, cite results, or emit natural language. It may only select tools from
+the provided catalog and return a single valid JSON object in `tool_uses`
+shape. Windows folder-search prompts such as an `H:\...` share path now
+regress as first-pass tool-planning inputs before any repair path is involved.
+
+Additional reliability pass: the compiler prompt now includes a capability
+policy for the operations Relay/OpenCode can actually handle today. It routes
+file/path discovery to `glob` with simple non-brace patterns, plaintext/code
+search to `grep`, exact reads to `read`, code/config edits through
+`discover -> read -> edit -> test`, and explicit builds/tests/git inspection to
+safe `bash` usage. The same policy tells M365 not to route unsupported binary
+Office/PDF operations such as Excel cell formatting, GUI automation, OCR, or
+protected/shared workbook edits into `bash`, `edit`, or `write`; when `question`
+is available it should ask instead of pretending.
+
+Final-answer turns after OpenCode tool execution are now wrapped as a dedicated
+"Relay Agent final answer writer" task. Relay passes the conversation/tool
+transcript as JSON `TRANSCRIPT DATA` and instructs M365 Copilot to write only
+from those tool results, without Microsoft 365 built-in tools, memory, search,
+or invented file paths/results. Advanced diagnostics also state the provider
+policy so Windows support reports show that OpenCode owns tools/execution and
+unsupported binary Office/PDF edits are outside the generic tool path.
+
+Docs now include a manual Windows tool-policy checklist covering Windows share
+file discovery, simple code/text edits, unsupported Office binary edits, and
+the advanced diagnostics policy lines.
+
+Verification:
+
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`:
+  passed, 34 tests.
+- `pnpm --filter @relay-agent/desktop check:opencode-provider`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-07 UX: Relay Agent branded browser tab for OpenCode
 
 The installed browser handoff no longer opens OpenCode directly with

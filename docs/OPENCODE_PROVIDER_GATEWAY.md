@@ -205,21 +205,49 @@ M365 Copilot does not provide a reliable native tool-calling contract in this
 integration. Relay therefore emulates the contract at the provider boundary:
 
 - `final_answer`: Copilot may write prose only when no further environment
-  access is needed, or after OpenCode has sent tool/function results.
+  access is needed, or after OpenCode has sent tool/function results. When
+  tool/function results are present, Relay wraps the transcript as JSON data and
+  instructs Copilot to write only from those results.
 - `tool_planning`: when the user asks for local files, repo/workspace access,
   command execution, edits, tests, or another available tool, Copilot must
-  return only OpenAI-compatible JSON with a non-empty `tool_calls` array.
+  return only strict JSON. Relay prefers `tool_uses` with normal JSON
+  `parameters`, and normalizes accepted responses to OpenAI `tool_calls`.
 - `specified_tool`: when the OpenAI-compatible request selects a specific
   function tool, Copilot must call that function and cannot answer in prose.
 - `repair`: if Copilot answers with prose, code, markdown, or claims about its
   own Microsoft 365 tools during a required tool-planning turn, Relay performs
   one same-thread retry that asks for strict JSON only.
 
-Relay accepts only structured tool evidence in strict modes. A valid tool plan
-must have no assistant prose outside the JSON. If the repair retry still mixes
-prose with a tool call or fails to produce tool JSON, Relay fail-closes with
+Strict tool-planning turns are sent to M365 Copilot as a JSON compiler task:
+the natural-language user request is embedded under `USER REQUEST DATA`, and
+Copilot is told not to answer, search, browse, inspect files, or use Microsoft
+365 built-in tools. Relay treats any supported extracted tool call as the
+authoritative assistant output and discards surrounding Copilot prose before
+returning the OpenAI-compatible response to OpenCode.
+
+Relay accepts only structured tool evidence in strict modes. If the repair retry
+still fails to produce a supported tool JSON object, Relay fail-closes with
 `relay_tool_call_repair_failed` and writes a support artifact instead of
 guessing or executing code itself.
+
+## Reliable Tool Policy
+
+Relay intentionally leans into OpenCode's strongest path: normal codebase and
+workspace tooling. The compiler prompt steers M365 Copilot toward operations
+that OpenCode can execute reliably today:
+
+- file/path discovery uses `glob` with the user-supplied root folder in `path`
+  when available, and simple patterns such as `**/*keyword*.ext`
+- plaintext and code content search uses `grep`; Office/PDF binary containers
+  are not searched with text grep
+- exact file reads use `read`, usually after discovery when the path is not
+  exact
+- code/config/text document changes follow `discover -> read -> edit -> test`
+- explicit builds, tests, and git inspection may use safe shell commands
+- unsupported binary document work, such as Excel cell color changes, Office GUI
+  automation, OCR, Outlook `.msg` parsing, or protected/shared workbook edits,
+  is not mapped to generic `bash`, `edit`, or `write` calls without a dedicated
+  tool
 
 ## Streaming Display Policy
 
@@ -269,6 +297,19 @@ Expected:
   `tool_calls`
 - cancelling the OpenCode request closes the Relay request instead of leaving a
   Copilot turn running indefinitely
+
+Manual Windows tool-policy checks:
+
+- Ask OpenCode to find files under a Windows drive path such as
+  `H:\share\folder`; the first provider response should be an OpenCode-owned
+  file discovery tool call, not a Copilot prose answer.
+- Ask for a simple code/text edit in a workspace; the plan should discover or
+  read files before editing and should run only explicit safe checks.
+- Ask for an unsupported Office binary edit, such as coloring an Excel cell; the
+  gateway should not convert that into a generic shell/text edit plan.
+- In Relay's advanced diagnostics, confirm the provider policy lines show that
+  OpenCode owns tools/execution and that unsupported Office/PDF binary edits are
+  outside the generic tool path.
 
 ## Automated OpenCode Contract Smoke
 
