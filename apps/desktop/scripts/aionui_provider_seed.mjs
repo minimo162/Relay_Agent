@@ -39,6 +39,7 @@ export const AIONUI_RELAY_DEFAULT_ASSISTANTS = Object.freeze([
     defaultEnabledSkills: ["officecli-pptx"],
   },
 ]);
+export const AIONUI_RELAY_ADVANCED_SURFACES_ENABLED = false;
 
 export function aionuiRelayProviderConfig({
   baseUrl = providerBaseURL(providerPort()),
@@ -89,6 +90,10 @@ export function aionuiRelayConfigSeed({
     "gemini.defaultModel": aionuiRelayDefaultModel(),
     "webui.desktop.enabled": false,
     "webui.desktop.allowRemote": false,
+    "relay.advancedSurfaces.enabled": AIONUI_RELAY_ADVANCED_SURFACES_ENABLED,
+    "relay.channels.enabled": false,
+    "relay.providerOnboarding.enabled": false,
+    "relay.remoteAccess.enabled": false,
     "skillsMarket.enabled": false,
     "system.autoPreviewOfficeFiles": true,
     "relay.defaultEnabledSkills": [...AIONUI_RELAY_DEFAULT_SKILLS],
@@ -161,6 +166,10 @@ export function applyAionuiRelaySeed(existingConfig, seed = aionuiRelaySeedBundl
     "gemini.defaultModel": seed.defaults?.["gemini.defaultModel"] ?? aionuiRelayDefaultModel(),
     "webui.desktop.enabled": false,
     "webui.desktop.allowRemote": false,
+    "relay.advancedSurfaces.enabled": AIONUI_RELAY_ADVANCED_SURFACES_ENABLED,
+    "relay.channels.enabled": false,
+    "relay.providerOnboarding.enabled": false,
+    "relay.remoteAccess.enabled": false,
   };
 }
 

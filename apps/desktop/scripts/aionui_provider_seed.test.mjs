@@ -54,6 +54,10 @@ test("AionUi config seed disables beginner-hostile surfaces by default", () => {
   assert.deepEqual(seed["gemini.defaultModel"], seed["aionrs.defaultModel"]);
   assert.equal(seed["webui.desktop.enabled"], false);
   assert.equal(seed["webui.desktop.allowRemote"], false);
+  assert.equal(seed["relay.advancedSurfaces.enabled"], false);
+  assert.equal(seed["relay.channels.enabled"], false);
+  assert.equal(seed["relay.providerOnboarding.enabled"], false);
+  assert.equal(seed["relay.remoteAccess.enabled"], false);
   assert.equal(seed["skillsMarket.enabled"], false);
   assert.equal(seed["system.autoPreviewOfficeFiles"], true);
   assert.deepEqual(seed["relay.defaultAssistantPresetIds"], [
@@ -180,6 +184,10 @@ test("seed applier makes Relay the selected AionUi provider without dropping unr
   assert.equal(applied.theme, "dark");
   assert.equal(applied["webui.desktop.enabled"], false);
   assert.equal(applied["webui.desktop.allowRemote"], false);
+  assert.equal(applied["relay.advancedSurfaces.enabled"], false);
+  assert.equal(applied["relay.channels.enabled"], false);
+  assert.equal(applied["relay.providerOnboarding.enabled"], false);
+  assert.equal(applied["relay.remoteAccess.enabled"], false);
   assert.equal(applied["model.config"][0].id, "relay-agent");
   assert.equal(applied["model.config"][1].id, "other-provider");
   assert.deepEqual(applied["aionrs.defaultModel"], {
