@@ -168,16 +168,20 @@ const required = [
     text: "\"diag:tauri-dev:cdp\"",
   },
   {
-    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    path: "apps/desktop/src-tauri/binaries/copilot_server.mjs",
     text: "function buildOpenAiCompletionBody",
   },
   {
-    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    path: "apps/desktop/src-tauri/binaries/copilot_server.mjs",
     text: "function writeOpenAiChatCompletionLiveStream",
   },
   {
-    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    path: "apps/desktop/src-tauri/binaries/copilot_server.mjs",
     text: "GET\" && reqUrl.pathname === \"/v1/models\"",
+  },
+  {
+    path: "apps/desktop/src-tauri/binaries/copilot_server.js",
+    text: "copilot_server.mjs",
   },
   {
     path: "apps/desktop/scripts/opencode_provider_gateway_smoke.mjs",
@@ -1440,6 +1444,7 @@ const byPath = {
   "apps/desktop/tests/relay-e2e-harness.ts": read("apps/desktop/tests/relay-e2e-harness.ts"),
   "apps/desktop/tests/tauri-mock-core.ts": read("apps/desktop/tests/tauri-mock-core.ts"),
   "apps/desktop/src-tauri/binaries/copilot_server.js": read("apps/desktop/src-tauri/binaries/copilot_server.js"),
+  "apps/desktop/src-tauri/binaries/copilot_server.mjs": read("apps/desktop/src-tauri/binaries/copilot_server.mjs"),
   "apps/desktop/scripts/opencode_provider_gateway_smoke.mjs": read("apps/desktop/scripts/opencode_provider_gateway_smoke.mjs"),
   "apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs": read("apps/desktop/scripts/live_m365_opencode_provider_smoke.mjs"),
   "apps/desktop/scripts/start_opencode_provider_gateway.mjs": read("apps/desktop/scripts/start_opencode_provider_gateway.mjs"),

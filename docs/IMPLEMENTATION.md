@@ -23,6 +23,16 @@
 
 ## Milestone Log
 
+### 2026-05-07 Fix: Packaged Copilot gateway module mode
+
+Fixed an installed Windows startup failure where the bundled
+`copilot_server.js` was treated as CommonJS because the Tauri resources
+directory does not include `apps/desktop/package.json`. The executable entry is
+now a dual-mode `.js` wrapper with no static ESM syntax, and the real provider
+implementation lives in `copilot_server.mjs`. The direct startup test copies
+the wrapper plus `.mjs` dependencies into a package-less temp directory before
+starting `node`, matching the installed app layout.
+
 ### 2026-05-06 Fix: Show actionable OpenWork/OpenCode setup failures
 
 Relay now preserves the failed OpenWork/OpenCode setup stage when setup enters

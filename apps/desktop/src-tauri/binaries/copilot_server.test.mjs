@@ -12,7 +12,7 @@ import {
   extractOpenAiToolCallsFromText,
   parseOpenAiRequest,
   shouldStartNewChatForRequest,
-} from "./copilot_server.js";
+} from "./copilot_server.mjs";
 
 test("shouldStartNewChatForRequest opens a new chat only for uninitialized or forced fresh-chat cases", () => {
   assert.equal(
@@ -667,7 +667,16 @@ test("createServer aborts the Relay request when an OpenAI-compatible client dis
 test("direct copilot_server writes the assigned port file for port 0", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "relay-copilot-port-file-"));
   const portFile = path.join(tempDir, "port.txt");
-  const script = fileURLToPath(new URL("./copilot_server.js", import.meta.url));
+  for (const filename of [
+    "copilot_server.js",
+    "copilot_server.mjs",
+    "copilot_dom_poll.mjs",
+    "copilot_send_timing.mjs",
+    "copilot_wait_dom_response.mjs",
+  ]) {
+    await fs.copyFile(fileURLToPath(new URL(`./${filename}`, import.meta.url)), path.join(tempDir, filename));
+  }
+  const script = path.join(tempDir, "copilot_server.js");
   const child = spawn(process.execPath, [
     "--no-warnings",
     script,

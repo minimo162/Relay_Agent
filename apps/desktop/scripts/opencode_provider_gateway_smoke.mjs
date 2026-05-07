@@ -8,7 +8,7 @@ import * as path from "node:path";
 import {
   buildOpenAiCompletionBody,
   createServer,
-} from "../src-tauri/binaries/copilot_server.js";
+} from "../src-tauri/binaries/copilot_server.mjs";
 
 const opencodeRepo = process.env.OPENCODE_REPO || "/root/opencode";
 const bunPath = process.env.BUN_BIN || "/root/.bun/bin/bun";
