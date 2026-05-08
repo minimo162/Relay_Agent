@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
+  isCliEntrypoint,
   patchDeepLinkContent,
   patchElectronBuilderContent,
   patchInitStorageContent,
@@ -38,6 +41,12 @@ const fixture = [
   "    mark('5.2 assistant config + migrations');",
   "};",
 ].join("\n");
+
+test("isCliEntrypoint recognizes pathToFileURL argv paths", () => {
+  const scriptPath = resolve("scripts/apply-aionui-overlay.mjs");
+  assert.equal(isCliEntrypoint(pathToFileURL(scriptPath).href, scriptPath), true);
+  assert.equal(isCliEntrypoint(pathToFileURL(scriptPath).href, ""), false);
+});
 
 test("patchInitStorageContent imports and applies Relay provider and assistant seed once", () => {
   const once = patchInitStorageContent(fixture);

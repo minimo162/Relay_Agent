@@ -2,7 +2,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
@@ -19,6 +19,11 @@ function relayBranding() {
 
 function ensureTrailingNewline(text) {
   return text.endsWith("\n") ? text : `${text}\n`;
+}
+
+export function isCliEntrypoint(metaUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  return metaUrl === pathToFileURL(resolve(argv1)).href;
 }
 
 function replaceLine(input, pattern, replacement) {
@@ -671,7 +676,7 @@ function parseArgs(raw) {
   return parsed;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isCliEntrypoint(import.meta.url)) {
   try {
     const options = parseArgs(process.argv.slice(2));
     if (options.help) {

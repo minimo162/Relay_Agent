@@ -35,12 +35,16 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   const text = workflow();
   const installIndex = text.indexOf("bun install --frozen-lockfile");
   const overlayIndex = text.indexOf("node scripts/apply-aionui-overlay.mjs --aionui-dir aionui");
+  const validateIndex = text.indexOf("name: Validate Relay overlay");
   const buildIndex = text.indexOf("bun run build-win:x64");
 
   assert.ok(installIndex > 0, "workflow should install pinned upstream dependencies");
   assert.ok(overlayIndex > installIndex, "workflow should apply Relay overlay after frozen install");
-  assert.ok(buildIndex > overlayIndex, "workflow should build after overlay");
+  assert.ok(validateIndex > overlayIndex, "workflow should validate overlay after applying it");
+  assert.ok(buildIndex > validateIndex, "workflow should build after overlay validation");
+  assert.match(text, /Relay overlay did not update productName/);
   assert.match(text, /Where-Object \{ \$_.Name -like "Relay Agent-\*-win-x64.exe" \}/);
+  assert.match(text, /Installer candidate: \$\(\$_\.Name\)/);
 });
 
 test("AionUi release workflow publishes signed or clearly marked prerelease assets", () => {

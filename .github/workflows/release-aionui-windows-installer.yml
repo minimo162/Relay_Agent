@@ -141,6 +141,25 @@ jobs:
       - name: Apply Relay overlay
         run: node scripts/apply-aionui-overlay.mjs --aionui-dir aionui
 
+      - name: Validate Relay overlay
+        shell: pwsh
+        run: |
+          $package = Get-Content -LiteralPath "aionui\package.json" -Raw | ConvertFrom-Json
+          if ($package.name -ne "relay-agent-aionui") {
+            throw "Relay overlay did not update package name; got '$($package.name)'."
+          }
+          if ($package.productName -ne "Relay Agent") {
+            throw "Relay overlay did not update productName; got '$($package.productName)'."
+          }
+
+          $builderConfig = Get-Content -LiteralPath "aionui\electron-builder.yml" -Raw
+          if ($builderConfig -notmatch "(?m)^productName:\s+Relay Agent$") {
+            throw "Relay overlay did not update electron-builder productName."
+          }
+          if ($builderConfig -notmatch "(?m)^executableName:\s+Relay Agent$") {
+            throw "Relay overlay did not update electron-builder executableName."
+          }
+
       - name: Build Relay-branded AionUi Windows installer
         working-directory: aionui
         env:
@@ -156,13 +175,17 @@ jobs:
             throw "AionUi output directory was not created: $installerDir"
           }
 
-          $installer = Get-ChildItem -Path $installerDir -Filter "*.exe" -File |
+          $candidates = Get-ChildItem -Path $installerDir -Filter "*.exe" -File
+          $candidates | ForEach-Object { Write-Host "Installer candidate: $($_.Name)" }
+
+          $installer = $candidates |
             Where-Object { $_.Name -like "Relay Agent-*-win-x64.exe" } |
             Sort-Object LastWriteTimeUtc -Descending |
             Select-Object -First 1
 
           if (-not $installer) {
-            throw "No Relay Agent AionUi Windows installer `.exe` was found in $installerDir"
+            $candidateNames = ($candidates | ForEach-Object { $_.Name }) -join ", "
+            throw "No Relay Agent AionUi Windows installer `.exe` was found in $installerDir. Found: $candidateNames"
           }
 
           "path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
