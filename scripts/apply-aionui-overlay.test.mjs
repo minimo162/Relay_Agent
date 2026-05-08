@@ -20,6 +20,7 @@ import {
   patchPlatformIndexContent,
   patchPublicManifestContent,
   patchRendererIndexHtmlContent,
+  patchRendererThemeBaseContent,
   patchSettingsModalContent,
   patchTitlebarContent,
   patchTrayContent,
@@ -237,6 +238,30 @@ test("user-facing AionUi shell branding is replaced with Relay Agent", () => {
     patchNodePlatformServicesContent("return { name: 'aionui', version: '0.0.0' };\n'.aionui-server'\n_pkg.name ?? 'aionui'", branding),
     /relay-agent-aionui/,
   );
+});
+
+test("renderer base stylesheet uses Japanese UI fonts for Relay Agent", () => {
+  const fixture = [
+    "/* Base styles - theme-independent */",
+    "",
+    ":root {",
+    "  --app-min-width: 360px;",
+    "}",
+  ].join("\n");
+
+  const once = patchRendererThemeBaseContent(fixture);
+  const twice = patchRendererThemeBaseContent(once);
+
+  assert.equal(twice, once);
+  assert.match(once, /Relay Agent Japanese UI font override/);
+  assert.match(once, /--relay-font-ja-ui: "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo/);
+  assert.match(once, /"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP"/);
+  assert.match(once, /\.login-page,/);
+  assert.match(once, /\.arco-modal,/);
+  assert.match(once, /\.markdown-shadow-body \{/);
+  assert.match(once, /font-family: var\(--relay-font-ja-ui\) !important;/);
+  assert.match(once, /pre,\ncode,\nkbd,\nsamp,/);
+  assert.match(once, /font-family: var\(--relay-font-mono\) !important;/);
 });
 
 test("About, update, locale, and visible logo references use Relay Agent branding", () => {

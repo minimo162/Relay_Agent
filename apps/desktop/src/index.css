@@ -13,14 +13,15 @@
   /* Font stacks — quiet operational system: IBM Plex Sans (UI/display), IBM Plex Serif
    * (editorial cites), IBM Plex Mono (code/tools), Shippori Mincho (JP/kanji fallback).
    * Brand font names stay first so locally installed fonts win. */
-  --ra-font-display: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Helvetica Neue",
-    Helvetica, Arial, "Noto Sans JP", sans-serif;
+  --ra-font-display: "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Noto Sans JP",
+    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --ra-font-editorial: "IBM Plex Serif", "Shippori Mincho", ui-serif, Georgia, Cambria,
     "Times New Roman", Times, serif;
-  --ra-font-jp: "Shippori Mincho", "IBM Plex Serif", ui-serif, serif;
+  --ra-font-jp: "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Noto Sans JP", sans-serif;
   --ra-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
-  --ra-font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --ra-font-ui: "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Noto Sans JP",
+    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   /* Optional; Lato not bundled — stack resolves to ui if absent */
   --ra-font-lato: Lato, var(--ra-font-ui);
 
@@ -2648,8 +2649,8 @@ body a:focus-visible {
   /* Type stacks — IBM Plex family across UI / editorial / mono. Shippori Mincho stays
    * for JP/kanji fallback. Brand names first so locally installed weights win. */
   --ra-font-display:
-    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial,
-    "Noto Sans JP", sans-serif;
+    "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Noto Sans JP", "IBM Plex Sans",
+    system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --ra-font-editorial:
     "IBM Plex Serif", "Shippori Mincho", ui-serif, "Iowan Old Style", "Palatino Linotype",
     "URW Palladio L", P052, Georgia, Cambria, "Times New Roman", Times, serif;
@@ -2657,8 +2658,9 @@ body a:focus-visible {
     "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
   --ra-font-ui:
-    "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  --ra-font-jp: "Shippori Mincho", "IBM Plex Serif", ui-serif, serif;
+    "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Noto Sans JP", "IBM Plex Sans",
+    system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --ra-font-jp: "Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Noto Sans JP", sans-serif;
 
   /* Vermillion kept as the single accent (matches --ra-accent). Expose a
    * "paper" alias for cream surfaces used by the overlay. */

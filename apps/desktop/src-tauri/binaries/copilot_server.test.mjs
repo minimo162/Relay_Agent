@@ -262,6 +262,7 @@ test("parseOpenAiRequest routes OfficeCLI work through execution after Skill ins
   assert.match(parsed.systemPrompt, /OfficeCLI skills are instructions, not execution/);
   assert.match(parsed.systemPrompt, /then call `bash` with the actual `officecli \.\.\.` command/);
   assert.match(parsed.systemPrompt, /Simple Office edits/);
+  assert.match(parsed.systemPrompt, /do not emit bare `\/A1`/);
   assert.match(parsed.systemPrompt, /"recipient_name":"functions\.bash"/);
   assert.match(parsed.systemPrompt, /A markdown command is not execution/);
 });
@@ -528,6 +529,26 @@ test("extractOpenAiToolCallsFromText converts fenced officecli commands to execu
   });
 });
 
+test("extractOpenAiToolCallsFromText sheet-qualifies bare OfficeCLI Excel cell references", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    [
+      "```bash",
+      'officecli set "C:/Users/m242054/Downloads/test.xlsx" /A1 --prop fill=FF0000',
+      "```",
+    ].join("\n"),
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: 'officecli set "C:/Users/m242054/Downloads/test.xlsx" /Sheet1/A1 --prop fill=FF0000',
+  });
+});
+
 test("extractOpenAiToolCallsFromText falls back to OfficeCLI Skill when no execution tool is available", () => {
   const extracted = extractOpenAiToolCallsFromText(
     [
@@ -543,6 +564,23 @@ test("extractOpenAiToolCallsFromText falls back to OfficeCLI Skill when no execu
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
     skill: "officecli-xlsx",
     args: "set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
+test("extractOpenAiToolCallsFromText sheet-qualifies bare OfficeCLI Skill Excel cell references", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"officecli-xlsx","args":"set C:/Users/m242054/Downloads/test.xlsx /A1 --prop fill=FF0000"}}]}',
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.displayText, "");
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
   });
 });
 

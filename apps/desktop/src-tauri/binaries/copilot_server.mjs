@@ -5344,6 +5344,7 @@ function formatReliableToolPolicy(tools = []) {
       lines.push(
         `Office file requests: OfficeCLI skills are instructions, not execution. Use \`Skill\` only when the OfficeCLI rules need to be loaded, then call \`${executionToolName}\` with the actual \`officecli ...\` command. Do not stop after \`Skill\`.`,
         `Simple Office edits: when the requested OfficeCLI command is clear, emit the execution tool directly, for example \`{\"tool_uses\":[{\"recipient_name\":\"functions.${executionToolName}\",\"parameters\":{\"command\":\"officecli set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}}]}\`.`,
+        "Excel cell references: OfficeCLI needs a sheet-qualified path such as `/Sheet1/A1`; do not emit bare `/A1`.",
         "Excel requests: use `officecli-xlsx` as the skill name only for loading instructions. The file change itself must be an execution tool call running `officecli`.",
         "Do not answer with `officecli` commands in markdown. A markdown command is not execution.",
         "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
@@ -5352,6 +5353,7 @@ function formatReliableToolPolicy(tools = []) {
       lines.push(
         "Office file requests: when no execution tool is available, emit `Skill` with the matching OfficeCLI skill so the executor can load instructions. Do not claim the file was changed until an execution result exists.",
         "Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx` and `args` containing the concise OfficeCLI task or command, for example `{\"skill\":\"officecli-xlsx\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}`.",
+        "Excel cell references: OfficeCLI needs a sheet-qualified path such as `/Sheet1/A1`; do not emit bare `/A1`.",
         "Generic OfficeCLI fallback: use `{\"skill\":\"officecli\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}` only if the catalog does not expose a more specific OfficeCLI skill name.",
         "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
       );
@@ -5898,15 +5900,26 @@ function officeCliCommandArgsFromNaturalLanguage(args) {
   return `set ${path} /Sheet1/${cell} --prop fill=${color}`;
 }
 
+function normalizeOfficeCliCommandArgs(args) {
+  return String(args || "")
+    .trim()
+    .replace(
+      /(^|\s)\/(\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?)(?=\s|$)/giu,
+      (_match, prefix, address) => `${prefix}/Sheet1/${String(address).toUpperCase()}`,
+    );
+}
+
 function officeCliCommandForArgs(args) {
   const trimmed = String(args || "").trim();
   if (!trimmed) return "";
   if (/^(?:officecli|office-cli)(?:\.exe)?(?:\s|$)/iu.test(trimmed)) {
-    return trimmed.replace(/^(?:office-cli)(?=\.exe|\s|$)/iu, "officecli");
+    const match = trimmed.match(/^(?:officecli|office-cli)(?:\.exe)?(?:\s+(.+))?$/iu);
+    const commandArgs = normalizeOfficeCliCommandArgs(match?.[1] || "");
+    return commandArgs ? `officecli ${commandArgs}` : "officecli";
   }
   const naturalCommandArgs = officeCliCommandArgsFromNaturalLanguage(trimmed);
   if (naturalCommandArgs) return `officecli ${naturalCommandArgs}`;
-  return `officecli ${trimmed}`;
+  return `officecli ${normalizeOfficeCliCommandArgs(trimmed)}`;
 }
 
 function looksLikeOfficeCliCommandArgs(args) {
@@ -5940,7 +5953,9 @@ function officeCliToolCallForArgs(args, allowed, names = {}) {
       name: skillToolName,
       arguments: JSON.stringify({
         skill: officeCliSkillNameForArgs(args),
-        args: String(args || "").trim(),
+        args: looksLikeOfficeCliCommandArgs(args)
+          ? normalizeOfficeCliCommandArgs(String(args || "").trim())
+          : String(args || "").trim(),
       }),
     },
   };

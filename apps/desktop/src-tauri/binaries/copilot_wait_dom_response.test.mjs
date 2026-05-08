@@ -258,6 +258,31 @@ test("normalizeCopilotVisibleText strips transient image status noise and duplic
   );
 });
 
+test("normalizeCopilotVisibleText removes M365 semantic person tags and repeated reply copies", () => {
+  const raw = [
+    "こんにちはこんにちはこんにちは、<Person>小谷 侑輝</Person>さん。",
+    "今日はどのようなお手伝いをしましょうか？📝📊💻",
+    "",
+    "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）こんにちは、小谷 侑輝さん。",
+    "今日はどのようなお手伝いをしましょうか？📝📊💻",
+    "",
+    "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）こんにちは、<Person>小谷 侑輝</Person>さん。",
+    "今日はどのようなお手伝いをしましょうか？📝📊💻",
+    "",
+    "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）",
+  ].join("\n");
+
+  assert.equal(
+    normalizeCopilotVisibleText(raw),
+    [
+      "こんにちは、小谷 侑輝さん。",
+      "今日はどのようなお手伝いをしましょうか？📝📊💻",
+      "",
+      "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）",
+    ].join("\n"),
+  );
+});
+
 test("normalizeCopilotVisibleText strips internal reasoning lead-ins and search-planning paragraphs", () => {
   assert.equal(
     normalizeCopilotVisibleText(
@@ -457,6 +482,44 @@ test("resolveAssistantReplyForReturn keeps structured body when strict and heuri
 
   const response = await resolveAssistantReplyForReturn(session, structuredReply, 0, null);
   assert.equal(response, structuredReply);
+});
+
+test("resolveAssistantReplyForReturn keeps a complete short DOM reply over duplicated Chathub text", async () => {
+  const visibleReply = [
+    "こんにちは、小谷 侑輝さん。",
+    "今日はどのようなお手伝いをしましょうか？📝📊💻",
+    "",
+    "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）",
+  ].join("\n");
+  const duplicatedNetworkReply = [
+    "こんにちは、<Person>小谷 侑輝</Person>さん。",
+    "今日はどのようなお手伝いをしましょうか？📝📊💻",
+    "",
+    "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）こんにちは、小谷 侑輝さん。",
+    "今日はどのようなお手伝いをしましょうか？📝📊💻",
+    "",
+    "（翻訳、メール文案、資料レビュー、会計・決算まわり、Excelや自動化の相談など、何でも対応できます。）",
+  ].join("\n");
+  const session = {
+    async evaluate() {
+      return { value: visibleReply };
+    },
+  };
+  const netCapture = {
+    called: false,
+    async pickBestShortAssistant() {
+      this.called = true;
+      return duplicatedNetworkReply;
+    },
+    async pickBestOver() {
+      this.called = true;
+      return duplicatedNetworkReply;
+    },
+  };
+
+  const response = await resolveAssistantReplyForReturn(session, visibleReply, 0, netCapture);
+  assert.equal(response, visibleReply);
+  assert.equal(netCapture.called, false);
 });
 
 test("resolveAssistantReplyForReturn rejects incomplete relay_tool snippets as final assistant text", async () => {

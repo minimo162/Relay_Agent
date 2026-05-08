@@ -8,6 +8,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
 const manifestPath = resolve(repoRoot, "apps/desktop/src-tauri/bootstrap/aionui-relay.json");
 const desktopIconRoot = resolve(repoRoot, "apps/desktop/src-tauri/icons");
+const relayJapaneseFontMarker = "/* Relay Agent Japanese UI font override */";
+const relayJapaneseUiFontStack =
+  '"Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "BIZ UDPGothic", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
+const relayJapaneseMonoFontStack =
+  'ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", "Noto Sans Mono CJK JP", monospace';
+const rendererThemeBaseCandidates = [
+  "src/renderer/styles/themes/base.css",
+  "src/renderer/styles/base.css",
+  "src/renderer/styles/global.css",
+  "src/renderer/index.css",
+];
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -229,6 +240,61 @@ export function patchRendererIndexHtmlContent(input, branding = relayBranding())
   );
   output = output.replace(/<title>[^<]*<\/title>/u, `<title>${branding.browserTitle || branding.productName}</title>`);
   return output;
+}
+
+export function patchRendererThemeBaseContent(input) {
+  if (input.includes(relayJapaneseFontMarker)) return ensureTrailingNewline(input);
+
+  const fontOverride = [
+    relayJapaneseFontMarker,
+    ":root {",
+    `  --relay-font-ja-ui: ${relayJapaneseUiFontStack};`,
+    `  --relay-font-mono: ${relayJapaneseMonoFontStack};`,
+    "}",
+    "",
+    "html,",
+    "body,",
+    "#root,",
+    ".layout,",
+    ".layout-content,",
+    ".login-page,",
+    ".arco-modal,",
+    ".arco-drawer,",
+    ".arco-popover,",
+    ".arco-tooltip,",
+    ".arco-message,",
+    ".arco-notification,",
+    ".markdown-body,",
+    ".markdown-shadow-body {",
+    "  font-family: var(--relay-font-ja-ui) !important;",
+    "  text-rendering: optimizeLegibility;",
+    "}",
+    "",
+    "button,",
+    "input,",
+    "textarea,",
+    "select,",
+    ".arco-btn,",
+    ".arco-input,",
+    ".arco-input-inner-wrapper,",
+    ".arco-textarea,",
+    ".arco-select,",
+    ".arco-typography {",
+    "  font-family: var(--relay-font-ja-ui) !important;",
+    "}",
+    "",
+    "pre,",
+    "code,",
+    "kbd,",
+    "samp,",
+    ".monaco-editor,",
+    ".cm-editor,",
+    ".xterm {",
+    "  font-family: var(--relay-font-mono) !important;",
+    "}",
+  ].join("\n");
+
+  return `${fontOverride}\n\n${ensureTrailingNewline(input)}`;
 }
 
 export function patchPublicManifestContent(input, branding = relayBranding()) {
@@ -906,6 +972,16 @@ function patchRendererLocaleFiles(targetRoot) {
   }
 }
 
+function findRendererThemeBasePath(targetRoot) {
+  for (const candidate of rendererThemeBaseCandidates) {
+    const candidatePath = resolve(targetRoot, candidate);
+    if (existsSync(candidatePath)) return candidatePath;
+  }
+  throw new Error(
+    `AionUi renderer base stylesheet was not found. Tried: ${rendererThemeBaseCandidates.join(", ")}`,
+  );
+}
+
 export function applyAionuiOverlay(aionuiDir) {
   const targetRoot = resolve(aionuiDir);
   const indexPath = resolve(targetRoot, "src/index.ts");
@@ -928,6 +1004,7 @@ export function applyAionuiOverlay(aionuiDir) {
   const agentLogoPath = resolve(targetRoot, "src/renderer/utils/model/agentLogo.ts");
   const titlebarPath = resolve(targetRoot, "src/renderer/components/layout/Titlebar/index.tsx");
   const layoutPath = resolve(targetRoot, "src/renderer/components/layout/Layout.tsx");
+  const rendererThemeBasePath = findRendererThemeBasePath(targetRoot);
   const settingsModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/index.tsx");
   const webuiModalPath = resolve(
     targetRoot,
@@ -950,6 +1027,7 @@ export function applyAionuiOverlay(aionuiDir) {
     agentLogoPath,
     titlebarPath,
     layoutPath,
+    rendererThemeBasePath,
     settingsModalPath,
     webuiModalPath,
   ]) {
@@ -994,6 +1072,7 @@ export function applyAionuiOverlay(aionuiDir) {
   writeFileSync(agentLogoPath, patchAgentLogoContent(readFileSync(agentLogoPath, "utf8")), "utf8");
   writeFileSync(titlebarPath, patchTitlebarContent(readFileSync(titlebarPath, "utf8")), "utf8");
   writeFileSync(layoutPath, patchLayoutBrandContent(readFileSync(layoutPath, "utf8")), "utf8");
+  writeFileSync(rendererThemeBasePath, patchRendererThemeBaseContent(readFileSync(rendererThemeBasePath, "utf8")), "utf8");
   patchRendererLocaleFiles(targetRoot);
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");
@@ -1006,6 +1085,7 @@ export function applyAionuiOverlay(aionuiDir) {
     electronBuilderPath,
     rendererIndexHtmlPath,
     publicManifestPath,
+    rendererThemeBasePath,
     indexPath,
     initStoragePath,
     packageJsonPath,
@@ -1065,6 +1145,7 @@ if (isCliEntrypoint(import.meta.url)) {
     console.log("[relay-aionui-overlay] package:", result.packageJsonPath);
     console.log("[relay-aionui-overlay] electronBuilder:", result.electronBuilderPath);
     console.log("[relay-aionui-overlay] deepLink:", result.deepLinkPath);
+    console.log("[relay-aionui-overlay] rendererThemeBase:", result.rendererThemeBasePath);
     console.log("[relay-aionui-overlay] settingsModal:", result.settingsModalPath);
     console.log("[relay-aionui-overlay] webuiModal:", result.webuiModalPath);
     console.log("[relay-aionui-overlay] relayGatewayResources:", result.relayGatewayResourcesDir);

@@ -284,6 +284,35 @@ function dedupeConsecutiveParagraphs(text) {
   return out.join("\n\n");
 }
 
+const M365_SEMANTIC_TAG_RE =
+  /<\/?(?:Person|Contact|User|File|DriveItem|Event|Meeting|Email|Message|CalendarEvent|Entity|Organization|Organisation|Org|Place)\b[^>]*>/giu;
+
+function stripM365SemanticTagsOutsideFences(text) {
+  const raw = String(text ?? "");
+  const parts = raw.split(/(```[\s\S]*?```)/gu);
+  return parts
+    .map((part) => (part.startsWith("```") ? part : part.replace(M365_SEMANTIC_TAG_RE, "")))
+    .join("");
+}
+
+function collapseRepeatedLineLeadTokens(text) {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) =>
+      line.replace(
+        /^([^\s、,，。.!?！？\r\n]{2,16})(?:\1){1,}(?=[、,，。.!?！？\s])/u,
+        "$1",
+      ),
+    )
+    .join("\n");
+}
+
+function textDedupeKey(text) {
+  return collapseRepeatedLineLeadTokens(stripM365SemanticTagsOutsideFences(text))
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 function dedupeRepeatedParagraphs(text) {
   const parts = String(text ?? "").split(/\n{2,}/);
   const out = [];
@@ -291,7 +320,7 @@ function dedupeRepeatedParagraphs(text) {
   for (const part of parts) {
     const trimmed = part.trim();
     if (!trimmed) continue;
-    const key = trimmed.replace(/\s+/gu, " ").trim();
+    const key = textDedupeKey(trimmed);
     if ((key.length >= 8 || trimmed.includes("```") || trimmed.includes("\n")) && seen.has(key)) {
       continue;
     }
@@ -301,21 +330,62 @@ function dedupeRepeatedParagraphs(text) {
   return out.join("\n\n");
 }
 
+function collapseRepeatedReplyByFirstLine(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw || assistantTextHasStructuredContent(raw)) return raw;
+  const firstLine = raw
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return raw;
+  const firstKey = textDedupeKey(firstLine);
+  if (firstKey.length < 6 || firstKey.length > 180) return raw;
+
+  let searchFrom = Math.max(firstLine.length, 40);
+  for (let guard = 0; guard < 8; guard += 1) {
+    const repeatedAt = raw.indexOf(firstLine, searchFrom);
+    if (repeatedAt < 0) return raw;
+    const before = raw.slice(0, repeatedAt).trimEnd();
+    const after = raw.slice(repeatedAt).trimStart();
+    if (before.length < 40) {
+      searchFrom = repeatedAt + firstLine.length;
+      continue;
+    }
+    if (!/[。.!?！？）」』】)\]]$/u.test(before)) {
+      searchFrom = repeatedAt + firstLine.length;
+      continue;
+    }
+    const beforeKey = textDedupeKey(before);
+    const afterKey = textDedupeKey(after);
+    const probeLen = Math.min(120, beforeKey.length, afterKey.length);
+    if (probeLen >= firstKey.length && beforeKey.slice(0, probeLen) === afterKey.slice(0, probeLen)) {
+      return before;
+    }
+    searchFrom = repeatedAt + firstLine.length;
+  }
+  return raw;
+}
+
 function normalizeCopilotVisibleText(text) {
   let cleaned = stripM365CopilotReplyChrome(String(text ?? ""));
   cleaned = stripStreamingPlaceholderTail(cleaned);
   cleaned = stripTransientCopilotStatus(cleaned);
   cleaned = stripM365SearchProgressSnippets(cleaned);
   cleaned = stripInternalReasoningParagraphs(cleaned);
-  if (/relay_tool_call/u.test(cleaned)) {
+  const toolLike = /relay_tool_call|"(?:tool_calls|tool_uses|recipient_name)"\s*:/u.test(cleaned);
+  if (toolLike) {
     return cleaned.trim();
   }
+  cleaned = stripM365SemanticTagsOutsideFences(cleaned);
+  cleaned = collapseRepeatedLineLeadTokens(cleaned);
+  cleaned = collapseRepeatedReplyByFirstLine(cleaned);
   if (assistantTextHasStructuredContent(cleaned)) {
     return dedupeRepeatedParagraphs(cleaned).trim();
   }
   cleaned = dedupeConsecutiveLines(cleaned);
   cleaned = dedupeConsecutiveParagraphs(cleaned);
   cleaned = dedupeRepeatedParagraphs(cleaned);
+  cleaned = collapseRepeatedReplyByFirstLine(cleaned);
   return cleaned.trim();
 }
 
@@ -998,6 +1068,7 @@ function assistantReplyNeedsExpansionProbe(text, submittedPromptLen) {
   if (replyIsOnlyReasoningDisclosurePlaceholder(cleaned)) return true;
   if (domExtractLooksLikeSubmittedPrompt(cleaned.length, submittedPromptLen)) return true;
   if (assistantReplyHasCompleteToolCallJson(cleaned)) return false;
+  if (assistantReplyLooksNaturallyComplete(cleaned)) return false;
   return cleaned.length < 220 && !assistantTextHasStructuredContent(cleaned);
 }
 
@@ -1109,7 +1180,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
         (strict.startsWith(structured) && strict.length >= structured.length + 10)));
   if (strictClearlyMoreCompleteThanStructured) return strict;
   if (structured && !structuredLooksLikePrompt && !structuredNeedsExpansionProbe) return structured;
-  if (strict && !strictLooksLikePrompt && !strictNeedsExpansionProbe) return strict;
+  if (strict && !strictLooksLikePrompt && !strictNeedsExpansionProbe && !strictAddsOnlySuggestionSuffix) return strict;
   if (!strict && !looseLooksLikePrompt && !needsExpansionProbe) return loose;
 
   let best = "";
