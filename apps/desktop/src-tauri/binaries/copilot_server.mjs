@@ -4992,10 +4992,10 @@ function buildToolProtocolSystemPrompt({
   ];
   modePrompt.push(
     hasToolResultMessages
-      ? "Mode: final_answer. Answer only from the provided TOOL/FUNCTION results and conversation. If more environment access is needed, return tool_uses JSON instead of prose."
+      ? "Mode: final_answer_or_continue_tools. Answer only from the provided TOOL/FUNCTION results when they are sufficient. If more environment access is needed, return tool_uses JSON instead of prose."
       : "Mode: final_answer. Answer normally only when no external tool or environment access is needed. If tool access is needed, return tool_uses JSON instead of prose.",
   );
-  parts.push(modePrompt.join("\n"), toolProtocolPrompt);
+  parts.push(modePrompt.join("\n"), formatReliableToolPolicy(tools), toolProtocolPrompt);
   return parts.filter(Boolean).join("\n\n");
 }
 
@@ -5043,6 +5043,8 @@ function formatReliableToolPolicy(tools = []) {
   if (available.has("glob")) {
     lines.push(
       "File discovery: use `glob` for filename/path lookup. Put a user-supplied root folder in `path` when supported. Use simple patterns such as `**/*keyword*.ext`; do not rely on brace expansion for important searches.",
+      "Broad file discovery: emit several complementary `glob` calls instead of one narrow pattern when the user asks for files needed for a workflow. Cover direct names, abbreviations, Japanese/English variants, and supporting workpaper terms.",
+      "Skew check: if returned paths are mostly from one subfolder, one quarter, one filing/output folder, or one filename family, do not treat them as the full answer. Emit additional `glob` calls for sibling folders and alternate terms before finalizing.",
     );
   }
   if (available.has("grep")) {
@@ -5080,6 +5082,8 @@ function formatReliableToolPolicy(tools = []) {
     );
   }
   lines.push(
+    "Finance/CFS file investigations: search direct terms such as `キャッシュフロー`, `CFS`, `CF`, `連結CF`, `連結CFS`, plus workpaper/support terms such as `精算表`, `設備投資`, `償却`, `有利子負債`, `BS`, and `PL`. Treat `ファイリング`, `XSA`, disclosure, and backup folders as output/review candidates unless tool results prove they are source workpapers.",
+    "File investigation final answers: separate direct source/workpaper candidates, supporting evidence, disclosure/output files, and backups. Do not call a file `必須`, `中核`, or `latest` unless the tool results prove that status. State visible coverage limits and folder skew.",
     "Normal reliable sequences: discover -> read -> edit -> test for code changes; discover -> read exact candidates -> summarize for local file investigations; command -> summarize output for explicit test/build requests.",
   );
   return lines.join("\n");
@@ -5118,15 +5122,19 @@ function formatPromptForCopilot(params = {}) {
   if (params.hasToolResultMessages === true) {
     return [
       params.systemPrompt || "",
-      "RELAY AGENT FINAL ANSWER WRITER",
+      "RELAY AGENT TOOL RESULT REVIEWER",
       "The OpenCode executor has already produced tool/function results in TRANSCRIPT DATA.",
-      "Write the final user-facing answer only from TRANSCRIPT DATA and the provided tool/function results.",
+      "Decide whether the evidence is sufficient before writing a final answer.",
+      "If additional environment access is needed, return only tool_uses JSON for the next OpenCode executor call. Do not explain the tool call.",
+      "Write the final user-facing answer only when TRANSCRIPT DATA and the provided tool/function results are sufficient.",
       "Do not use Microsoft 365 Copilot built-in tools, browsing, search, code execution, plugins, connectors, file lookup, or memory.",
       "Do not invent file paths, command output, edits, test results, or document contents.",
-      "If the tool/function results are incomplete for the user's request, say exactly what evidence is missing instead of guessing.",
+      "For local file investigations, check whether the results are skewed toward one subfolder, quarter, filing/output folder, backup folder, or filename family. If skewed and more file tools are available, return additional glob/list/grep tool_uses JSON instead of a final answer.",
+      "For finance/CFS searches, do not let `ファイリング`, `XSA`, disclosure, or backup matches dominate the conclusion. Search or label direct workpapers separately from output/review artifacts.",
+      "If no additional tool can resolve missing evidence, say exactly what evidence is missing instead of guessing.",
       "TRANSCRIPT DATA:",
       JSON.stringify(userPrompt),
-      "Write the final answer now.",
+      "Return either the next tool_uses JSON or the final answer now.",
     ].filter(Boolean).join("\n\n");
   }
   return params.systemPrompt ? `${params.systemPrompt}\n\n${userPrompt}` : userPrompt;

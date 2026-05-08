@@ -186,6 +186,12 @@ test("parseOpenAiRequest treats Windows folder search as first-pass tool plannin
   assert.match(parsed.systemPrompt, /emit `glob`/);
   assert.match(parsed.systemPrompt, /File discovery: use `glob`/);
   assert.match(parsed.systemPrompt, /do not rely on brace expansion/);
+  assert.match(parsed.systemPrompt, /Broad file discovery/);
+  assert.match(parsed.systemPrompt, /Skew check/);
+  assert.match(parsed.systemPrompt, /キャッシュフロー/);
+  assert.match(parsed.systemPrompt, /CFS/);
+  assert.match(parsed.systemPrompt, /ファイリング/);
+  assert.match(parsed.systemPrompt, /XSA/);
 });
 
 test("parseOpenAiRequest routes Office filename lookup but warns away from Office binary content tools", () => {
@@ -278,10 +284,11 @@ test("parseOpenAiRequest treats tool results as final-answer mode", () => {
   assert.equal(parsed.hasToolResultMessages, true);
   assert.equal(parsed.toolProtocolMode, "final_answer");
   assert.equal(parsed.requiresStrictToolCalls, false);
-  assert.match(parsed.systemPrompt, /Answer only from the provided TOOL\/FUNCTION results/);
+  assert.match(parsed.systemPrompt, /final_answer_or_continue_tools/);
+  assert.match(parsed.systemPrompt, /If more environment access is needed, return tool_uses JSON/);
 });
 
-test("formatPromptForCopilot wraps tool results as final-answer transcript data", () => {
+test("formatPromptForCopilot wraps tool results as evidence review transcript data", () => {
   const parsed = parseOpenAiRequest({
     messages: [
       { role: "user", content: "Read README." },
@@ -292,12 +299,49 @@ test("formatPromptForCopilot wraps tool results as final-answer transcript data"
   const prompt = formatPromptForCopilot(parsed);
 
   assert.equal(parsed.hasToolResultMessages, true);
-  assert.match(prompt, /RELAY AGENT FINAL ANSWER WRITER/);
+  assert.match(prompt, /RELAY AGENT TOOL RESULT REVIEWER/);
   assert.match(prompt, /TRANSCRIPT DATA:/);
   assert.match(prompt, /"USER:\\nRead README\./);
   assert.match(prompt, /TOOL:\\nREADME contents/);
+  assert.match(prompt, /return only tool_uses JSON for the next OpenCode executor call/);
   assert.match(prompt, /Do not invent file paths, command output, edits, test results, or document contents/);
   assert.doesNotMatch(prompt, /\n\nUSER:\nRead README\.\s*$/);
+});
+
+test("formatPromptForCopilot asks for more tools when local file results are skewed", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "user",
+        content: String.raw`"H:\shr1\05_経理部\03_連結財務G\160連結" からキャッシュフロー計算書作成に必要なファイルを検索して`,
+      },
+      {
+        role: "tool",
+        content: [
+          String.raw`H:\shr1\05_経理部\03_連結財務G\160連結\160期-1Q\ファイリング\⑫XSA\1.財務諸表\連結\XSA_連結CF.xlsx`,
+          String.raw`H:\shr1\05_経理部\03_連結財務G\160連結\160期-1Q\ファイリング\⑫XSA\1.財務諸表\連結\XSA_連結BS.xlsx`,
+        ].join("\n"),
+        tool_call_id: "call_glob",
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "glob",
+          description: "Find files by glob pattern",
+          parameters: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } } },
+        },
+      },
+    ],
+  });
+  const prompt = formatPromptForCopilot(parsed);
+
+  assert.equal(parsed.hasToolResultMessages, true);
+  assert.match(prompt, /results are skewed toward one subfolder/);
+  assert.match(prompt, /return additional glob\/list\/grep tool_uses JSON/);
+  assert.match(prompt, /do not let `ファイリング`, `XSA`, disclosure, or backup matches dominate/);
+  assert.match(prompt, /Return either the next tool_uses JSON or the final answer now/);
 });
 
 test("parseOpenAiRequest honors explicit no-tool choice", () => {
