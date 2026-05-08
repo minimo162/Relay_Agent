@@ -9,6 +9,10 @@ import {
   resolveAionuiBin,
 } from "./start_aionui_relay_gateway.mjs";
 
+function slashPath(path) {
+  return String(path || "").replace(/\\/gu, "/");
+}
+
 test("AionUi launch args accept explicit shell path, seed printing, and OfficeCLI skip", () => {
   assert.deepEqual(parseArgs(["--print-seed", "--aionui-bin", "C:/Relay Agent/Relay Agent.exe", "--skip-officecli-bootstrap"]), {
     printSeed: true,
@@ -28,21 +32,22 @@ test("AionUi Windows binary candidates prefer explicit env path then user-local 
       "ProgramFiles(x86)": "C:/Program Files (x86)",
     },
   });
+  const normalized = candidates.map(slashPath);
 
-  assert.equal(candidates[0], "D:/Relay/Relay Agent.exe");
-  assert.ok(candidates.includes("C:/Users/example/AppData/Local/Programs/Relay Agent/Relay Agent.exe"));
-  assert.ok(candidates.includes("C:/Program Files/Relay Agent/Relay Agent.exe"));
+  assert.equal(normalized[0], "D:/Relay/Relay Agent.exe");
+  assert.ok(normalized.includes("C:/Users/example/AppData/Local/Programs/Relay Agent/Relay Agent.exe"));
+  assert.ok(normalized.includes("C:/Program Files/Relay Agent/Relay Agent.exe"));
 });
 
 test("AionUi binary resolution returns first existing candidate without requiring CLI args", () => {
-  const existing = new Set(["/usr/local/bin/relay-agent-aionui"]);
+  const existing = new Set(["usr/local/bin/relay-agent-aionui"]);
   const resolved = resolveAionuiBin(null, {
     platform: "linux",
     env: {},
-    exists: (path) => existing.has(path),
+    exists: (path) => existing.has(slashPath(path).replace(/^[A-Z]:\//iu, "").replace(/^\//u, "")),
   });
 
-  assert.equal(resolved, "/usr/local/bin/relay-agent-aionui");
+  assert.match(slashPath(resolved), /\/usr\/local\/bin\/relay-agent-aionui$/u);
 });
 
 test("AionUi launch env always passes Relay seed and prepends cached OfficeCLI when present", () => {
