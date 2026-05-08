@@ -394,6 +394,32 @@ test("extractOpenAiToolCallsFromText converts OpenAI-compatible tool_uses", () =
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), { pattern: "**/*.rs" });
 });
 
+test("extractOpenAiToolCallsFromText recovers malformed tool_uses skill args with quoted path", () => {
+  const malformed =
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"office-cli","args":"modify excel file "C:/Users/m242054/Downloads/test.xlsx" set cell A1 fill-color red"}}]}';
+  const extracted = extractOpenAiToolCallsFromText(malformed, [
+    { type: "function", function: { name: "Skill" } },
+  ]);
+
+  assert.equal(extracted.displayText, "");
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "Skill");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    skill: "office-cli",
+    args: 'modify excel file "C:/Users/m242054/Downloads/test.xlsx" set cell A1 fill-color red',
+  });
+});
+
+test("extractOpenAiToolCallsFromText resolves tool names case-insensitively to the advertised tool", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"office-cli","args":"status"}}]}',
+    [{ type: "function", function: { name: "skill" } }],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "skill");
+});
+
 test("extractOpenAiToolCallsFromText recovers embedded repeated tool_calls JSON", () => {
   const repeated =
     '{"{"{"tool_calls":[{"id":"call_read","function":{"name":"read","arguments":"{\\"filePath\\":\\"/tmp/a.txt\\"}"}}]}' +

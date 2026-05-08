@@ -5076,6 +5076,12 @@ function formatReliableToolPolicy(tools = []) {
       "Unsupported operations: do not route Excel cell formatting, Office GUI automation, OCR, Outlook .msg handling, or binary document mutation to bash/edit/write unless a dedicated tool exists.",
     );
   }
+  if ([...available].some((name) => name.toLowerCase() === "skill")) {
+    lines.push(
+      "Skill runner: use `Skill` only when a matching skill is exposed by the tool catalog. Parameters must be a normal JSON object such as `{\"skill\":\"office-cli\",\"args\":\"modify excel file C:/path/file.xlsx set cell A1 fill-color red\"}`.",
+      "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
+    );
+  }
   if (available.has("websearch") || available.has("webfetch")) {
     lines.push(
       "Web tools: use web tools only when the user asks for current external information or gives a URL. Do not use web/Microsoft 365 search for local file requests.",
@@ -5102,6 +5108,7 @@ function formatOpenAiToolProtocolPrompt(tools) {
     "When a tool is needed, return only JSON in one of these shapes, with no prose before or after it.",
     "Prefer tool_uses because its parameters are a normal JSON object and do not require escaping nested JSON strings:",
     '{"tool_uses":[{"recipient_name":"functions.tool_name","parameters":{"key":"value"}}]}',
+    "Every string inside parameters must still be valid JSON: avoid inner double quotes around Windows paths, or escape them.",
     "OpenAI-compatible tool_calls are also accepted when arguments is a JSON-encoded string:",
     '{"tool_calls":[{"id":"call_1","function":{"name":"tool_name","arguments":"{\\"key\\":\\"value\\"}"}}]}',
     `Available tools: ${names}`,
@@ -5446,7 +5453,12 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
     if (parsedCalls.length && candidate.trim() === trimmedRaw) displayText = "";
     toolCalls.push(...parsedCalls);
   }
-  toolCalls.push(...extractMalformedOpenAiToolCalls(raw, allowed));
+  const malformedCalls = [
+    ...extractMalformedOpenAiToolCalls(raw, allowed),
+    ...extractMalformedToolUses(raw, allowed),
+  ];
+  if (malformedCalls.length && looksLikeToolJson(trimmedRaw)) displayText = "";
+  toolCalls.push(...malformedCalls);
   return { displayText: displayText.trim(), toolCalls: dedupeOpenAiToolCalls(toolCalls) };
 }
 
@@ -5512,8 +5524,8 @@ function extractMalformedOpenAiToolCalls(text, allowed) {
   const calls = [];
   const nameRe = /"name"\s*:\s*"([^"]+)"/gu;
   for (const match of raw.matchAll(nameRe)) {
-    const name = normalizeToolName(match[1]);
-    if (!name || (allowed.size && !allowed.has(name))) continue;
+    const name = resolveAllowedToolName(match[1], allowed);
+    if (!name) continue;
     const argsKey = raw.indexOf('"arguments"', match.index + match[0].length);
     if (argsKey < 0) continue;
     const nextName = raw.indexOf('"name"', match.index + match[0].length);
@@ -5527,6 +5539,42 @@ function extractMalformedOpenAiToolCalls(text, allowed) {
     if (raw[cursor] !== "{") continue;
     const argumentCandidate = extractBalancedJsonAt(raw, cursor);
     const args = parseJsonCandidate(argumentCandidate);
+    if (!args || typeof args !== "object" || Array.isArray(args)) continue;
+    const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
+    const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
+    calls.push({
+      id,
+      type: "function",
+      function: {
+        name,
+        arguments: JSON.stringify(args),
+      },
+    });
+  }
+  return calls;
+}
+
+function extractMalformedToolUses(text, allowed) {
+  const raw = String(text || "");
+  if (!/"tool_uses"/u.test(raw) || !/"recipient_name"/u.test(raw) || !/"parameters"/u.test(raw)) return [];
+  const calls = [];
+  const recipientRe = /"recipient_name"\s*:\s*"([^"]+)"/gu;
+  for (const match of raw.matchAll(recipientRe)) {
+    const name = resolveAllowedToolName(match[1], allowed);
+    if (!name) continue;
+    const paramsKey = raw.indexOf('"parameters"', match.index + match[0].length);
+    if (paramsKey < 0) continue;
+    const nextRecipient = raw.indexOf('"recipient_name"', match.index + match[0].length);
+    if (nextRecipient >= 0 && nextRecipient < paramsKey) continue;
+    const colon = raw.indexOf(":", paramsKey);
+    if (colon < 0) continue;
+    let cursor = colon + 1;
+    while (/\s/u.test(raw[cursor] || "")) cursor += 1;
+    if (raw[cursor] !== "{") continue;
+    const parametersCandidate = extractBalancedJsonAtLoose(raw, cursor);
+    const args =
+      parseJsonCandidate(parametersCandidate) ??
+      parseLooseJsonObject(parametersCandidate);
     if (!args || typeof args !== "object" || Array.isArray(args)) continue;
     const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
     const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
@@ -5579,12 +5627,128 @@ function extractBalancedJsonAt(raw, start) {
   return "";
 }
 
+function extractBalancedJsonAtLoose(raw, start) {
+  const open = raw[start];
+  if (open !== "{" && open !== "[") return "";
+  const stack = [open === "{" ? "}" : "]"];
+  for (let i = start + 1; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === "{" || ch === "[") {
+      stack.push(ch === "{" ? "}" : "]");
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      if (stack[stack.length - 1] !== ch) return "";
+      stack.pop();
+      if (stack.length === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return "";
+}
+
 function parseJsonCandidate(text) {
   try {
     return JSON.parse(String(text || "").trim());
   } catch {
     return undefined;
   }
+}
+
+function parseLooseJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw.startsWith("{") || !raw.endsWith("}")) return undefined;
+  const body = raw.slice(1, -1);
+  const out = {};
+  let cursor = 0;
+  while (cursor < body.length) {
+    while (/[\s,]/u.test(body[cursor] || "")) cursor += 1;
+    if (cursor >= body.length) break;
+    if (body[cursor] !== "\"") {
+      const nextKey = body.slice(cursor).search(/"[^"]+"\s*:/u);
+      if (nextKey < 0) break;
+      cursor += nextKey;
+    }
+    const keyEnd = findStrictStringEnd(body, cursor + 1);
+    if (keyEnd < 0) break;
+    const key = decodeLooseJsonString(body.slice(cursor + 1, keyEnd));
+    cursor = keyEnd + 1;
+    while (/\s/u.test(body[cursor] || "")) cursor += 1;
+    if (body[cursor] !== ":") break;
+    cursor += 1;
+    while (/\s/u.test(body[cursor] || "")) cursor += 1;
+    if (body[cursor] === "\"") {
+      const valueEnd = findLooseStringValueEnd(body, cursor + 1);
+      if (valueEnd < 0) break;
+      out[key] = decodeLooseJsonString(body.slice(cursor + 1, valueEnd));
+      cursor = valueEnd + 1;
+      continue;
+    }
+    const valueStart = cursor;
+    while (cursor < body.length && body[cursor] !== ",") cursor += 1;
+    const valueRaw = body.slice(valueStart, cursor).trim();
+    out[key] = parseLooseScalar(valueRaw);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function findStrictStringEnd(text, start) {
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "\"") return i;
+  }
+  return -1;
+}
+
+function findLooseStringValueEnd(text, start) {
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch !== "\"") continue;
+    if (/^\s*(?:$|,\s*"[^"]+"\s*:)/u.test(text.slice(i + 1))) return i;
+  }
+  return -1;
+}
+
+function decodeLooseJsonString(value) {
+  return String(value || "")
+    .replace(/\\u([0-9a-fA-F]{4})/gu, (_match, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/\\(["\\/bfnrt])/gu, (_match, escaped) => {
+      switch (escaped) {
+        case "b": return "\b";
+        case "f": return "\f";
+        case "n": return "\n";
+        case "r": return "\r";
+        case "t": return "\t";
+        default: return escaped;
+      }
+    });
+}
+
+function parseLooseScalar(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  if (raw === "null") return null;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) && /^-?\d+(?:\.\d+)?$/u.test(raw) ? numeric : raw;
 }
 
 function extractToolCallsFromJsonValue(value, allowed) {
@@ -5612,8 +5776,8 @@ function normalizeOpenAiToolCall(value, allowed) {
         : typeof value.function?.name === "string"
           ? value.function.name
           : "";
-  const name = normalizeToolName(rawName);
-  if (!name || (allowed.size && !allowed.has(name))) return null;
+  const name = resolveAllowedToolName(rawName, allowed);
+  if (!name) return null;
   const rawArguments =
     value.parameters ??
     value.input ??
@@ -5634,6 +5798,19 @@ function normalizeOpenAiToolCall(value, allowed) {
       arguments: JSON.stringify(args),
     },
   };
+}
+
+function resolveAllowedToolName(name, allowed) {
+  const normalized = normalizeToolName(name);
+  if (!normalized) return "";
+  if (!allowed?.size) return normalized;
+  if (allowed.has(normalized)) return normalized;
+  const lower = normalized.toLowerCase();
+  for (const allowedName of allowed) {
+    const normalizedAllowed = normalizeToolName(allowedName);
+    if (normalizedAllowed.toLowerCase() === lower) return allowedName;
+  }
+  return "";
 }
 
 function normalizeToolName(name) {

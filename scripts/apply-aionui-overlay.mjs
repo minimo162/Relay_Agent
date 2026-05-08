@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -98,7 +98,7 @@ export function patchInitStorageContent(input) {
 export function patchPackageJsonContent(input, branding = relayBranding()) {
   const packageJson = JSON.parse(input);
   packageJson.name = branding.packageName;
-  packageJson.description = "Relay Agent desktop shell powered by AionUi and Microsoft 365 Copilot.";
+  packageJson.description = "Relay Agent desktop shell for Microsoft 365 Copilot and Office workflows.";
   packageJson.author = {
     name: branding.supportName,
   };
@@ -106,7 +106,7 @@ export function patchPackageJsonContent(input, branding = relayBranding()) {
   return ensureTrailingNewline(JSON.stringify(packageJson, null, 2));
 }
 
-export function patchIndexContent(input) {
+export function patchIndexContent(input, branding = relayBranding()) {
   let output = input;
   const importLine = "import { startRelayGatewayBeforeShell, type RelayGatewayStartupResult } from './process/utils/relayGateway';";
   const oldImportLine = "import { startRelayGatewayBeforeShell } from './process/utils/relayGateway';";
@@ -129,6 +129,11 @@ export function patchIndexContent(input) {
   if (output.includes(electronImport)) {
     output = output.replace(electronImport, electronImportWithDialog);
   }
+
+  output = output.replace(
+    /(\n\s*height:\s*windowHeight,\n)(\s*title:\s*['"][^'"]+['"],\n)?(\s*show:\s*false,)/u,
+    `$1    title: '${branding.windowTitle || branding.productName}',\n$3`,
+  );
 
   const oldGatewayStartupBlock = [
     "  if (!isWebUIMode && !isResetPasswordMode) {",
@@ -202,6 +207,108 @@ export function patchIndexContent(input) {
   }
 
   return output;
+}
+
+export function patchTrayContent(input, branding = relayBranding()) {
+  return input.replace(/tray\.setToolTip\(['"][^'"]+['"]\);/u, `tray.setToolTip('${branding.productName}');`);
+}
+
+export function patchRendererIndexHtmlContent(input, branding = relayBranding()) {
+  let output = input;
+  output = output.replace(
+    /<meta name="application-name" content="[^"]*" \/>/u,
+    `<meta name="application-name" content="${branding.productName}" />`,
+  );
+  output = output.replace(
+    /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/u,
+    `<meta name="apple-mobile-web-app-title" content="${branding.productName}" />`,
+  );
+  output = output.replace(
+    /<link rel="icon"[^>]*\/>/u,
+    '<link rel="icon" type="image/svg+xml" href="./favicon.svg" />',
+  );
+  output = output.replace(/<title>[^<]*<\/title>/u, `<title>${branding.browserTitle || branding.productName}</title>`);
+  return output;
+}
+
+export function patchPublicManifestContent(input, branding = relayBranding()) {
+  const manifest = JSON.parse(input);
+  manifest.name = branding.productName;
+  manifest.short_name = branding.productName;
+  manifest.description = `${branding.productName} desktop and browser interface.`;
+  return ensureTrailingNewline(JSON.stringify(manifest, null, 2));
+}
+
+export function patchAppConfigContent(input, branding = relayBranding()) {
+  return input.replace(
+    /return appConfig\?\.name \|\| ['"][^'"]+['"];/u,
+    `return appConfig?.name || '${branding.productName}';`,
+  );
+}
+
+export function patchPlatformIndexContent(input, branding = relayBranding()) {
+  const devName = `${branding.productName}-Dev`;
+  const multiDevName = `${branding.productName}-Dev-2`;
+  return input.replace(
+    /return isMultiInstance \? ['"][^'"]+['"] : ['"][^'"]+['"];/u,
+    `return isMultiInstance ? '${multiDevName}' : '${devName}';`,
+  );
+}
+
+export function patchNodePlatformServicesContent(input, branding = relayBranding()) {
+  const dataDir = `.${branding.packageName}-server`;
+  return input
+    .replace(/return \{ name: ['"][^'"]+['"], version: ['"]0\.0\.0['"] \};/u, `return { name: '${branding.packageName}', version: '0.0.0' };`)
+    .replace(/\.aionui-server/gu, dataDir)
+    .replace(/_pkg\.name \?\? ['"][^'"]+['"]/u, `_pkg.name ?? '${branding.packageName}'`);
+}
+
+export function patchUpdateBridgeContent(input, branding = relayBranding()) {
+  const repo = `${branding.publishOwner}/${branding.publishRepo}`;
+  return input
+    .replace(/const DEFAULT_REPO = ['"][^'"]+['"];/u, `const DEFAULT_REPO = '${repo}';`)
+    .replace(/const DEFAULT_USER_AGENT = ['"][^'"]+['"];/u, `const DEFAULT_USER_AGENT = '${branding.productName}';`)
+    .replace(/return base \|\| `[^`]+-update-\$\{Date\.now\(\)\}`;/u, `return base || \`${branding.packageName}-update-\${Date.now()}\`;`);
+}
+
+export function patchAboutModalContent(input, branding = relayBranding()) {
+  const repoUrl = `https://github.com/${branding.publishOwner}/${branding.publishRepo}`;
+  return input
+    .replace(/window\.dispatchEvent\(new CustomEvent\('aionui-open-update-modal'/gu, "window.dispatchEvent(new CustomEvent('relay-agent-open-update-modal'")
+    .replace(/https:\/\/github\.com\/iOfficeAI\/AionUi\/wiki/gu, `${repoUrl}#readme`)
+    .replace(/https:\/\/github\.com\/iOfficeAI\/AionUi\/releases/gu, `${repoUrl}/releases`)
+    .replace(/https:\/\/github\.com\/iOfficeAI\/AionUi\/issues/gu, `${repoUrl}/issues`)
+    .replace(/https:\/\/github\.com\/iOfficeAI\/AionUi(?![A-Za-z0-9_/-])/gu, repoUrl)
+    .replace(/https:\/\/www\.aionui\.com/gu, repoUrl)
+    .replace(/>\s*AionUi\s*</u, `>\n              ${branding.productName}\n            <`);
+}
+
+export function patchUpdateModalContent(input) {
+  return input
+    .replace(/window\.addEventListener\('aionui-open-update-modal'/gu, "window.addEventListener('relay-agent-open-update-modal'")
+    .replace(/window\.removeEventListener\('aionui-open-update-modal'/gu, "window.removeEventListener('relay-agent-open-update-modal'");
+}
+
+export function patchAgentLogoContent(input) {
+  return input.replace(
+    "import AionLogo from '@/renderer/assets/logos/brand/aion.svg';",
+    "import AionLogo from '@/renderer/assets/logos/brand/app.png';",
+  );
+}
+
+export function patchLocaleJsonContent(input, branding = relayBranding()) {
+  const parsed = JSON.parse(input);
+  const replaceBrand = (value) => {
+    if (typeof value === "string") {
+      return value.replace(/AionUi|AionUI|Aion UI/gu, branding.productName);
+    }
+    if (Array.isArray(value)) return value.map(replaceBrand);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, replaceBrand(nested)]));
+    }
+    return value;
+  };
+  return ensureTrailingNewline(JSON.stringify(replaceBrand(parsed), null, 2));
 }
 
 export function patchElectronBuilderContent(input, branding = relayBranding()) {
@@ -683,12 +790,16 @@ function copyBrandingAssets(targetRoot) {
   const icoIcon = resolve(desktopIconRoot, "icon.ico");
   const icnsIcon = resolve(desktopIconRoot, "icon.icns");
   const png128Icon = resolve(desktopIconRoot, "128x128.png");
+  const svgIcon = resolve(desktopIconRoot, "source/relay-agent.svg");
+  const faviconSvg = resolve(repoRoot, "apps/desktop/public/favicon.svg");
 
   copyFileSync(icoIcon, resolve(resourcesDir, "app.ico"));
   copyFileSync(icnsIcon, resolve(resourcesDir, "app.icns"));
   copyFileSync(pngIcon, resolve(resourcesDir, "app.png"));
   copyFileSync(pngIcon, resolve(resourcesDir, "icon.png"));
   copyFileSync(pngIcon, resolve(rendererBrandDir, "app.png"));
+  copyFileSync(svgIcon, resolve(rendererBrandDir, "aion.svg"));
+  copyFileSync(faviconSvg, resolve(targetRoot, "public/favicon.svg"));
   copyFileSync(png128Icon, resolve(publicPwaDir, "icon-180.png"));
   copyFileSync(png128Icon, resolve(publicPwaDir, "icon-192.png"));
   copyFileSync(pngIcon, resolve(publicPwaDir, "icon-512.png"));
@@ -723,6 +834,20 @@ function copyRelayGatewayResources(targetRoot) {
   return resourcesDir;
 }
 
+function patchRendererLocaleFiles(targetRoot) {
+  const localeRoot = resolve(targetRoot, "src/renderer/services/i18n/locales");
+  if (!existsSync(localeRoot)) return;
+  for (const localeDir of readdirSync(localeRoot, { withFileTypes: true })) {
+    if (!localeDir.isDirectory()) continue;
+    const dirPath = resolve(localeRoot, localeDir.name);
+    for (const file of readdirSync(dirPath, { withFileTypes: true })) {
+      if (!file.isFile() || !file.name.endsWith(".json")) continue;
+      const filePath = resolve(dirPath, file.name);
+      writeFileSync(filePath, patchLocaleJsonContent(readFileSync(filePath, "utf8")), "utf8");
+    }
+  }
+}
+
 export function applyAionuiOverlay(aionuiDir) {
   const targetRoot = resolve(aionuiDir);
   const indexPath = resolve(targetRoot, "src/index.ts");
@@ -733,12 +858,39 @@ export function applyAionuiOverlay(aionuiDir) {
   const packageJsonPath = resolve(targetRoot, "package.json");
   const electronBuilderPath = resolve(targetRoot, "electron-builder.yml");
   const deepLinkPath = resolve(targetRoot, "src/process/utils/deepLink.ts");
+  const trayPath = resolve(targetRoot, "src/process/utils/tray.ts");
+  const rendererIndexHtmlPath = resolve(targetRoot, "src/renderer/index.html");
+  const publicManifestPath = resolve(targetRoot, "public/manifest.webmanifest");
+  const appConfigPath = resolve(targetRoot, "src/common/utils/appConfig.ts");
+  const platformIndexPath = resolve(targetRoot, "src/common/platform/index.ts");
+  const nodePlatformServicesPath = resolve(targetRoot, "src/common/platform/NodePlatformServices.ts");
+  const aboutModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/contents/AboutModalContent.tsx");
+  const updateModalPath = resolve(targetRoot, "src/renderer/components/settings/UpdateModal.tsx");
+  const updateBridgePath = resolve(targetRoot, "src/process/bridge/updateBridge.ts");
+  const agentLogoPath = resolve(targetRoot, "src/renderer/utils/model/agentLogo.ts");
   const settingsModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/index.tsx");
   const webuiModalPath = resolve(
     targetRoot,
     "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx",
   );
-  for (const requiredPath of [indexPath, packageJsonPath, electronBuilderPath, deepLinkPath, settingsModalPath, webuiModalPath]) {
+  for (const requiredPath of [
+    indexPath,
+    packageJsonPath,
+    electronBuilderPath,
+    deepLinkPath,
+    trayPath,
+    rendererIndexHtmlPath,
+    publicManifestPath,
+    appConfigPath,
+    platformIndexPath,
+    nodePlatformServicesPath,
+    aboutModalPath,
+    updateModalPath,
+    updateBridgePath,
+    agentLogoPath,
+    settingsModalPath,
+    webuiModalPath,
+  ]) {
     if (!existsSync(requiredPath)) {
       throw new Error(`AionUi overlay target was not found: ${requiredPath}`);
     }
@@ -764,6 +916,21 @@ export function applyAionuiOverlay(aionuiDir) {
     "utf8",
   );
   writeFileSync(deepLinkPath, patchDeepLinkContent(readFileSync(deepLinkPath, "utf8")), "utf8");
+  writeFileSync(trayPath, patchTrayContent(readFileSync(trayPath, "utf8")), "utf8");
+  writeFileSync(rendererIndexHtmlPath, patchRendererIndexHtmlContent(readFileSync(rendererIndexHtmlPath, "utf8")), "utf8");
+  writeFileSync(publicManifestPath, patchPublicManifestContent(readFileSync(publicManifestPath, "utf8")), "utf8");
+  writeFileSync(appConfigPath, patchAppConfigContent(readFileSync(appConfigPath, "utf8")), "utf8");
+  writeFileSync(platformIndexPath, patchPlatformIndexContent(readFileSync(platformIndexPath, "utf8")), "utf8");
+  writeFileSync(
+    nodePlatformServicesPath,
+    patchNodePlatformServicesContent(readFileSync(nodePlatformServicesPath, "utf8")),
+    "utf8",
+  );
+  writeFileSync(aboutModalPath, patchAboutModalContent(readFileSync(aboutModalPath, "utf8")), "utf8");
+  writeFileSync(updateModalPath, patchUpdateModalContent(readFileSync(updateModalPath, "utf8")), "utf8");
+  writeFileSync(updateBridgePath, patchUpdateBridgeContent(readFileSync(updateBridgePath, "utf8")), "utf8");
+  writeFileSync(agentLogoPath, patchAgentLogoContent(readFileSync(agentLogoPath, "utf8")), "utf8");
+  patchRendererLocaleFiles(targetRoot);
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");
   const brandingAssets = copyBrandingAssets(targetRoot);
@@ -773,9 +940,12 @@ export function applyAionuiOverlay(aionuiDir) {
     brandingAssets,
     deepLinkPath,
     electronBuilderPath,
+    rendererIndexHtmlPath,
+    publicManifestPath,
     indexPath,
     initStoragePath,
     packageJsonPath,
+    trayPath,
     relayGatewayResourcesDir,
     relayGatewayTarget,
     relaySeedTarget,

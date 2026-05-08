@@ -6,12 +6,23 @@ import { pathToFileURL } from "node:url";
 
 import {
   isCliEntrypoint,
+  patchAboutModalContent,
+  patchAgentLogoContent,
+  patchAppConfigContent,
   patchDeepLinkContent,
   patchElectronBuilderContent,
   patchIndexContent,
   patchInitStorageContent,
+  patchLocaleJsonContent,
+  patchNodePlatformServicesContent,
   patchPackageJsonContent,
+  patchPlatformIndexContent,
+  patchPublicManifestContent,
+  patchRendererIndexHtmlContent,
   patchSettingsModalContent,
+  patchTrayContent,
+  patchUpdateBridgeContent,
+  patchUpdateModalContent,
   patchWebuiModalContent,
 } from "./apply-aionui-overlay.mjs";
 
@@ -20,9 +31,11 @@ const branding = {
   appId: "com.relayagent.app",
   productName: "Relay Agent",
   executableName: "Relay Agent",
+  windowTitle: "Relay Agent",
   protocol: "relay-agent",
   publishOwner: "minimo162",
   publishRepo: "Relay_Agent",
+  browserTitle: "Relay Agent",
   supportName: "Relay Agent",
 };
 
@@ -86,6 +99,13 @@ test("patchIndexContent starts the Relay gateway before AionUi storage initializ
     "import { ProcessConfig } from './process/utils/initStorage';",
     "const isWebUIMode = hasSwitch('webui');",
     "const isResetPasswordMode = hasCommand('--resetpass');",
+    "function createWindow() {",
+    "  mainWindow = new BrowserWindow({",
+    "    width: windowWidth,",
+    "    height: windowHeight,",
+    "    show: false,",
+    "  });",
+    "}",
     "async function handleAppReady() {",
     "  try {",
     "    await initializeProcess();",
@@ -110,6 +130,7 @@ test("patchIndexContent starts the Relay gateway before AionUi storage initializ
   );
   assert.match(once, /dialog, nativeImage/);
   assert.match(once, /RelayGatewayStartupResult/);
+  assert.match(once, /title: 'Relay Agent'/);
   assert.match(once, /relayGatewayStartup = await startRelayGatewayBeforeShell\(\);/);
   assert.match(once, /if \(!isWebUIMode && !isResetPasswordMode\)/);
   assert.match(once, /mark\('relayGateway'\);/);
@@ -171,6 +192,107 @@ test("patchDeepLinkContent switches the registered deep-link scheme", () => {
   assert.match(patched, /relay-agent:\/\/add-provider/);
   assert.doesNotMatch(patched, /aionui:\/\//);
   assert.doesNotMatch(patched, /an relay-agent:\/\//);
+});
+
+test("user-facing AionUi shell branding is replaced with Relay Agent", () => {
+  assert.match(
+    patchTrayContent("tray.setToolTip('AionUi');", branding),
+    /tray\.setToolTip\('Relay Agent'\)/,
+  );
+
+  const html = patchRendererIndexHtmlContent(
+    [
+      '<meta name="application-name" content="AionUi" />',
+      '<meta name="apple-mobile-web-app-title" content="AionUi" />',
+      '<link rel="icon" type="image/png" href="./pwa/icon-192.png" />',
+      "<title>AionUi</title>",
+    ].join("\n"),
+    branding,
+  );
+  assert.match(html, /content="Relay Agent"/);
+  assert.match(html, /href="\.\/favicon\.svg"/);
+  assert.match(html, /<title>Relay Agent<\/title>/);
+
+  const manifest = JSON.parse(
+    patchPublicManifestContent(
+      JSON.stringify({ name: "AionUi", short_name: "AionUi", description: "AionUi WebUI" }),
+      branding,
+    ),
+  );
+  assert.equal(manifest.name, "Relay Agent");
+  assert.equal(manifest.short_name, "Relay Agent");
+  assert.match(manifest.description, /Relay Agent/);
+
+  assert.match(
+    patchAppConfigContent("return appConfig?.name || 'AionUi';", branding),
+    /'Relay Agent'/,
+  );
+  assert.match(
+    patchPlatformIndexContent("return isMultiInstance ? 'AionUi-Dev-2' : 'AionUi-Dev';", branding),
+    /Relay Agent-Dev-2.*Relay Agent-Dev/,
+  );
+  assert.match(
+    patchNodePlatformServicesContent("return { name: 'aionui', version: '0.0.0' };\n'.aionui-server'\n_pkg.name ?? 'aionui'", branding),
+    /relay-agent-aionui/,
+  );
+});
+
+test("About, update, locale, and visible logo references use Relay Agent branding", () => {
+  const about = patchAboutModalContent(
+    [
+      "window.dispatchEvent(new CustomEvent('aionui-open-update-modal', { detail: { source: 'about' } }));",
+      "url: 'https://github.com/iOfficeAI/AionUi/wiki',",
+      "url: 'https://github.com/iOfficeAI/AionUi/releases',",
+      "url: 'https://github.com/iOfficeAI/AionUi/issues',",
+      "url: 'https://www.aionui.com',",
+      "<Typography.Title>",
+      "              AionUi",
+      "            </Typography.Title>",
+    ].join("\n"),
+    branding,
+  );
+  assert.match(about, /relay-agent-open-update-modal/);
+  assert.match(about, /github\.com\/minimo162\/Relay_Agent\/releases/);
+  assert.match(about, /Relay Agent/);
+  assert.doesNotMatch(about, /iOfficeAI\/AionUi|www\.aionui\.com/);
+
+  const update = patchUpdateModalContent(
+    [
+      "window.addEventListener('aionui-open-update-modal', handleOpenUpdateModal);",
+      "window.removeEventListener('aionui-open-update-modal', handleOpenUpdateModal);",
+    ].join("\n"),
+  );
+  assert.match(update, /relay-agent-open-update-modal/);
+  assert.doesNotMatch(update, /aionui-open-update-modal/);
+
+  const bridge = patchUpdateBridgeContent(
+    [
+      "const DEFAULT_REPO = 'iOfficeAI/AionUi';",
+      "const DEFAULT_USER_AGENT = 'AionUi';",
+      "  return base || `AionUi-update-${Date.now()}`;",
+    ].join("\n"),
+    branding,
+  );
+  assert.match(bridge, /minimo162\/Relay_Agent/);
+  assert.match(bridge, /DEFAULT_USER_AGENT = 'Relay Agent'/);
+  assert.match(bridge, /relay-agent-aionui-update/);
+
+  const locale = JSON.parse(
+    patchLocaleJsonContent(
+      JSON.stringify({
+        "tray.showWindow": "Show AionUi",
+        login: { pageTitle: "AionUi - Sign In", brand: "AionUi" },
+      }),
+      branding,
+    ),
+  );
+  assert.equal(locale["tray.showWindow"], "Show Relay Agent");
+  assert.equal(locale.login.brand, "Relay Agent");
+
+  assert.match(
+    patchAgentLogoContent("import AionLogo from '@/renderer/assets/logos/brand/aion.svg';"),
+    /brand\/app\.png/,
+  );
 });
 
 test("patchSettingsModalContent hides provider and remote setup tabs behind Relay advanced surfaces", () => {
