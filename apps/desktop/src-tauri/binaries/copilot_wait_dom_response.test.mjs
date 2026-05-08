@@ -192,6 +192,40 @@ test("normalizeProgressTextForUi hides raw OpenAI tool_uses JSON", () => {
   );
 });
 
+test("normalizeProgressTextForUi strips M365 search snippets and duplicate structured answers", () => {
+  const answer = [
+    "はい、'test.xlsx' を検索します...はい、'C:\\Users\\m242054\\Downloads\\test.xlsx' を検索します...",
+    "了解しました。",
+    "指定の Excel ファイルの **A1 セルを赤く**します。",
+    "",
+    "これを実行します：",
+    "",
+    "```bash",
+    "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    "```",
+    "",
+    "- `fill=FF0000` は赤色（背景色）です",
+    "- 値や他の書式は変更せず、**塗りつぶし色のみ**を変更します",
+    "",
+    "了解しました。",
+    "指定の Excel ファイルの **A1 セルを赤く**します。",
+    "",
+    "これを実行します：",
+    "",
+    "```bash",
+    "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    "```",
+    "",
+    "- `fill=FF0000` は赤色（背景色）です",
+    "- 値や他の書式は変更せず、**塗りつぶし色のみ**を変更します",
+  ].join("\n");
+  const normalized = normalizeProgressTextForUi(answer, "");
+
+  assert.doesNotMatch(normalized, /検索します/u);
+  assert.equal((normalized.match(/指定の Excel ファイル/gu) || []).length, 1);
+  assert.equal((normalized.match(/officecli set/gu) || []).length, 1);
+});
+
 test("normalizeCopilotVisibleText strips transient image status noise and duplicate paragraphs", () => {
   assert.equal(
     normalizeCopilotVisibleText(

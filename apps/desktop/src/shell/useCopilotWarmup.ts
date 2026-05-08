@@ -49,8 +49,10 @@ export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings |
     message: null,
     result: null,
   });
+  let warmupInFlight = false;
 
   const runCopilotWarmup = (focusMainWindow: boolean) => {
+    if (warmupInFlight) return;
     const mockedUiSession =
       typeof window !== "undefined" &&
       (((window as unknown as { __RELAY_MOCK__?: unknown }).__RELAY_MOCK__ != null) ||
@@ -75,6 +77,7 @@ export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings |
       });
       return;
     }
+    warmupInFlight = true;
     setCopilotState({ status: "checking", message: "Checking Copilot connection…", result: null });
     void warmupCopilotBridge(loadSettings() ?? null)
       .then((r) => {
@@ -96,6 +99,7 @@ export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings |
         setCopilotState({ status: "error", message: `Copilot: ${msg}`, result: null });
       })
       .finally(() => {
+        warmupInFlight = false;
         if (!focusMainWindow || !isTauri()) return;
         const win = getCurrentWindow();
         void win

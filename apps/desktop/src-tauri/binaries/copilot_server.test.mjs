@@ -247,6 +247,23 @@ test("parseOpenAiRequest keeps unsupported Excel formatting away from bash and t
   assert.match(parsed.systemPrompt, /Do not edit binary Office\/PDF files with text tools/);
 });
 
+test("parseOpenAiRequest routes OfficeCLI work through Skill instead of bash when available", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: String.raw`C:\Users\m242054\Downloads\test.xlsx の A1 セルを赤くして` }],
+    tools: [
+      { type: "function", function: { name: "Skill", parameters: { type: "object" } } },
+      { type: "function", function: { name: "bash", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.match(parsed.systemPrompt, /Office file requests: when the user asks to inspect, create, or modify Office files/);
+  assert.match(parsed.systemPrompt, /Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx`/);
+  assert.match(parsed.systemPrompt, /do not route `officecli` through `bash`/);
+});
+
 test("formatPromptForCopilot wraps strict tool planning as compiler input data", () => {
   const parsed = parseOpenAiRequest({
     messages: [{ role: "user", content: "Read README.md." }],
@@ -420,6 +437,26 @@ test("extractOpenAiToolCallsFromText resolves tool names case-insensitively to t
   assert.equal(extracted.toolCalls[0].function.name, "skill");
 });
 
+test("extractOpenAiToolCallsFromText converts fenced officecli commands to the OfficeCLI Skill", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    [
+      "了解しました。",
+      "",
+      "```bash",
+      "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+      "```",
+    ].join("\n"),
+    [{ type: "function", function: { name: "Skill" } }],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "Skill");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    skill: "officecli-xlsx",
+    args: "set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
 test("extractOpenAiToolCallsFromText recovers embedded repeated tool_calls JSON", () => {
   const repeated =
     '{"{"{"tool_calls":[{"id":"call_read","function":{"name":"read","arguments":"{\\"filePath\\":\\"/tmp/a.txt\\"}"}}]}' +
@@ -525,6 +562,43 @@ test("createServer exposes OpenAI-compatible models and streaming chat endpoints
     assert.match(text, /data: /);
     assert.match(text, /streamed response/);
     assert.match(text, /data: \[DONE\]/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer exposes a Copilot prewarm endpoint", async () => {
+  let prewarmCount = 0;
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: false };
+    },
+    async prewarm() {
+      prewarmCount += 1;
+      return { connected: true, loginRequired: false, prewarmed: true, url: "https://m365.cloud.microsoft/chat/" };
+    },
+    async startOrJoinDescribe(prompt) {
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody("ok", prompt),
+      };
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/prewarm`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(prewarmCount, 1);
+    assert.equal(body.connected, true);
+    assert.equal(body.prewarmed, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

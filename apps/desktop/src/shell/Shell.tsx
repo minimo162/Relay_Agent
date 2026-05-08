@@ -269,13 +269,19 @@ export default function Shell(): JSX.Element {
   onMount(() => {
     void showMainWindow();
     void refreshDiagnostics(false);
+    const copilotPrewarmTimer = window.setTimeout(() => {
+      runCopilotWarmup(false);
+    }, 500);
     const timer = window.setInterval(() => {
       const setup = diagnostics()?.openworkSetup?.status;
       if (setup !== "ready") {
         void refreshDiagnostics(false);
       }
     }, 2500);
-    onCleanup(() => window.clearInterval(timer));
+    onCleanup(() => {
+      window.clearTimeout(copilotPrewarmTimer);
+      window.clearInterval(timer);
+    });
   });
 
   createEffect(() => {

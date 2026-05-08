@@ -61,6 +61,7 @@ export type RelayGatewayStartupResult = {
 let relayGatewayProcess: ChildProcess | null = null;
 let relayGatewayResult: RelayGatewayStartupResult | null = null;
 let quitHandlerRegistered = false;
+let relayGatewayPrewarmStarted = false;
 
 function relayDataDir(): string {
   const dir = join(app.getPath('userData'), 'relay');
@@ -150,6 +151,29 @@ function providerBaseUrl(port: number): string {
 
 function aionrsBaseUrlForRelay(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, '');
+}
+
+function relayReadyStatus({
+  baseUrl,
+  seedFile,
+  cdpPort,
+  gatewayDir,
+  prewarm,
+}: {
+  baseUrl: string;
+  seedFile: string;
+  cdpPort: number;
+  gatewayDir: string;
+  prewarm?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    state: 'ready',
+    baseUrl,
+    seedFile,
+    cdpPort,
+    gatewayDir,
+    ...(prewarm ? { prewarm } : {}),
+  };
 }
 
 function relayDefaultModel(): { id: string; useModel: string } {
@@ -316,6 +340,124 @@ export function stopRelayGateway(): void {
   relayGatewayProcess.kill('SIGTERM');
 }
 
+async function fetchRelayPrewarm(baseUrl: string, token: string): Promise<Record<string, unknown>> {
+  const timeoutMs = intEnv('RELAY_COPILOT_PREWARM_TIMEOUT_MS', 120000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const url = `${aionrsBaseUrlForRelay(baseUrl)}/prewarm`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'X-Relay-Boot-Token': token,
+      },
+      signal: controller.signal,
+    });
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!response.ok) {
+      throw new Error(
+        `prewarm HTTP ${response.status}` +
+          (typeof body.message === 'string' ? `: ${body.message}` : ''),
+      );
+    }
+    return body;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function startRelayGatewayPrewarm({
+  baseUrl,
+  seedFile,
+  cdpPort,
+  gatewayDir,
+  token,
+}: {
+  baseUrl: string;
+  seedFile: string;
+  cdpPort: number;
+  gatewayDir: string;
+  token: string;
+}): void {
+  if (relayGatewayPrewarmStarted) return;
+  relayGatewayPrewarmStarted = true;
+  if (process.env.RELAY_AIONUI_DISABLE_COPILOT_PREWARM === '1') {
+    writeStatus(
+      relayReadyStatus({
+        baseUrl,
+        seedFile,
+        cdpPort,
+        gatewayDir,
+        prewarm: { state: 'disabled', message: 'Copilot background prewarm disabled by environment.' },
+      }),
+    );
+    return;
+  }
+
+  writeStatus(
+    relayReadyStatus({
+      baseUrl,
+      seedFile,
+      cdpPort,
+      gatewayDir,
+      prewarm: { state: 'starting', message: 'Opening Microsoft 365 Copilot in the background.' },
+    }),
+  );
+
+  void fetchRelayPrewarm(baseUrl, token)
+    .then((status) => {
+      const connected = status.connected === true;
+      const prewarmed = status.prewarmed === true;
+      const loginRequired = status.loginRequired === true;
+      const url = typeof status.url === 'string' ? status.url : null;
+      const message =
+        typeof status.error === 'string'
+          ? status.error
+          : loginRequired
+            ? 'Microsoft 365 sign-in is required before Relay can use Copilot.'
+            : prewarmed
+              ? 'Microsoft 365 Copilot is ready for the first request.'
+              : connected
+                ? 'Microsoft 365 Copilot is open; first request may still prepare a new chat.'
+                : 'Microsoft 365 Copilot did not report ready.';
+      writeStatus(
+        relayReadyStatus({
+          baseUrl,
+          seedFile,
+          cdpPort,
+          gatewayDir,
+          prewarm: {
+            state: loginRequired ? 'needs_sign_in' : prewarmed ? 'ready' : connected ? 'page_ready' : 'needs_attention',
+            message,
+            connected,
+            prewarmed,
+            loginRequired,
+            ...(url ? { url } : {}),
+          },
+        }),
+      );
+      appendGatewayLog(`[RelayGateway] Copilot prewarm: ${message}\n`);
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      writeStatus(
+        relayReadyStatus({
+          baseUrl,
+          seedFile,
+          cdpPort,
+          gatewayDir,
+          prewarm: {
+            state: 'needs_attention',
+            message,
+            connected: false,
+            prewarmed: false,
+            loginRequired: false,
+          },
+        }),
+      );
+      appendGatewayLog(`[RelayGateway] Copilot prewarm failed: ${message}\n`);
+    });
+}
+
 export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartupResult> {
   if (process.env.RELAY_AIONUI_DISABLE_GATEWAY_AUTOSTART === '1') {
     relayGatewayResult = {
@@ -371,6 +513,7 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
       ELECTRON_RUN_AS_NODE: '1',
       RELAY_AGENT_API_KEY: token,
       RELAY_EDGE_CDP_PORT: String(cdpPort),
+      RELAY_COPILOT_NO_WINDOW_FOCUS: process.env.RELAY_COPILOT_NO_WINDOW_FOCUS || '1',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
     windowsHide: true,
@@ -393,7 +536,8 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
       seedFile,
       statusFile,
     };
-    writeStatus({ state: 'ready', baseUrl, seedFile, cdpPort, gatewayDir });
+    writeStatus(relayReadyStatus({ baseUrl, seedFile, cdpPort, gatewayDir }));
+    startRelayGatewayPrewarm({ baseUrl, seedFile, cdpPort, gatewayDir, token });
     return relayGatewayResult;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

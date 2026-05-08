@@ -624,6 +624,7 @@ class CopilotSession {
   /** Serialize /v1/chat/completions — overlapping POSTs (e.g. Rust retry while Copilot still runs) must wait, not 500 "busy". */
   _describeChain = Promise.resolve();
   relaySessions = new Map();
+  prewarmedTarget = null;
   inflightRequests = new Map();
   completedRequests = new Map();
   repairStageStats = new Map();
@@ -893,6 +894,21 @@ class CopilotSession {
       return { targetId: result.targetId, url: COPILOT_URL };
     }
 
+    const prewarmedTargetId = this.prewarmedTarget?.targetId || "";
+    if (prewarmedTargetId) {
+      const prewarmedPage = pages.find(
+        (page) => page.targetId === prewarmedTargetId && !claimedTargets.has(page.targetId) && isCopilotUrl(page.url),
+      );
+      this.prewarmedTarget = null;
+      if (prewarmedPage) {
+        console.error("[copilot] adopting prewarmed Copilot tab for relay session", relaySessionId);
+        relaySession.cdpTargetId = prewarmedPage.targetId;
+        relaySession.initialized = true;
+        return prewarmedPage;
+      }
+      console.error("[copilot] prewarmed Copilot tab was unavailable; falling back to normal page selection");
+    }
+
     const unclaimedCopilot = pages.filter(
       (page) => !claimedTargets.has(page.targetId) && isCopilotUrl(page.url),
     );
@@ -995,6 +1011,12 @@ class CopilotSession {
     return pending;
   }
 
+  async prewarm() {
+    const pending = this._describeChain.then(() => this.prewarmImpl());
+    this._describeChain = pending.catch(() => {});
+    return pending;
+  }
+
   async inspectStatusImpl() {
     let pageSession = null;
     try {
@@ -1038,6 +1060,93 @@ class CopilotSession {
         connected: false,
         loginRequired: false,
         error: error instanceof Error ? error.message : String(error),
+        lastBridgeFailure: this.lastBridgeFailure,
+        repairStageStats: this._serializeRepairStageStats(),
+      };
+    } finally {
+      if (pageSession) pageSession.close();
+    }
+  }
+
+  async prewarmImpl() {
+    let pageSession = null;
+    const startedAt = Date.now();
+    try {
+      await this.connect(globalOptions.cdpPort);
+      const page = await this.findStatusPage();
+      if (!page) {
+        return {
+          connected: false,
+          loginRequired: false,
+          error: "Copilot page not available",
+          prewarmed: false,
+          lastBridgeFailure: this.lastBridgeFailure,
+          repairStageStats: this._serializeRepairStageStats(),
+        };
+      }
+
+      pageSession = await this.navigateToPage(page);
+      await pageSession.send("Page.enable", {}).catch(() => {});
+
+      const { currentUrl: finalUrl, page: refreshedPage } = await this.ensureTargetUrl(
+        pageSession,
+        page,
+        page.targetId,
+        true,
+        "[copilot:prewarm]",
+      );
+      if (isLoginUrl(finalUrl)) {
+        return {
+          connected: false,
+          loginRequired: true,
+          url: finalUrl,
+          prewarmed: false,
+          lastBridgeFailure: this.lastBridgeFailure,
+          repairStageStats: this._serializeRepairStageStats(),
+        };
+      }
+      if (!isCopilotUrl(finalUrl)) {
+        return {
+          connected: false,
+          loginRequired: false,
+          url: finalUrl,
+          error: "Copilot tab could not be resolved for prewarm",
+          prewarmed: false,
+          lastBridgeFailure: this.lastBridgeFailure,
+          repairStageStats: this._serializeRepairStageStats(),
+        };
+      }
+
+      await assertCopilotPageResponsive(pageSession, "[copilot:prewarm]");
+      const newChatOk = await clickNewChatDeep(pageSession).catch((error) => {
+        console.error("[copilot:prewarm] new chat click failed:", error?.message || error);
+        return false;
+      });
+      if (newChatOk) {
+        await sleep(1000);
+        this.prewarmedTarget = {
+          targetId: refreshedPage?.targetId || page.targetId,
+          readyAt: Date.now(),
+        };
+        console.error("[copilot:prewarm] ready in", Date.now() - startedAt, "ms");
+      } else {
+        console.error("[copilot:prewarm] Copilot page ready but new chat button was not available");
+      }
+
+      return {
+        connected: true,
+        loginRequired: false,
+        url: finalUrl,
+        prewarmed: newChatOk,
+        lastBridgeFailure: this.lastBridgeFailure,
+        repairStageStats: this._serializeRepairStageStats(),
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        loginRequired: false,
+        error: error instanceof Error ? error.message : String(error),
+        prewarmed: false,
         lastBridgeFailure: this.lastBridgeFailure,
         repairStageStats: this._serializeRepairStageStats(),
       };
@@ -4687,6 +4796,11 @@ function createServer(session, options = globalOptions) {
         const status = await session.inspectStatus();
         return writeJson(res, 200, status);
       }
+      if (req.method === "GET" && reqUrl.pathname === "/prewarm") {
+        if (!requireBridgeAuth(req, res, options)) return;
+        const status = await session.prewarm();
+        return writeJson(res, 200, status);
+      }
       if (req.method === "POST" && reqUrl.pathname === "/v1/chat/abort") {
         if (!requireBridgeAuth(req, res, options)) return;
         const payload = await readJsonBody(req);
@@ -5018,7 +5132,7 @@ function formatStrictToolCompilerPrompt({ tools = [], mode = TOOL_PROTOCOL_MODES
     "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
     "Use this shape only:",
     '{"tool_uses":[{"recipient_name":"functions.tool_name","parameters":{"key":"value"}}]}',
-    "Do not return markdown, prose, headings, bullets, code fences, comments, explanations, citations, or partial JSON.",
+    "Do not return markdown, prose, headings, bullets, code fences, bash commands, shell commands, comments, explanations, citations, or partial JSON.",
     "Do not use OpenAI `tool_calls` with nested JSON strings unless the caller explicitly requested that shape; `tool_uses.parameters` must be a normal JSON object.",
     "Use only double quotes for JSON strings and property names. Escape backslashes if you keep Windows separators, or prefer forward slashes in Windows paths.",
     "For local file or folder requests, never answer from memory or Microsoft 365 search. Emit a file tool call such as glob, grep, read, list, or shell according to the catalog.",
@@ -5035,6 +5149,7 @@ function formatStrictToolCompilerPrompt({ tools = [], mode = TOOL_PROTOCOL_MODES
 
 function formatReliableToolPolicy(tools = []) {
   const available = new Set(tools.map((tool) => normalizeToolName(tool?.function?.name || "")).filter(Boolean));
+  const hasSkillRunner = [...available].some((name) => name.toLowerCase() === "skill");
   const lines = [
     "RELAY RELIABLE TOOL POLICY:",
     "Use only capabilities that are reliable in the current OpenCode tool catalog. Prefer the smallest safe first tool call over a large speculative plan.",
@@ -5067,7 +5182,11 @@ function formatReliableToolPolicy(tools = []) {
       "Command execution: use `bash` only for explicit tests, builds, git inspection, or safe project commands. Do not use destructive commands, package installation, network mutation, or arbitrary scripts unless the user explicitly requested them.",
     );
   }
-  if (available.has("question")) {
+  if (available.has("question") && hasSkillRunner) {
+    lines.push(
+      "Unsupported or ambiguous operations: use `question` instead of pretending only when no advertised skill/tool covers the requested operation.",
+    );
+  } else if (available.has("question")) {
     lines.push(
       "Unsupported or ambiguous operations: use `question` instead of pretending. This includes Excel cell formatting, Office GUI automation, OCR, Outlook .msg handling, protected/shared workbook edits, and binary document mutation without a dedicated tool.",
     );
@@ -5076,9 +5195,11 @@ function formatReliableToolPolicy(tools = []) {
       "Unsupported operations: do not route Excel cell formatting, Office GUI automation, OCR, Outlook .msg handling, or binary document mutation to bash/edit/write unless a dedicated tool exists.",
     );
   }
-  if ([...available].some((name) => name.toLowerCase() === "skill")) {
+  if (hasSkillRunner) {
     lines.push(
-      "Skill runner: use `Skill` only when a matching skill is exposed by the tool catalog. Parameters must be a normal JSON object such as `{\"skill\":\"office-cli\",\"args\":\"modify excel file C:/path/file.xlsx set cell A1 fill-color red\"}`.",
+      "Office file requests: when the user asks to inspect, create, or modify Office files and a matching OfficeCLI skill is available, emit a `Skill` tool call. Do not answer with `officecli` commands in markdown and do not route `officecli` through `bash`.",
+      "Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx` and `args` containing the concise OfficeCLI task or command, for example `{\"skill\":\"officecli-xlsx\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}`.",
+      "Generic OfficeCLI fallback: use `{\"skill\":\"officecli\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}` only if the catalog does not expose a more specific OfficeCLI skill name.",
       "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
     );
   }
@@ -5459,7 +5580,95 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
   ];
   if (malformedCalls.length && looksLikeToolJson(trimmedRaw)) displayText = "";
   toolCalls.push(...malformedCalls);
+  const officeCliSkillCalls = extractOfficeCliSkillCallsFromText(raw, allowed);
+  if (officeCliSkillCalls.length) {
+    displayText = stripOfficeCliCodeFences(displayText);
+    toolCalls.push(...officeCliSkillCalls);
+  }
   return { displayText: displayText.trim(), toolCalls: dedupeOpenAiToolCalls(toolCalls) };
+}
+
+function extractOfficeCliSkillCallsFromText(text, allowed) {
+  const skillToolName = resolveAllowedToolName("Skill", allowed) || resolveAllowedToolName("skill", allowed);
+  if (!skillToolName) return [];
+  const raw = String(text || "");
+  const commands = [];
+  const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/giu;
+  for (const match of raw.matchAll(fenceRe)) {
+    const lang = String(match[1] || "").trim().toLowerCase();
+    if (
+      lang &&
+      !/^(?:bash|sh|shell|zsh|powershell|pwsh|cmd|bat|dos|text|plaintext|console)$/u.test(lang)
+    ) {
+      continue;
+    }
+    commands.push(...extractOfficeCliCommandArgsFromLines(match[2]));
+  }
+  if (!commands.length) {
+    commands.push(...extractOfficeCliCommandArgsFromLines(raw));
+  }
+  const seen = new Set();
+  return commands
+    .map((args) => args.trim())
+    .filter(Boolean)
+    .filter((args) => {
+      if (seen.has(args)) return false;
+      seen.add(args);
+      return true;
+    })
+    .map((args) => ({
+      id: `call_${randomBytes(6).toString("hex")}`,
+      type: "function",
+      function: {
+        name: skillToolName,
+        arguments: JSON.stringify({
+          skill: officeCliSkillNameForArgs(args),
+          args,
+        }),
+      },
+    }));
+}
+
+function extractOfficeCliCommandArgsFromLines(text) {
+  const args = [];
+  for (const line of String(text || "").split(/\r?\n/u)) {
+    const commandArgs = parseOfficeCliCommandArgs(line);
+    if (commandArgs) args.push(commandArgs);
+  }
+  return args;
+}
+
+function parseOfficeCliCommandArgs(line) {
+  let raw = String(line || "").trim();
+  if (!raw || raw.startsWith("#") || raw.startsWith("//")) return "";
+  raw = raw.replace(/^\s*(?:\$|>|PS>|cmd>)\s*/iu, "");
+  raw = raw.replace(/^\s*PS\s+[A-Z]:\\[^>]*>\s*/iu, "");
+  const match = raw.match(/^(?:officecli|office-cli)(?:\.exe)?(?:\s+(.+))?$/iu);
+  if (!match) return "";
+  const args = String(match[1] || "").trim();
+  if (!args) return "";
+  if (/[\r\n`]/u.test(args)) return "";
+  if (/(?:^|\s)(?:&&|\|\|)(?:\s|$)/u.test(args)) return "";
+  if (/[;&|]\s*(?:officecli|office-cli|cmd|powershell|pwsh|bash|sh|del|erase|rd|rmdir|rm)\b/iu.test(args)) {
+    return "";
+  }
+  return args;
+}
+
+function officeCliSkillNameForArgs(args) {
+  const text = String(args || "").toLowerCase();
+  if (/\.(?:xlsx|xlsm|xlsb|csv|tsv)\b/u.test(text) || /\bxlsx\b/u.test(text) || /\/sheet[^/\s]*/u.test(text)) {
+    return "officecli-xlsx";
+  }
+  if (/\.(?:docx|docm)\b/u.test(text) || /\bdocx\b/u.test(text)) return "officecli-docx";
+  if (/\.(?:pptx|pptm)\b/u.test(text) || /\bpptx\b/u.test(text)) return "officecli-pptx";
+  return "officecli";
+}
+
+function stripOfficeCliCodeFences(text) {
+  return String(text || "").replace(/```([^\n`]*)\r?\n([\s\S]*?)```/giu, (match, _lang, body) => {
+    return extractOfficeCliCommandArgsFromLines(body).length ? "" : match;
+  });
 }
 
 function looksLikeToolJson(text) {

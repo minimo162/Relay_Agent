@@ -243,7 +243,7 @@ fn run_existing_copilot_warmup_blocking(
         boot_token_present,
     );
     let result = match runtime.block_on(
-        guard.status_with_timeout_detailed(status_timeout_secs(browser_settings.timeout_ms)),
+        guard.prewarm_status_with_timeout_detailed(status_timeout_secs(browser_settings.timeout_ms)),
     ) {
         Ok(response) => {
             classify_warmup_status_response(&request_id, cdp_port, boot_token_present, response)
@@ -337,7 +337,7 @@ pub fn run_copilot_warmup_blocking(
         boot_token_present,
     );
     let result = match runtime.block_on(
-        guard.status_with_timeout_detailed(status_timeout_secs(browser_settings.timeout_ms)),
+        guard.prewarm_status_with_timeout_detailed(status_timeout_secs(browser_settings.timeout_ms)),
     ) {
         Ok(response) => {
             classify_warmup_status_response(&request_id, cdp_port, boot_token_present, response)

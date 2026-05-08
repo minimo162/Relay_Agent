@@ -296,6 +296,61 @@ export function patchAgentLogoContent(input) {
   );
 }
 
+export function patchTitlebarContent(input, branding = relayBranding()) {
+  let output = input;
+  output = output.replace(
+    /const AionLogoMark: React\.FC = \(\) => \([\s\S]*?\n\);\n\n\/\/ Claude-desktop-style/u,
+    [
+      "const RelayLogoMark: React.FC = () => (",
+      "  <svg className='app-titlebar__brand-logo' viewBox='0 0 80 80' fill='none' aria-hidden='true' focusable='false'>",
+      "    <path d='M31 34 Q40 25 49 34' stroke='currentColor' strokeWidth='7' strokeLinecap='round' />",
+      "    <path d='M31 46 Q40 55 49 46' stroke='currentColor' strokeWidth='7' strokeLinecap='round' />",
+      "    <circle cx='22' cy='40' r='12' fill='currentColor' />",
+      "    <circle cx='58' cy='40' r='12' fill='currentColor' />",
+      "  </svg>",
+      ");",
+      "",
+      "// Claude-desktop-style",
+    ].join("\n"),
+  );
+  output = output.replace(
+    /const appTitle = useMemo\(\(\) => ['"][^'"]+['"], \[\]\);/u,
+    `const appTitle = useMemo(() => '${branding.productName}', []);`,
+  );
+  output = output.replace(/<AionLogoMark \/>/gu, "<RelayLogoMark />");
+  return output;
+}
+
+export function patchLayoutBrandContent(input, branding = relayBranding()) {
+  let output = input;
+  const relayLogoImport = "import RelayLogo from '@/renderer/assets/logos/brand/app.png';";
+  if (!output.includes(relayLogoImport)) {
+    const anchor = "import Titlebar from '@/renderer/components/layout/Titlebar';";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find layout Titlebar import anchor");
+    }
+    output = output.replace(anchor, `${anchor}\n${relayLogoImport}`);
+  }
+
+  output = output.replace(
+    /<svg\s+className=\{classNames\('w-5\.5 h-5\.5 absolute inset-0 m-auto'[\s\S]*?<\/svg>/u,
+    [
+      "<img",
+      "                    src={RelayLogo}",
+      `                    alt='${branding.productName}'`,
+      "                    className={classNames('w-5.5 h-5.5 absolute inset-0 m-auto object-contain', {",
+      "                      ' scale-140': !collapsed,",
+      "                    })}",
+      "                  />",
+    ].join("\n"),
+  );
+  output = output.replace(
+    /<div className='flex-1 text-20px text-1 collapsed-hidden font-bold'>[^<]+<\/div>/u,
+    `<div className='flex-1 text-20px text-1 collapsed-hidden font-bold'>${branding.productName}</div>`,
+  );
+  return output;
+}
+
 export function patchLocaleJsonContent(input, branding = relayBranding()) {
   const parsed = JSON.parse(input);
   const replaceBrand = (value) => {
@@ -796,8 +851,11 @@ function copyBrandingAssets(targetRoot) {
   copyFileSync(icoIcon, resolve(resourcesDir, "app.ico"));
   copyFileSync(icnsIcon, resolve(resourcesDir, "app.icns"));
   copyFileSync(pngIcon, resolve(resourcesDir, "app.png"));
+  copyFileSync(pngIcon, resolve(resourcesDir, "app_dev.png"));
   copyFileSync(pngIcon, resolve(resourcesDir, "icon.png"));
+  copyFileSync(pngIcon, resolve(resourcesDir, "aionui_logo_no_border.png"));
   copyFileSync(pngIcon, resolve(rendererBrandDir, "app.png"));
+  copyFileSync(svgIcon, resolve(resourcesDir, "aionui_logo_black_bg.svg"));
   copyFileSync(svgIcon, resolve(rendererBrandDir, "aion.svg"));
   copyFileSync(faviconSvg, resolve(targetRoot, "public/favicon.svg"));
   copyFileSync(png128Icon, resolve(publicPwaDir, "icon-180.png"));
@@ -868,6 +926,8 @@ export function applyAionuiOverlay(aionuiDir) {
   const updateModalPath = resolve(targetRoot, "src/renderer/components/settings/UpdateModal.tsx");
   const updateBridgePath = resolve(targetRoot, "src/process/bridge/updateBridge.ts");
   const agentLogoPath = resolve(targetRoot, "src/renderer/utils/model/agentLogo.ts");
+  const titlebarPath = resolve(targetRoot, "src/renderer/components/layout/Titlebar/index.tsx");
+  const layoutPath = resolve(targetRoot, "src/renderer/components/layout/Layout.tsx");
   const settingsModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/index.tsx");
   const webuiModalPath = resolve(
     targetRoot,
@@ -888,6 +948,8 @@ export function applyAionuiOverlay(aionuiDir) {
     updateModalPath,
     updateBridgePath,
     agentLogoPath,
+    titlebarPath,
+    layoutPath,
     settingsModalPath,
     webuiModalPath,
   ]) {
@@ -930,6 +992,8 @@ export function applyAionuiOverlay(aionuiDir) {
   writeFileSync(updateModalPath, patchUpdateModalContent(readFileSync(updateModalPath, "utf8")), "utf8");
   writeFileSync(updateBridgePath, patchUpdateBridgeContent(readFileSync(updateBridgePath, "utf8")), "utf8");
   writeFileSync(agentLogoPath, patchAgentLogoContent(readFileSync(agentLogoPath, "utf8")), "utf8");
+  writeFileSync(titlebarPath, patchTitlebarContent(readFileSync(titlebarPath, "utf8")), "utf8");
+  writeFileSync(layoutPath, patchLayoutBrandContent(readFileSync(layoutPath, "utf8")), "utf8");
   patchRendererLocaleFiles(targetRoot);
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");

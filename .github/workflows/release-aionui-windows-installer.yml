@@ -184,6 +184,22 @@ jobs:
             throw "Relay gateway startup hook was not installed before AionUi shell startup."
           }
 
+          $titlebar = Get-Content -LiteralPath "aionui\src\renderer\components\layout\Titlebar\index.tsx" -Raw
+          if ($titlebar -match "const appTitle = useMemo\(\(\) => 'AionUi'") {
+            throw "Relay overlay did not update the visible titlebar app title."
+          }
+          if ($titlebar -notmatch "RelayLogoMark" -or $titlebar -notmatch "Relay Agent") {
+            throw "Relay overlay did not install the Relay titlebar brand mark."
+          }
+
+          $layout = Get-Content -LiteralPath "aionui\src\renderer\components\layout\Layout.tsx" -Raw
+          if ($layout -match ">AionUi</div>") {
+            throw "Relay overlay did not update the visible sidebar brand text."
+          }
+          if ($layout -notmatch "RelayLogo" -or $layout -notmatch ">Relay Agent</div>") {
+            throw "Relay overlay did not install the Relay sidebar logo."
+          }
+
       - name: Build Relay-branded AionUi Windows installer
         working-directory: aionui
         env:

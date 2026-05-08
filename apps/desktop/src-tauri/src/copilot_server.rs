@@ -894,9 +894,26 @@ impl CopilotServer {
         &mut self,
         timeout_secs: u64,
     ) -> Result<CopilotStatusResponse, CopilotStatusCheckError> {
+        self.status_path_with_timeout_detailed("/status", timeout_secs)
+            .await
+    }
+
+    pub async fn prewarm_status_with_timeout_detailed(
+        &mut self,
+        timeout_secs: u64,
+    ) -> Result<CopilotStatusResponse, CopilotStatusCheckError> {
+        self.status_path_with_timeout_detailed("/prewarm", timeout_secs)
+            .await
+    }
+
+    async fn status_path_with_timeout_detailed(
+        &mut self,
+        path: &str,
+        timeout_secs: u64,
+    ) -> Result<CopilotStatusResponse, CopilotStatusCheckError> {
         let mut request = self
             .client
-            .get(format!("{}/status", self.server_url()))
+            .get(format!("{}{}", self.server_url(), path))
             .timeout(Duration::from_secs(timeout_secs));
         if let Some(token) = &self.boot_token {
             request = request.header("X-Relay-Boot-Token", token);
@@ -927,9 +944,24 @@ impl CopilotServer {
         }
     }
 
-    /// Startup warmup: long-timeout `/status` (Edge + Copilot tab + login probe).
+    /// Startup warmup: long-timeout `/prewarm` (Edge + Copilot tab + login probe + best-effort new chat).
     pub async fn warmup_status(&mut self) -> Result<CopilotStatusResponse, CopilotError> {
-        self.status_with_timeout(WARMUP_STATUS_TIMEOUT_SECS).await
+        self.prewarm_status_with_timeout_detailed(WARMUP_STATUS_TIMEOUT_SECS)
+            .await
+            .map_err(|error| match error {
+                CopilotStatusCheckError::Transport(error) => error,
+                CopilotStatusCheckError::Http(error) => CopilotError::PromptError(Box::new(
+                    CopilotPromptFailure::Message(format!(
+                        "warmup check failed: status {}{}",
+                        error.status,
+                        error
+                            .error_code
+                            .as_deref()
+                            .map(|code| format!(" ({code})"))
+                            .unwrap_or_default()
+                    )),
+                )),
+            })
     }
 
     fn http_error_is_timeout(err: &CopilotError) -> bool {

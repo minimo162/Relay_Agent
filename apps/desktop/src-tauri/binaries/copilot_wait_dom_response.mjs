@@ -170,6 +170,10 @@ function stripInternalReasoningLeadIns(text) {
 }
 
 function looksLikeSearchProgressText(text) {
+  const raw = String(text ?? "").trim();
+  if (/^(?:はい[、,]?\s*)?['"`][^'"`\r\n]{1,260}['"`]\s*を検索します(?:\.{3}|…)?$/u.test(raw)) {
+    return true;
+  }
   const normalized = normalizeReasoningDetectionText(text);
   if (!normalized) return false;
   if (
@@ -204,7 +208,7 @@ function looksLikeInternalReasoningParagraph(text) {
   if (/^reasoning completed in\s*\d+\s*steps/i.test(raw)) return true;
   const normalized = normalizeReasoningDetectionText(raw);
   if (!normalized) return false;
-  if (looksLikeSearchProgressText(normalized)) return true;
+  if (looksLikeSearchProgressText(raw)) return true;
   if (/^the user wants me to\b/.test(normalized)) return true;
   if (/^show\s*considering\b/.test(normalized)) return true;
   if (
@@ -243,6 +247,13 @@ function stripInternalReasoningParagraphs(text) {
   return paragraphs.join("\n\n");
 }
 
+function stripM365SearchProgressSnippets(text) {
+  return String(text ?? "").replace(
+    /(?:はい[、,]?\s*)?['"`][^'"`\r\n]{1,260}['"`]\s*を検索します(?:\.{3}|…)?/gu,
+    "\n",
+  );
+}
+
 function dedupeConsecutiveLines(text) {
   const lines = String(text ?? "").split(/\r?\n/);
   const out = [];
@@ -273,16 +284,38 @@ function dedupeConsecutiveParagraphs(text) {
   return out.join("\n\n");
 }
 
+function dedupeRepeatedParagraphs(text) {
+  const parts = String(text ?? "").split(/\n{2,}/);
+  const out = [];
+  const seen = new Set();
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const key = trimmed.replace(/\s+/gu, " ").trim();
+    if ((key.length >= 8 || trimmed.includes("```") || trimmed.includes("\n")) && seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out.join("\n\n");
+}
+
 function normalizeCopilotVisibleText(text) {
   let cleaned = stripM365CopilotReplyChrome(String(text ?? ""));
   cleaned = stripStreamingPlaceholderTail(cleaned);
   cleaned = stripTransientCopilotStatus(cleaned);
+  cleaned = stripM365SearchProgressSnippets(cleaned);
   cleaned = stripInternalReasoningParagraphs(cleaned);
-  if (assistantTextHasStructuredContent(cleaned) || /relay_tool_call/u.test(cleaned)) {
+  if (/relay_tool_call/u.test(cleaned)) {
     return cleaned.trim();
+  }
+  if (assistantTextHasStructuredContent(cleaned)) {
+    return dedupeRepeatedParagraphs(cleaned).trim();
   }
   cleaned = dedupeConsecutiveLines(cleaned);
   cleaned = dedupeConsecutiveParagraphs(cleaned);
+  cleaned = dedupeRepeatedParagraphs(cleaned);
   return cleaned.trim();
 }
 
