@@ -43,9 +43,10 @@ test("OfficeCLI path registration prepends the cache directory once", () => {
 
 test("OfficeCLI cached path uses version and manifest entrypoint", () => {
   const artifact = officeCliArtifact();
+  const cacheRoot = join(tmpdir(), "relay-officecli");
   assert.equal(
-    officeCliCachedPath({ cacheRoot: "/tmp/relay-officecli", artifact }),
-    "/tmp/relay-officecli/1.0.76/officecli.exe",
+    officeCliCachedPath({ cacheRoot, artifact }),
+    join(cacheRoot, "1.0.76", "officecli.exe"),
   );
 });
 
