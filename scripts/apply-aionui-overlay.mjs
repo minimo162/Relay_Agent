@@ -106,6 +106,104 @@ export function patchPackageJsonContent(input, branding = relayBranding()) {
   return ensureTrailingNewline(JSON.stringify(packageJson, null, 2));
 }
 
+export function patchIndexContent(input) {
+  let output = input;
+  const importLine = "import { startRelayGatewayBeforeShell, type RelayGatewayStartupResult } from './process/utils/relayGateway';";
+  const oldImportLine = "import { startRelayGatewayBeforeShell } from './process/utils/relayGateway';";
+
+  if (output.includes(oldImportLine)) {
+    output = output.replace(oldImportLine, importLine);
+  }
+
+  if (!output.includes(importLine)) {
+    const anchor = "import { ProcessConfig } from './process/utils/initStorage';";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find index ProcessConfig import anchor");
+    }
+    output = output.replace(anchor, `${anchor}\n${importLine}`);
+  }
+
+  const electronImport = "import { app, BrowserWindow, nativeImage, net, powerMonitor, protocol, screen } from 'electron';";
+  const electronImportWithDialog =
+    "import { app, BrowserWindow, dialog, nativeImage, net, powerMonitor, protocol, screen } from 'electron';";
+  if (output.includes(electronImport)) {
+    output = output.replace(electronImport, electronImportWithDialog);
+  }
+
+  const oldGatewayStartupBlock = [
+    "  if (!isWebUIMode && !isResetPasswordMode) {",
+    "    await startRelayGatewayBeforeShell();",
+    "    mark('relayGateway');",
+    "  }",
+  ].join("\n");
+  const gatewayStartupBlock = [
+    "  let relayGatewayStartup: RelayGatewayStartupResult | null = null;",
+    "  if (!isWebUIMode && !isResetPasswordMode) {",
+    "    relayGatewayStartup = await startRelayGatewayBeforeShell();",
+    "    mark('relayGateway');",
+    "  }",
+  ].join("\n");
+
+  if (output.includes(oldGatewayStartupBlock)) {
+    output = output.replace(oldGatewayStartupBlock, gatewayStartupBlock);
+  } else if (!output.includes("mark('relayGateway')")) {
+    const anchor = [
+      "  try {",
+      "    await initializeProcess();",
+      "    mark('initializeProcess');",
+    ].join("\n");
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find index initializeProcess anchor");
+    }
+    output = output.replace(
+      anchor,
+      [
+        gatewayStartupBlock,
+        "",
+        "  try {",
+        "    await initializeProcess();",
+        "    mark('initializeProcess');",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("relayGatewayStartup?.state === 'needs_attention'")) {
+    const anchor = [
+      "    createWindow({ showOnReady: showMainWindowOnReady });",
+      "    appReadyDone = true;",
+      "    mark('createWindow');",
+    ].join("\n");
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find index createWindow anchor");
+    }
+    output = output.replace(
+      anchor,
+      [
+        "    createWindow({ showOnReady: showMainWindowOnReady });",
+        "    appReadyDone = true;",
+        "    mark('createWindow');",
+        "",
+        "    if (relayGatewayStartup?.state === 'needs_attention') {",
+        "      dialog",
+        "        .showMessageBox(mainWindow, {",
+        "          type: 'warning',",
+        "          title: 'Relay Agent setup needs attention',",
+        "          message: 'Relay could not start the local Microsoft 365 Copilot gateway.',",
+        "          detail:",
+        "            'Relay Agent opened, but Copilot requests will not run until the local gateway starts. ' +",
+        "            'Close other Relay Agent windows and restart the app. ' +",
+        "            `Detail: ${relayGatewayStartup.message || 'No additional detail was reported.'}`,",
+        "          buttons: ['OK'],",
+        "        })",
+        "        .catch((error) => console.error('[RelayGateway] Failed to show setup warning:', error));",
+        "    }",
+      ].join("\n"),
+    );
+  }
+
+  return output;
+}
+
 export function patchElectronBuilderContent(input, branding = relayBranding()) {
   let output = input;
   output = replaceYamlScalar(output, "appId", branding.appId);
@@ -129,6 +227,13 @@ export function patchElectronBuilderContent(input, branding = relayBranding()) {
   );
   output = replaceLine(output, /^  owner: .*$/m, `  owner: ${branding.publishOwner}`);
   output = replaceLine(output, /^  repo: .*$/m, `  repo: ${branding.publishRepo}`);
+  if (!output.includes("from: resources/relay-gateway")) {
+    const anchor = "extraResources:\n";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find electron-builder extraResources anchor");
+    }
+    output = output.replace(anchor, `${anchor}  - from: resources/relay-gateway\n    to: relay-gateway\n`);
+  }
   return output;
 }
 
@@ -595,8 +700,32 @@ function copyBrandingAssets(targetRoot) {
   };
 }
 
+function copyRelayGatewayResources(targetRoot) {
+  const sourceDir = resolve(repoRoot, "apps/desktop/src-tauri/binaries");
+  const resourcesDir = resolve(targetRoot, "resources/relay-gateway");
+  const files = [
+    "copilot_server.js",
+    "copilot_server.mjs",
+    "copilot_dom_poll.mjs",
+    "copilot_send_timing.mjs",
+    "copilot_wait_dom_response.mjs",
+  ];
+
+  mkdirSync(resourcesDir, { recursive: true });
+  for (const file of files) {
+    const sourcePath = resolve(sourceDir, file);
+    if (!existsSync(sourcePath)) {
+      throw new Error(`Relay gateway resource was not found: ${sourcePath}`);
+    }
+    copyFileSync(sourcePath, resolve(resourcesDir, file));
+  }
+
+  return resourcesDir;
+}
+
 export function applyAionuiOverlay(aionuiDir) {
   const targetRoot = resolve(aionuiDir);
+  const indexPath = resolve(targetRoot, "src/index.ts");
   const initStoragePath = resolve(targetRoot, "src/process/utils/initStorage.ts");
   if (!existsSync(initStoragePath)) {
     throw new Error(`AionUi initStorage.ts was not found: ${initStoragePath}`);
@@ -609,7 +738,7 @@ export function applyAionuiOverlay(aionuiDir) {
     targetRoot,
     "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx",
   );
-  for (const requiredPath of [packageJsonPath, electronBuilderPath, deepLinkPath, settingsModalPath, webuiModalPath]) {
+  for (const requiredPath of [indexPath, packageJsonPath, electronBuilderPath, deepLinkPath, settingsModalPath, webuiModalPath]) {
     if (!existsSync(requiredPath)) {
       throw new Error(`AionUi overlay target was not found: ${requiredPath}`);
     }
@@ -618,11 +747,15 @@ export function applyAionuiOverlay(aionuiDir) {
   const overlayRoot = resolve(repoRoot, "integrations/aionui/overlay");
   const relaySeedSource = resolve(overlayRoot, "src/process/utils/relaySeed.ts");
   const relaySeedTarget = resolve(targetRoot, "src/process/utils/relaySeed.ts");
+  const relayGatewaySource = resolve(overlayRoot, "src/process/utils/relayGateway.ts");
+  const relayGatewayTarget = resolve(targetRoot, "src/process/utils/relayGateway.ts");
 
   mkdirSync(dirname(relaySeedTarget), { recursive: true });
   copyFileSync(relaySeedSource, relaySeedTarget);
+  copyFileSync(relayGatewaySource, relayGatewayTarget);
 
   const patched = patchInitStorageContent(readFileSync(initStoragePath, "utf8"));
+  writeFileSync(indexPath, patchIndexContent(readFileSync(indexPath, "utf8")), "utf8");
   writeFileSync(initStoragePath, patched, "utf8");
   writeFileSync(packageJsonPath, patchPackageJsonContent(readFileSync(packageJsonPath, "utf8")), "utf8");
   writeFileSync(
@@ -634,13 +767,17 @@ export function applyAionuiOverlay(aionuiDir) {
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");
   const brandingAssets = copyBrandingAssets(targetRoot);
+  const relayGatewayResourcesDir = copyRelayGatewayResources(targetRoot);
 
   return {
     brandingAssets,
     deepLinkPath,
     electronBuilderPath,
+    indexPath,
     initStoragePath,
     packageJsonPath,
+    relayGatewayResourcesDir,
+    relayGatewayTarget,
     relaySeedTarget,
     settingsModalPath,
     webuiModalPath,
@@ -687,13 +824,16 @@ if (isCliEntrypoint(import.meta.url)) {
       throw new Error("--aionui-dir is required");
     }
     const result = applyAionuiOverlay(options.aionuiDir);
+    console.log("[relay-aionui-overlay] index:", result.indexPath);
     console.log("[relay-aionui-overlay] initStorage:", result.initStoragePath);
+    console.log("[relay-aionui-overlay] relayGateway:", result.relayGatewayTarget);
     console.log("[relay-aionui-overlay] relaySeed:", result.relaySeedTarget);
     console.log("[relay-aionui-overlay] package:", result.packageJsonPath);
     console.log("[relay-aionui-overlay] electronBuilder:", result.electronBuilderPath);
     console.log("[relay-aionui-overlay] deepLink:", result.deepLinkPath);
     console.log("[relay-aionui-overlay] settingsModal:", result.settingsModalPath);
     console.log("[relay-aionui-overlay] webuiModal:", result.webuiModalPath);
+    console.log("[relay-aionui-overlay] relayGatewayResources:", result.relayGatewayResourcesDir);
     console.log("[relay-aionui-overlay] resources:", result.brandingAssets.resourcesDir);
   } catch (error) {
     console.error("[relay-aionui-overlay] apply failed:", error instanceof Error ? error.message : String(error));

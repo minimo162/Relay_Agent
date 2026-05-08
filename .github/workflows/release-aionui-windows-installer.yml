@@ -159,6 +159,30 @@ jobs:
           if ($builderConfig -notmatch "(?m)^executableName:\s+Relay Agent$") {
             throw "Relay overlay did not update electron-builder executableName."
           }
+          if ($builderConfig -notmatch "resources/relay-gateway") {
+            throw "Relay overlay did not bundle the local Copilot gateway resource."
+          }
+
+          $gatewayFiles = @(
+            "copilot_server.js",
+            "copilot_server.mjs",
+            "copilot_dom_poll.mjs",
+            "copilot_send_timing.mjs",
+            "copilot_wait_dom_response.mjs"
+          )
+          foreach ($gatewayFile in $gatewayFiles) {
+            $gatewayPath = Join-Path "aionui\resources\relay-gateway" $gatewayFile
+            if (-not (Test-Path -LiteralPath $gatewayPath)) {
+              throw "Relay Copilot gateway resource was not copied into AionUi resources: $gatewayFile"
+            }
+          }
+          if (-not (Test-Path -LiteralPath "aionui\src\process\utils\relayGateway.ts")) {
+            throw "Relay gateway startup overlay was not copied into AionUi."
+          }
+          $index = Get-Content -LiteralPath "aionui\src\index.ts" -Raw
+          if ($index -notmatch "startRelayGatewayBeforeShell") {
+            throw "Relay gateway startup hook was not installed before AionUi shell startup."
+          }
 
       - name: Build Relay-branded AionUi Windows installer
         working-directory: aionui

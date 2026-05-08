@@ -8,6 +8,7 @@ import {
   isCliEntrypoint,
   patchDeepLinkContent,
   patchElectronBuilderContent,
+  patchIndexContent,
   patchInitStorageContent,
   patchPackageJsonContent,
   patchSettingsModalContent,
@@ -79,7 +80,44 @@ test("patchPackageJsonContent rebrands the AionUi package metadata", () => {
   assert.match(patched.description, /Microsoft 365 Copilot/);
 });
 
-test("patchElectronBuilderContent rebrands installer metadata, protocol, and update target", () => {
+test("patchIndexContent starts the Relay gateway before AionUi storage initialization", () => {
+  const fixture = [
+    "import { app, BrowserWindow, nativeImage, net, powerMonitor, protocol, screen } from 'electron';",
+    "import { ProcessConfig } from './process/utils/initStorage';",
+    "const isWebUIMode = hasSwitch('webui');",
+    "const isResetPasswordMode = hasCommand('--resetpass');",
+    "async function handleAppReady() {",
+    "  try {",
+    "    await initializeProcess();",
+    "    mark('initializeProcess');",
+    "  } catch (error) {",
+    "    app.exit(1);",
+    "  }",
+    "    createWindow({ showOnReady: showMainWindowOnReady });",
+    "    appReadyDone = true;",
+    "    mark('createWindow');",
+    "}",
+  ].join("\n");
+
+  const once = patchIndexContent(fixture);
+  const twice = patchIndexContent(once);
+
+  assert.equal(twice, once);
+  assert.match(once, /startRelayGatewayBeforeShell/);
+  assert.ok(
+    once.indexOf("await startRelayGatewayBeforeShell();") < once.indexOf("await initializeProcess();"),
+    "gateway should start before initStorage consumes the Relay provider seed",
+  );
+  assert.match(once, /dialog, nativeImage/);
+  assert.match(once, /RelayGatewayStartupResult/);
+  assert.match(once, /relayGatewayStartup = await startRelayGatewayBeforeShell\(\);/);
+  assert.match(once, /if \(!isWebUIMode && !isResetPasswordMode\)/);
+  assert.match(once, /mark\('relayGateway'\);/);
+  assert.match(once, /relayGatewayStartup\?\.state === 'needs_attention'/);
+  assert.match(once, /Relay could not start the local Microsoft 365 Copilot gateway/);
+});
+
+test("patchElectronBuilderContent rebrands installer metadata, protocol, update target, and bundled gateway", () => {
   const fixture = [
     "appId: com.aionui.app",
     "productName: AionUi",
@@ -100,6 +138,9 @@ test("patchElectronBuilderContent rebrands installer metadata, protocol, and upd
     "publish:",
     "  owner: iOfficeAI",
     "  repo: AionUi",
+    "extraResources:",
+    "  - from: public",
+    "    to: .",
   ].join("\n");
 
   const patched = patchElectronBuilderContent(fixture, branding);
@@ -112,6 +153,8 @@ test("patchElectronBuilderContent rebrands installer metadata, protocol, and upd
   assert.match(patched, /^      MimeType: x-scheme-handler\/relay-agent;$/m);
   assert.match(patched, /^  owner: minimo162$/m);
   assert.match(patched, /^  repo: Relay_Agent$/m);
+  assert.match(patched, /^  - from: resources\/relay-gateway$/m);
+  assert.match(patched, /^    to: relay-gateway$/m);
   assert.doesNotMatch(patched, /AionUi Protocol|x-scheme-handler\/aionui|owner: iOfficeAI/);
 });
 
@@ -302,4 +345,16 @@ test("Relay seed overlay persists OfficeCLI assistant defaults into AionUi confi
   assert.match(relaySeed, /relay\.providerOnboarding\.enabled/);
   assert.match(relaySeed, /builtin-\$\{preset\.id\}/);
   assert.match(relaySeed, /await configFile\.set\('assistants', updated\)/);
+});
+
+test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic provider seed", () => {
+  const relayGateway = readFileSync("integrations/aionui/overlay/src/process/utils/relayGateway.ts", "utf8");
+
+  assert.match(relayGateway, /ELECTRON_RUN_AS_NODE/);
+  assert.match(relayGateway, /--port',\n\s+'0'/);
+  assert.match(relayGateway, /--port-file/);
+  assert.match(relayGateway, /RELAY_AIONUI_PROVIDER_SEED_FILE/);
+  assert.match(relayGateway, /Relay Agent \/ M365 Copilot/);
+  assert.match(relayGateway, /function_calling/);
+  assert.match(relayGateway, /officecli-xlsx/);
 });

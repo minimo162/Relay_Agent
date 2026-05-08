@@ -43,6 +43,13 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.ok(validateIndex > overlayIndex, "workflow should validate overlay after applying it");
   assert.ok(buildIndex > validateIndex, "workflow should build after overlay validation");
   assert.match(text, /Relay overlay did not update productName/);
+  assert.match(text, /resources\/relay-gateway/);
+  assert.match(text, /copilot_server\.js/);
+  assert.match(text, /copilot_dom_poll\.mjs/);
+  assert.match(text, /copilot_send_timing\.mjs/);
+  assert.match(text, /copilot_wait_dom_response\.mjs/);
+  assert.match(text, /relayGateway\.ts/);
+  assert.match(text, /startRelayGatewayBeforeShell/);
   assert.match(text, /Where-Object \{ \$_.Name -like "Relay Agent-\*-win-x64.exe" \}/);
   assert.match(text, /Installer candidate: \$\(\$_\.Name\)/);
 });
