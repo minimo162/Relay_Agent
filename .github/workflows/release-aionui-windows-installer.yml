@@ -1,4 +1,4 @@
-name: release-aionui-windows-installer
+name: release-windows-installer
 
 on:
   workflow_dispatch:

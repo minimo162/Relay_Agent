@@ -128,6 +128,15 @@ The Relay fork/wrapper must apply these fixed branding values from
 9. Add Windows validation for first install, M365 sign-in, provider readiness,
    OfficeCLI download, Office document creation/editing, and Defender behavior.
 
+## Release Workflow Boundary
+
+- `.github/workflows/release-aionui-windows-installer.yml` owns the primary
+  `release-windows-installer` workflow. It builds the Relay-branded AionUi
+  installer from the pinned AionUi baseline after applying the Relay overlay.
+- `.github/workflows/release-windows-installer.yml` is retained only as a
+  manual legacy Tauri/OpenCode diagnostic release path. It has no tag push
+  trigger and requires explicit `confirm_legacy_tauri_release=true`.
+
 ## Compatibility Position
 
 The current OpenCode-only implementation remains useful as a reference for the

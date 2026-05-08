@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 const workflowPath = resolve(".github/workflows/release-aionui-windows-installer.yml");
+const legacyWorkflowPath = resolve(".github/workflows/release-windows-installer.yml");
 const manifestPath = resolve("apps/desktop/src-tauri/bootstrap/aionui-relay.json");
 
 function workflow() {
@@ -14,11 +15,15 @@ function manifest() {
   return JSON.parse(readFileSync(manifestPath, "utf8"));
 }
 
+function legacyWorkflow() {
+  return readFileSync(legacyWorkflowPath, "utf8");
+}
+
 test("AionUi release workflow checks out the pinned upstream baseline", () => {
   const text = workflow();
   const pinned = manifest().upstreams.aionUi;
 
-  assert.match(text, /name: release-aionui-windows-installer/);
+  assert.match(text, /name: release-windows-installer/);
   assert.match(text, /runs-on: windows-latest/);
   assert.match(text, new RegExp(`AIONUI_TAG: ${pinned.tag}`));
   assert.match(text, new RegExp(`AIONUI_COMMIT: ${pinned.commit}`));
@@ -47,4 +52,14 @@ test("AionUi release workflow publishes signed or clearly marked prerelease asse
   assert.match(text, /\$unsignedName = "\$stem-unsigned\.exe"/);
   assert.match(text, /gh release upload \$env:RELEASE_TAG @assets --clobber/);
   assert.match(text, /gh @args/);
+});
+
+test("legacy Tauri/OpenCode release workflow is manual-only and guarded", () => {
+  const text = legacyWorkflow();
+
+  assert.match(text, /name: legacy-release-tauri-windows-installer/);
+  assert.doesNotMatch(text, /push:\n\s+tags:/);
+  assert.match(text, /confirm_legacy_tauri_release/);
+  assert.match(text, /deprecated Tauri\/OpenCode diagnostic installer/);
+  assert.match(text, /Use release-windows-installer from release-aionui-windows-installer\.yml/);
 });
