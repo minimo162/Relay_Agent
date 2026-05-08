@@ -8,9 +8,19 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { app } from 'electron';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
 import { dirname, join, resolve } from 'path';
 
 const RELAY_PROVIDER_ID = 'relay-agent';
@@ -18,6 +28,13 @@ const RELAY_MODEL_ID = 'm365-copilot';
 const RELAY_PROVIDER_NAME = 'Relay Agent / M365 Copilot';
 const RELAY_CONTEXT_LIMIT = 128000;
 const RELAY_SEED_FILE_ENV = 'RELAY_AIONUI_PROVIDER_SEED_FILE';
+const RELAY_OFFICECLI_PATH_ENV = 'RELAY_OFFICECLI_PATH';
+const RELAY_OFFICECLI_EXPECTED_PATH_ENV = 'RELAY_OFFICECLI_EXPECTED_PATH';
+const RELAY_OFFICECLI_VERSION = '1.0.76';
+const RELAY_OFFICECLI_URL = 'https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe';
+const RELAY_OFFICECLI_SHA256 = 'f9e4895505858ab813e133d4d1f9f01004c7b4b08397408487f534caf9e2ec58';
+const RELAY_OFFICECLI_SIZE = 30433916;
+const RELAY_OFFICECLI_ENTRYPOINT = 'officecli.exe';
 const DEFAULT_RELAY_EDGE_CDP_PORT = 9360;
 const RELAY_DEFAULT_SKILLS = [
   'officecli-docx',
@@ -49,6 +66,16 @@ const GATEWAY_FILES = [
 ];
 
 type RelayGatewayStartupState = 'ready' | 'needs_attention' | 'disabled';
+type OfficeCliStatusState = 'ready-env' | 'ready-reused' | 'ready-downloaded' | 'skipped' | 'needs_attention';
+
+type OfficeCliStatus = {
+  state: OfficeCliStatusState;
+  path: string;
+  reason?: string;
+  message?: string;
+  sha256?: string;
+  size?: number;
+};
 
 export type RelayGatewayStartupResult = {
   state: RelayGatewayStartupState;
@@ -79,6 +106,143 @@ function relayStatusFilePath(): string {
 
 function relayTokenFilePath(): string {
   return join(relayDataDir(), 'provider-token');
+}
+
+function officeCliCacheRoot(): string {
+  const envPath = process.env.RELAY_OFFICECLI_CACHE_DIR?.trim();
+  return envPath || join(app.getPath('userData'), 'tools', 'officecli');
+}
+
+function officeCliCachedPath(): string {
+  return join(officeCliCacheRoot(), RELAY_OFFICECLI_VERSION, RELAY_OFFICECLI_ENTRYPOINT);
+}
+
+function sha256Buffer(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+function verifyOfficeCliArtifactBuffer(buffer: Buffer): { size: number; sha256: string } {
+  if (buffer.length !== RELAY_OFFICECLI_SIZE) {
+    throw new Error(`OfficeCLI size mismatch: expected ${RELAY_OFFICECLI_SIZE}, actual ${buffer.length}`);
+  }
+  const actual = sha256Buffer(buffer);
+  if (actual !== RELAY_OFFICECLI_SHA256) {
+    throw new Error(`OfficeCLI sha256 mismatch: expected ${RELAY_OFFICECLI_SHA256}, actual ${actual}`);
+  }
+  return {
+    size: buffer.length,
+    sha256: actual,
+  };
+}
+
+function verifyOfficeCliArtifactFile(path: string): { size: number; sha256: string } {
+  const stat = statSync(path);
+  if (stat.size !== RELAY_OFFICECLI_SIZE) {
+    throw new Error(`OfficeCLI size mismatch: expected ${RELAY_OFFICECLI_SIZE}, actual ${stat.size}`);
+  }
+  const actual = sha256Buffer(readFileSync(path));
+  if (actual !== RELAY_OFFICECLI_SHA256) {
+    throw new Error(`OfficeCLI sha256 mismatch: expected ${RELAY_OFFICECLI_SHA256}, actual ${actual}`);
+  }
+  return {
+    size: stat.size,
+    sha256: actual,
+  };
+}
+
+function prependProcessPath(dir: string): void {
+  const separator = process.platform === 'win32' ? ';' : ':';
+  const current = process.env.PATH || '';
+  const parts = current.split(separator).filter(Boolean);
+  const normalizedDir = process.platform === 'win32' ? dir.toLowerCase() : dir;
+  const alreadyPresent = parts.some((part) => (process.platform === 'win32' ? part.toLowerCase() : part) === normalizedDir);
+  if (!alreadyPresent) process.env.PATH = [dir, ...parts].join(separator);
+}
+
+function registerOfficeCliPath(path: string): void {
+  process.env[RELAY_OFFICECLI_PATH_ENV] = path;
+  process.env[RELAY_OFFICECLI_EXPECTED_PATH_ENV] = path;
+  prependProcessPath(dirname(path));
+}
+
+async function downloadOfficeCliArtifact(outputPath: string): Promise<OfficeCliStatus> {
+  if (existsSync(outputPath)) {
+    const verified = verifyOfficeCliArtifactFile(outputPath);
+    registerOfficeCliPath(outputPath);
+    return {
+      state: 'ready-reused',
+      path: outputPath,
+      ...verified,
+    };
+  }
+  if (typeof fetch !== 'function') {
+    throw new Error('fetch is unavailable; Electron Node runtime is required for OfficeCLI bootstrap');
+  }
+
+  mkdirSync(dirname(outputPath), { recursive: true });
+  const tempPath = `${outputPath}.download`;
+  rmSync(tempPath, { force: true });
+
+  try {
+    const response = await fetch(RELAY_OFFICECLI_URL);
+    if (!response.ok) {
+      throw new Error(`OfficeCLI download failed with HTTP ${response.status} for ${RELAY_OFFICECLI_URL}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    verifyOfficeCliArtifactBuffer(buffer);
+    writeFileSync(tempPath, buffer, { mode: 0o755 });
+    const verified = verifyOfficeCliArtifactFile(tempPath);
+    renameSync(tempPath, outputPath);
+    try {
+      chmodSync(outputPath, 0o755);
+    } catch {
+      // Best effort on Windows.
+    }
+    registerOfficeCliPath(outputPath);
+    return {
+      state: 'ready-downloaded',
+      path: outputPath,
+      ...verified,
+    };
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+async function prepareOfficeCli(): Promise<OfficeCliStatus> {
+  const expectedPath = officeCliCachedPath();
+  process.env[RELAY_OFFICECLI_EXPECTED_PATH_ENV] = expectedPath;
+
+  if (process.env.RELAY_SKIP_OFFICECLI_BOOTSTRAP === '1') {
+    return {
+      state: 'skipped',
+      path: expectedPath,
+      reason: 'disabled',
+    };
+  }
+
+  const explicitPath = process.env[RELAY_OFFICECLI_PATH_ENV]?.trim();
+  if (explicitPath) {
+    if (!existsSync(explicitPath)) {
+      throw new Error(`RELAY_OFFICECLI_PATH was set but OfficeCLI was not found: ${explicitPath}`);
+    }
+    registerOfficeCliPath(explicitPath);
+    return {
+      state: 'ready-env',
+      path: explicitPath,
+    };
+  }
+
+  if (process.platform !== 'win32' && process.env.RELAY_OFFICECLI_BOOTSTRAP_NON_WINDOWS !== '1') {
+    return {
+      state: 'skipped',
+      path: expectedPath,
+      reason: 'non-windows-host',
+    };
+  }
+
+  return downloadOfficeCliArtifact(expectedPath);
 }
 
 function readOrCreateToken(): string {
@@ -158,12 +322,14 @@ function relayReadyStatus({
   seedFile,
   cdpPort,
   gatewayDir,
+  officeCli,
   prewarm,
 }: {
   baseUrl: string;
   seedFile: string;
   cdpPort: number;
   gatewayDir: string;
+  officeCli?: OfficeCliStatus;
   prewarm?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
@@ -172,6 +338,7 @@ function relayReadyStatus({
     seedFile,
     cdpPort,
     gatewayDir,
+    ...(officeCli ? { officeCli } : {}),
     ...(prewarm ? { prewarm } : {}),
   };
 }
@@ -371,12 +538,14 @@ function startRelayGatewayPrewarm({
   cdpPort,
   gatewayDir,
   token,
+  officeCli,
 }: {
   baseUrl: string;
   seedFile: string;
   cdpPort: number;
   gatewayDir: string;
   token: string;
+  officeCli?: OfficeCliStatus;
 }): void {
   if (relayGatewayPrewarmStarted) return;
   relayGatewayPrewarmStarted = true;
@@ -387,6 +556,7 @@ function startRelayGatewayPrewarm({
         seedFile,
         cdpPort,
         gatewayDir,
+        officeCli,
         prewarm: { state: 'disabled', message: 'Copilot background prewarm disabled by environment.' },
       }),
     );
@@ -399,6 +569,7 @@ function startRelayGatewayPrewarm({
       seedFile,
       cdpPort,
       gatewayDir,
+      officeCli,
       prewarm: { state: 'starting', message: 'Opening Microsoft 365 Copilot in the background.' },
     }),
   );
@@ -425,6 +596,7 @@ function startRelayGatewayPrewarm({
           seedFile,
           cdpPort,
           gatewayDir,
+          officeCli,
           prewarm: {
             state: loginRequired ? 'needs_sign_in' : prewarmed ? 'ready' : connected ? 'page_ready' : 'needs_attention',
             message,
@@ -445,6 +617,7 @@ function startRelayGatewayPrewarm({
           seedFile,
           cdpPort,
           gatewayDir,
+          officeCli,
           prewarm: {
             state: 'needs_attention',
             message,
@@ -481,6 +654,22 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
     writeStatus({ state: 'needs_attention', message: relayGatewayResult.message });
     return relayGatewayResult;
   }
+
+  let officeCli: OfficeCliStatus | undefined;
+  try {
+    writeStatus({ state: 'starting', message: 'Preparing OfficeCLI for Office file tools.', gatewayDir });
+    officeCli = await prepareOfficeCli();
+    appendGatewayLog(`[RelayGateway] OfficeCLI ${officeCli.state}: ${officeCli.path}${officeCli.reason ? ` (${officeCli.reason})` : ''}\n`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    officeCli = {
+      state: 'needs_attention',
+      path: officeCliCachedPath(),
+      message,
+    };
+    appendGatewayLog(`[RelayGateway] OfficeCLI bootstrap failed: ${message}\n`);
+  }
+  writeStatus({ state: 'starting', message: 'Starting Relay local M365 Copilot gateway.', gatewayDir, officeCli });
 
   const token = readOrCreateToken();
   const cdpPort = intEnv('RELAY_EDGE_CDP_PORT', DEFAULT_RELAY_EDGE_CDP_PORT);
@@ -536,8 +725,8 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
       seedFile,
       statusFile,
     };
-    writeStatus(relayReadyStatus({ baseUrl, seedFile, cdpPort, gatewayDir }));
-    startRelayGatewayPrewarm({ baseUrl, seedFile, cdpPort, gatewayDir, token });
+    writeStatus(relayReadyStatus({ baseUrl, seedFile, cdpPort, gatewayDir, officeCli }));
+    startRelayGatewayPrewarm({ baseUrl, seedFile, cdpPort, gatewayDir, token, officeCli });
     return relayGatewayResult;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -547,7 +736,7 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
       statusFile,
       message,
     };
-    writeStatus({ state: 'needs_attention', message, gatewayDir });
+    writeStatus({ state: 'needs_attention', message, gatewayDir, officeCli });
     return relayGatewayResult;
   }
 }

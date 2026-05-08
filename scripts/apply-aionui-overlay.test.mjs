@@ -530,6 +530,11 @@ test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic pr
   assert.match(relayGateway, /Relay Agent \/ M365 Copilot/);
   assert.match(relayGateway, /function_calling/);
   assert.match(relayGateway, /officecli-xlsx/);
+  assert.match(relayGateway, /officecli-win-x64\.exe/);
+  assert.match(relayGateway, /RELAY_OFFICECLI_PATH/);
+  assert.match(relayGateway, /RELAY_OFFICECLI_EXPECTED_PATH/);
+  assert.match(relayGateway, /prepareOfficeCli/);
+  assert.match(relayGateway, /prependProcessPath/);
   assert.match(relayGateway, /\/prewarm/);
   assert.match(relayGateway, /RELAY_COPILOT_NO_WINDOW_FOCUS/);
   assert.match(relayGateway, /RELAY_AIONUI_DISABLE_COPILOT_PREWARM/);

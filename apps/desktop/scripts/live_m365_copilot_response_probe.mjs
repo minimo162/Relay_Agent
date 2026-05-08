@@ -6,7 +6,8 @@
  * Example:
  *   pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- \
  *     --prompt "日本の首都はどこですか？一言で答えてください。" \
- *     --prompt "次の fenced block をそのまま返してください: ```relay_tool\n{\"relay_tool_call\":true,\"name\":\"noop\",\"input\":{}}\n```"
+ *     --prompt "次の fenced block をそのまま返してください: ```relay_tool\n{\"relay_tool_call\":true,\"name\":\"noop\",\"input\":{}}\n```" \
+ *     --signal-sample-ms 300
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +18,7 @@ import { chromium } from "playwright";
 import {
   ASSISTANT_REPLY_DOM_SELECTORS,
   COMPOSER_ANCESTOR_CLOSEST,
+  copilotDomPollGeneratingAndReplyExpression,
 } from "../src-tauri/binaries/copilot_dom_poll.mjs";
 import {
   extractAssistantReplyHeuristic,
@@ -30,6 +32,8 @@ import {
 
 const DEFAULT_CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://127.0.0.1:9360";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_SIGNAL_SAMPLE_MS = 300;
+const DEFAULT_SIGNAL_SETTLE_MS = 2_000;
 const CHAT_URL = "https://m365.cloud.microsoft/chat/";
 const RESPONSE_URL_RE =
   /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com|services\.actions\.ms/i;
@@ -63,6 +67,9 @@ function parseArgs(argv) {
   let outputDir = null;
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   let newChatPerPrompt = true;
+  let traceSignals = true;
+  let signalSampleMs = DEFAULT_SIGNAL_SAMPLE_MS;
+  let signalSettleMs = DEFAULT_SIGNAL_SETTLE_MS;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -98,6 +105,22 @@ function parseArgs(argv) {
       case "--keep-chat":
         newChatPerPrompt = false;
         break;
+      case "--trace-signals":
+        traceSignals = true;
+        break;
+      case "--no-trace-signals":
+        traceSignals = false;
+        break;
+      case "--signal-sample-ms":
+        if (!next) throw new Error("--signal-sample-ms requires a value");
+        signalSampleMs = parsePositiveInt(next, "--signal-sample-ms");
+        i += 1;
+        break;
+      case "--signal-settle-ms":
+        if (!next) throw new Error("--signal-settle-ms requires a value");
+        signalSettleMs = parsePositiveInt(next, "--signal-settle-ms");
+        i += 1;
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -115,6 +138,9 @@ function parseArgs(argv) {
       fs.mkdtempSync(path.join(os.tmpdir(), "relay-live-copilot-probe-")),
     timeoutMs,
     newChatPerPrompt,
+    traceSignals,
+    signalSampleMs,
+    signalSettleMs,
   };
 }
 
@@ -143,6 +169,15 @@ function writeText(filePath, text) {
 
 function writeJson(filePath, value) {
   writeText(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function compactOneLine(value, max = 320) {
+  const compact = String(value ?? "").replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact;
+}
+
+function serializeError(error) {
+  return error instanceof Error ? error.stack || error.message : String(error);
 }
 
 async function firstVisibleLocator(page, selectors, timeoutMs) {
@@ -378,6 +413,391 @@ async function captureDomState(page, promptText) {
   };
 }
 
+async function captureSignalState(page, promptText, startedAtMs) {
+  let relayPoll = null;
+  let relayPollError = null;
+  let domSignals = null;
+  let domSignalsError = null;
+  const pollExpression = copilotDomPollGeneratingAndReplyExpression();
+  try {
+    const snapshot = await page.evaluate(
+      ({ composerSelector, pollExpression }) => {
+        let relayPoll = null;
+        let relayPollError = null;
+        try {
+          relayPoll = globalThis.eval(pollExpression);
+        } catch (error) {
+          relayPollError = error?.stack || error?.message || String(error);
+        }
+        function walk(root, visit, depth = 0) {
+          if (!root || depth > 18) return;
+          if (root.nodeType === 1) visit(root);
+          const tree = root.nodeType === 9 ? root.documentElement : root;
+          if (!tree) return;
+          for (const child of tree.children || []) walk(child, visit, depth + 1);
+          if (tree.shadowRoot) walk(tree.shadowRoot, visit, depth + 1);
+        }
+        function queryDeepAll(selector, doc) {
+          const out = [];
+          walk(doc.documentElement || doc.body, (el) => {
+            try {
+              if (el.matches && el.matches(selector)) out.push(el);
+            } catch (_) {}
+          });
+          return out;
+        }
+        function visible(el) {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect?.();
+          if (!rect) return false;
+          const style = getComputedStyle(el);
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number(style.opacity || "1") !== 0 &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        }
+        function inComposer(el) {
+          return !!(el && el.closest(composerSelector));
+        }
+        function inUserTurn(el) {
+          if (!el) return false;
+          try {
+            return !!(
+              el.closest('[data-message-author-role="user"]') ||
+              el.closest('[data-testid="userMessage"]') ||
+              el.closest('[data-testid*="user-message"]') ||
+              el.closest('[data-testid="chatQuestion"]') ||
+              el.closest('[aria-label*="Your message"]') ||
+              el.closest('[aria-label*="送信した"]')
+            );
+          } catch (_) {
+            return false;
+          }
+        }
+        function textOf(el) {
+          return (el?.innerText || el?.textContent || "").trim();
+        }
+        function compact(text, max = 320) {
+          const s = String(text || "").replace(/\s+/g, " ").trim();
+          return s.length > max ? `${s.slice(0, max)}...` : s;
+        }
+        function attr(el, name) {
+          return el?.getAttribute?.(name) || "";
+        }
+        function disabled(el) {
+          return !!(
+            el &&
+            (el.disabled || el.hasAttribute?.("disabled") || attr(el, "aria-disabled") === "true")
+          );
+        }
+        function isChatInputControl(el) {
+          if (!el) return false;
+          if (el.matches?.(".fai-SendButton")) return true;
+          return !!el.closest?.(
+            '.fai-ChatInput, .fai-ExpandableChatInput, [class*="ChatInput"], [class*="chatInput"]',
+          );
+        }
+        function rectOf(el) {
+          const rect = el.getBoundingClientRect?.();
+          if (!rect) return null;
+          return {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        }
+        function semanticName(el) {
+          return [
+            attr(el, "aria-label"),
+            attr(el, "title"),
+            attr(el, "data-testid"),
+            attr(el, "role"),
+            el?.className ? String(el.className) : "",
+            textOf(el),
+          ]
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+        function summarizeButton(el, index) {
+          const name = semanticName(el);
+          const nameLower = name.toLowerCase();
+          const chatInputControl = isChatInputControl(el);
+          const looksStop =
+            chatInputControl &&
+            /stopgenerating|stop generating|stop response|\bstop\b|生成を停止|停止|中断/i.test(name) &&
+            /generat|response|応答|生成|回答|作成|stop|停止|中断/i.test(name);
+          const looksSend =
+            chatInputControl &&
+            (/\bsend\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
+              el.matches?.(".fai-SendButton"));
+          return {
+            index,
+            tag: el.tagName?.toLowerCase() || null,
+            role: attr(el, "role") || null,
+            testId: attr(el, "data-testid") || null,
+            ariaLabel: attr(el, "aria-label") || null,
+            title: attr(el, "title") || null,
+            className: el?.className ? String(el.className).slice(0, 220) : null,
+            text: compact(textOf(el), 180),
+            disabled: disabled(el),
+            inComposer: inComposer(el),
+            chatInputControl,
+            inUserTurn: inUserTurn(el),
+            looksStop,
+            looksSend,
+            nameTail: compact(nameLower.slice(-260), 260),
+            rect: rectOf(el),
+          };
+        }
+        function summarizeNode(el, index) {
+          const text = textOf(el);
+          return {
+            index,
+            tag: el?.tagName?.toLowerCase() || null,
+            role: attr(el, "role") || attr(el, "data-message-author-role") || null,
+            testId: attr(el, "data-testid") || null,
+            messageType: attr(el, "data-message-type") || null,
+            className: el?.className ? String(el.className).slice(0, 220) : null,
+            textLength: text.length,
+            textTail: compact(text.slice(-600), 600),
+            rect: rectOf(el),
+          };
+        }
+        const allButtons = queryDeepAll(".fai-SendButton, button, [role=\"button\"]", document)
+          .filter((el) => visible(el) && !inUserTurn(el))
+          .map((el, index) => summarizeButton(el, index));
+        const relevantButtons = allButtons
+          .filter(
+            (button) =>
+              button.inComposer ||
+              button.chatInputControl ||
+              button.looksStop ||
+              button.looksSend,
+          )
+          .slice(-80);
+        const progressNodes = queryDeepAll(
+          '[data-message-type="Progress"], [data-testid="loading-message"], [role="progressbar"], .scc-ChainOfThought, [aria-live]',
+          document,
+        )
+          .filter((el) => visible(el) && !inComposer(el) && !inUserTurn(el))
+          .slice(-12)
+          .map((el, index) => summarizeNode(el, index));
+        const assistantRoots = queryDeepAll(
+          '[data-testid="copilot-message-reply-div"], [data-message-author-role="assistant"], [data-testid*="assistant"], article',
+          document,
+        )
+          .filter((el) => visible(el) && !inComposer(el) && !inUserTurn(el) && textOf(el).length > 0)
+          .slice(-8)
+          .map((el, index) => summarizeNode(el, index));
+        const activeElement = document.activeElement ? summarizeNode(document.activeElement, 0) : null;
+        return {
+          relayPoll,
+          relayPollError,
+          pageUrl: location.href,
+          pageTitle: document.title,
+          activeElement,
+          buttonCount: allButtons.length,
+          relevantButtons,
+          progressNodes,
+          assistantRoots,
+          bodyTextTail: compact((document.body?.innerText || document.body?.textContent || "").slice(-3000), 3000),
+        };
+      },
+      { composerSelector: COMPOSER_ANCESTOR_CLOSEST, pollExpression },
+    );
+    if (snapshot) {
+      relayPoll = snapshot.relayPoll ?? null;
+      relayPollError = snapshot.relayPollError ?? null;
+      const { relayPoll: _relayPoll, relayPollError: _relayPollError, ...rest } = snapshot;
+      domSignals = rest;
+    }
+  } catch (error) {
+    domSignalsError = serializeError(error);
+  }
+
+  const rawReply = typeof relayPoll?.reply === "string" ? relayPoll.reply : "";
+  const normalizedReply = normalizeCopilotVisibleText(rawReply);
+
+  return {
+    timestamp: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAtMs,
+    promptChars: promptText.length,
+    relay: {
+      error: relayPollError,
+      generating: relayPoll?.generating === true,
+      strongGeneratingSignal: relayPoll?.strongGeneratingSignal === true,
+      composerButtonState: relayPoll?.composerButtonState ?? null,
+      progressOnly: relayPoll?.progressOnly === true,
+      hasVisibleAssistantChat: relayPoll?.hasVisibleAssistantChat === true,
+      hasExpandableCodeBlock: relayPoll?.hasExpandableCodeBlock === true,
+      replyRawLength: rawReply.length,
+      replyNormalizedLength: normalizedReply.length,
+      replyNormalizedTail: compactOneLine(normalizedReply.slice(-700), 700),
+    },
+    dom: domSignals,
+    domError: domSignalsError,
+  };
+}
+
+async function runSignalTrace(page, prompt, options, control) {
+  const samples = [];
+  const startedAtMs = Date.now();
+  const maxDurationMs = options.timeoutMs + options.signalSettleMs + 10_000;
+  while (Date.now() - startedAtMs <= maxDurationMs) {
+    samples.push(await captureSignalState(page, prompt, startedAtMs).catch((error) => ({
+      timestamp: new Date().toISOString(),
+      elapsedMs: Date.now() - startedAtMs,
+      error: serializeError(error),
+    })));
+
+    if (control.doneAt && Date.now() - control.doneAt >= options.signalSettleMs) break;
+    await page.waitForTimeout(options.signalSampleMs);
+  }
+  return samples;
+}
+
+function summarizeSignalTimeline(samples) {
+  const usableSamples = Array.isArray(samples) ? samples.filter((sample) => !sample.error) : [];
+  const firstIndex = (predicate) => usableSamples.findIndex(predicate);
+  const lastIndex = (predicate) => {
+    for (let i = usableSamples.length - 1; i >= 0; i -= 1) {
+      if (predicate(usableSamples[i], i)) return i;
+    }
+    return -1;
+  };
+  const sampleAt = (index) => {
+    if (index < 0 || index >= usableSamples.length) return null;
+    const sample = usableSamples[index];
+    return {
+      index,
+      elapsedMs: sample.elapsedMs,
+      timestamp: sample.timestamp,
+    };
+  };
+  const firstGeneratingIndex = firstIndex((sample) => sample.relay?.generating === true);
+  const lastGeneratingIndex = lastIndex((sample) => sample.relay?.generating === true);
+  const firstStrongGeneratingIndex = firstIndex((sample) => sample.relay?.strongGeneratingSignal === true);
+  const lastStrongGeneratingIndex = lastIndex((sample) => sample.relay?.strongGeneratingSignal === true);
+  const firstReplyIndex = firstIndex((sample) => Number(sample.relay?.replyNormalizedLength || 0) > 0);
+  const firstProgressOnlyIndex = firstIndex((sample) => sample.relay?.progressOnly === true);
+  const firstReadyAfterGeneratingIndex = firstIndex((sample, index) => {
+    if (firstGeneratingIndex < 0 || index <= firstGeneratingIndex) return false;
+    const state = sample.relay?.composerButtonState;
+    return (
+      state?.hasReadySendButton === true &&
+      state?.hasStopButton !== true &&
+      state?.hasStopVisualInDisabledSendButton !== true
+    );
+  });
+
+  const composerButtonStateChanges = [];
+  const generationStateChanges = [];
+  const replyLengthChanges = [];
+  let previousComposerKey = null;
+  let previousGenerationKey = null;
+  let previousReplyLength = null;
+  for (let i = 0; i < usableSamples.length; i += 1) {
+    const sample = usableSamples[i];
+    const composerState = sample.relay?.composerButtonState ?? null;
+    const composerKey = JSON.stringify(composerState);
+    if (composerKey !== previousComposerKey) {
+      composerButtonStateChanges.push({
+        index: i,
+        elapsedMs: sample.elapsedMs,
+        composerButtonState: composerState,
+      });
+      previousComposerKey = composerKey;
+    }
+
+    const generationKey = JSON.stringify({
+      generating: sample.relay?.generating === true,
+      strongGeneratingSignal: sample.relay?.strongGeneratingSignal === true,
+      progressOnly: sample.relay?.progressOnly === true,
+      hasVisibleAssistantChat: sample.relay?.hasVisibleAssistantChat === true,
+    });
+    if (generationKey !== previousGenerationKey) {
+      generationStateChanges.push({
+        index: i,
+        elapsedMs: sample.elapsedMs,
+        generating: sample.relay?.generating === true,
+        strongGeneratingSignal: sample.relay?.strongGeneratingSignal === true,
+        progressOnly: sample.relay?.progressOnly === true,
+        hasVisibleAssistantChat: sample.relay?.hasVisibleAssistantChat === true,
+      });
+      previousGenerationKey = generationKey;
+    }
+
+    const replyLength = Number(sample.relay?.replyNormalizedLength || 0);
+    if (replyLength !== previousReplyLength) {
+      replyLengthChanges.push({
+        index: i,
+        elapsedMs: sample.elapsedMs,
+        replyNormalizedLength: replyLength,
+        replyTail: sample.relay?.replyNormalizedTail || "",
+      });
+      previousReplyLength = replyLength;
+    }
+  }
+
+  const finalSample = usableSamples[usableSamples.length - 1] ?? null;
+  const finalComposerState = finalSample?.relay?.composerButtonState ?? null;
+  let likelyIssue = null;
+  if (
+    finalSample?.relay?.generating === true &&
+    finalSample?.relay?.strongGeneratingSignal !== true &&
+    finalComposerState?.hasReadySendButton === true
+  ) {
+    likelyIssue = "weak_generating_stuck_after_ready_send";
+  } else if (
+    finalSample?.relay?.generating === true &&
+    finalSample?.relay?.strongGeneratingSignal === true
+  ) {
+    likelyIssue = "strong_stop_signal_still_visible";
+  } else if (
+    firstReplyIndex >= 0 &&
+    lastGeneratingIndex > firstReplyIndex &&
+    lastStrongGeneratingIndex < lastGeneratingIndex
+  ) {
+    likelyIssue = "reply_done_but_weak_generating_lingers";
+  }
+
+  return {
+    sampleCount: samples.length,
+    usableSampleCount: usableSamples.length,
+    durationMs: usableSamples.length
+      ? usableSamples[usableSamples.length - 1].elapsedMs - usableSamples[0].elapsedMs
+      : 0,
+    firstGenerating: sampleAt(firstGeneratingIndex),
+    lastGenerating: sampleAt(lastGeneratingIndex),
+    firstStrongGenerating: sampleAt(firstStrongGeneratingIndex),
+    lastStrongGenerating: sampleAt(lastStrongGeneratingIndex),
+    firstProgressOnly: sampleAt(firstProgressOnlyIndex),
+    firstReply: sampleAt(firstReplyIndex),
+    firstReadySendAfterGenerating: sampleAt(firstReadyAfterGeneratingIndex),
+    composerButtonStateChanges,
+    generationStateChanges,
+    replyLengthChanges: replyLengthChanges.slice(-120),
+    finalRelayState: finalSample
+      ? {
+          elapsedMs: finalSample.elapsedMs,
+          generating: finalSample.relay?.generating === true,
+          strongGeneratingSignal: finalSample.relay?.strongGeneratingSignal === true,
+          composerButtonState: finalComposerState,
+          progressOnly: finalSample.relay?.progressOnly === true,
+          hasVisibleAssistantChat: finalSample.relay?.hasVisibleAssistantChat === true,
+          replyNormalizedLength: Number(finalSample.relay?.replyNormalizedLength || 0),
+          replyTail: finalSample.relay?.replyNormalizedTail || "",
+        }
+      : null,
+    likelyIssue,
+  };
+}
+
 async function runTurn(page, turnIndex, prompt, options) {
   const turnLabel = `turn-${String(turnIndex + 1).padStart(2, "0")}`;
   const turnDir = path.join(options.outputDir, turnLabel);
@@ -404,10 +824,40 @@ async function runTurn(page, turnIndex, prompt, options) {
   };
   page.on("response", onResponse);
 
+  let signalTraceControl = null;
+  let signalTracePromise = null;
+  let signalTimeline = [];
+  let signalSummary = null;
+  const finishSignalTrace = async () => {
+    if (!signalTraceControl || !signalTracePromise) {
+      return { signalTimeline, signalSummary };
+    }
+    if (!signalTraceControl.doneAt) {
+      signalTraceControl.doneAt = Date.now();
+    }
+    signalTimeline = await signalTracePromise.catch((error) => [
+      {
+        timestamp: new Date().toISOString(),
+        elapsedMs: 0,
+        error: serializeError(error),
+      },
+    ]);
+    signalSummary = summarizeSignalTimeline(signalTimeline);
+    writeJson(path.join(turnDir, "signal-timeline.json"), signalTimeline);
+    writeJson(path.join(turnDir, "signal-summary.json"), signalSummary);
+    signalTraceControl = null;
+    signalTracePromise = null;
+    return { signalTimeline, signalSummary };
+  };
+
   try {
     const composerSelector = await enterPrompt(page, prompt, options.timeoutMs);
     const screenshotBeforeSend = path.join(turnDir, "before-send.png");
     await page.screenshot({ path: screenshotBeforeSend, fullPage: true });
+    if (options.traceSignals) {
+      signalTraceControl = { doneAt: 0 };
+      signalTracePromise = runSignalTrace(page, prompt, options, signalTraceControl);
+    }
     const sendSelector = await clickSend(page, options.timeoutMs);
     let finalizationMode = "unknown";
     const relayReply = await waitForDomResponse(
@@ -422,6 +872,7 @@ async function runTurn(page, turnIndex, prompt, options) {
         },
       },
     );
+    await finishSignalTrace();
     await page.waitForTimeout(1_000);
     const afterState = await captureDomState(page, prompt);
     const screenshotAfterReply = path.join(turnDir, "after-reply.png");
@@ -445,8 +896,13 @@ async function runTurn(page, turnIndex, prompt, options) {
       relayStructuredExtract: afterState.relayStructuredExtract,
       relayResolvedExtract: afterState.relayResolvedExtract,
       messageListTextChars: afterState.messageListText.length,
+      signalSummary,
+      signalTimelinePath: options.traceSignals ? path.join(turnDir, "signal-timeline.json") : null,
       artifactDir: turnDir,
     };
+  } catch (error) {
+    await finishSignalTrace();
+    throw error;
   } finally {
     page.off("response", onResponse);
   }
@@ -466,6 +922,11 @@ async function main() {
     const output = {
       cdpEndpoint: options.cdpEndpoint,
       outputDir: options.outputDir,
+      signalTrace: {
+        enabled: options.traceSignals,
+        sampleMs: options.signalSampleMs,
+        settleMs: options.signalSettleMs,
+      },
       turns: summary.map((turn) => ({
         ...turn,
         relayReplyPreview:

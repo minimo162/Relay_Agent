@@ -4880,6 +4880,7 @@ function parseOpenAiRequest(payload) {
     .join("\n\n");
   const tools = normalizeOpenAiTools(payload.tools);
   const hasToolResultMessages = msgs.some((m) => m?.role === "tool" || m?.role === "function");
+  const toolResultFailure = detectToolResultFailure(msgs);
   const openAiToolChoice = normalizeOpenAiToolChoice(payload.tool_choice);
   let userPrompt = "";
   let imageB64;
@@ -4951,6 +4952,7 @@ function parseOpenAiRequest(payload) {
     attachmentPaths,
     tools,
     hasToolResultMessages,
+    toolResultFailure,
     openAiToolChoice,
     toolProtocolMode,
     requiresStrictToolCalls,
@@ -4967,6 +4969,142 @@ function parseOpenAiRequest(payload) {
 }
 
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }
+
+function detectToolResultFailure(messages = []) {
+  for (const message of messages || []) {
+    const role = String(message?.role || "");
+    if (role !== "tool" && role !== "function") continue;
+    const content = normalizeTextContent(message.content);
+    if (!content) continue;
+    const failure = detectToolResultTextFailure(content);
+    if (!failure) continue;
+    return {
+      ...failure,
+      role,
+      toolCallId: String(message.tool_call_id || message.call_id || message.id || "").trim(),
+      toolName: String(message.name || "").trim(),
+    };
+  }
+  return null;
+}
+
+function detectToolResultTextFailure(content) {
+  const text = String(content || "").trim();
+  if (!text) return null;
+  const parsed = parseJsonCandidate(text);
+  const structured = detectStructuredToolFailure(parsed);
+  if (structured) {
+    return {
+      reason: structured.reason,
+      excerpt: summarizeToolFailureExcerpt(text, structured.message),
+    };
+  }
+
+  const textFailurePatterns = [
+    /\bcommand\s+not\s+found\b/iu,
+    /\bnot\s+recognized\s+as\s+an\s+internal\s+or\s+external\s+command\b/iu,
+    /\bno\s+such\s+file\s+or\s+directory\b/iu,
+    /\b(?:enoent|eacces|eperm)\b/iu,
+    /\bpermission\s+denied\b/iu,
+    /\b(?:tool|command|process)\s+failed\b/iu,
+    /\bfailed\s+with\s+(?:exit\s+)?code\s+[1-9]\d*\b/iu,
+    /\bexit\s+(?:code|status)\s*[:=]?\s*[1-9]\d*\b/iu,
+    /\bexited\s+with\s+code\s+[1-9]\d*\b/iu,
+    /\btimed\s*out\b/iu,
+  ];
+  const pattern = textFailurePatterns.find((candidate) => candidate.test(text));
+  if (!pattern) return null;
+  return {
+    reason: "text_error",
+    excerpt: summarizeToolFailureExcerpt(text),
+  };
+}
+
+function detectStructuredToolFailure(value) {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const failure = detectStructuredToolFailure(item);
+      if (failure) return failure;
+    }
+    return null;
+  }
+
+  const exitCode = numericProperty(value, ["exit_code", "exitCode", "returncode", "return_code"]);
+  if (Number.isFinite(exitCode) && exitCode !== 0) {
+    return {
+      reason: "non_zero_exit",
+      message: firstStringProperty(value, ["stderr", "error", "message", "formatted_output", "aggregated_output", "stdout"]),
+    };
+  }
+  if (value.success === false || value.ok === false) {
+    return {
+      reason: "success_false",
+      message: firstStringProperty(value, ["error", "message", "stderr", "formatted_output", "aggregated_output", "stdout"]),
+    };
+  }
+  if (value.failed === true || value.failure === true) {
+    return {
+      reason: "failure_true",
+      message: firstStringProperty(value, ["error", "message", "stderr", "formatted_output", "aggregated_output", "stdout"]),
+    };
+  }
+  const status = String(value.status || value.state || "").trim().toLowerCase();
+  if (/^(?:error|failed|failure|fatal|cancelled|canceled|denied|rejected)$/u.test(status)) {
+    return {
+      reason: `status_${status}`,
+      message: firstStringProperty(value, ["error", "message", "stderr", "formatted_output", "aggregated_output", "stdout"]),
+    };
+  }
+  const errorField = errorFieldMessage(value.error);
+  if (errorField && Object.keys(value).some((key) => /^(?:error|message|stderr|status|state|ok|success)$/u.test(key))) {
+    return {
+      reason: "error_field",
+      message: errorField,
+    };
+  }
+  return null;
+}
+
+function numericProperty(value, keys) {
+  for (const key of keys) {
+    if (!(key in value)) continue;
+    const number = Number(value[key]);
+    if (Number.isFinite(number)) return number;
+  }
+  return null;
+}
+
+function firstStringProperty(value, keys) {
+  for (const key of keys) {
+    if (typeof value[key] !== "string") continue;
+    const text = value[key].trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function errorFieldMessage(value) {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object") return "";
+  for (const key of ["message", "error", "detail", "stderr"]) {
+    if (typeof value[key] !== "string") continue;
+    const text = value[key].trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function summarizeToolFailureExcerpt(content, preferred = "") {
+  const text = String(preferred || content || "")
+    .replace(/\r\n/gu, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text.slice(0, 2000);
+}
 
 function extractFirstImageBase64(content) {
   if (!Array.isArray(content)) return undefined;
@@ -5285,6 +5423,9 @@ function formatPromptForCopilot(params = {}) {
 }
 
 async function startOpenAiCompletionWithToolRepair(session, prompt) {
+  if (prompt.toolResultFailure) {
+    return buildToolResultFailureRecord(prompt);
+  }
   prompt.relayActiveRequestId = prompt.relayRequestId;
   const record = await session.startOrJoinDescribe(prompt);
   if (!shouldAttemptOpenAiToolRepair(record, prompt)) return record;
@@ -5326,6 +5467,43 @@ async function startOpenAiCompletionWithToolRepair(session, prompt) {
         ...(artifactPath ? { artifact_path: artifactPath } : {}),
       },
     ),
+  };
+}
+
+function buildToolResultFailureRecord(prompt = {}) {
+  const failure = prompt.toolResultFailure || {};
+  const labelParts = [
+    failure.toolName ? `tool=${failure.toolName}` : "",
+    failure.toolCallId ? `call_id=${failure.toolCallId}` : "",
+    failure.reason ? `reason=${failure.reason}` : "",
+  ].filter(Boolean);
+  const excerpt = String(failure.excerpt || failure.message || "No error details were returned by the executor.").trim();
+  const content = [
+    "ツール実行に失敗したため、処理を停止しました。自動フォールバックや再試行は行っていません。",
+    "",
+    labelParts.length ? `失敗したツール: ${labelParts.join(", ")}` : "失敗したツール: unknown",
+    "",
+    "エラー内容:",
+    excerpt,
+  ].join("\n");
+  return {
+    status: 200,
+    body: {
+      id: `chatcmpl-${randomBytes(12).toString("hex")}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: String(prompt.model || OPENAI_COMPAT_DEFAULT_MODEL),
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content,
+          },
+          finish_reason: "stop",
+        },
+      ],
+    },
   };
 }
 

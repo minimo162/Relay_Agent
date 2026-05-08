@@ -476,6 +476,18 @@ function assistantReplyHasStrongCompletionSignal(text) {
   return false;
 }
 
+function assistantReplyLooksNaturallyComplete(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned || cleaned.length < 24) return false;
+  if (replyEndsWithStreamingPlaceholder(cleaned)) return false;
+  if (replyIsOnlyReasoningDisclosurePlaceholder(cleaned)) return false;
+  if (assistantReplyLooksIncompleteRelayTool(cleaned)) return false;
+  if (assistantReplyHasStrongCompletionSignal(cleaned)) return true;
+  if (looksLikeSearchProgressText(cleaned) || looksLikeInternalReasoningParagraph(cleaned)) return false;
+  if (textContainsOfficeCliExecutionCommand(cleaned)) return false;
+  return /[。.!?！？）」』】)]\s*$/u.test(cleaned) || /(?:です|ます|ました|しました|ください)\s*$/u.test(cleaned);
+}
+
 const INTERNAL_PROGRESS_PREFIXES = [
   "the user wants me to ",
   "i'll ",
@@ -1260,6 +1272,9 @@ async function waitForDomResponse(
   let genStreak = 0;
   /** Consecutive polls where the composer is clearly back to idle send state. */
   let readySendStreak = 0;
+  /** Consecutive polls where only a weak/stale generating signal remains while completed-looking text is unchanged. */
+  let weakGeneratingStable = 0;
+  let weakGeneratingReply = "";
   /** Long code replies may hide trailing lines behind a one-shot expansion control. */
   let expandAttempted = false;
   /** M365 reply-div yields short answers (e.g. "OK"); keep floor low but still require growth vs baseline. */
@@ -1313,6 +1328,28 @@ async function waitForDomResponse(
       (genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS || readySendStreak >= 2);
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
     const reasoningDisclosurePlaceholder = replyIsOnlyReasoningDisclosurePlaceholder(reply);
+    const weakGeneratingCandidate =
+      generatingRaw &&
+      strongGeneratingSignal !== true &&
+      !progressOnly &&
+      hasVisibleAssistantChat &&
+      !streamingPlaceholderTail &&
+      !reasoningDisclosurePlaceholder &&
+      len >= minDoneLen() &&
+      len > baselineLen &&
+      !domExtractLooksLikeSubmittedPrompt(len, submittedPromptLen) &&
+      assistantReplyLooksNaturallyComplete(reply);
+    if (weakGeneratingCandidate) {
+      const lengthDelta = Math.abs(reply.length - weakGeneratingReply.length);
+      const sameOrNearSame =
+        reply === weakGeneratingReply ||
+        (lengthDelta <= 12 && (reply.startsWith(weakGeneratingReply) || weakGeneratingReply.startsWith(reply)));
+      weakGeneratingStable = weakGeneratingReply && sameOrNearSame ? weakGeneratingStable + 1 : 1;
+      weakGeneratingReply = reply;
+    } else {
+      weakGeneratingStable = 0;
+      weakGeneratingReply = reply;
+    }
     const generating =
       streamingPlaceholderTail ||
       reasoningDisclosurePlaceholder ||
@@ -1411,6 +1448,30 @@ async function waitForDomResponse(
     }
 
     if (generating) {
+      if (weakGeneratingStable >= 4) {
+        await sleep(250);
+        const lateState = await pollCopilotGeneratingAndReply(session);
+        const replyLate = normalizeCopilotVisibleText(lateState.reply);
+        if (
+          lateState.strongGeneratingSignal !== true &&
+          !lateState.progressOnly &&
+          lateState.hasVisibleAssistantChat &&
+          !replyEndsWithStreamingPlaceholder(replyLate) &&
+          !replyIsOnlyReasoningDisclosurePlaceholder(replyLate) &&
+          assistantReplyLooksNaturallyComplete(replyLate) &&
+          replyLate.length <= len + 20
+        ) {
+          const candidate = replyLate.length >= len ? replyLate : reply;
+          const out = await resolveAssistantReplyForReturn(session, candidate, submittedPromptLen, netCapture);
+          if (out != null) {
+            console.error(
+              "[copilot:response] done (weak generating stale, completed text stable) len=",
+              out.length,
+            );
+            return await finalize("weak_generating_stable", out);
+          }
+        }
+      }
       streamed = true;
       stable = 0;
       prev = len;

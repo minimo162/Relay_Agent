@@ -301,6 +301,13 @@ function copilotDomGeneratingIifeExpression() {
           el.getAttribute?.("aria-disabled") === "true")
       );
     }
+    function isChatInputControl(el) {
+      if (!el) return false;
+      if (el.matches?.('.fai-SendButton')) return true;
+      return !!el.closest?.(
+        '.fai-ChatInput, .fai-ExpandableChatInput, [class*="ChatInput"], [class*="chatInput"]',
+      );
+    }
     function composerButtonStateInDoc(doc) {
       const buttons = queryDeepAll('.fai-SendButton, button, [role="button"]', doc).filter(reallyVisible);
       let hasStopButton = false;
@@ -310,15 +317,18 @@ function copilotDomGeneratingIifeExpression() {
       for (const button of buttons) {
         const name = buttonSemanticName(button).toLowerCase();
         const disabled = buttonDisabled(button);
+        const chatInputControl = isChatInputControl(button);
         const isSend =
-          /\\bsend\\b|\\breply\\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
-          button.matches?.('.fai-SendButton');
+          chatInputControl &&
+          (/\\bsend\\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
+            button.matches?.('.fai-SendButton'));
         const stopByName =
+          chatInputControl &&
           /stopgenerating|stop generating|stop response|\\bstop\\b|生成を停止|停止|中断/i.test(name) &&
           /generat|response|応答|生成|回答|作成|stop|停止|中断/i.test(name);
         const namedStopChild = !!button.querySelector?.(
           '[data-testid*="stop"], [class*="StopGenerating"], [class*="stopGenerating"]',
-        );
+        ) && chatInputControl;
         if (stopByName) hasStopButton = true;
         if (isSend && disabled) hasDisabledSendButton = true;
         if (isSend && !disabled && !stopByName) hasReadySendButton = true;
@@ -919,6 +929,13 @@ function copilotDomPollGeneratingAndReplyExpression() {
           el.getAttribute?.("aria-disabled") === "true")
       );
     }
+    function isChatInputControl(el) {
+      if (!el) return false;
+      if (el.matches?.('.fai-SendButton')) return true;
+      return !!el.closest?.(
+        '.fai-ChatInput, .fai-ExpandableChatInput, [class*="ChatInput"], [class*="chatInput"]',
+      );
+    }
     function composerButtonState(doc) {
       const buttons = queryDeepAll('.fai-SendButton, button, [role="button"]', doc).filter(
         (el) => visible(el) && !inUserTurn(el),
@@ -930,15 +947,18 @@ function copilotDomPollGeneratingAndReplyExpression() {
       for (const button of buttons) {
         const name = buttonSemanticName(button).toLowerCase();
         const disabled = buttonDisabled(button);
+        const chatInputControl = isChatInputControl(button);
         const isSend =
-          /\\bsend\\b|\\breply\\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
-          button.matches?.('.fai-SendButton');
+          chatInputControl &&
+          (/\\bsend\\b|送信|返信|応答|fai-sendbutton/i.test(name) ||
+            button.matches?.('.fai-SendButton'));
         const stopByName =
+          chatInputControl &&
           /stopgenerating|stop generating|stop response|\\bstop\\b|生成を停止|停止|中断/i.test(name) &&
           /generat|response|応答|生成|回答|作成|stop|停止|中断/i.test(name);
         const namedStopChild = !!button.querySelector?.(
           '[data-testid*="stop"], [class*="StopGenerating"], [class*="stopGenerating"]',
-        );
+        ) && chatInputControl;
         if (stopByName) hasStopButton = true;
         if (isSend && disabled) hasDisabledSendButton = true;
         if (isSend && !disabled && !stopByName) hasReadySendButton = true;

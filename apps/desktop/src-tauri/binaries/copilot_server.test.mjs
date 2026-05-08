@@ -321,6 +321,59 @@ test("parseOpenAiRequest treats tool results as final-answer mode", () => {
   assert.match(parsed.systemPrompt, /If more environment access is needed, return tool_uses JSON/);
 });
 
+test("parseOpenAiRequest detects failed tool result messages", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "Set A1 red." },
+      {
+        role: "tool",
+        content: '{"stdout":"","stderr":"officecli: command not found","exit_code":127}',
+        tool_call_id: "call_officecli",
+      },
+    ],
+    tools: [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.hasToolResultMessages, true);
+  assert.equal(parsed.toolResultFailure.reason, "non_zero_exit");
+  assert.equal(parsed.toolResultFailure.toolCallId, "call_officecli");
+  assert.match(parsed.toolResultFailure.excerpt, /officecli: command not found/);
+});
+
+test("parseOpenAiRequest does not treat successful tool warnings or data codes as failures", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "Run a command." },
+      {
+        role: "tool",
+        content: '{"stdout":"{\\"code\\":404,\\"label\\":\\"sample data\\"}","stderr":"warning: ignored optional field","exit_code":0}',
+        tool_call_id: "call_bash",
+      },
+    ],
+    tools: [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.hasToolResultMessages, true);
+  assert.equal(parsed.toolResultFailure, null);
+});
+
+test("parseOpenAiRequest detects structured tool error objects", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "Run a command." },
+      {
+        role: "tool",
+        content: '{"error":{"message":"permission denied while editing file"},"status":"failed"}',
+        tool_call_id: "call_edit",
+      },
+    ],
+    tools: [{ type: "function", function: { name: "edit", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.toolResultFailure.reason, "status_failed");
+  assert.match(parsed.toolResultFailure.excerpt, /permission denied/);
+});
+
 test("formatPromptForCopilot wraps tool results as evidence review transcript data", () => {
   const parsed = parseOpenAiRequest({
     messages: [
@@ -973,6 +1026,108 @@ test("createServer does not force tool repair after OpenAI tool result messages"
     const body = await response.json();
     assert.equal(prompts.length, 1);
     assert.equal(body.choices[0].message.content, "final answer after tool result");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer stops with an explicit error when a tool result failed", async () => {
+  const prompts = [];
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: true };
+    },
+    async startOrJoinDescribe(prompt) {
+      prompts.push(prompt);
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody("this should not be called", prompt),
+      };
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "m365-copilot",
+        messages: [
+          { role: "user", content: "Set A1 red." },
+          {
+            role: "tool",
+            content: '{"stdout":"","stderr":"officecli: command not found","exit_code":127}',
+            tool_call_id: "call_officecli",
+          },
+        ],
+        tools: [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(prompts.length, 0);
+    assert.equal(body.choices[0].finish_reason, "stop");
+    assert.match(body.choices[0].message.content, /ツール実行に失敗/);
+    assert.match(body.choices[0].message.content, /officecli: command not found/);
+    assert.doesNotMatch(body.choices[0].message.content, /this should not be called/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer streams explicit tool failure without calling Copilot", async () => {
+  const prompts = [];
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: true };
+    },
+    async startOrJoinDescribe(prompt) {
+      prompts.push(prompt);
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody("this should not be streamed", prompt),
+      };
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "m365-copilot",
+        stream: true,
+        messages: [
+          { role: "user", content: "Set A1 red." },
+          {
+            role: "tool",
+            content: '{"stdout":"","stderr":"officecli: command not found","exit_code":127}',
+            tool_call_id: "call_officecli",
+          },
+        ],
+        tools: [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.equal(prompts.length, 0);
+    assert.match(collectSseContentDeltas(text).join(""), /ツール実行に失敗/);
+    assert.match(collectSseContentDeltas(text).join(""), /officecli: command not found/);
+    assert.doesNotMatch(text, /this should not be streamed/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

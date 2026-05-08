@@ -1045,7 +1045,7 @@ test("waitForDomResponse expands incomplete relay_tool replies even without the 
   assert.ok(pollIndex >= 3);
 });
 
-test("waitForDomResponse finalizes long HTML replies after phantom generating without timeout fallback", async () => {
+test("waitForDomResponse finalizes long HTML replies without waiting for phantom generating timeout", async () => {
   const fullReply = [
     "了解です。",
     "",
@@ -1054,22 +1054,31 @@ test("waitForDomResponse finalizes long HTML replies after phantom generating wi
     "<body></body>",
     "</html>",
   ].join("\n");
+  const snapshots = [
+    {
+      generating: false,
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    ...Array.from({ length: 10 }, () => ({
+      generating: true,
+      reply: fullReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+  ];
   let pollIndex = 0;
   let finalizationMode = "";
   const session = {
     async evaluate(script) {
       const source = String(script);
       if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
         pollIndex += 1;
-        return {
-          value: {
-            generating: true,
-            reply: fullReply,
-            progressOnly: false,
-            hasVisibleAssistantChat: true,
-            hasExpandableCodeBlock: false,
-          },
-        };
+        return { value: snapshot };
       }
       if (source.includes("const includeGenericSelectors = false")) {
         return { value: fullReply };
@@ -1092,8 +1101,111 @@ test("waitForDomResponse finalizes long HTML replies after phantom generating wi
   });
 
   assert.equal(response, fullReply);
-  assert.equal(finalizationMode, "stable_strong_signal");
-  assert.ok(pollIndex >= 12);
+  assert.equal(finalizationMode, "weak_generating_stable");
+  assert.ok(pollIndex < 12);
+});
+
+test("waitForDomResponse finalizes completed plain text while weak generating is stale", async () => {
+  const finalReply = "検索結果を整理しました。対象ファイルは 3 件です。";
+  const snapshots = [
+    {
+      generating: false,
+      strongGeneratingSignal: false,
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    ...Array.from({ length: 10 }, () => ({
+      generating: true,
+      strongGeneratingSignal: false,
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+  ];
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: finalReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 5_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.equal(finalizationMode, "weak_generating_stable");
+  assert.ok(pollIndex < 8);
+});
+
+test("waitForDomResponse waits when weak generating text is still growing", async () => {
+  const finalReply = "検索結果を整理しました。対象ファイルは 3 件です。";
+  const snapshots = [
+    {
+      generating: false,
+      strongGeneratingSignal: false,
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    { generating: true, strongGeneratingSignal: false, reply: "検索結果を整理しました。", progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+    { generating: true, strongGeneratingSignal: false, reply: "検索結果を整理しました。対象ファイルは", progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+    { generating: true, strongGeneratingSignal: false, reply: finalReply, progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+    { generating: true, strongGeneratingSignal: false, reply: finalReply, progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+    { generating: false, strongGeneratingSignal: false, reply: finalReply, progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+    { generating: false, strongGeneratingSignal: false, reply: finalReply, progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+    { generating: false, strongGeneratingSignal: false, reply: finalReply, progressOnly: false, hasVisibleAssistantChat: true, hasExpandableCodeBlock: false },
+  ];
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: finalReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 6_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.notEqual(finalizationMode, "weak_generating_stable");
+  assert.ok(pollIndex >= 5);
 });
 
 test("waitForDomResponse treats a ready send button as idle when stale generating remains", async () => {
