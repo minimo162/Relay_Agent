@@ -204,6 +204,8 @@ jobs:
         working-directory: aionui
         env:
           CI: true
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: bun run build-win:x64
 
       - name: Locate AionUi installer artifact

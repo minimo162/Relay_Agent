@@ -52,6 +52,8 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /startRelayGatewayBeforeShell/);
   assert.match(text, /Where-Object \{ \$_.Name -like "Relay Agent-\*-win-x64.exe" \}/);
   assert.match(text, /Installer candidate: \$\(\$_\.Name\)/);
+  assert.match(text, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(text, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
 });
 
 test("AionUi release workflow publishes signed or clearly marked prerelease assets", () => {
