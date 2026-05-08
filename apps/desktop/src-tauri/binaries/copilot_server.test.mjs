@@ -247,7 +247,7 @@ test("parseOpenAiRequest keeps unsupported Excel formatting away from bash and t
   assert.match(parsed.systemPrompt, /Do not edit binary Office\/PDF files with text tools/);
 });
 
-test("parseOpenAiRequest routes OfficeCLI work through Skill instead of bash when available", () => {
+test("parseOpenAiRequest routes OfficeCLI work through execution after Skill instructions", () => {
   const parsed = parseOpenAiRequest({
     messages: [{ role: "user", content: String.raw`C:\Users\m242054\Downloads\test.xlsx の A1 セルを赤くして` }],
     tools: [
@@ -259,9 +259,25 @@ test("parseOpenAiRequest routes OfficeCLI work through Skill instead of bash whe
 
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
-  assert.match(parsed.systemPrompt, /Office file requests: when the user asks to inspect, create, or modify Office files/);
-  assert.match(parsed.systemPrompt, /Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx`/);
-  assert.match(parsed.systemPrompt, /do not route `officecli` through `bash`/);
+  assert.match(parsed.systemPrompt, /OfficeCLI skills are instructions, not execution/);
+  assert.match(parsed.systemPrompt, /then call `bash` with the actual `officecli \.\.\.` command/);
+  assert.match(parsed.systemPrompt, /Simple Office edits/);
+  assert.match(parsed.systemPrompt, /"recipient_name":"functions\.bash"/);
+  assert.match(parsed.systemPrompt, /A markdown command is not execution/);
+});
+
+test("parseOpenAiRequest names the advertised execution tool in OfficeCLI policy", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: String.raw`C:\Users\m242054\Downloads\test.xlsx の A1 セルを赤くして` }],
+    tools: [
+      { type: "function", function: { name: "Skill", parameters: { type: "object" } } },
+      { type: "function", function: { name: "exec", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.match(parsed.systemPrompt, /then call `exec` with the actual `officecli \.\.\.` command/);
+  assert.match(parsed.systemPrompt, /"recipient_name":"functions\.exec"/);
 });
 
 test("formatPromptForCopilot wraps strict tool planning as compiler input data", () => {
@@ -422,7 +438,7 @@ test("extractOpenAiToolCallsFromText recovers malformed tool_uses skill args wit
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "Skill");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    skill: "office-cli",
+    skill: "officecli-xlsx",
     args: 'modify excel file "C:/Users/m242054/Downloads/test.xlsx" set cell A1 fill-color red',
   });
 });
@@ -437,11 +453,31 @@ test("extractOpenAiToolCallsFromText resolves tool names case-insensitively to t
   assert.equal(extracted.toolCalls[0].function.name, "skill");
 });
 
-test("extractOpenAiToolCallsFromText converts fenced officecli commands to the OfficeCLI Skill", () => {
+test("extractOpenAiToolCallsFromText converts fenced officecli commands to execution when available", () => {
   const extracted = extractOpenAiToolCallsFromText(
     [
       "了解しました。",
       "",
+      "```bash",
+      "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+      "```",
+    ].join("\n"),
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
+test("extractOpenAiToolCallsFromText falls back to OfficeCLI Skill when no execution tool is available", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    [
       "```bash",
       "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
       "```",
@@ -454,6 +490,102 @@ test("extractOpenAiToolCallsFromText converts fenced officecli commands to the O
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
     skill: "officecli-xlsx",
     args: "set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
+test("extractOpenAiToolCallsFromText rewrites OfficeCLI Skill calls to execution", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"officecli-xlsx","args":"set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000"}}]}',
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.displayText, "");
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
+test("extractOpenAiToolCallsFromText rewrites simple OfficeCLI natural-language Skill args to execution", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"office-cli","args":"modify excel file C:/Users/m242054/Downloads/test.xlsx set cell A1 fill-color red"}}]}',
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
+test("extractOpenAiToolCallsFromText accepts PowerShell officecli invocation fences", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    [
+      "```powershell",
+      "& officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+      "```",
+    ].join("\n"),
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+  });
+});
+
+test("extractOpenAiToolCallsFromText keeps non-command OfficeCLI Skill args as Skill", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"office-cli","args":"inspect excel file C:/Users/m242054/Downloads/test.xlsx and recommend a safe edit"}}]}',
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "Skill");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    skill: "officecli-xlsx",
+    args: "inspect excel file C:/Users/m242054/Downloads/test.xlsx and recommend a safe edit",
+  });
+});
+
+test("buildOpenAiCompletionBody executes OfficeCLI even when Copilot wraps the JSON in prose", () => {
+  const responseText = [
+    "了解しました。",
+    "こちらで **A1セルを赤くする** 操作を実行します。",
+    "",
+    "```json",
+    '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"office-cli","args":"set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000"}}]}',
+    "```",
+    "",
+    "次はどこをどう変更しますか？",
+  ].join("\n");
+  const body = buildOpenAiCompletionBody(responseText, {
+    tools: [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  });
+
+  assert.equal(body.choices[0].finish_reason, "tool_calls");
+  assert.equal(body.choices[0].message.content, null);
+  assert.equal(body.choices[0].message.tool_calls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(body.choices[0].message.tool_calls[0].function.arguments), {
+    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
   });
 });
 

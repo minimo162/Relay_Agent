@@ -5148,8 +5148,14 @@ function formatStrictToolCompilerPrompt({ tools = [], mode = TOOL_PROTOCOL_MODES
 }
 
 function formatReliableToolPolicy(tools = []) {
-  const available = new Set(tools.map((tool) => normalizeToolName(tool?.function?.name || "")).filter(Boolean));
-  const hasSkillRunner = [...available].some((name) => name.toLowerCase() === "skill");
+  const available = new Set(
+    tools
+      .map((tool) => normalizeToolName(tool?.function?.name || ""))
+      .filter(Boolean)
+      .map((name) => name.toLowerCase()),
+  );
+  const hasSkillRunner = available.has("skill");
+  const executionToolName = ["bash", "shell", "exec", "run"].find((name) => available.has(name)) || "";
   const lines = [
     "RELAY RELIABLE TOOL POLICY:",
     "Use only capabilities that are reliable in the current OpenCode tool catalog. Prefer the smallest safe first tool call over a large speculative plan.",
@@ -5177,9 +5183,9 @@ function formatReliableToolPolicy(tools = []) {
       "Code/config/document text changes: read the target first, then use `edit`, `write`, or `apply_patch`. Do not edit binary Office/PDF files with text tools.",
     );
   }
-  if (available.has("bash") || available.has("shell") || available.has("run") || available.has("exec")) {
+  if (executionToolName) {
     lines.push(
-      "Command execution: use `bash` only for explicit tests, builds, git inspection, or safe project commands. Do not use destructive commands, package installation, network mutation, or arbitrary scripts unless the user explicitly requested them.",
+      `Command execution: use \`${executionToolName}\` only for explicit tests, builds, git inspection, safe project commands, or dedicated CLI commands covered by the tool policy. Do not use destructive commands, package installation, network mutation, or arbitrary scripts unless the user explicitly requested them.`,
     );
   }
   if (available.has("question") && hasSkillRunner) {
@@ -5196,12 +5202,22 @@ function formatReliableToolPolicy(tools = []) {
     );
   }
   if (hasSkillRunner) {
-    lines.push(
-      "Office file requests: when the user asks to inspect, create, or modify Office files and a matching OfficeCLI skill is available, emit a `Skill` tool call. Do not answer with `officecli` commands in markdown and do not route `officecli` through `bash`.",
-      "Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx` and `args` containing the concise OfficeCLI task or command, for example `{\"skill\":\"officecli-xlsx\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}`.",
-      "Generic OfficeCLI fallback: use `{\"skill\":\"officecli\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}` only if the catalog does not expose a more specific OfficeCLI skill name.",
-      "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
-    );
+    if (executionToolName) {
+      lines.push(
+        `Office file requests: OfficeCLI skills are instructions, not execution. Use \`Skill\` only when the OfficeCLI rules need to be loaded, then call \`${executionToolName}\` with the actual \`officecli ...\` command. Do not stop after \`Skill\`.`,
+        `Simple Office edits: when the requested OfficeCLI command is clear, emit the execution tool directly, for example \`{\"tool_uses\":[{\"recipient_name\":\"functions.${executionToolName}\",\"parameters\":{\"command\":\"officecli set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}}]}\`.`,
+        "Excel requests: use `officecli-xlsx` as the skill name only for loading instructions. The file change itself must be an execution tool call running `officecli`.",
+        "Do not answer with `officecli` commands in markdown. A markdown command is not execution.",
+        "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
+      );
+    } else {
+      lines.push(
+        "Office file requests: when no execution tool is available, emit `Skill` with the matching OfficeCLI skill so the executor can load instructions. Do not claim the file was changed until an execution result exists.",
+        "Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx` and `args` containing the concise OfficeCLI task or command, for example `{\"skill\":\"officecli-xlsx\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}`.",
+        "Generic OfficeCLI fallback: use `{\"skill\":\"officecli\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}` only if the catalog does not expose a more specific OfficeCLI skill name.",
+        "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
+      );
+    }
   }
   if (available.has("websearch") || available.has("webfetch")) {
     lines.push(
@@ -5580,7 +5596,7 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
   ];
   if (malformedCalls.length && looksLikeToolJson(trimmedRaw)) displayText = "";
   toolCalls.push(...malformedCalls);
-  const officeCliSkillCalls = extractOfficeCliSkillCallsFromText(raw, allowed);
+  const officeCliSkillCalls = extractOfficeCliToolCallsFromText(raw, allowed);
   if (officeCliSkillCalls.length) {
     displayText = stripOfficeCliCodeFences(displayText);
     toolCalls.push(...officeCliSkillCalls);
@@ -5588,9 +5604,10 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
   return { displayText: displayText.trim(), toolCalls: dedupeOpenAiToolCalls(toolCalls) };
 }
 
-function extractOfficeCliSkillCallsFromText(text, allowed) {
+function extractOfficeCliToolCallsFromText(text, allowed) {
   const skillToolName = resolveAllowedToolName("Skill", allowed) || resolveAllowedToolName("skill", allowed);
-  if (!skillToolName) return [];
+  const executionToolName = resolveOfficeCliExecutionToolName(allowed);
+  if (!skillToolName && !executionToolName) return [];
   const raw = String(text || "");
   const commands = [];
   const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/giu;
@@ -5616,17 +5633,8 @@ function extractOfficeCliSkillCallsFromText(text, allowed) {
       seen.add(args);
       return true;
     })
-    .map((args) => ({
-      id: `call_${randomBytes(6).toString("hex")}`,
-      type: "function",
-      function: {
-        name: skillToolName,
-        arguments: JSON.stringify({
-          skill: officeCliSkillNameForArgs(args),
-          args,
-        }),
-      },
-    }));
+    .map((args) => officeCliToolCallForArgs(args, allowed, { skillToolName, executionToolName }))
+    .filter(Boolean);
 }
 
 function extractOfficeCliCommandArgsFromLines(text) {
@@ -5643,6 +5651,7 @@ function parseOfficeCliCommandArgs(line) {
   if (!raw || raw.startsWith("#") || raw.startsWith("//")) return "";
   raw = raw.replace(/^\s*(?:\$|>|PS>|cmd>)\s*/iu, "");
   raw = raw.replace(/^\s*PS\s+[A-Z]:\\[^>]*>\s*/iu, "");
+  if (raw.startsWith("& ")) raw = raw.slice(2).trim();
   const match = raw.match(/^(?:officecli|office-cli)(?:\.exe)?(?:\s+(.+))?$/iu);
   if (!match) return "";
   const args = String(match[1] || "").trim();
@@ -5663,6 +5672,132 @@ function officeCliSkillNameForArgs(args) {
   if (/\.(?:docx|docm)\b/u.test(text) || /\bdocx\b/u.test(text)) return "officecli-docx";
   if (/\.(?:pptx|pptm)\b/u.test(text) || /\bpptx\b/u.test(text)) return "officecli-pptx";
   return "officecli";
+}
+
+function resolveOfficeCliExecutionToolName(allowed) {
+  return (
+    resolveAllowedToolName("bash", allowed) ||
+    resolveAllowedToolName("shell", allowed) ||
+    resolveAllowedToolName("exec", allowed) ||
+    resolveAllowedToolName("run", allowed)
+  );
+}
+
+function normalizeOfficeCliColorValue(value) {
+  const color = String(value || "").trim().replace(/^#/u, "");
+  const named = {
+    red: "FF0000",
+    blue: "0000FF",
+    green: "00FF00",
+    yellow: "FFFF00",
+    black: "000000",
+    white: "FFFFFF",
+    gray: "808080",
+    grey: "808080",
+  };
+  if (/^[0-9a-f]{6}$/iu.test(color)) return color.toUpperCase();
+  return named[color.toLowerCase()] || "";
+}
+
+function quoteOfficeCliPathForCommand(path) {
+  const normalized = String(path || "").trim().replace(/\\/gu, "/");
+  if (!normalized) return "";
+  if (!/[\s"'`$;&|<>]/u.test(normalized)) return normalized;
+  return `"${normalized.replace(/(["\\$`])/gu, "\\$1")}"`;
+}
+
+function officeCliCommandArgsFromNaturalLanguage(args) {
+  const text = String(args || "").trim();
+  if (!text) return "";
+  const match = text.match(
+    /^modify\s+excel\s+file\s+(?:"([^"]+)"|(.+?))\s+set\s+cell\s+([A-Z]{1,3}\d+)\s+fill-?color\s+(#[0-9a-f]{6}|[0-9a-f]{6}|red|blue|green|yellow|black|white|gr[ae]y)\s*$/iu,
+  );
+  if (!match) return "";
+  const path = quoteOfficeCliPathForCommand(match[1] || match[2] || "");
+  const cell = String(match[3] || "").toUpperCase();
+  const color = normalizeOfficeCliColorValue(match[4]);
+  if (!path || !cell || !color) return "";
+  return `set ${path} /Sheet1/${cell} --prop fill=${color}`;
+}
+
+function officeCliCommandForArgs(args) {
+  const trimmed = String(args || "").trim();
+  if (!trimmed) return "";
+  if (/^(?:officecli|office-cli)(?:\.exe)?(?:\s|$)/iu.test(trimmed)) {
+    return trimmed.replace(/^(?:office-cli)(?=\.exe|\s|$)/iu, "officecli");
+  }
+  const naturalCommandArgs = officeCliCommandArgsFromNaturalLanguage(trimmed);
+  if (naturalCommandArgs) return `officecli ${naturalCommandArgs}`;
+  return `officecli ${trimmed}`;
+}
+
+function looksLikeOfficeCliCommandArgs(args) {
+  const trimmed = String(args || "").trim();
+  if (!trimmed) return false;
+  if (/^(?:officecli|office-cli)(?:\.exe)?(?:\s|$)/iu.test(trimmed)) return true;
+  if (officeCliCommandArgsFromNaturalLanguage(trimmed)) return true;
+  return /^(?:help|create|open|close|set|add|get|query|remove|move|swap|view|raw|raw-set|validate|import|batch|load_skill)\b/iu.test(trimmed);
+}
+
+function officeCliToolCallForArgs(args, allowed, names = {}) {
+  const executionToolName = names.executionToolName || resolveOfficeCliExecutionToolName(allowed);
+  if (executionToolName && looksLikeOfficeCliCommandArgs(args)) {
+    return {
+      id: `call_${randomBytes(6).toString("hex")}`,
+      type: "function",
+      function: {
+        name: executionToolName,
+        arguments: JSON.stringify({
+          command: officeCliCommandForArgs(args),
+        }),
+      },
+    };
+  }
+  const skillToolName = names.skillToolName || resolveAllowedToolName("Skill", allowed) || resolveAllowedToolName("skill", allowed);
+  if (!skillToolName) return null;
+  return {
+    id: `call_${randomBytes(6).toString("hex")}`,
+    type: "function",
+    function: {
+      name: skillToolName,
+      arguments: JSON.stringify({
+        skill: officeCliSkillNameForArgs(args),
+        args: String(args || "").trim(),
+      }),
+    },
+  };
+}
+
+function normalizeSkillToolArguments(name, args, allowed) {
+  if (!/^skill$/iu.test(normalizeToolName(name))) return { name, args };
+  if (!args || typeof args !== "object" || Array.isArray(args)) return { name, args };
+  const rawSkill = String(args.skill || "").trim();
+  const rawArgs = String(args.args || "").trim();
+  const isOfficeCliSkill =
+    /^office-?cli(?:-(?:xlsx|docx|pptx|financial-model|data-dashboard))?$/iu.test(rawSkill) ||
+    /^officecli-/iu.test(rawSkill);
+  const hasOfficeCliArgs =
+    rawArgs &&
+    (/^(?:officecli|office-cli)(?:\.exe)?(?:\s|$)/iu.test(rawArgs) ||
+      /\.(?:xlsx|xlsm|xlsb|csv|tsv|docx|docm|pptx|pptm)\b/iu.test(rawArgs) ||
+      /\/sheet[^/\s]*/iu.test(rawArgs));
+  if (!isOfficeCliSkill && !hasOfficeCliArgs) return { name, args };
+  if (rawArgs) {
+    const call = officeCliToolCallForArgs(rawArgs, allowed, { skillToolName: name });
+    if (call) {
+      return {
+        name: call.function.name,
+        args: JSON.parse(call.function.arguments),
+      };
+    }
+  }
+  return {
+    name,
+    args: {
+      ...args,
+      skill: officeCliSkillNameForArgs(rawArgs || rawSkill),
+    },
+  };
 }
 
 function stripOfficeCliCodeFences(text) {
@@ -5751,12 +5886,13 @@ function extractMalformedOpenAiToolCalls(text, allowed) {
     if (!args || typeof args !== "object" || Array.isArray(args)) continue;
     const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
     const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
+    const normalized = normalizeSkillToolArguments(name, args, allowed);
     calls.push({
       id,
       type: "function",
       function: {
-        name,
-        arguments: JSON.stringify(args),
+        name: normalized.name,
+        arguments: JSON.stringify(normalized.args),
       },
     });
   }
@@ -5787,12 +5923,13 @@ function extractMalformedToolUses(text, allowed) {
     if (!args || typeof args !== "object" || Array.isArray(args)) continue;
     const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
     const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
+    const normalized = normalizeSkillToolArguments(name, args, allowed);
     calls.push({
       id,
       type: "function",
       function: {
-        name,
-        arguments: JSON.stringify(args),
+        name: normalized.name,
+        arguments: JSON.stringify(normalized.args),
       },
     });
   }
@@ -5999,12 +6136,13 @@ function normalizeOpenAiToolCall(value, allowed) {
       : rawArguments && typeof rawArguments === "object"
         ? rawArguments
         : {};
+  const normalized = normalizeSkillToolArguments(name, args, allowed);
   return {
     id: String(value.id || value.call_id || value.tool_call_id || `call_${randomBytes(6).toString("hex")}`),
     type: "function",
     function: {
-      name,
-      arguments: JSON.stringify(args),
+      name: normalized.name,
+      arguments: JSON.stringify(normalized.args),
     },
   };
 }

@@ -192,7 +192,24 @@ test("normalizeProgressTextForUi hides raw OpenAI tool_uses JSON", () => {
   );
 });
 
-test("normalizeProgressTextForUi strips M365 search snippets and duplicate structured answers", () => {
+test("normalizeProgressTextForUi hides prose-wrapped OpenAI tool_uses JSON", () => {
+  assert.equal(
+    normalizeProgressTextForUi(
+      [
+        "了解しました。",
+        "以下を実行します。",
+        "",
+        "```json",
+        '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"officecli-xlsx","args":"set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000"}}]}',
+        "```",
+      ].join("\n"),
+      "",
+    ),
+    "",
+  );
+});
+
+test("normalizeProgressTextForUi hides OfficeCLI execution prose instead of showing a fake final answer", () => {
   const answer = [
     "はい、'test.xlsx' を検索します...はい、'C:\\Users\\m242054\\Downloads\\test.xlsx' を検索します...",
     "了解しました。",
@@ -219,11 +236,7 @@ test("normalizeProgressTextForUi strips M365 search snippets and duplicate struc
     "- `fill=FF0000` は赤色（背景色）です",
     "- 値や他の書式は変更せず、**塗りつぶし色のみ**を変更します",
   ].join("\n");
-  const normalized = normalizeProgressTextForUi(answer, "");
-
-  assert.doesNotMatch(normalized, /検索します/u);
-  assert.equal((normalized.match(/指定の Excel ファイル/gu) || []).length, 1);
-  assert.equal((normalized.match(/officecli set/gu) || []).length, 1);
+  assert.equal(normalizeProgressTextForUi(answer, ""), "");
 });
 
 test("normalizeCopilotVisibleText strips transient image status noise and duplicate paragraphs", () => {

@@ -412,6 +412,55 @@ function assistantReplyHasCompleteToolCallJson(text) {
   return hasBalancedStructuredPayload(cleaned);
 }
 
+function assistantReplyHasCompleteOpenAiToolCallJson(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned || assistantReplyLooksIncompleteRelayTool(cleaned)) return false;
+  if (!/"(?:tool_calls|tool_uses|recipient_name)"\s*:/u.test(cleaned)) return false;
+  if (assistantReplyHasClosedFence(cleaned)) return true;
+  return hasBalancedStructuredPayload(cleaned);
+}
+
+const OFFICECLI_PROGRESS_COMMAND_LANGS = new Set([
+  "",
+  "bash",
+  "sh",
+  "shell",
+  "zsh",
+  "powershell",
+  "pwsh",
+  "cmd",
+  "bat",
+  "dos",
+  "text",
+  "plaintext",
+  "console",
+]);
+
+function lineLooksLikeOfficeCliExecutionCommand(line) {
+  let candidate = String(line || "")
+    .trim()
+    .replace(/^(?:\$\s*|>\s*|PS>\s*|cmd>\s*)/iu, "")
+    .replace(/^PS\s+[A-Z]:\\[^>]*>\s*/iu, "")
+    .trim();
+  if (candidate.startsWith("& ")) candidate = candidate.slice(2).trim();
+  return /^(?:officecli|office-cli)(?:\.exe)?\s+(?:help|create|open|close|set|add|get|query|remove|move|swap|view|raw|raw-set|validate|import|batch|load_skill)\b/iu.test(
+    candidate,
+  );
+}
+
+function textContainsOfficeCliExecutionCommand(text) {
+  const raw = String(text || "");
+  if (!raw) return false;
+  const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/giu;
+  let match;
+  while ((match = fenceRe.exec(raw))) {
+    const lang = String(match[1] || "").trim().toLowerCase();
+    if (!OFFICECLI_PROGRESS_COMMAND_LANGS.has(lang)) continue;
+    if (String(match[2] || "").split(/\r?\n/u).some(lineLooksLikeOfficeCliExecutionCommand)) return true;
+  }
+  return raw.split(/\r?\n/u).some(lineLooksLikeOfficeCliExecutionCommand);
+}
+
 function assistantReplyHasStrongCompletionSignal(text) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned || replyEndsWithStreamingPlaceholder(cleaned)) return false;
@@ -535,6 +584,8 @@ function extractUserVisibleProgressText(text) {
   let cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return "";
   if (looksLikeSearchProgressText(cleaned)) return "";
+  if (assistantReplyHasCompleteOpenAiToolCallJson(cleaned)) return "";
+  if (textContainsOfficeCliExecutionCommand(cleaned)) return "";
 
   const cutoff = findProgressToolCutoff(cleaned);
   if (cutoff >= 0) {
