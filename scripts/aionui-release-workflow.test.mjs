@@ -54,6 +54,7 @@ test("AionUi release workflow publishes signed or clearly marked prerelease asse
   assert.match(text, /windows-self-sign-installer\.ps1/);
   assert.match(text, /self-signed for smoke testing only/);
   assert.match(text, /\$unsignedName = "\$stem-unsigned\.exe"/);
+  assert.match(text, /\$releaseName = \$name -replace '\^Relay Agent-', 'Relay\.Agent-'/);
   assert.match(text, /gh release upload \$env:RELEASE_TAG @assets --clobber/);
   assert.match(text, /gh @args/);
 });

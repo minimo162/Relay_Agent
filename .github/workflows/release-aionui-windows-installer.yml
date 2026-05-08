@@ -291,6 +291,15 @@ jobs:
             $name = $unsignedName
           }
 
+          $releaseName = $name -replace '^Relay Agent-', 'Relay.Agent-'
+          if ($releaseName -ne $name) {
+            $dir = Split-Path -Parent $path
+            $releasePath = Join-Path $dir $releaseName
+            Copy-Item -LiteralPath $path -Destination $releasePath -Force
+            $path = $releasePath
+            $name = $releaseName
+          }
+
           "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 

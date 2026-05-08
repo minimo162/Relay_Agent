@@ -9,7 +9,7 @@ const selfSignedDoc = readFileSync("docs/WINDOWS_SELF_SIGNED_SIGNING.md", "utf8"
 test("AionUi Windows validation checklist covers install, provider, OfficeCLI, and Office workflows", () => {
   assert.match(validationDoc, /release-aionui-windows-installer\.yml/);
   assert.match(validationDoc, /no administrator rights/i);
-  assert.match(validationDoc, /Relay Agent-\*-win-x64\.exe/);
+  assert.match(validationDoc, /Relay\.Agent-\*-win-x64\*\.exe/);
   assert.match(validationDoc, /Get-AuthenticodeSignature/);
   assert.match(validationDoc, /Defender/);
   assert.match(validationDoc, /Relay Agent \/ M365 Copilot/);

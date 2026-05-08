@@ -8,17 +8,17 @@ The target is Windows 10/11 x64 with no administrator rights available.
 
 ## Release Asset
 
-- [ ] Download the `Relay Agent-*-win-x64.exe` asset from the GitHub Release.
+- [ ] Download the `Relay.Agent-*-win-x64*.exe` asset from the GitHub Release.
 - [ ] Record the SHA256 from the workflow summary and confirm it locally:
 
 ```powershell
-Get-FileHash ".\Relay Agent-*-win-x64.exe" -Algorithm SHA256
+Get-FileHash ".\Relay.Agent-*-win-x64*.exe" -Algorithm SHA256
 ```
 
 - [ ] Check the Authenticode signature:
 
 ```powershell
-Get-AuthenticodeSignature ".\Relay Agent-*-win-x64.exe" | Format-List
+Get-AuthenticodeSignature ".\Relay.Agent-*-win-x64*.exe" | Format-List
 ```
 
 - [ ] If Windows Security reports a detection, keep the file quarantined and
