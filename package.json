@@ -16,7 +16,7 @@
     "apply:aionui-overlay": "node scripts/apply-aionui-overlay.mjs",
     "install:opencode-provider-config": "pnpm --filter @relay-agent/desktop install:opencode-provider-config",
     "check:opencode-provider": "pnpm --filter @relay-agent/desktop check:opencode-provider",
-    "check:aionui-relay": "pnpm --filter @relay-agent/desktop check:aionui-relay && node --check scripts/apply-aionui-overlay.mjs && node --test scripts/apply-aionui-overlay.test.mjs && node --test scripts/aionui-release-workflow.test.mjs",
+    "check:aionui-relay": "pnpm --filter @relay-agent/desktop check:aionui-relay && node --check scripts/apply-aionui-overlay.mjs && node --test scripts/apply-aionui-overlay.test.mjs && node --test scripts/aionui-release-workflow.test.mjs && node --test scripts/aionui-windows-validation-doc.test.mjs",
     "smoke:opencode-provider": "pnpm --filter @relay-agent/desktop smoke:opencode-provider",
     "smoke:opencode-bootstrap-config": "pnpm --filter @relay-agent/desktop smoke:opencode-bootstrap-config",
     "smoke:openwork-opencode-bootstrap-auto": "pnpm --filter @relay-agent/desktop smoke:openwork-opencode-bootstrap-auto",

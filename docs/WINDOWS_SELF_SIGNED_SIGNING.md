@@ -44,10 +44,11 @@ status after signing.
 
 ## Publish a Self-Signed GitHub Prerelease
 
-The `release-windows-installer` workflow can publish a self-signed internal
-prerelease asset when Azure Artifact Signing is not configured. This path is
-restricted to manual `workflow_dispatch` runs with a prerelease tag containing
-`-`.
+The primary `.github/workflows/release-aionui-windows-installer.yml` workflow
+can publish a self-signed internal prerelease asset when Azure Artifact Signing
+is not configured. It appears in GitHub Actions as
+`release-windows-installer`. This path is restricted to manual
+`workflow_dispatch` runs with a prerelease tag containing `-`.
 
 From GitHub Actions, run `release-windows-installer` with:
 
@@ -58,10 +59,15 @@ From GitHub Actions, run `release-windows-installer` with:
 Equivalent GitHub CLI command:
 
 ```powershell
-gh workflow run release-windows-installer.yml `
+gh workflow run release-aionui-windows-installer.yml `
   -f release_tag=v0.1.0-selfsigned.1 `
   -f self_signed_prerelease=true
 ```
+
+The legacy `.github/workflows/release-windows-installer.yml` workflow is for
+the deprecated Tauri/OpenCode diagnostic installer only and requires
+`confirm_legacy_tauri_release=true`. Do not use it for normal Relay Agent
+validation.
 
 The workflow signs the installer without importing the self-signed certificate
 into the GitHub Actions runner trust store. It verifies that an Authenticode

@@ -6,8 +6,12 @@ workflow.
 
 ## What this repo expects
 
-The release workflow at `.github/workflows/release-windows-installer.yml` now
-supports three states:
+The primary Windows installer workflow is
+`.github/workflows/release-aionui-windows-installer.yml`, displayed in GitHub
+Actions as `release-windows-installer`. It builds the Relay-branded AionUi
+installer.
+
+That workflow supports these states:
 
 - `trusted-signing`: all required GitHub and Azure configuration is present, so
   the workflow signs the NSIS installer before release upload
@@ -22,7 +26,13 @@ supports three states:
 - `partial-config`: some Trusted Signing values are present and some are
   missing, so the workflow fails fast instead of publishing an ambiguous asset
 
-Formal pushed `v*` release tags fail when Trusted Signing is not configured.
+Formal release tags fail when Trusted Signing is not configured. Use a
+manually dispatched prerelease tag containing `-` only for internal unsigned or
+self-signed validation builds.
+
+The older `.github/workflows/release-windows-installer.yml` file is a manually
+guarded legacy Tauri/OpenCode diagnostic workflow. It is not the normal release
+path.
 
 ## GitHub secrets
 
@@ -105,7 +115,8 @@ The workflow uses:
    workflow trigger you actually use.
 4. Confirm the GitHub principal has
    `Artifact Signing Certificate Profile Signer`.
-5. Run the workflow manually with a test tag or the next release tag.
+5. Run `release-aionui-windows-installer.yml` manually with a test tag or the
+   next release tag.
 6. Confirm the workflow summary says `Signing mode: trusted-signing`.
 7. Confirm the workflow summary reports `Authenticode status: Valid`.
 8. Download the published installer and confirm the signature locally:
@@ -120,8 +131,8 @@ Get-AuthenticodeSignature .\Relay.Agent_0.1.0_x64-setup.exe
   SmartScreen warnings on the very first signed release.
 - Public Trust availability and identity validation requirements depend on the
   Microsoft eligibility rules for your region and entity type.
-- Until Azure setup is complete, formal pushed `v*` releases will fail instead
-  of publishing fallback installers. Use a manually dispatched prerelease tag
+- Until Azure setup is complete, formal release tags will fail instead of
+  publishing fallback installers. Use a manually dispatched prerelease tag
   containing `-` only for internal unsigned or self-signed validation builds.
 
 ## Official references
