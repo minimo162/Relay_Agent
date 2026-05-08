@@ -7,7 +7,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildToolResultFailureRecord,
   buildOpenAiCompletionBody,
+  classifyToolIntent,
   createServer,
   extractOpenAiToolCallsFromText,
   formatPromptForCopilot,
@@ -127,6 +129,63 @@ test("parseOpenAiRequest isolates stateless OpenAI-compatible requests by defaul
   assert.notEqual(first.relaySessionId, second.relaySessionId);
 });
 
+test("classifyToolIntent centralizes tool routing decisions", () => {
+  const tools = ["glob", "grep", "read", "write", "edit", "bash", "Skill", "question", "webfetch"].map((name) => ({
+    type: "function",
+    function: { name, parameters: { type: "object" } },
+  }));
+  const cases = [
+    {
+      text: "Explain recursion in one sentence.",
+      intent: "general_answer",
+      requiresTool: false,
+    },
+    {
+      text: String.raw`C:\Users\m242054\Downloads\report.pdf を要約して`,
+      intent: "local_document_summary",
+      requiresTool: true,
+      preferred: "read",
+    },
+    {
+      text: String.raw`htmlでテトリスを作成して。"C:\Users\m242054\Downloads"に保存して。`,
+      intent: "local_file_create",
+      requiresTool: true,
+      preferred: "write",
+    },
+    {
+      text: String.raw`C:\Users\m242054\Downloads\test.xlsx の A1 セルを赤くして`,
+      intent: "office_file_edit",
+      requiresTool: true,
+      preferred: "bash",
+    },
+    {
+      text: "SettingsModal の保存ボタンを Apply に変更してテストして",
+      intent: "code_or_project_change",
+      requiresTool: true,
+      preferred: "glob",
+    },
+    {
+      text: '"H:\\shr1\\05_経理部\\03_連結財務G" 内でキャッシュフロー計算書の作成に使用するファイルを検索して。',
+      intent: "local_file_discovery",
+      requiresTool: true,
+      preferred: "glob",
+    },
+    {
+      text: "https://example.com を要約して",
+      intent: "web_access",
+      requiresTool: true,
+      preferred: "webfetch",
+    },
+  ];
+
+  for (const entry of cases) {
+    const intent = classifyToolIntent({ tools, userPrompt: entry.text });
+    assert.equal(intent.intent, entry.intent, entry.text);
+    assert.equal(intent.requiresTool, entry.requiresTool, entry.text);
+    if (entry.preferred) assert.equal(intent.preferredTools[0], entry.preferred, entry.text);
+  }
+});
+
 test("parseOpenAiRequest injects tool protocol instructions for OpenAI tools", () => {
   const parsed = parseOpenAiRequest({
     messages: [{ role: "user", content: "Read README." }],
@@ -144,6 +203,10 @@ test("parseOpenAiRequest injects tool protocol instructions for OpenAI tools", (
 
   assert.match(parsed.systemPrompt, /Tool invocation protocol:/);
   assert.match(parsed.systemPrompt, /RELAY AGENT TOOL CALL JSON COMPILER/);
+  assert.match(parsed.systemPrompt, /RELAY TOOL INTENT ROUTER/);
+  assert.match(parsed.systemPrompt, /Decision: tool_required/);
+  assert.match(parsed.systemPrompt, /Intent: local_path_access/);
+  assert.match(parsed.systemPrompt, /Preferred first tools: read/);
   assert.match(parsed.systemPrompt, /Do not answer the user's request/);
   assert.match(parsed.systemPrompt, /Do not use Microsoft 365 Copilot built-in tools/);
   assert.match(parsed.systemPrompt, /Use this shape only:/);
@@ -151,6 +214,8 @@ test("parseOpenAiRequest injects tool protocol instructions for OpenAI tools", (
   assert.match(parsed.systemPrompt, /Available tools: read/);
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_path_access");
+  assert.deepEqual(parsed.toolIntent.preferredTools, ["read"]);
   assert.equal(parsed.tools[0].function.name, "read");
 });
 
@@ -182,6 +247,10 @@ test("parseOpenAiRequest treats Windows folder search as first-pass tool plannin
 
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_file_discovery");
+  assert.deepEqual(parsed.toolIntent.preferredTools, ["glob"]);
+  assert.match(parsed.systemPrompt, /Intent: local_file_discovery/);
+  assert.match(parsed.systemPrompt, /Preferred first tools: glob/);
   assert.match(parsed.systemPrompt, /For requests that mention a folder\/path and ask to search\/find\/list candidate files/);
   assert.match(parsed.systemPrompt, /emit `glob`/);
   assert.match(parsed.systemPrompt, /File discovery: use `glob`/);
@@ -210,6 +279,45 @@ test("parseOpenAiRequest routes Office filename lookup but warns away from Offic
   assert.match(parsed.systemPrompt, /Do not use `grep` for Office\/PDF binary containers/);
 });
 
+test("parseOpenAiRequest routes local PDF summaries through tools", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: String.raw`C:\Users\m242054\Downloads\report.pdf を要約して` }],
+    tools: [
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+      { type: "function", function: { name: "read", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_document_summary");
+  assert.deepEqual(parsed.toolIntent.preferredTools, ["read", "glob", "question"]);
+  assert.match(parsed.systemPrompt, /Intent: local_document_summary/);
+  assert.match(parsed.systemPrompt, /Local document summaries/);
+  assert.match(parsed.systemPrompt, /call `read` on that file first/);
+  assert.match(parsed.systemPrompt, /Write the summary only after tool results/);
+  assert.match(parsed.systemPrompt, /Do not use Microsoft 365 Copilot built-in tools/);
+});
+
+test("parseOpenAiRequest treats pathless local PDF summary requests as tool planning", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "ローカルのPDFファイルを要約して" }],
+    tools: [
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+      { type: "function", function: { name: "read", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_document_summary");
+  assert.match(parsed.systemPrompt, /Intent: local_document_summary/);
+  assert.match(parsed.systemPrompt, /If the target path is not exact, call `glob`/);
+  assert.match(parsed.systemPrompt, /never answer from memory or Microsoft 365 content/);
+});
+
 test("parseOpenAiRequest routes code edit requests through read/edit/test policy", () => {
   const parsed = parseOpenAiRequest({
     messages: [{ role: "user", content: "SettingsModal の保存ボタンを Apply に変更してテストして" }],
@@ -224,9 +332,32 @@ test("parseOpenAiRequest routes code edit requests through read/edit/test policy
 
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "code_or_project_change");
+  assert.match(parsed.systemPrompt, /Intent: code_or_project_change/);
   assert.match(parsed.systemPrompt, /Code\/config\/document text changes: read the target first/);
   assert.match(parsed.systemPrompt, /Command execution: use `bash` only for explicit tests/);
   assert.match(parsed.systemPrompt, /discover -> read -> edit -> test/);
+});
+
+test("parseOpenAiRequest routes local HTML creation to write instead of Copilot Canvas", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: String.raw`htmlでテトリスを作成して。"C:\Users\m242054\Downloads"に保存して。` }],
+    tools: [
+      { type: "function", function: { name: "write", parameters: { type: "object" } } },
+      { type: "function", function: { name: "bash", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_file_create");
+  assert.deepEqual(parsed.toolIntent.preferredTools, ["write", "bash", "question"]);
+  assert.match(parsed.systemPrompt, /Intent: local_file_create/);
+  assert.match(parsed.systemPrompt, /New local text\/code files/);
+  assert.match(parsed.systemPrompt, /call `write` with `filePath` and the complete `content`/);
+  assert.match(parsed.systemPrompt, /tetris\.html/);
+  assert.match(parsed.systemPrompt, /Copilot Canvas is not execution/);
 });
 
 test("parseOpenAiRequest keeps unsupported Excel formatting away from bash and text edits", () => {
@@ -242,6 +373,8 @@ test("parseOpenAiRequest keeps unsupported Excel formatting away from bash and t
 
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "office_file_edit");
+  assert.match(parsed.systemPrompt, /Intent: office_file_edit/);
   assert.match(parsed.systemPrompt, /Unsupported or ambiguous operations: use `question` instead of pretending/);
   assert.match(parsed.systemPrompt, /Excel cell formatting/);
   assert.match(parsed.systemPrompt, /Do not edit binary Office\/PDF files with text tools/);
@@ -259,9 +392,14 @@ test("parseOpenAiRequest routes OfficeCLI work through execution after Skill ins
 
   assert.equal(parsed.toolProtocolMode, "tool_planning");
   assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "office_file_edit");
+  assert.deepEqual(parsed.toolIntent.preferredTools, ["bash", "Skill", "question"]);
+  assert.match(parsed.systemPrompt, /Intent: office_file_edit/);
   assert.match(parsed.systemPrompt, /OfficeCLI skills are instructions, not execution/);
   assert.match(parsed.systemPrompt, /then call `bash` with the actual `officecli \.\.\.` command/);
   assert.match(parsed.systemPrompt, /Simple Office edits/);
+  assert.match(parsed.systemPrompt, /Existing workbook sheet safety/);
+  assert.match(parsed.systemPrompt, /officecli view C:\/path\/file\.xlsx outline --json/);
   assert.match(parsed.systemPrompt, /do not emit bare `\/A1`/);
   assert.match(parsed.systemPrompt, /"recipient_name":"functions\.bash"/);
   assert.match(parsed.systemPrompt, /A markdown command is not execution/);
@@ -303,6 +441,7 @@ test("parseOpenAiRequest allows final answers when tools are available but no en
 
   assert.equal(parsed.toolProtocolMode, "final_answer");
   assert.equal(parsed.requiresStrictToolCalls, false);
+  assert.equal(parsed.toolIntent.intent, "general_answer");
   assert.match(parsed.systemPrompt, /Mode: final_answer/);
 });
 
@@ -339,6 +478,45 @@ test("parseOpenAiRequest detects failed tool result messages", () => {
   assert.equal(parsed.toolResultFailure.reason, "non_zero_exit");
   assert.equal(parsed.toolResultFailure.toolCallId, "call_officecli");
   assert.match(parsed.toolResultFailure.excerpt, /officecli: command not found/);
+});
+
+test("parseOpenAiRequest preserves failed OfficeCLI command hints and empty-output guidance", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "Set A1 red." },
+      {
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "call_officecli",
+            type: "function",
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({
+                command: 'officecli set "C:/Users/m242054/Downloads/test.xlsx" "/Sheet1/A1" --prop fill=FF0000 --json',
+              }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: "Exit code: 1\nSTDOUT:\n\nSTDERR:",
+        tool_call_id: "call_officecli",
+      },
+    ],
+    tools: [{ type: "function", function: { name: "bash", parameters: { type: "object" } } }],
+  });
+
+  assert.equal(parsed.toolResultFailure.reason, "text_error");
+  assert.equal(parsed.toolResultFailure.toolName, "bash");
+  assert.match(parsed.toolResultFailure.command, /officecli set/);
+
+  const record = buildToolResultFailureRecord(parsed);
+  assert.match(record.body.choices[0].message.content, /実行コマンド:/);
+  assert.match(record.body.choices[0].message.content, /--json/);
+  assert.match(record.body.choices[0].message.content, /OfficeCLI が詳細な標準出力\/標準エラーを返していません/);
+  assert.match(record.body.choices[0].message.content, /シート名/);
 });
 
 test("parseOpenAiRequest does not treat successful tool warnings or data codes as failures", () => {
@@ -481,6 +659,21 @@ test("extractOpenAiToolCallsFromText converts OpenAI-compatible tool_uses", () =
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), { pattern: "**/*.rs" });
 });
 
+test("extractOpenAiToolCallsFromText maps write_file aliases to the advertised write tool", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    '```relay_tool\n{"name":"write_file","relay_tool_call":true,"input":{"path":"C:/Users/m242054/Downloads/tetris.html","content":"<!doctype html><html></html>"}}\n```',
+    [{ type: "function", function: { name: "write" } }],
+  );
+
+  assert.equal(extracted.displayText, "");
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "write");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    filePath: "C:/Users/m242054/Downloads/tetris.html",
+    content: "<!doctype html><html></html>",
+  });
+});
+
 test("extractOpenAiToolCallsFromText recovers malformed tool_uses skill args with quoted path", () => {
   const malformed =
     '{"tool_uses":[{"recipient_name":"functions.Skill","parameters":{"skill":"office-cli","args":"modify excel file "C:/Users/m242054/Downloads/test.xlsx" set cell A1 fill-color red"}}]}';
@@ -513,7 +706,7 @@ test("extractOpenAiToolCallsFromText converts fenced officecli commands to execu
       "了解しました。",
       "",
       "```bash",
-      "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+      'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000',
       "```",
     ].join("\n"),
     [
@@ -525,7 +718,7 @@ test("extractOpenAiToolCallsFromText converts fenced officecli commands to execu
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    command: 'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000 --json',
   });
 });
 
@@ -545,7 +738,27 @@ test("extractOpenAiToolCallsFromText sheet-qualifies bare OfficeCLI Excel cell r
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    command: 'officecli set "C:/Users/m242054/Downloads/test.xlsx" /Sheet1/A1 --prop fill=FF0000',
+    command: 'officecli set "C:/Users/m242054/Downloads/test.xlsx" "/Sheet1/A1" --prop fill=FF0000 --json',
+  });
+});
+
+test("extractOpenAiToolCallsFromText sheet-qualifies quoted bare OfficeCLI Excel cell references", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    [
+      "```bash",
+      'officecli set "C:/Users/m242054/Downloads/test.xlsx" "/A1" --prop fill=FF0000 --json',
+      "```",
+    ].join("\n"),
+    [
+      { type: "function", function: { name: "Skill" } },
+      { type: "function", function: { name: "bash" } },
+    ],
+  );
+
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, "bash");
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    command: 'officecli set "C:/Users/m242054/Downloads/test.xlsx" "/Sheet1/A1" --prop fill=FF0000 --json',
   });
 });
 
@@ -553,7 +766,7 @@ test("extractOpenAiToolCallsFromText falls back to OfficeCLI Skill when no execu
   const extracted = extractOpenAiToolCallsFromText(
     [
       "```bash",
-      "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+      'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000',
       "```",
     ].join("\n"),
     [{ type: "function", function: { name: "Skill" } }],
@@ -563,7 +776,7 @@ test("extractOpenAiToolCallsFromText falls back to OfficeCLI Skill when no execu
   assert.equal(extracted.toolCalls[0].function.name, "Skill");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
     skill: "officecli-xlsx",
-    args: "set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    args: 'set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000',
   });
 });
 
@@ -580,7 +793,7 @@ test("extractOpenAiToolCallsFromText sheet-qualifies bare OfficeCLI Skill Excel 
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    command: 'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000 --json',
   });
 });
 
@@ -597,7 +810,7 @@ test("extractOpenAiToolCallsFromText rewrites OfficeCLI Skill calls to execution
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    command: 'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000 --json',
   });
 });
 
@@ -613,7 +826,7 @@ test("extractOpenAiToolCallsFromText rewrites simple OfficeCLI natural-language 
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    command: 'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000 --json',
   });
 });
 
@@ -621,7 +834,7 @@ test("extractOpenAiToolCallsFromText accepts PowerShell officecli invocation fen
   const extracted = extractOpenAiToolCallsFromText(
     [
       "```powershell",
-      "& officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+      '& officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000',
       "```",
     ].join("\n"),
     [
@@ -633,7 +846,7 @@ test("extractOpenAiToolCallsFromText accepts PowerShell officecli invocation fen
   assert.equal(extracted.toolCalls.length, 1);
   assert.equal(extracted.toolCalls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
-    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    command: 'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000 --json',
   });
 });
 
@@ -676,8 +889,37 @@ test("buildOpenAiCompletionBody executes OfficeCLI even when Copilot wraps the J
   assert.equal(body.choices[0].message.content, null);
   assert.equal(body.choices[0].message.tool_calls[0].function.name, "bash");
   assert.deepEqual(JSON.parse(body.choices[0].message.tool_calls[0].function.arguments), {
-    command: "officecli set C:/Users/m242054/Downloads/test.xlsx /Sheet1/A1 --prop fill=FF0000",
+    command: 'officecli set C:/Users/m242054/Downloads/test.xlsx "/Sheet1/A1" --prop fill=FF0000 --json',
   });
+});
+
+test("buildOpenAiCompletionBody turns strict HTML Canvas prose into a write tool call", () => {
+  const responseText = [
+    "了解です。HTML版テトリスを作成しました。",
+    "",
+    "```html",
+    "<!doctype html>",
+    "<html lang=\"ja\">",
+    "<head><meta charset=\"utf-8\"><title>Tetris</title></head>",
+    "<body><canvas id=\"board\"></canvas><script>console.log('tetris');</script></body>",
+    "</html>",
+    "```",
+    "",
+    "ただし、まだローカルには保存されていません。",
+  ].join("\n");
+  const body = buildOpenAiCompletionBody(responseText, {
+    tools: [{ type: "function", function: { name: "write" } }],
+    requiresStrictToolCalls: true,
+    userPrompt: String.raw`htmlでテトリスを作成して。"C:\Users\m242054\Downloads"に保存して。`,
+  });
+
+  assert.equal(body.choices[0].finish_reason, "tool_calls");
+  assert.equal(body.choices[0].message.content, null);
+  assert.equal(body.choices[0].message.tool_calls[0].function.name, "write");
+  const args = JSON.parse(body.choices[0].message.tool_calls[0].function.arguments);
+  assert.equal(args.filePath, "C:/Users/m242054/Downloads/tetris.html");
+  assert.match(args.content, /<canvas id="board"><\/canvas>/);
+  assert.match(args.content, /<\/html>/);
 });
 
 test("extractOpenAiToolCallsFromText recovers embedded repeated tool_calls JSON", () => {

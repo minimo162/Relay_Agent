@@ -1381,6 +1381,63 @@ test("waitForDomResponse does not ignore a structural stop-button generating sig
   assert.ok(pollIndex >= 16);
 });
 
+test("waitForDomResponse finalizes stable complete text even when a stop button signal is stale", async () => {
+  const finalReply = [
+    "了解です。",
+    "HTML版テトリスを作成しました。",
+    "",
+    "保存先は C:\\Users\\m242054\\Downloads\\tetris.html です。",
+  ].join("\n");
+  const snapshots = [
+    {
+      generating: false,
+      strongGeneratingSignal: false,
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    ...Array.from({ length: 12 }, () => ({
+      generating: true,
+      strongGeneratingSignal: true,
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+  ];
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: finalReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 8_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.equal(finalizationMode, "stale_complete_text");
+  assert.ok(pollIndex < 12);
+});
+
 test("waitForDomResponse finalizes from strict extraction when loose stalled reply is still truncated", async () => {
   const truncatedReply = [
     "了解です。",

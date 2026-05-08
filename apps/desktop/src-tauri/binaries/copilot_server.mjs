@@ -4929,12 +4929,20 @@ function parseOpenAiRequest(payload) {
   const relayNewChat = payload.relay_new_chat === true;
   const relayForceFreshChat = payload.relay_force_fresh_chat === true;
   const model = String(payload.model || OPENAI_COMPAT_DEFAULT_MODEL).trim() || OPENAI_COMPAT_DEFAULT_MODEL;
+  const toolIntent = classifyToolIntent({
+    tools,
+    hasToolResultMessages,
+    openAiToolChoice,
+    userPrompt,
+    relayStageLabel,
+  });
   const toolProtocolMode = decideToolProtocolMode({
     tools,
     hasToolResultMessages,
     openAiToolChoice,
     userPrompt,
     relayStageLabel,
+    toolIntent,
   });
   const requiresStrictToolCalls = toolProtocolModeRequiresStrict(toolProtocolMode);
   const systemPrompt = buildToolProtocolSystemPrompt({
@@ -4943,6 +4951,7 @@ function parseOpenAiRequest(payload) {
     mode: toolProtocolMode,
     openAiToolChoice,
     hasToolResultMessages,
+    toolIntent,
   });
   return {
     model,
@@ -4953,6 +4962,7 @@ function parseOpenAiRequest(payload) {
     tools,
     hasToolResultMessages,
     toolResultFailure,
+    toolIntent,
     openAiToolChoice,
     toolProtocolMode,
     requiresStrictToolCalls,
@@ -4971,6 +4981,7 @@ function parseOpenAiRequest(payload) {
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }
 
 function detectToolResultFailure(messages = []) {
+  const toolCallHints = collectToolCallHints(messages);
   for (const message of messages || []) {
     const role = String(message?.role || "");
     if (role !== "tool" && role !== "function") continue;
@@ -4978,14 +4989,36 @@ function detectToolResultFailure(messages = []) {
     if (!content) continue;
     const failure = detectToolResultTextFailure(content);
     if (!failure) continue;
+    const toolCallId = String(message.tool_call_id || message.call_id || message.id || "").trim();
+    const hint = toolCallHints.get(toolCallId) || (toolCallHints.size === 1 ? [...toolCallHints.values()][0] : null);
     return {
       ...failure,
       role,
-      toolCallId: String(message.tool_call_id || message.call_id || message.id || "").trim(),
-      toolName: String(message.name || "").trim(),
+      toolCallId,
+      toolName: String(message.name || hint?.toolName || "").trim(),
+      command: String(hint?.command || "").trim(),
     };
   }
   return null;
+}
+
+function collectToolCallHints(messages = []) {
+  const hints = new Map();
+  for (const message of messages || []) {
+    for (const toolCall of Array.isArray(message?.tool_calls) ? message.tool_calls : []) {
+      const id = String(toolCall?.id || toolCall?.call_id || "").trim();
+      if (!id) continue;
+      const toolName = String(toolCall?.function?.name || toolCall?.name || "").trim();
+      const rawArgs = toolCall?.function?.arguments ?? toolCall?.arguments ?? {};
+      const args = typeof rawArgs === "string" ? parseJsonCandidate(rawArgs) : rawArgs;
+      const command =
+        args && typeof args === "object" && !Array.isArray(args)
+          ? String(args.command || args.cmd || args.rootCommand || "").trim()
+          : "";
+      hints.set(id, { toolName, command });
+    }
+  }
+  return hints;
 }
 
 function detectToolResultTextFailure(content) {
@@ -5173,7 +5206,8 @@ function decideToolProtocolMode(prompt = {}) {
   if (choice === "none") return TOOL_PROTOCOL_MODES.FINAL_ANSWER;
   if (typeof choice === "object" && choice?.function?.name) return TOOL_PROTOCOL_MODES.SPECIFIED_TOOL;
   if (openAiToolChoiceRequiresTool(choice, tools)) return TOOL_PROTOCOL_MODES.TOOL_PLANNING;
-  if (promptNeedsExternalToolAccess(prompt)) return TOOL_PROTOCOL_MODES.TOOL_PLANNING;
+  const intent = prompt.toolIntent || classifyToolIntent(prompt);
+  if (intent.requiresTool) return TOOL_PROTOCOL_MODES.TOOL_PLANNING;
   return TOOL_PROTOCOL_MODES.FINAL_ANSWER;
 }
 
@@ -5186,39 +5220,252 @@ function toolProtocolModeRequiresStrict(mode) {
 }
 
 function promptNeedsExternalToolAccess(prompt = {}) {
+  return classifyToolIntent(prompt).requiresTool;
+}
+
+function classifyToolIntent(prompt = {}) {
   const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
-  if (!tools.length) return false;
-  if (promptExplicitlyRequestsAvailableTool(prompt)) return true;
-  const text = String(prompt.userPrompt || "");
-  const lower = text.toLowerCase();
-  const pathLike =
-    /(?:^|[\s"'(:])(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|\.{1,2}[\\/]|~[\\/]|[\w@.-]+[\\/][\w@./-]+|[\w@.-]+\.(?:md|mdx|txt|csv|json|jsonc|lock|toml|ya?ml|xml|html?|css|scss|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|cs|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|sql|env|ini|cfg|conf|log|xlsx?|xlsm|docx?|pptx?|pdf))(?=$|[\s"',).:])/iu;
-  if (pathLike.test(text) || /\b(?:readme|package\.json|cargo\.toml|tsconfig\.json|pnpm-lock\.yaml)\b/iu.test(lower)) {
-    return true;
+  const available = availableToolNameSet(tools);
+  if (!tools.length) {
+    return toolIntentResult({
+      decision: "final_answer_allowed",
+      intent: "no_tools_available",
+      reason: "No external tool catalog was provided.",
+    });
   }
-  const actionHint =
-    /\b(read|open|inspect|search|find|grep|list|scan|check|review|edit|write|patch|modify|fix|run|execute|test|build|commit|implement|add|remove|rename|replace)\b|読んで|開いて|確認|調べ|検索|探して|探す|一覧|修正|編集|変更|置換|追加|削除|実装|直して|書いて|作成|生成|保存|実行|テスト|ビルド|コミット|プッシュ/iu;
+  if (prompt.hasToolResultMessages) {
+    return toolIntentResult({
+      decision: "final_answer_allowed",
+      intent: "tool_result_review",
+      reason: "Tool results are already present; Copilot may write a final answer from evidence.",
+    });
+  }
+  const choice = prompt.openAiToolChoice;
+  if (choice === "none") {
+    return toolIntentResult({
+      decision: "final_answer_allowed",
+      intent: "tool_choice_none",
+      reason: "The OpenAI-compatible caller explicitly disabled tools.",
+    });
+  }
+  if (typeof choice === "object" && choice?.function?.name) {
+    const selected = resolveAllowedToolName(choice.function.name, available);
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "specified_tool",
+      reason: "The OpenAI-compatible caller selected a specific tool.",
+      preferredTools: selected ? [selected] : [],
+    });
+  }
+  if (openAiToolChoiceRequiresTool(choice, tools)) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "tool_choice_required",
+      reason: "The OpenAI-compatible caller required tool use.",
+      preferredTools: preferredTools(available, ["glob", "read", "write", "edit", "bash", "shell", "exec", "run"]),
+    });
+  }
+  if (promptExplicitlyRequestsAvailableTool(prompt)) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "explicit_tool_request",
+      reason: "The user explicitly asked to use an advertised tool.",
+      preferredTools: explicitlyRequestedToolNames(prompt, available),
+    });
+  }
+
+  const text = String(prompt.userPrompt || "");
+  const signals = toolIntentSignals(text);
+  if (signals.officeEdit) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "office_file_edit",
+      reason: "The request edits or formats a local Office document.",
+      preferredTools: preferredTools(available, ["bash", "shell", "exec", "run", "Skill", "skill", "question"]),
+    });
+  }
+  const webPreferredTools = preferredTools(available, ["webfetch", "websearch", "question"]);
+  if (signals.webAccess && webPreferredTools.length) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "web_access",
+      reason: "The request requires current web or URL access.",
+      preferredTools: webPreferredTools,
+    });
+  }
+  if (signals.localDocumentSummary) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "local_document_summary",
+      reason: "The request asks to summarize or extract from a local document.",
+      preferredTools: preferredTools(available, ["read", "glob", "question"]),
+    });
+  }
+  if (signals.localFileDiscovery) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "local_file_discovery",
+      reason: "The request asks to find, list, or inspect local files.",
+      preferredTools: preferredTools(available, ["glob", "grep", "read", "question"]),
+    });
+  }
+  if (signals.localFileCreate) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "local_file_create",
+      reason: "The request asks to create or save a local text/code artifact.",
+      preferredTools: preferredTools(available, ["write", "edit", "bash", "shell", "exec", "run", "question"]),
+    });
+  }
+  if (signals.codeChange) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "code_or_project_change",
+      reason: "The request changes code, project files, or local workspace state.",
+      preferredTools: preferredTools(available, ["glob", "grep", "read", "edit", "write", "apply_patch", "bash", "shell", "exec", "run"]),
+    });
+  }
+  if (signals.commandExecution) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "command_execution",
+      reason: "The request asks to run a command, test, build, or git operation.",
+      preferredTools: preferredTools(available, ["bash", "shell", "exec", "run", "question"]),
+    });
+  }
+  if (signals.explicitLocalPath || signals.knownLocalFile) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "local_path_access",
+      reason: "The request includes an explicit or well-known local file/path.",
+      preferredTools: preferredTools(available, ["read", "glob", "grep", "question"]),
+    });
+  }
+  if (signals.actionTargetPair) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "environment_access",
+      reason: "The request combines an environment action with a local/workspace target.",
+      preferredTools: preferredTools(available, ["glob", "grep", "read", "edit", "write", "bash", "shell", "exec", "run", "question"]),
+    });
+  }
+  if (signals.currentWorkspaceReference) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "current_workspace_reference",
+      reason: "The request refers to current/local workspace state.",
+      preferredTools: preferredTools(available, ["glob", "grep", "read", "question"]),
+    });
+  }
+  return toolIntentResult({
+    decision: "final_answer_allowed",
+    intent: "general_answer",
+    reason: "No local environment, tool, or current external access is required.",
+  });
+}
+
+function toolIntentResult({
+  decision = "final_answer_allowed",
+  intent = "general_answer",
+  reason = "",
+  preferredTools = [],
+} = {}) {
+  const normalizedDecision = decision === "tool_required" || decision === "question_required"
+    ? decision
+    : "final_answer_allowed";
+  const uniquePreferredTools = [...new Set((preferredTools || []).map((name) => String(name || "").trim()).filter(Boolean))];
+  return {
+    decision: normalizedDecision,
+    intent,
+    reason,
+    preferredTools: uniquePreferredTools,
+    requiresTool: normalizedDecision !== "final_answer_allowed",
+  };
+}
+
+function availableToolNameSet(tools = []) {
+  return new Set(
+    (tools || [])
+      .map((tool) => normalizeToolName(tool?.function?.name || ""))
+      .filter(Boolean),
+  );
+}
+
+function preferredTools(available, candidates = []) {
+  const out = [];
+  for (const candidate of candidates) {
+    const resolved = resolveAllowedToolName(candidate, available);
+    if (resolved) out.push(resolved);
+  }
+  return [...new Set(out)];
+}
+
+function explicitlyRequestedToolNames(prompt = {}, available = new Set()) {
+  const text = String(prompt.userPrompt || "");
+  const out = [];
+  for (const tool of prompt.tools || []) {
+    const name = normalizeToolName(tool?.function?.name || "");
+    if (!name) continue;
+    const escaped = escapeRegex(name);
+    const patterns = [
+      new RegExp(`\\b(?:use|call|invoke|run|execute)\\s+(?:the\\s+)?${escaped}\\s+(?:tool|function)\\b`, "iu"),
+      new RegExp(`\\b${escaped}\\s+(?:tool|function)\\b`, "iu"),
+    ];
+    if (patterns.some((pattern) => pattern.test(text))) {
+      const resolved = resolveAllowedToolName(name, available);
+      if (resolved) out.push(resolved);
+    }
+  }
+  return [...new Set(out)];
+}
+
+function toolIntentSignals(text) {
+  const raw = String(text || "");
+  const explicitLocalPath =
+    /[a-zA-Z]:[\\/][^\r\n]*/u.test(raw) ||
+    /\\\\[^\\/]+[\\/][^\\/]+/u.test(raw) ||
+    /(?:^|[\s"'(:])(?:\.{1,2}[\\/]|~[\\/])/u.test(raw);
+  const knownLocalFile =
+    /\b(?:readme|package\.json|cargo\.toml|tsconfig\.json|pnpm-lock\.yaml)\b/iu.test(raw) ||
+    /\b[\w@.-]+\.(?:md|mdx|txt|csv|json|jsonc|lock|toml|ya?ml|xml|html?|css|scss|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|kt|cs|c|cc|cpp|h|hpp|sh|bash|zsh|ps1|sql|env|ini|cfg|conf|log|xlsx?|xlsm|docx?|pptx?|pdf)\b/iu.test(raw);
+  const localWord = /\b(?:local|workspace|repo|repository|codebase|project|folder|directory|path)\b|ローカル|ワークスペース|リポジトリ|フォルダ|ディレクトリ|パス/iu.test(raw);
+  const fileWord = /\b(?:file|files|document|pdf|docx?|xlsx?|xlsm|pptx?|html?|css|javascript|typescript|json|markdown|text)\b|ファイル|ドキュメント|資料|PDF|Excel|エクセル|Word|ブック|シート|HTML|コード/iu.test(raw);
+  const folderWord = /\b(?:folder|directory|drive)\b|フォルダ|ディレクトリ|ドライブ|配下|内で/iu.test(raw);
+  const codeWord = /\b(?:code|source|component|function|class|app|page|site|html?|css|javascript|typescript|tsx|jsx|python|rust|go|button|label|modal|ui)\b|コード|ソース|コンポーネント|関数|アプリ|ページ|サイト|画面|ボタン|ラベル|表示|文言|テトリス/iu.test(raw);
+  const officeWord = /\b(?:excel|xlsx?|xlsm|word|docx?|powerpoint|pptx?|office|spreadsheet|workbook|sheet|cell)\b|Excel|エクセル|Word|Office|ブック|シート|セル/iu.test(raw);
+  const pdfWord = /\bpdf\b|PDF/iu.test(raw);
+  const docWord = fileWord || pdfWord || officeWord;
+  const readAction = /\b(?:read|open|inspect|review|check|extract|summari[sz]e)\b|読んで|開いて|確認|レビュー|抽出|要約|まとめ/iu.test(raw);
+  const summaryAction = /\b(?:summari[sz]e|extract|review)\b|要約|まとめ|抽出|概要/iu.test(raw);
+  const findAction = /\b(?:search|find|grep|list|scan|locate)\b|検索|探して|探す|一覧|列挙|洗い出/iu.test(raw);
+  const createAction = /\b(?:create|generate|write|save|make|build|output)\b|作成|生成|書いて|保存|作って|つくって|出力/iu.test(raw);
+  const editAction = /\b(?:edit|modify|patch|fix|replace|rename|remove|add|change|format|color|fill)\b|修正|編集|変更|置換|追加|削除|リネーム|色|塗り|赤く|黄色|保存/iu.test(raw);
+  const codeAction = /\b(?:implement|fix|edit|modify|patch|refactor|add|remove|replace|write|create|build)\b|実装|修正|編集|変更|追加|削除|作成|生成|直して/iu.test(raw);
+  const runAction = /\b(?:run|execute|test|build|commit|push|merge|git|npm|pnpm|cargo|python|node)\b|実行|テスト|ビルド|コミット|プッシュ|マージ/iu.test(raw);
   const targetHint =
-    /\b(file|files|folder|directory|workspace|repo|repository|codebase|project|source|local|path|diff|branch|terminal|shell|command|test|build|code|config|document|spreadsheet|excel|word|pdf|xlsx?|xlsm|docx?|pptx?|component|button|label|modal|ui)\b|ファイル|フォルダ|ディレクトリ|ワークスペース|リポジトリ|コードベース|プロジェクト|ローカル|パス|差分|ブランチ|端末|コマンド|コード|ソース|設定|ドキュメント|資料|Excel|エクセル|Word|PDF|ブック|シート|セル|画面|ボタン|ラベル|表示|文言|コンポーネント/iu;
-  if (actionHint.test(text) && targetHint.test(text)) return true;
-  const externalToolNames = new Set([
-    "read",
-    "grep",
-    "glob",
-    "list",
-    "ls",
-    "search",
-    "find",
-    "edit",
-    "write",
-    "patch",
-    "bash",
-    "shell",
-    "run",
-    "exec",
-  ]);
-  const availableExternal = tools.some((tool) => externalToolNames.has(normalizeToolName(tool?.function?.name || "")));
-  return availableExternal && actionHint.test(text) && /\b(this|that|it|the|current|workspace|repo|code|project)\b|これ|それ|この|現在|コード/iu.test(text);
+    /\b(?:file|files|folder|directory|workspace|repo|repository|codebase|project|source|local|path|diff|branch|terminal|shell|command|test|build|code|config|document|spreadsheet|excel|word|pdf|xlsx?|xlsm|docx?|pptx?|component|button|label|modal|ui)\b|ファイル|フォルダ|ディレクトリ|ワークスペース|リポジトリ|コードベース|プロジェクト|ローカル|パス|差分|ブランチ|端末|コマンド|コード|ソース|設定|ドキュメント|資料|Excel|エクセル|Word|PDF|ブック|シート|セル|画面|ボタン|ラベル|表示|文言|コンポーネント/iu.test(raw);
+  const actionHint = readAction || findAction || createAction || editAction || codeAction || runAction;
+  const currentWorkspaceReference =
+    actionHint && /\b(?:this|that|it|the|current|workspace|repo|code|project)\b|これ|それ|この|現在|コード/iu.test(raw);
+  const webAccess =
+    /https?:\/\/\S+/iu.test(raw) ||
+    (/\b(?:latest|current|today|news|web|internet|url)\b|最新|今日|現在|ニュース|URL|ウェブ/iu.test(raw) &&
+      !localWord &&
+      !explicitLocalPath);
+
+  return {
+    explicitLocalPath,
+    knownLocalFile,
+    localFileCreate: createAction && (explicitLocalPath || localWord || knownLocalFile) && (codeWord || fileWord),
+    officeEdit: officeWord && editAction && (explicitLocalPath || localWord || knownLocalFile || /保存/u.test(raw)),
+    localDocumentSummary: summaryAction && (explicitLocalPath || knownLocalFile || localWord || docWord),
+    localFileDiscovery: findAction && (explicitLocalPath || knownLocalFile || localWord || fileWord || folderWord),
+    codeChange: codeAction && (codeWord || currentWorkspaceReference || explicitLocalPath || knownLocalFile),
+    commandExecution: runAction,
+    webAccess,
+    actionTargetPair: actionHint && targetHint,
+    currentWorkspaceReference,
+  };
 }
 
 function buildToolProtocolSystemPrompt({
@@ -5227,13 +5474,14 @@ function buildToolProtocolSystemPrompt({
   mode = TOOL_PROTOCOL_MODES.FINAL_ANSWER,
   openAiToolChoice = null,
   hasToolResultMessages = false,
+  toolIntent = null,
 } = {}) {
   const parts = [basePrompt].filter(Boolean);
   if (!tools.length) return parts.join("\n\n");
   const selectedTool =
     typeof openAiToolChoice === "object" ? String(openAiToolChoice?.function?.name || "").trim() : "";
   if (mode !== TOOL_PROTOCOL_MODES.FINAL_ANSWER) {
-    parts.push(formatStrictToolCompilerPrompt({ tools, mode, selectedTool }));
+    parts.push(formatStrictToolCompilerPrompt({ tools, mode, selectedTool, toolIntent }));
     return parts.filter(Boolean).join("\n\n");
   }
   const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
@@ -5247,11 +5495,16 @@ function buildToolProtocolSystemPrompt({
       ? "Mode: final_answer_or_continue_tools. Answer only from the provided TOOL/FUNCTION results when they are sufficient. If more environment access is needed, return tool_uses JSON instead of prose."
       : "Mode: final_answer. Answer normally only when no external tool or environment access is needed. If tool access is needed, return tool_uses JSON instead of prose.",
   );
-  parts.push(modePrompt.join("\n"), formatReliableToolPolicy(tools), toolProtocolPrompt);
+  parts.push(modePrompt.join("\n"), formatToolIntentPolicy(toolIntent), formatReliableToolPolicy(tools), toolProtocolPrompt);
   return parts.filter(Boolean).join("\n\n");
 }
 
-function formatStrictToolCompilerPrompt({ tools = [], mode = TOOL_PROTOCOL_MODES.TOOL_PLANNING, selectedTool = "" } = {}) {
+function formatStrictToolCompilerPrompt({
+  tools = [],
+  mode = TOOL_PROTOCOL_MODES.TOOL_PLANNING,
+  selectedTool = "",
+  toolIntent = null,
+} = {}) {
   const names = tools.map((tool) => tool.function.name).join(", ");
   const catalog = tools.map((tool) => ({
     name: tool.function.name,
@@ -5275,12 +5528,49 @@ function formatStrictToolCompilerPrompt({ tools = [], mode = TOOL_PROTOCOL_MODES
     "Use only double quotes for JSON strings and property names. Escape backslashes if you keep Windows separators, or prefer forward slashes in Windows paths.",
     "For local file or folder requests, never answer from memory or Microsoft 365 search. Emit a file tool call such as glob, grep, read, list, or shell according to the catalog.",
     "For requests that mention a folder/path and ask to search/find/list candidate files, emit `glob` with the folder in `path` when the schema supports it and a filename-oriented `pattern`.",
+    formatToolIntentPolicy(toolIntent),
     formatReliableToolPolicy(tools),
     `Available tools: ${names}`,
     `TOOL CATALOG: ${JSON.stringify(catalog)}`,
   ];
   if (selectedTool) {
     lines.push(`Selected tool constraint: call ${selectedTool} unless the request is impossible with that tool schema.`);
+  }
+  return lines.join("\n");
+}
+
+function formatToolIntentPolicy(toolIntent = null) {
+  if (!toolIntent || typeof toolIntent !== "object") return "";
+  const decision = String(toolIntent.decision || "").trim();
+  const intent = String(toolIntent.intent || "").trim();
+  const reason = String(toolIntent.reason || "").trim();
+  const preferredToolsList = Array.isArray(toolIntent.preferredTools)
+    ? [...new Set(toolIntent.preferredTools.map((name) => String(name || "").trim()).filter(Boolean))]
+    : [];
+  if (!decision && !intent && !preferredToolsList.length && !reason) return "";
+  const requiresTool = toolIntent.requiresTool === true || decision === "tool_required" || decision === "question_required";
+  const lines = [
+    "RELAY TOOL INTENT ROUTER:",
+    `Decision: ${decision || "unknown"}.`,
+    `Intent: ${intent || "unknown"}.`,
+  ];
+  if (reason) lines.push(`Reason: ${reason}`);
+  if (preferredToolsList.length) {
+    lines.push(`Preferred first tools: ${preferredToolsList.join(", ")}.`);
+  }
+  if (requiresTool) {
+    lines.push(
+      "Routing contract: tool use is required. Return tool_uses JSON only; prose, Canvas, built-in Copilot search, and markdown commands are invalid until a tool result exists.",
+    );
+    if (preferredToolsList.length) {
+      lines.push(
+        "Use the preferred first tools unless the advertised schema makes them impossible; then choose the nearest safe advertised tool or question.",
+      );
+    }
+  } else {
+    lines.push(
+      "Routing contract: a direct final answer is allowed only if no new local, workspace, command, document, or current external evidence is needed.",
+    );
   }
   return lines.join("\n");
 }
@@ -5314,11 +5604,19 @@ function formatReliableToolPolicy(tools = []) {
   if (available.has("read")) {
     lines.push(
       "Reading: use `read` only for exact files or directories. If the target path is not exact, call `glob` or `grep` first.",
+      "Local document summaries: for local PDF/Office/text summaries, never answer from memory or Microsoft 365 content. If the exact local path is known, call `read` on that file first. If only a folder/name is known, call `glob` first. Write the summary only after tool results provide document contents or clearly show the file cannot be extracted.",
     );
   }
   if (available.has("edit") || available.has("write") || available.has("apply_patch")) {
     lines.push(
       "Code/config/document text changes: read the target first, then use `edit`, `write`, or `apply_patch`. Do not edit binary Office/PDF files with text tools.",
+    );
+  }
+  if (available.has("write")) {
+    lines.push(
+      "New local text/code files: when the user asks to create/generate/write/save an HTML, CSS, JavaScript, Markdown, JSON, text, or code file at a specified file or folder path, call `write` with `filePath` and the complete `content`. Do not answer with a preview-only Canvas.",
+      "HTML app requests: if the user gives a folder path and asks for an HTML game/app/page, choose a sensible filename such as `tetris.html` for Tetris or `index.html` otherwise, and write the complete standalone HTML file.",
+      "Copilot Canvas is not execution: never use Microsoft 365 Copilot Canvas as the saved artifact. A local save request is complete only after a `write` tool result exists.",
     );
   }
   if (executionToolName) {
@@ -5343,8 +5641,10 @@ function formatReliableToolPolicy(tools = []) {
     if (executionToolName) {
       lines.push(
         `Office file requests: OfficeCLI skills are instructions, not execution. Use \`Skill\` only when the OfficeCLI rules need to be loaded, then call \`${executionToolName}\` with the actual \`officecli ...\` command. Do not stop after \`Skill\`.`,
-        `Simple Office edits: when the requested OfficeCLI command is clear, emit the execution tool directly, for example \`{\"tool_uses\":[{\"recipient_name\":\"functions.${executionToolName}\",\"parameters\":{\"command\":\"officecli set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}}]}\`.`,
-        "Excel cell references: OfficeCLI needs a sheet-qualified path such as `/Sheet1/A1`; do not emit bare `/A1`.",
+        `Simple Office edits: when the requested OfficeCLI command is clear, emit the execution tool directly, for example \`{\"tool_uses\":[{\"recipient_name\":\"functions.${executionToolName}\",\"parameters\":{\"command\":\"officecli set C:/path/file.xlsx \\\"/Sheet1/A1\\\" --prop fill=FF0000 --json\"}}]}\`.`,
+        "Existing workbook sheet safety: if the user names a cell/range but not a sheet, first inspect sheets with `officecli view C:/path/file.xlsx outline --json` unless prior tool results already identify the target sheet. Do not silently assume `Sheet1` for non-new workbooks.",
+        "Excel cell references: OfficeCLI needs a quoted, sheet-qualified path such as `\"/Sheet1/A1\"`; do not emit bare `/A1`.",
+        "OfficeCLI diagnostics: add `--json` to OfficeCLI commands so failures include structured errors instead of empty stdout/stderr.",
         "Excel requests: use `officecli-xlsx` as the skill name only for loading instructions. The file change itself must be an execution tool call running `officecli`.",
         "Do not answer with `officecli` commands in markdown. A markdown command is not execution.",
         "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
@@ -5352,9 +5652,9 @@ function formatReliableToolPolicy(tools = []) {
     } else {
       lines.push(
         "Office file requests: when no execution tool is available, emit `Skill` with the matching OfficeCLI skill so the executor can load instructions. Do not claim the file was changed until an execution result exists.",
-        "Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx` and `args` containing the concise OfficeCLI task or command, for example `{\"skill\":\"officecli-xlsx\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}`.",
-        "Excel cell references: OfficeCLI needs a sheet-qualified path such as `/Sheet1/A1`; do not emit bare `/A1`.",
-        "Generic OfficeCLI fallback: use `{\"skill\":\"officecli\",\"args\":\"set C:/path/file.xlsx /Sheet1/A1 --prop fill=FF0000\"}` only if the catalog does not expose a more specific OfficeCLI skill name.",
+        "Excel requests: prefer `Skill` with `skill` set to `officecli-xlsx` and `args` containing the concise OfficeCLI task or command, for example `{\"skill\":\"officecli-xlsx\",\"args\":\"set C:/path/file.xlsx \\\"/Sheet1/A1\\\" --prop fill=FF0000\"}`.",
+        "Excel cell references: OfficeCLI needs a quoted, sheet-qualified path such as `\"/Sheet1/A1\"`; do not emit bare `/A1`.",
+        "Generic OfficeCLI fallback: use `{\"skill\":\"officecli\",\"args\":\"set C:/path/file.xlsx \\\"/Sheet1/A1\\\" --prop fill=FF0000\"}` only if the catalog does not expose a more specific OfficeCLI skill name.",
         "Skill runner JSON rule: every `args` value must be one valid JSON string. Prefer forward slashes and do not wrap file paths in inner double quotes; if double quotes are unavoidable, escape them as `\\\"`.",
       );
     }
@@ -5480,13 +5780,16 @@ function buildToolResultFailureRecord(prompt = {}) {
     failure.reason ? `reason=${failure.reason}` : "",
   ].filter(Boolean);
   const excerpt = String(failure.excerpt || failure.message || "No error details were returned by the executor.").trim();
+  const guidance = toolFailureGuidance(failure, excerpt);
   const content = [
     "ツール実行に失敗したため、処理を停止しました。自動フォールバックや再試行は行っていません。",
     "",
     labelParts.length ? `失敗したツール: ${labelParts.join(", ")}` : "失敗したツール: unknown",
     "",
+    ...(failure.command ? ["実行コマンド:", failure.command, ""] : []),
     "エラー内容:",
     excerpt,
+    ...(guidance ? ["", "確認ポイント:", guidance] : []),
   ].join("\n");
   return {
     status: 200,
@@ -5509,15 +5812,33 @@ function buildToolResultFailureRecord(prompt = {}) {
   };
 }
 
+function toolFailureGuidance(failure = {}, excerpt = "") {
+  const command = String(failure.command || "");
+  const text = `${command}\n${excerpt}`;
+  const isOfficeCli = /\bofficecli(?:\.exe)?\b/iu.test(text);
+  if (!isOfficeCli) return "";
+  const emptyOutput =
+    /Exit\s+code\s*:\s*[1-9]\d*[\s\S]*STDOUT\s*:\s*[\r\n\s]*STDERR\s*:\s*$/iu.test(excerpt) ||
+    /"stdout"\s*:\s*""[\s\S]*"stderr"\s*:\s*""/iu.test(excerpt);
+  const lines = [];
+  if (emptyOutput) {
+    lines.push(
+      "OfficeCLI が詳細な標準出力/標準エラーを返していません。`--json` 付きの OfficeCLI 実行にすると、シート名違い・ファイルロック・未対応プロパティなどの原因が構造化されて返ります。",
+    );
+  }
+  lines.push(
+    "Excel 編集では、対象ブックが開かれてロックされていないか、シート名が `/Sheet1/...` と一致しているか、対象ファイルが存在するかを確認してください。",
+  );
+  return lines.join("\n");
+}
+
 function shouldAttemptOpenAiToolRepair(record, prompt = {}) {
   if (!Array.isArray(prompt.tools) || !prompt.tools.length) return false;
   if (prompt.hasToolResultMessages) return false;
   if (prompt.openAiToolRepairAttempt === true) return false;
   if (recordSatisfiesOpenAiToolProtocol(record, prompt)) return false;
-  const requiresTool =
-    prompt.requiresStrictToolCalls === true ||
-    openAiToolChoiceRequiresTool(prompt.openAiToolChoice, prompt.tools) ||
-    promptExplicitlyRequestsAvailableTool(prompt);
+  const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
+  const requiresTool = prompt.requiresStrictToolCalls === true || toolIntent.requiresTool === true;
   const content = openAiMessageContent(record);
   if (!content.trim()) return requiresTool;
   return requiresTool;
@@ -5581,7 +5902,8 @@ function buildOpenAiToolRepairPrompt(prompt, invalidText) {
       toolProtocolPrompt,
       "Tool-call repair instruction:",
       "The previous answer was invalid because tools were required but the response was prose, code, markdown, a Microsoft 365 built-in tool claim, or otherwise not strict tool_calls JSON.",
-      "Do not write code, explanations, markdown, natural language, file-upload requests, or claims that you can use Microsoft 365 tools.",
+      "Do not write code as prose or markdown. If code must be saved, place it inside the selected write tool's content argument.",
+      "Do not write explanations, natural language, file-upload requests, or claims that you can use Microsoft 365 tools.",
       "Return only OpenAI-compatible JSON with a non-empty tool_calls array.",
     ].filter(Boolean).join("\n\n"),
     userPrompt: [
@@ -5712,7 +6034,7 @@ function escapeRegex(value) {
 
 function buildOpenAiCompletionBody(description, params = {}) {
   const model = String(params.model || OPENAI_COMPAT_DEFAULT_MODEL);
-  const extracted = extractOpenAiToolCallsFromText(description, params.tools || []);
+  const extracted = extractOpenAiToolCallsFromText(description, params.tools || [], params);
   const hasToolCalls = extracted.toolCalls.length > 0;
   const message = {
     role: "assistant",
@@ -5734,7 +6056,7 @@ function buildOpenAiCompletionBody(description, params = {}) {
   };
 }
 
-function extractOpenAiToolCallsFromText(text, tools = []) {
+function extractOpenAiToolCallsFromText(text, tools = [], context = {}) {
   const allowed = new Set(
     tools
       .map((tool) => String(tool?.function?.name || "").trim())
@@ -5780,6 +6102,11 @@ function extractOpenAiToolCallsFromText(text, tools = []) {
   if (officeCliSkillCalls.length) {
     displayText = stripOfficeCliCodeFences(displayText);
     toolCalls.push(...officeCliSkillCalls);
+  }
+  const generatedFileCalls = extractGeneratedFileWriteCallsFromText(raw, allowed, context);
+  if (generatedFileCalls.length) {
+    displayText = "";
+    toolCalls.push(...generatedFileCalls);
   }
   return { displayText: displayText.trim(), toolCalls: dedupeOpenAiToolCalls(toolCalls) };
 }
@@ -5897,16 +6224,35 @@ function officeCliCommandArgsFromNaturalLanguage(args) {
   const cell = String(match[3] || "").toUpperCase();
   const color = normalizeOfficeCliColorValue(match[4]);
   if (!path || !cell || !color) return "";
-  return `set ${path} /Sheet1/${cell} --prop fill=${color}`;
+  return `set ${path} "/Sheet1/${cell}" --prop fill=${color}`;
 }
 
-function normalizeOfficeCliCommandArgs(args) {
-  return String(args || "")
+function normalizeOfficeCliCommandArgs(args, options = {}) {
+  const { json = false } = options;
+  const normalized = String(args || "")
     .trim()
+    .replace(
+      /(["'])\/(\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?)(\1)/giu,
+      (_match, quote, address, endQuote) => `${quote}/Sheet1/${String(address).toUpperCase()}${endQuote}`,
+    )
     .replace(
       /(^|\s)\/(\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?)(?=\s|$)/giu,
       (_match, prefix, address) => `${prefix}/Sheet1/${String(address).toUpperCase()}`,
     );
+  const quoted = quoteOfficeCliElementPathArgs(normalized);
+  return json ? appendOfficeCliJsonFlag(quoted) : quoted;
+}
+
+function quoteOfficeCliElementPathArgs(args) {
+  return String(args || "").replace(/(^|\s)(\/[^\s"'`]+)/gu, (_match, prefix, path) => {
+    return `${prefix}"${path.replace(/"/gu, '\\"')}"`;
+  });
+}
+
+function appendOfficeCliJsonFlag(args) {
+  const text = String(args || "").trim();
+  if (!text || /(^|\s)--json(?=\s|$)/u.test(text)) return text;
+  return `${text} --json`;
 }
 
 function officeCliCommandForArgs(args) {
@@ -5914,12 +6260,12 @@ function officeCliCommandForArgs(args) {
   if (!trimmed) return "";
   if (/^(?:officecli|office-cli)(?:\.exe)?(?:\s|$)/iu.test(trimmed)) {
     const match = trimmed.match(/^(?:officecli|office-cli)(?:\.exe)?(?:\s+(.+))?$/iu);
-    const commandArgs = normalizeOfficeCliCommandArgs(match?.[1] || "");
+    const commandArgs = normalizeOfficeCliCommandArgs(match?.[1] || "", { json: true });
     return commandArgs ? `officecli ${commandArgs}` : "officecli";
   }
   const naturalCommandArgs = officeCliCommandArgsFromNaturalLanguage(trimmed);
-  if (naturalCommandArgs) return `officecli ${naturalCommandArgs}`;
-  return `officecli ${normalizeOfficeCliCommandArgs(trimmed)}`;
+  if (naturalCommandArgs) return `officecli ${appendOfficeCliJsonFlag(naturalCommandArgs)}`;
+  return `officecli ${normalizeOfficeCliCommandArgs(trimmed, { json: true })}`;
 }
 
 function looksLikeOfficeCliCommandArgs(args) {
@@ -5959,6 +6305,78 @@ function officeCliToolCallForArgs(args, allowed, names = {}) {
       }),
     },
   };
+}
+
+function extractGeneratedFileWriteCallsFromText(text, allowed, context = {}) {
+  if (context?.requiresStrictToolCalls !== true) return [];
+  const writeToolName = resolveAllowedToolName("write", allowed) || resolveAllowedToolName("write_file", allowed);
+  if (!writeToolName) return [];
+  const userPrompt = String(context.userPrompt || "");
+  if (!userPrompt || !userPromptRequestsLocalFileCreation(userPrompt)) return [];
+  const content = extractHtmlDocumentFromText(text);
+  if (!content) return [];
+  const filePath = requestedOutputFilePath(userPrompt, { defaultExtension: "html" });
+  if (!filePath) return [];
+  return [
+    {
+      id: `call_${randomBytes(6).toString("hex")}`,
+      type: "function",
+      function: {
+        name: writeToolName,
+        arguments: JSON.stringify({
+          filePath,
+          content,
+        }),
+      },
+    },
+  ];
+}
+
+function userPromptRequestsLocalFileCreation(prompt) {
+  const text = String(prompt || "");
+  if (!/(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|~[\\/]|\.{1,2}[\\/])/u.test(text)) return false;
+  const createHint =
+    /\b(?:create|generate|write|save|make|build)\b|作成|生成|書いて|保存|作って|つくって|出力/iu;
+  const fileKindHint =
+    /\b(?:html?|css|javascript|js|markdown|md|json|text|txt|code|game|app|page|site)\b|HTML|コード|ゲーム|アプリ|ページ|サイト|テトリス/iu;
+  return createHint.test(text) && fileKindHint.test(text);
+}
+
+function extractHtmlDocumentFromText(text) {
+  const raw = String(text || "");
+  const fenced = /```(?:html?|HTML)?\s*([\s\S]*?<\/html>)\s*```/iu.exec(raw);
+  if (fenced?.[1]) return fenced[1].trim();
+  const startMatch = /<!doctype\s+html\b|<html\b/iu.exec(raw);
+  if (!startMatch) return "";
+  const end = raw.toLowerCase().indexOf("</html>", startMatch.index);
+  if (end < 0) return "";
+  return raw.slice(startMatch.index, end + "</html>".length).trim();
+}
+
+function requestedOutputFilePath(prompt, options = {}) {
+  const defaultExtension = String(options.defaultExtension || "txt").replace(/^\./u, "") || "txt";
+  const text = String(prompt || "");
+  const pathRe = /["'“”]?((?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+|~[\\/]|\.{1,2}[\\/])[^"'“”\r\n]+)["'“”]?/gu;
+  let lastPath = "";
+  for (const match of text.matchAll(pathRe)) {
+    const candidate = String(match[1] || "").trim().replace(/[。．.、,\s]+$/u, "");
+    if (candidate) lastPath = candidate;
+  }
+  if (!lastPath) return "";
+  const normalized = lastPath.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const base = normalized.split("/").pop() || "";
+  const hasExtension = /\.[A-Za-z0-9]{1,12}$/u.test(base);
+  if (hasExtension) return normalized;
+  const filename = inferGeneratedFilename(prompt, defaultExtension);
+  return `${normalized}/${filename}`;
+}
+
+function inferGeneratedFilename(prompt, extension = "txt") {
+  const ext = String(extension || "txt").replace(/^\./u, "") || "txt";
+  const text = String(prompt || "");
+  if (/tetris|テトリス/iu.test(text)) return `tetris.${ext}`;
+  if (/todo|タスク/iu.test(text)) return `todo.${ext}`;
+  return ext === "html" ? "index.html" : `output.${ext}`;
 }
 
 function normalizeSkillToolArguments(name, args, allowed) {
@@ -6329,7 +6747,8 @@ function normalizeOpenAiToolCall(value, allowed) {
       : rawArguments && typeof rawArguments === "object"
         ? rawArguments
         : {};
-  const normalized = normalizeSkillToolArguments(name, args, allowed);
+  const normalizedArgs = normalizeToolArgumentsForResolvedName(name, rawName, args);
+  const normalized = normalizeSkillToolArguments(name, normalizedArgs, allowed);
   return {
     id: String(value.id || value.call_id || value.tool_call_id || `call_${randomBytes(6).toString("hex")}`),
     type: "function",
@@ -6350,6 +6769,15 @@ function resolveAllowedToolName(name, allowed) {
     const normalizedAllowed = normalizeToolName(allowedName);
     if (normalizedAllowed.toLowerCase() === lower) return allowedName;
   }
+  const alias = canonicalToolNameAlias(normalized);
+  if (alias) {
+    if (allowed.has(alias)) return alias;
+    const aliasLower = alias.toLowerCase();
+    for (const allowedName of allowed) {
+      const normalizedAllowed = normalizeToolName(allowedName);
+      if (normalizedAllowed.toLowerCase() === aliasLower) return allowedName;
+    }
+  }
   return "";
 }
 
@@ -6357,6 +6785,38 @@ function normalizeToolName(name) {
   const raw = String(name || "").trim();
   if (!raw) return "";
   return raw.replace(/^functions\./, "").replace(/^function\./, "");
+}
+
+function canonicalToolNameAlias(name) {
+  const normalized = normalizeToolName(name).toLowerCase().replace(/[-\s]+/gu, "_");
+  if (["write_file", "create_file", "save_file"].includes(normalized)) return "write";
+  if (["read_file", "open_file"].includes(normalized)) return "read";
+  return "";
+}
+
+function normalizeToolArgumentsForResolvedName(name, rawName, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const resolved = normalizeToolName(name).toLowerCase();
+  const raw = normalizeToolName(rawName).toLowerCase();
+  if (resolved === "write") {
+    const out = { ...args };
+    if (out.filePath == null && out.path != null) out.filePath = out.path;
+    if (out.content == null && out.contents != null) out.content = out.contents;
+    if (raw === "write_file" || raw === "create_file" || raw === "save_file") {
+      delete out.path;
+      delete out.contents;
+    }
+    return out;
+  }
+  if (resolved === "read") {
+    const out = { ...args };
+    if ((raw === "read_file" || raw === "open_file") && out.filePath == null && out.path != null) {
+      out.filePath = out.path;
+      delete out.path;
+    }
+    return out;
+  }
+  return args;
 }
 
 function dedupeOpenAiToolCalls(calls) {
@@ -6576,7 +7036,9 @@ if (isDirectEntry) {
 }
 
 export {
+  buildToolResultFailureRecord,
   buildOpenAiCompletionBody,
+  classifyToolIntent,
   createServer,
   extractOpenAiToolCallsFromText,
   formatPromptForCopilot,

@@ -531,6 +531,22 @@ function textContainsOfficeCliExecutionCommand(text) {
   return raw.split(/\r?\n/u).some(lineLooksLikeOfficeCliExecutionCommand);
 }
 
+function assistantReplyLooksLikeInProgressProse(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned) return false;
+  const tail = cleaned
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-3)
+    .join(" ");
+  if (!tail) return false;
+  return (
+    /(?:しています|中です|作成中|生成中|確認中|検索中|処理中|準備中|整理中|読み込み中|待機中)[。.!?！？\s]*$/u.test(tail) ||
+    /\b(?:working|creating|generating|searching|checking|preparing|processing|loading|waiting)\b[\s.!?]*$/iu.test(tail)
+  );
+}
+
 function assistantReplyHasStrongCompletionSignal(text) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned || replyEndsWithStreamingPlaceholder(cleaned)) return false;
@@ -555,6 +571,7 @@ function assistantReplyLooksNaturallyComplete(text) {
   if (assistantReplyHasStrongCompletionSignal(cleaned)) return true;
   if (looksLikeSearchProgressText(cleaned) || looksLikeInternalReasoningParagraph(cleaned)) return false;
   if (textContainsOfficeCliExecutionCommand(cleaned)) return false;
+  if (assistantReplyLooksLikeInProgressProse(cleaned)) return false;
   return /[。.!?！？）」』】)]\s*$/u.test(cleaned) || /(?:です|ます|ました|しました|ください)\s*$/u.test(cleaned);
 }
 
@@ -1346,6 +1363,9 @@ async function waitForDomResponse(
   /** Consecutive polls where only a weak/stale generating signal remains while completed-looking text is unchanged. */
   let weakGeneratingStable = 0;
   let weakGeneratingReply = "";
+  /** Consecutive polls where completed-looking text is unchanged, even if the stop button signal is stale. */
+  let completeGeneratingStable = 0;
+  let completeGeneratingReply = "";
   /** Long code replies may hide trailing lines behind a one-shot expansion control. */
   let expandAttempted = false;
   /** M365 reply-div yields short answers (e.g. "OK"); keep floor low but still require growth vs baseline. */
@@ -1420,6 +1440,28 @@ async function waitForDomResponse(
     } else {
       weakGeneratingStable = 0;
       weakGeneratingReply = reply;
+    }
+    const completeGeneratingCandidate =
+      generatingRaw &&
+      !progressOnly &&
+      hasVisibleAssistantChat &&
+      !streamingPlaceholderTail &&
+      !reasoningDisclosurePlaceholder &&
+      len >= minDoneLen() &&
+      len > baselineLen &&
+      !domExtractLooksLikeSubmittedPrompt(len, submittedPromptLen) &&
+      assistantReplyLooksNaturallyComplete(reply);
+    if (completeGeneratingCandidate) {
+      const lengthDelta = Math.abs(reply.length - completeGeneratingReply.length);
+      const sameOrNearSame =
+        reply === completeGeneratingReply ||
+        (lengthDelta <= 12 &&
+          (reply.startsWith(completeGeneratingReply) || completeGeneratingReply.startsWith(reply)));
+      completeGeneratingStable = completeGeneratingReply && sameOrNearSame ? completeGeneratingStable + 1 : 1;
+      completeGeneratingReply = reply;
+    } else {
+      completeGeneratingStable = 0;
+      completeGeneratingReply = reply;
     }
     const generating =
       streamingPlaceholderTail ||
@@ -1519,12 +1561,13 @@ async function waitForDomResponse(
     }
 
     if (generating) {
-      if (weakGeneratingStable >= 4) {
+      const staleCompleteThreshold = strongGeneratingSignal === true ? 8 : 4;
+      if (weakGeneratingStable >= 4 || completeGeneratingStable >= staleCompleteThreshold) {
         await sleep(250);
         const lateState = await pollCopilotGeneratingAndReply(session);
         const replyLate = normalizeCopilotVisibleText(lateState.reply);
         if (
-          lateState.strongGeneratingSignal !== true &&
+          (lateState.strongGeneratingSignal !== true || completeGeneratingStable >= staleCompleteThreshold) &&
           !lateState.progressOnly &&
           lateState.hasVisibleAssistantChat &&
           !replyEndsWithStreamingPlaceholder(replyLate) &&
@@ -1536,10 +1579,13 @@ async function waitForDomResponse(
           const out = await resolveAssistantReplyForReturn(session, candidate, submittedPromptLen, netCapture);
           if (out != null) {
             console.error(
-              "[copilot:response] done (weak generating stale, completed text stable) len=",
+              "[copilot:response] done (stale generating, completed text stable) len=",
               out.length,
             );
-            return await finalize("weak_generating_stable", out);
+            return await finalize(
+              weakGeneratingStable >= 4 ? "weak_generating_stable" : "stale_complete_text",
+              out,
+            );
           }
         }
       }
