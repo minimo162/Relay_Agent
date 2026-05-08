@@ -51,8 +51,9 @@ function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
   const setup = diagnostics.openworkSetup;
   return [
     `architecture: ${diagnostics.architectureNotes}`,
-    "provider policy: OpenCode owns tools and execution; Relay asks M365 Copilot only for strict tool JSON or final answers from tool results.",
-    "tool scope: reliable OpenCode-standard file discovery, text search, code/text edits, and explicit test/build commands; unsupported binary Office/PDF edits are not routed to generic tools.",
+    "product path: Relay-branded AionUi is the primary UX; this shell is retained for legacy OpenCode diagnostics.",
+    "provider policy: Relay asks M365 Copilot only for strict tool JSON or final answers from tool results.",
+    "legacy tool scope: OpenCode-standard file discovery, text search, code/text edits, and explicit test/build commands.",
     `target OS: ${diagnostics.targetOs}`,
     `process cwd: ${diagnostics.processCwd}`,
     `CDP port: ${diagnostics.defaultEdgeCdpPort}`,
@@ -87,9 +88,9 @@ function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: stri
   }
   if (copilotMessage && copilotMessage.toLowerCase().includes("sign")) return copilotMessage;
   if (setup?.status === "ready") {
-    return "Relay Agent Web opens automatically. Use Open Relay Agent Web if the browser did not appear.";
+    return "The legacy Relay Agent Web diagnostic path is ready. Use it only for OpenCode compatibility checks.";
   }
-  return "Relay is preparing OpenCode and the Copilot connection.";
+  return "Relay is preparing the legacy OpenCode diagnostic path and the Copilot connection.";
 }
 
 type SetupProgressStep = {
@@ -114,27 +115,27 @@ const OPENWORK_SETUP_STEPS: SetupProgressStep[] = [
   {
     id: "provider_config",
     label: "Write config",
-    detail: "Connect OpenCode to Relay.",
+    detail: "Connect legacy OpenCode diagnostics to Relay.",
   },
   {
     id: "provider_warmup",
     label: "Connect Copilot",
-    detail: "Prepare Microsoft 365 Copilot before OpenCode opens.",
+    detail: "Prepare Microsoft 365 Copilot before the legacy web shell opens.",
   },
   {
     id: "download_opencode",
     label: "Get OpenCode",
-    detail: "Download and verify portable OpenCode.",
+    detail: "Download and verify portable OpenCode for legacy diagnostics.",
   },
   {
     id: "opencode_web",
-    label: "Prepare web",
-    detail: "Create the user workspace.",
+    label: "Prepare legacy web",
+    detail: "Create the diagnostic workspace.",
   },
   {
     id: "ready",
     label: "Ready",
-    detail: "OpenCode can start.",
+    detail: "Legacy OpenCode diagnostics can start.",
   },
 ];
 
@@ -211,7 +212,7 @@ export default function Shell(): JSX.Element {
   const [setupRetrying, setSetupRetrying] = createSignal(false);
   const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
 
-  const workspace = createMemo(() => workspaceLabel() || "OpenCode workspace owns execution state");
+  const workspace = createMemo(() => workspaceLabel() || "Legacy OpenCode workspace owns execution state");
   const endpoint = createMemo(providerBaseUrl);
   const diagLines = createMemo(() => diagnosticsSummary(diagnostics()));
   const setupState = createMemo(() => {
@@ -242,7 +243,7 @@ export default function Shell(): JSX.Element {
       copilotReady,
       needsSignIn,
       needsAttention,
-      launchLabel: report?.openworkSetup?.launchLabel ?? "Open Relay Agent Web",
+      launchLabel: report?.openworkSetup?.launchLabel ?? "Open Relay Agent Web (Legacy)",
       providerBaseUrl: report?.openworkSetup?.providerBaseUrl ?? endpoint(),
       configPath: report?.openworkSetup?.configPath ?? "~/.config/opencode/opencode.json",
       steps: [
@@ -305,7 +306,7 @@ export default function Shell(): JSX.Element {
     setSetupRetrying(true);
     try {
       await retryOpencodeSetup();
-      showToast({ tone: "ok", message: "OpenCode setup restarted" });
+      showToast({ tone: "ok", message: "Legacy OpenCode setup restarted" });
       await refreshDiagnostics(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -319,10 +320,10 @@ export default function Shell(): JSX.Element {
     setOpeningWorkspace(true);
     try {
       await openOpencodeWeb(workspaceLabel());
-      showToast({ tone: "ok", message: "Opening Relay Agent Web" });
+      showToast({ tone: "ok", message: "Opening legacy Relay Agent Web" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      showToast({ tone: "danger", message: "OpenCode is not ready", detail: message });
+      showToast({ tone: "danger", message: "Legacy OpenCode is not ready", detail: message });
       await refreshDiagnostics(false);
     } finally {
       setOpeningWorkspace(false);
@@ -345,7 +346,7 @@ export default function Shell(): JSX.Element {
         >
           <div>
             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--ra-color-text-muted)]">
-              Relay Agent Web setup + M365 Copilot gateway
+              Legacy OpenCode diagnostics + M365 Copilot gateway
             </p>
             <h1 class="text-2xl font-semibold">Relay Agent</h1>
           </div>
@@ -361,13 +362,13 @@ export default function Shell(): JSX.Element {
 
         <section class="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
           <article class="ra-surface p-5">
-            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">OpenCode</p>
+            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">Legacy OpenCode diagnostics</p>
             <h2 class="mt-2 text-2xl font-semibold">{setupState().title}</h2>
             <p class="mt-2 max-w-3xl text-sm text-[var(--ra-color-text-muted)]">{setupState().message}</p>
             <div
               class="ra-setup-progress mt-5"
               data-state={setupState().needsAttention ? "blocked" : setupState().status === "ready" ? "done" : "current"}
-              aria-label="OpenCode setup progress"
+              aria-label="Legacy OpenCode setup progress"
             >
               <div class="ra-setup-progress__topline">
                 <div>
@@ -382,7 +383,7 @@ export default function Shell(): JSX.Element {
                 aria-valuemin="0"
                 aria-valuemax="100"
                 aria-valuenow={setupState().progressPercent}
-                aria-label={`OpenCode setup is ${setupState().progressPercent}% complete`}
+                aria-label={`Legacy OpenCode setup is ${setupState().progressPercent}% complete`}
                 aria-valuetext={`${setupState().currentStep.label}: ${setupState().progressDetail}`}
               >
                 <div class="ra-setup-progress__fill" style={{ width: `${setupState().progressPercent}%` }} />
@@ -457,10 +458,10 @@ export default function Shell(): JSX.Element {
           <article class="ra-surface p-5">
             <h2 class="text-xl font-semibold">What happens next</h2>
             <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
-              <p>Relay prepares portable OpenCode and connects it to Microsoft 365 Copilot.</p>
-              <p>When the status is ready, Relay opens Relay Agent Web automatically in the browser.</p>
-              <p>Use Open Relay Agent Web only if the browser did not appear or was closed.</p>
-              <p>Relay Agent Web is powered by OpenCode, which keeps the chat, tools, approvals, files, and session history.</p>
+              <p>The normal installer path is the Relay-branded AionUi desktop shell.</p>
+              <p>This window prepares the legacy OpenCode web diagnostic path for compatibility checks.</p>
+              <p>Use it only when validating the old OpenCode provider gateway behavior.</p>
+              <p>For normal chat, tools, OfficeCLI assistants, files, approvals, and history, use Relay Agent from the AionUi installer.</p>
             </div>
           </article>
           <article class="ra-surface p-5">
@@ -513,7 +514,7 @@ export default function Shell(): JSX.Element {
                   when={diagnostics()}
                   fallback={
                     <p class="mt-4 text-sm text-[var(--ra-color-text-muted)]">
-                      Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and OpenCode status.
+                      Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and legacy OpenCode status.
                     </p>
                   }
                 >
