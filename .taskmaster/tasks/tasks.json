@@ -1,8 +1,8 @@
 {
-  "projectName": "Relay_Agent OpenWork/OpenCode Setup Gateway",
-  "version": "5.0",
+  "projectName": "Relay_Agent AionUi Release Acceptance",
+  "version": "6.0",
   "createdAt": "2026-04-14",
-  "summary": "Current task graph for the OpenWork/OpenCode setup layer and OpenAI-compatible M365 Copilot provider gateway, with OpenWork/OpenCode owning UX and execution.",
+  "summary": "Current task graph for the Relay-branded AionUi release acceptance path, OpenAI-compatible M365 Copilot provider gateway, and remaining Windows-only bootstrap sign-off.",
   "phases": [
     {
       "id": "baseline",
@@ -992,7 +992,7 @@
             "scripts/check-hard-cut-guard.mjs",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "post-UX-removal Windows bootstrap E2E readiness gate; live run pending",
+          "artifact": "post-UX-removal Windows bootstrap E2E readiness gate; 2026-05-12 Linux readiness-only and Windows x64 artifact download_verify reruns passed, headless/gateway/auto bootstrap smokes passed, M365 provider/read live smoke passed on one retry at /tmp/relay-live-m365-opencode-provider-YDGjaV after one structured-tool-call repair failure; Windows installer/browser handoff pending",
           "effort": "L",
           "priority": "critical",
           "blockedBy": [
@@ -1078,6 +1078,514 @@
             "B14"
           ],
           "status": "completed"
+        }
+      ]
+    },
+    {
+      "id": "workspace_document_search_cutover",
+      "name": "Workspace Document Search SQLite/FTS Cutover Follow-up",
+      "description": "Post-MVP work split out from the broader SQLite/FTS cutover tuning bucket after diagnostics, readiness, support export, score, and metadata-boost telemetry reached the MVP completion line.",
+      "tasks": [
+        {
+          "id": "WDS01",
+          "title": "Run real-data SQLite/FTS search-quality evaluation",
+          "description": "Evaluate representative local/shared folders to compare filename, derived-content, and SQLite/FTS evidence quality. Capture precision/recall-like examples, false positives, stale-evidence cases, score-weight recommendations, and privacy constraints without exporting original files or document text.",
+          "files": [
+            "docs/IMPLEMENTATION.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md",
+            "PLANS.md",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts",
+            "scripts/relay-document-search-module-loader.mjs",
+            "scripts/relay-document-search-quality-evaluation.mjs",
+            "scripts/relay-document-search-index-db.test.mjs",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [],
+          "status": "completed"
+        },
+        {
+          "id": "WDS02",
+          "title": "Define and implement primary-path SQLite/FTS cutover gate",
+          "description": "Decide and implement when SQLite/FTS can move from advisory scoring to the primary search path. Include readiness thresholds, feature flags, rollback behavior, and Query Trace/support evidence that explains whether the active path is filename, derived-content, or SQLite/FTS primary.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts",
+            "scripts/relay-document-search-executor.test.mjs",
+            "scripts/relay-document-search-query-trace.test.mjs",
+            "scripts/relay-document-search-display.test.mjs",
+            "scripts/relay-document-search-support-export.test.mjs",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "feature-gated SQLite/FTS primary-path cutover with Query Trace, support export, display, and sync-journal rollback diagnostics",
+          "effort": "XL",
+          "priority": "high",
+          "blockedBy": [
+            "WDS01"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS03",
+          "title": "Measure and tune large-folder SQLite/FTS performance",
+          "description": "Benchmark query latency, metadata/FTS write cost, DB size, WAL/SHM growth, checkpoint behavior, and scheduler/backpressure impact on large local and network-share-like folders. Record thresholds and remediation guidance without persisting or exporting document contents.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchBackgroundScheduler.ts",
+            "scripts/relay-document-search-index-db-performance.mjs",
+            "scripts/relay-document-search-module-loader.mjs",
+            "scripts/relay-document-search-index-db.test.mjs",
+            "scripts/relay-document-search-index-maintenance.test.mjs",
+            "scripts/relay-document-search-background-scheduler.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_PERFORMANCE.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_PERFORMANCE.md",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "WDS01"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS04",
+          "title": "Promote index status to user-facing Workspace Search UX",
+          "description": "Expose beginner-safe AionUi-visible index status, repair/retry affordances, and partial-result explanations. Keep raw DB paths, raw FTS rows, and document text out of normal UI and support exports while making degraded or rebuilding indexes understandable to users.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchProductResult.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts",
+            "scripts/relay-document-search-display.test.mjs",
+            "scripts/relay-document-search-product-result.test.mjs",
+            "scripts/relay-document-search-index-maintenance.test.mjs",
+            "docs/IMPLEMENTATION.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "beginner-safe display index status, partial-result explanations, and repair/retry affordances",
+          "effort": "L",
+          "priority": "medium",
+          "blockedBy": [
+            "WDS02",
+            "WDS03"
+          ],
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "id": "workspace_document_search_hardening",
+      "name": "Workspace Document Search Safety, Consistency, And UX Hardening",
+      "description": "Next implementation list after WDS01-WDS04. These tasks turn the completed SQLite/FTS diagnostics and user-facing index-state slice into a safer default path by adding cache protection, scoped cleanup, transactional index semantics, migration gates, quality regression coverage, ranking explainability, parser validation, and AionUi result-flow integration.",
+      "tasks": [
+        {
+          "id": "WDS05",
+          "title": "Implement cache quota, retention, and at-rest protection gate",
+          "description": "Define and enforce separate quota/retention policy for metadata, ParsedDocument IR, derived FTS/table/preview indexes, result caches, pins, and search history. Gate content-bearing cache reads/writes on declared at-rest protection or an explicit local-cache policy, and expose metadata-only support diagnostics for cache size, quota pressure, protection state, and evictions.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayParsedDocumentCache.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDerivedContentIndex.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexReport.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "scripts/relay-parsed-document-cache.test.mjs",
+            "scripts/relay-document-search-derived-content-index.test.mjs",
+            "scripts/relay-document-search-index-report.test.mjs",
+            "scripts/relay-document-search-support-export.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "content-bearing ParsedDocument and derived-content-index cache quota/protection gates with metadata-only quota, protection, and eviction diagnostics in executor, index report, and support export",
+          "effort": "XL",
+          "priority": "critical",
+          "blockedBy": [
+            "WDS04"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS06",
+          "title": "Implement scoped root removal and derived-cache cleanup",
+          "description": "Add a safe root-removal cleanup path that can delete only the selected root's metadata, parsed payloads, derived indexes, SQLite FTS rows, preview spans, and short-lived result caches after confirmation, while preserving unrelated roots, pins outside the root, search history policy, and job state.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchCacheActions.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchMetadataCache.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts",
+            "scripts/relay-document-search-cache-actions.test.mjs",
+            "scripts/relay-document-search-index-maintenance.test.mjs",
+            "scripts/relay-document-search-display.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "confirmed remove-root cache and maintenance action that deletes only selected-root metadata, parsed payloads, derived indexes, SQLite FTS rows, and preview spans while preserving unrelated roots, jobs, user memory, pins, and search-history policy",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "WDS05"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS07",
+          "title": "Implement transactional content-index commit semantics",
+          "description": "Make content indexing transaction-like: write parser output to staging, build required derived FTS/table/preview indexes from staged ParsedDocument records, atomically swap the active content index pointer only after all required derived artifacts complete, and keep the previous active index usable but marked stale on failures.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayParsedDocumentCache.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDerivedContentIndex.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexCoordinator.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchFreshness.ts",
+            "scripts/relay-parsed-document-cache.test.mjs",
+            "scripts/relay-document-search-derived-content-index.test.mjs",
+            "scripts/relay-document-search-index-db.test.mjs",
+            "scripts/relay-document-search-index-coordinator.test.mjs",
+            "scripts/relay-document-search-executor.test.mjs",
+            "scripts/relay-document-search-support-export.test.mjs",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts",
+            "scripts/apply-aionui-overlay.mjs",
+            "scripts/apply-aionui-overlay.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "staged ParsedDocument and derived-content-index cache promotion, transactional SQLite derived-index writes, active content-index pointer swap, stale fallback, and metadata-only commit diagnostics",
+          "effort": "XL",
+          "priority": "high",
+          "blockedBy": [
+            "WDS05"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS08",
+          "title": "Implement schema migration and rebuild recovery gates",
+          "description": "Add versioned migration handling for metadata, analyzer, parser pipeline, ParsedDocument IR, derived indexes, Evidence Pack, and result contracts. Record migration/rebuild health events, preserve durable workspace roots and user state, rebuild disposable indexes when possible, and open incompatible downgraded stores read-only instead of overwriting newer schema data.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchMetadataCache.ts",
+            "integrations/aionui/overlay/src/process/utils/relayParsedDocumentCache.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexCoordinator.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts",
+            "scripts/relay-document-search-metadata-cache.test.mjs",
+            "scripts/relay-parsed-document-cache.test.mjs",
+            "scripts/relay-document-search-index-db.test.mjs",
+            "scripts/relay-document-search-index-maintenance.test.mjs",
+            "scripts/relay-document-search-query-trace.test.mjs",
+            "scripts/relay-document-search-support-export.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "metadata/ParsedDocument cache migration inspectors, SQLite read-only downgrade gate, schema migration gate health events, and metadata-only Query Trace/support export summaries",
+          "effort": "XL",
+          "priority": "high",
+          "blockedBy": [
+            "WDS07"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS09",
+          "title": "Add golden-query search quality regression gate",
+          "description": "Create a privacy-safe golden-query harness for representative local/shared-folder search failures. Measure top-k expected coverage, folder-skew, forbidden false positives, unsupported-claim prevention, warning correctness, and latency budget without exporting original documents or unredacted extracted content.",
+          "files": [
+            "scripts/relay-document-search-quality-evaluation.mjs",
+            "scripts/relay-document-search-golden-query-gate.mjs",
+            "scripts/relay-document-search-module-loader.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQualityGates.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts",
+            "scripts/relay-document-search-quality-gates.test.mjs",
+            "scripts/relay-document-search-query-trace.test.mjs",
+            "scripts/relay-document-search-golden-query-gate.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            "package.json",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "privacy-safe synthetic golden-query gate, docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md, golden_query_regression quality warning, and metadata-only Query Trace golden-gate summary",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "WDS01",
+            "WDS02",
+            "WDS03"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS10",
+          "title": "Expose deterministic ranking and grouping score breakdown",
+          "description": "Promote ranking diagnostics into an explicit score-breakdown contract for filename, keyword/FTS, table/cell, recency, pin/history, grouping, warning penalty, and hybrid merge contributions. Use the golden-query gate to prevent ranking changes that hide warnings or regress known expected files.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchResultGrouping.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchProductResult.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts",
+            "scripts/relay-document-search-executor.test.mjs",
+            "scripts/relay-document-search-result-grouping.test.mjs",
+            "scripts/relay-document-search-product-result.test.mjs",
+            "scripts/relay-document-search-display.test.mjs",
+            "scripts/relay-document-search-query-trace.test.mjs",
+            "scripts/relay-document-search-support-export.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "RelayDocumentSearchScoreBreakdown.v1 in product results, grouping score facts, Query Trace ranking totals, display labels, and metadata-only support export summaries",
+          "effort": "L",
+          "priority": "medium",
+          "blockedBy": [
+            "WDS09"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS11",
+          "title": "Add parser structure-profile validation gates",
+          "description": "Validate Dedoc-compatible ParsedDocument output by selected structure profile. Ensure profile-specific parser output keeps tree nodes, tables, cells, annotations, metadata, warnings, and attachments separate, records lossy or unsupported fields as warnings, and rejects parser output that is only flattened text.",
+          "files": [
+            "integrations/aionui/overlay/src/process/utils/relayParsedDocumentIr.ts",
+            "integrations/aionui/overlay/src/process/utils/relayParsedDocumentCache.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDerivedContentIndex.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchEvidencePack.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts",
+            "scripts/relay-parsed-document-ir.test.mjs",
+            "scripts/relay-parsed-document-cache.test.mjs",
+            "scripts/relay-document-search-derived-content-index.test.mjs",
+            "scripts/relay-document-search-evidence-pack.test.mjs",
+            "scripts/relay-document-search-executor.test.mjs",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "RelayParsedDocumentStructureProfile.v1 validation, flattened-text rejection, cache/derived-index gates, Evidence Pack structure-profile summary, executor diagnostics, and regression tests",
+          "effort": "XL",
+          "priority": "medium",
+          "blockedBy": [
+            "WDS07"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "WDS12",
+          "title": "Integrate AionUi result-flow continuation and stable selection",
+          "description": "Wire the existing renderer-neutral result contract into the Relay-branded AionUi result flow so capped batches expose show-more/refine actions, selection remains stable across refresh and continuation, partial/index states remain visible, and Copilot prose stays secondary to structured result cards.",
+          "files": [
+            "scripts/apply-aionui-overlay.mjs",
+            "scripts/apply-aionui-overlay.test.mjs",
+            "apps/desktop/scripts/aionui_relay_manifest.test.mjs",
+            "apps/desktop/src-tauri/bootstrap/aionui-relay.json",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchProductResult.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchBridge.ts",
+            "integrations/aionui/overlay/src/process/utils/relayDocumentSearchMcpStdio.ts",
+            "scripts/relay-document-search-display.test.mjs",
+            "scripts/relay-document-search-product-result.test.mjs",
+            "scripts/relay-document-search-bridge.test.mjs",
+            "scripts/relay-document-search-mcp.test.mjs",
+            "docs/AIONUI_RELAY_MIGRATION.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "RelayDocumentSearchResultFlow.v1 display flow, AionUi result-flow envelope, MCP AionUi content, file-id stable selection keys, manifest/gateway metadata, and regression tests",
+          "effort": "XL",
+          "priority": "high",
+          "blockedBy": [
+            "WDS04",
+            "WDS06",
+            "WDS10"
+          ],
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "id": "aionui_release_acceptance",
+      "name": "AionUi Release Acceptance And Windows Sign-off",
+      "description": "Post-WDS task list for moving the Relay-branded AionUi shell from completed document-search/result-flow contracts to a releasable Windows acceptance bundle. Linux-preparable gates are separated from clean-Windows sign-off, and B12 remains the existing Windows bootstrap handoff gate.",
+      "tasks": [
+        {
+          "id": "AION01",
+          "title": "Create installed-app Windows acceptance matrix and evidence bundle",
+          "description": "Define the installed Relay-branded AionUi acceptance matrix and evidence-bundle checklist. Map B12 bootstrap evidence, provider seeding, OfficeCLI/ripgrep, bundled Node/LiteParse, workspace document search, support export, and release workflow artifacts to concrete commands, expected outputs, and storage locations.",
+          "files": [
+            "docs/AIONUI_WINDOWS_VALIDATION.md",
+            "docs/AIONUI_RELAY_MIGRATION.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/AIONUI_WINDOWS_VALIDATION.md acceptance matrix and evidence-bundle checklist, plus docs/AIONUI_RELAY_MIGRATION.md installed-app acceptance boundary",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [],
+          "status": "completed"
+        },
+        {
+          "id": "AION02",
+          "title": "Harden AionUi release workflow artifact manifest gate",
+          "description": "Make release workflow verification assert the Relay-branded AionUi installer artifact, overlay version and upstream pin, bundled Node/LiteParse payload, unsigned or signed release mode, and generated manifest metadata before a prerelease can be treated as acceptable.",
+          "files": [
+            ".github/workflows/release-aionui-windows-installer.yml",
+            "scripts/aionui-release-workflow.test.mjs",
+            "apps/desktop/scripts/aionui_relay_manifest.test.mjs",
+            "apps/desktop/src-tauri/bootstrap/aionui-relay.json",
+            "docs/AIONUI_WINDOWS_VALIDATION.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "release-aionui-windows-installer.yml release artifact manifest gate, RelayAionUiReleaseArtifactManifest.v1 metadata in aionui-relay.json, release manifest upload, workflow/manifest/doc regression tests",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "AION01"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "AION03",
+          "title": "Add pinned AionUi overlay application smoke",
+          "description": "Run the Relay overlay against the pinned AionUi source or fixture and verify that provider seeding, beginner chrome hiding, /guid task launcher metadata, document-search result-flow contract, and bundled runtime payloads survive overlay application without manual edits.",
+          "files": [
+            "scripts/apply-aionui-overlay.mjs",
+            "scripts/apply-aionui-overlay.test.mjs",
+            "integrations/aionui/overlay/",
+            "docs/AIONUI_RELAY_MIGRATION.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "scripts/apply-aionui-overlay.test.mjs pinned AionUi fixture application smoke covering provider seed, beginner chrome, result-flow files, MCP injection, and bundled ripgrep/relay-node/LiteParse payloads",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "AION02"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "AION04",
+          "title": "Import clean-Windows B12 handoff evidence into AionUi acceptance",
+          "description": "After B12 is complete on a clean Windows host, link its installer/browser handoff evidence into the AionUi acceptance bundle. Preserve exact artifact paths, provider endpoint/model, OpenCode/OpenWork versions, SHA256 values, and M365 text/read-tool transcript evidence.",
+          "files": [
+            "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
+            "docs/AIONUI_WINDOWS_VALIDATION.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Clean-Windows B12 installer/browser handoff evidence linked from the AionUi acceptance matrix",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [
+            "B12",
+            "AION01"
+          ],
+          "status": "pending"
+        },
+        {
+          "id": "AION05",
+          "title": "Run installed Relay-branded AionUi first-run provider smoke",
+          "description": "On a clean Windows install, verify that the Relay-branded AionUi shell starts from the intended first-run flow, seeds the M365 Copilot provider/default model, surfaces sign-in or ready state clearly, discovers OfficeCLI/ripgrep/bundled Node/LiteParse, and does not route the primary user path through OpenCode Web.",
+          "files": [
+            "docs/AIONUI_WINDOWS_VALIDATION.md",
+            "docs/AIONUI_RELAY_MIGRATION.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Installed AionUi first-run provider and local-runtime smoke evidence",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "AION02",
+            "AION03",
+            "AION04"
+          ],
+          "status": "pending"
+        },
+        {
+          "id": "AION06",
+          "title": "Run installed Workspace Document Search UX acceptance",
+          "description": "Using the installed Relay-branded AionUi shell on Windows, run representative shared-folder searches and record result-card behavior, preview/open/copy/refine/show-more actions, partial/no-result/permission states, local draft and Copilot-polish boundaries, and support export output without source document contents.",
+          "files": [
+            "docs/AIONUI_WINDOWS_VALIDATION.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md",
+            "docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Installed Workspace Document Search UX acceptance evidence and support-export sample",
+          "effort": "L",
+          "priority": "high",
+          "blockedBy": [
+            "WDS12",
+            "AION05"
+          ],
+          "status": "pending"
+        },
+        {
+          "id": "AION07",
+          "title": "Publish AionUi release readiness decision",
+          "description": "Consolidate the release workflow, overlay smoke, B12 handoff, installed first-run, and Workspace Document Search acceptance artifacts into a release readiness decision. Update docs with known limitations, unsupported Windows-only gaps, unsigned/signed build status, and the next operator action.",
+          "files": [
+            "README.md",
+            "docs/AIONUI_WINDOWS_VALIDATION.md",
+            "docs/AIONUI_RELAY_MIGRATION.md",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "AionUi release readiness decision with evidence links and known limitations",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "AION04",
+            "AION05",
+            "AION06"
+          ],
+          "status": "pending"
         }
       ]
     }

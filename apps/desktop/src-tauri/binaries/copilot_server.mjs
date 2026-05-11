@@ -254,6 +254,16 @@ var TOOL_PROTOCOL_MODES = Object.freeze({
   SPECIFIED_TOOL: "specified_tool",
   REPAIR: "repair",
 });
+var RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT = "RelayDocumentSearchRequest.v1";
+var RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT = "RelayDocumentSearchResult.v1";
+var RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME = "relay_document_search";
+var RELAY_DOCUMENT_SEARCH_APPROVED_ALIASES = Object.freeze([
+  "relay_document_search",
+  "relay-document-search",
+  "workspace_document_search",
+  "workspace-search",
+  "find-files",
+]);
 
 /**
  * When RELAY_COPILOT_NO_WINDOW_FOCUS=1, skip CDP Target.activateTarget / Page.bringToFront
@@ -5170,8 +5180,12 @@ function normalizeOpenAiTools(rawTools) {
       const fn = tool?.function && typeof tool.function === "object" ? tool.function : null;
       const name = String(fn?.name || "").trim();
       if (!name) return null;
+      const requestContract = String(tool?.requestContract || fn?.requestContract || "").trim();
+      const resultContract = String(tool?.resultContract || fn?.resultContract || "").trim();
       return {
         type: "function",
+        ...(requestContract ? { requestContract } : {}),
+        ...(resultContract ? { resultContract } : {}),
         function: {
           name,
           description: String(fn.description || "").trim(),
@@ -5298,7 +5312,7 @@ function classifyToolIntent(prompt = {}) {
       decision: "tool_required",
       intent: "local_document_summary",
       reason: "The request asks to summarize or extract from a local document.",
-      preferredTools: preferredTools(available, ["read", "glob", "question"]),
+      preferredTools: preferredDocumentSearchTools(tools, ["read", "glob", "question"]),
     });
   }
   if (signals.localFileDiscovery) {
@@ -5306,7 +5320,7 @@ function classifyToolIntent(prompt = {}) {
       decision: "tool_required",
       intent: "local_file_discovery",
       reason: "The request asks to find, list, or inspect local files.",
-      preferredTools: preferredTools(available, ["glob", "grep", "read", "question"]),
+      preferredTools: preferredDocumentSearchTools(tools, ["glob", "grep", "read", "question"]),
     });
   }
   if (signals.localFileCreate) {
@@ -5338,7 +5352,7 @@ function classifyToolIntent(prompt = {}) {
       decision: "tool_required",
       intent: "local_path_access",
       reason: "The request includes an explicit or well-known local file/path.",
-      preferredTools: preferredTools(available, ["read", "glob", "grep", "question"]),
+      preferredTools: preferredDocumentSearchTools(tools, ["read", "glob", "grep", "question"]),
     });
   }
   if (signals.actionTargetPair) {
@@ -5354,7 +5368,7 @@ function classifyToolIntent(prompt = {}) {
       decision: "tool_required",
       intent: "current_workspace_reference",
       reason: "The request refers to current/local workspace state.",
-      preferredTools: preferredTools(available, ["glob", "grep", "read", "question"]),
+      preferredTools: preferredDocumentSearchTools(tools, ["glob", "grep", "read", "question"]),
     });
   }
   return toolIntentResult({
@@ -5398,6 +5412,62 @@ function preferredTools(available, candidates = []) {
     if (resolved) out.push(resolved);
   }
   return [...new Set(out)];
+}
+
+const DOCUMENT_SEARCH_TOOL_ALIASES = RELAY_DOCUMENT_SEARCH_APPROVED_ALIASES;
+
+function preferredDocumentSearchTools(toolsOrAvailable = [], fallbackCandidates = []) {
+  const available =
+    toolsOrAvailable instanceof Set
+      ? toolsOrAvailable
+      : availableToolNameSet(Array.isArray(toolsOrAvailable) ? toolsOrAvailable : []);
+  const documentSearchTools = availableDocumentSearchTools(toolsOrAvailable);
+  return [...new Set([...documentSearchTools, ...preferredTools(available, fallbackCandidates)])];
+}
+
+function availableDocumentSearchTools(toolsOrAvailable = []) {
+  if (toolsOrAvailable instanceof Set) {
+    return toolsOrAvailable.has(RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME) ? [RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME] : [];
+  }
+  if (!Array.isArray(toolsOrAvailable)) return [];
+  const out = [];
+  for (const tool of toolsOrAvailable) {
+    if (!isAcceptedRelayDocumentSearchTool(tool)) continue;
+    const name = normalizeToolName(tool?.function?.name || "");
+    if (name) out.push(name);
+  }
+  return [...new Set(out)];
+}
+
+function isAcceptedRelayDocumentSearchTool(tool) {
+  const name = normalizeToolName(tool?.function?.name || "");
+  if (!name) return false;
+  const alias = resolveRelayDocumentSearchAlias(name);
+  if (!alias) return false;
+  if (alias === RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME) return true;
+  return (
+    String(tool?.requestContract || tool?.function?.requestContract || "") === RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT ||
+    String(tool?.resultContract || tool?.function?.resultContract || "") === RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT
+  );
+}
+
+function resolveRelayDocumentSearchAlias(name) {
+  const normalized = normalizeToolName(name).toLowerCase();
+  const familyKey = normalized.replace(/[-\s]+/gu, "_");
+  for (const alias of RELAY_DOCUMENT_SEARCH_APPROVED_ALIASES) {
+    if (alias.toLowerCase() === normalized) return alias;
+    if (alias.toLowerCase().replace(/[-\s]+/gu, "_") === familyKey) return alias;
+  }
+  return "";
+}
+
+function isDocumentSearchIntent(intent = "") {
+  return [
+    "local_document_summary",
+    "local_file_discovery",
+    "local_path_access",
+    "current_workspace_reference",
+  ].includes(String(intent || ""));
 }
 
 function explicitlyRequestedToolNames(prompt = {}, available = new Set()) {
@@ -5506,6 +5576,7 @@ function formatStrictToolCompilerPrompt({
   toolIntent = null,
 } = {}) {
   const names = tools.map((tool) => tool.function.name).join(", ");
+  const documentSearchTools = availableDocumentSearchTools(tools);
   const catalog = tools.map((tool) => ({
     name: tool.function.name,
     description: tool.function.description || "",
@@ -5526,8 +5597,12 @@ function formatStrictToolCompilerPrompt({
     "Do not return markdown, prose, headings, bullets, code fences, bash commands, shell commands, comments, explanations, citations, or partial JSON.",
     "Do not use OpenAI `tool_calls` with nested JSON strings unless the caller explicitly requested that shape; `tool_uses.parameters` must be a normal JSON object.",
     "Use only double quotes for JSON strings and property names. Escape backslashes if you keep Windows separators, or prefer forward slashes in Windows paths.",
-    "For local file or folder requests, never answer from memory or Microsoft 365 search. Emit a file tool call such as glob, grep, read, list, or shell according to the catalog.",
-    "For requests that mention a folder/path and ask to search/find/list candidate files, emit `glob` with the folder in `path` when the schema supports it and a filename-oriented `pattern`.",
+    documentSearchTools.length
+      ? `For local document, folder, or workspace lookup requests, call the high-level document search tool first (${documentSearchTools.join(", ")}). Do not decompose the first step into glob/grep/read when this high-level tool is advertised.`
+      : "For local file or folder requests, never answer from memory or Microsoft 365 search. Emit a file tool call such as glob, grep, read, list, or shell according to the catalog.",
+    documentSearchTools.length
+      ? "For requests that mention a folder/path and ask to search/find/list/summarize candidate files, pass the user-supplied root/path and objective to the high-level document search tool using the advertised schema."
+      : "For requests that mention a folder/path and ask to search/find/list candidate files, emit `glob` with the folder in `path` when the schema supports it and a filename-oriented `pattern`.",
     formatToolIntentPolicy(toolIntent),
     formatReliableToolPolicy(tools),
     `Available tools: ${names}`,
@@ -5584,14 +5659,24 @@ function formatReliableToolPolicy(tools = []) {
   );
   const hasSkillRunner = available.has("skill");
   const executionToolName = ["bash", "shell", "exec", "run"].find((name) => available.has(name)) || "";
+  const documentSearchTools = availableDocumentSearchTools(tools);
   const lines = [
     "RELAY RELIABLE TOOL POLICY:",
     "Use only capabilities that are reliable in the current OpenCode tool catalog. Prefer the smallest safe first tool call over a large speculative plan.",
     "Never claim completion before a tool result exists. If evidence is needed, emit a tool call instead of prose.",
   ];
+  if (documentSearchTools.length) {
+    lines.push(
+      `Document finding pipeline: use the high-level document search tool first (${documentSearchTools.join(", ")}). It owns root selection, broad query expansion, ripgrep/glob planning, skew checks, Office/PDF reading, candidate ranking, and evidence packaging.`,
+      "Do not ask Copilot to manually choose glob/grep/read as the first step for document search or document summary when the high-level document search tool is available.",
+      "Pass the user intent, folder/path if present, and whether the user wants search-only, content review, or summary-with-evidence according to the advertised schema. If the schema is generic, use fields such as `query`, `path`, `objective`, `mode`, and `evidence` only when accepted by the catalog.",
+    );
+  }
   if (available.has("glob")) {
     lines.push(
-      "File discovery: use `glob` for filename/path lookup. Put a user-supplied root folder in `path` when supported. Use simple patterns such as `**/*keyword*.ext`; do not rely on brace expansion for important searches.",
+      documentSearchTools.length
+        ? "Low-level fallback only: use `glob` for filename/path lookup only when no high-level document search tool is advertised or after that tool asks for a narrower follow-up."
+        : "File discovery: use `glob` for filename/path lookup. Put a user-supplied root folder in `path` when supported. Use simple patterns such as `**/*keyword*.ext`; do not rely on brace expansion for important searches.",
       "Broad file discovery: emit several complementary `glob` calls instead of one narrow pattern when the user asks for files needed for a workflow. Cover direct names, abbreviations, Japanese/English variants, and supporting workpaper terms.",
       "Skew check: if returned paths are mostly from one subfolder, one quarter, one filing/output folder, or one filename family, do not treat them as the full answer. Emit additional `glob` calls for sibling folders and alternate terms before finalizing.",
     );
@@ -5847,7 +5932,15 @@ function shouldAttemptOpenAiToolRepair(record, prompt = {}) {
 function recordSatisfiesOpenAiToolProtocol(record, prompt = {}) {
   if (!recordHasOpenAiToolCalls(record)) return false;
   if (prompt.requiresStrictToolCalls !== true) return true;
-  return openAiMessageContent(record).trim() === "";
+  if (openAiMessageContent(record).trim() !== "") return false;
+  const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
+  const documentSearchTools = availableDocumentSearchTools(prompt.tools || []);
+  if (isDocumentSearchIntent(toolIntent.intent) && documentSearchTools.length) {
+    const firstCallName = normalizeToolName(record?.body?.choices?.[0]?.message?.tool_calls?.[0]?.function?.name || "");
+    const allowedHighLevel = new Set(documentSearchTools.map((name) => normalizeToolName(name).toLowerCase()));
+    return allowedHighLevel.has(firstCallName.toLowerCase());
+  }
+  return true;
 }
 
 function openAiToolChoiceRequiresTool(toolChoice, tools = []) {
@@ -5940,6 +6033,13 @@ function selectOpenAiToolRepairTools(prompt = {}) {
       new RegExp(`\\b${escaped}\\s+(?:tool|function)\\b`, "iu"),
     ];
     if (patterns.some((pattern) => pattern.test(text))) chosen.push(tool);
+  }
+  const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
+  if (!chosen.length && isDocumentSearchIntent(toolIntent.intent)) {
+    for (const name of availableDocumentSearchTools(tools)) {
+      const tool = byName.get(name);
+      if (tool) chosen.push(tool);
+    }
   }
   return dedupeOpenAiTools(chosen.length ? chosen : tools);
 }
@@ -6769,6 +6869,11 @@ function resolveAllowedToolName(name, allowed) {
     const normalizedAllowed = normalizeToolName(allowedName);
     if (normalizedAllowed.toLowerCase() === lower) return allowedName;
   }
+  const familyKey = lower.replace(/[-\s]+/gu, "_");
+  for (const allowedName of allowed) {
+    const normalizedAllowed = normalizeToolName(allowedName);
+    if (normalizedAllowed.toLowerCase().replace(/[-\s]+/gu, "_") === familyKey) return allowedName;
+  }
   const alias = canonicalToolNameAlias(normalized);
   if (alias) {
     if (allowed.has(alias)) return alias;
@@ -6791,6 +6896,10 @@ function canonicalToolNameAlias(name) {
   const normalized = normalizeToolName(name).toLowerCase().replace(/[-\s]+/gu, "_");
   if (["write_file", "create_file", "save_file"].includes(normalized)) return "write";
   if (["read_file", "open_file"].includes(normalized)) return "read";
+  if (["relay_document_search", "document_search", "workspace_document_search"].includes(normalized)) {
+    return "relay_document_search";
+  }
+  if (["workspace_search", "find_files"].includes(normalized)) return normalized;
   return "";
 }
 
@@ -7044,5 +7153,6 @@ export {
   formatPromptForCopilot,
   main,
   parseOpenAiRequest,
+  shouldAttemptOpenAiToolRepair,
   writeOpenAiChatCompletionStream,
 };

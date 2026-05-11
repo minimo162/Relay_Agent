@@ -1,5 +1,12 @@
 # Office File Search — Design (Phase A: non-semantic)
 
+Note 2026-05-09: this document remains the lower-level Office/PDF extraction
+and exact-file read design. Broad shared-folder discovery, workspace indexing,
+Docufinder-style immediate filename search, Dedoc-style document IR, and
+Evidence Pack answer generation are now planned in
+`docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md`. Do not treat this file as the whole
+workspace document search plan.
+
 Date: 2026-04-20 (rev 15: nine follow-ups to rev 14, accumulated over three review rounds. Core changes: (1) POSIX snapshot replaces the shared-`File` scheme for xlsx preflight+parse; (2) DOCX row anchors become `p{n}:tbl{j}:row{i}` for citation round-trip; (3) the dispatch loop keeps only the rendezvous-channel mode, retracting the "small-bounded channel" wording. Review-round-2 cleanup: (4) the preflight procedure is rewritten end-to-end so step 1 slurps bytes into the snapshot instead of opening a long-lived `File`; (5) Windows `FILE_SHARE_*` constants gain an explicit dep-or-local-const choice in the dependency section; (6) open-questions item 28 is re-labelled **superseded by item 31** rather than **resolved**; (7) `RELAY_OFFICE_XLSX_ARCHIVE_MAX_BYTES` gets an explicit unit-test checklist entry; (8) cache keys move from `to_string_lossy()` to OS-native bytes, with a new open-questions item 32 on tool-boundary display. Review-round-3 cleanup: (9) the cache record schema is made concrete about the OS-native source form — a new `source_encoding` field (one of `unix-bytes-b64` / `windows-wide-b64` / `utf8`) pairs with a base64-or-utf8 `source` payload; the lookup step switches to byte-exact `&[u8]` comparison; `schema_version` bumps to `3` with an explicit pre-ship-folding rule; the "archive cap above decompressed cap is redundant" claim is retracted as factually wrong (archive bytes and decompressed bytes are independent); all `RELAY_OFFICE_*` env-parse errors fall back to the default with a one-shot diagnostic rather than surfacing `InvalidInput`, since env vars are process-level config and failing every extraction on one bad value is worse than the default.)
 
 2026-04-23 update: the extraction/cache design remains active, but the

@@ -13,6 +13,7 @@ import { app } from 'electron';
 import {
   appendFileSync,
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -21,6 +22,7 @@ import {
   statSync,
   writeFileSync,
 } from 'fs';
+import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 
 const RELAY_PROVIDER_ID = 'relay-agent';
@@ -30,6 +32,10 @@ const RELAY_CONTEXT_LIMIT = 128000;
 const RELAY_SEED_FILE_ENV = 'RELAY_AIONUI_PROVIDER_SEED_FILE';
 const RELAY_OFFICECLI_PATH_ENV = 'RELAY_OFFICECLI_PATH';
 const RELAY_OFFICECLI_EXPECTED_PATH_ENV = 'RELAY_OFFICECLI_EXPECTED_PATH';
+const RELAY_RIPGREP_PATH_ENV = 'RELAY_RIPGREP_PATH';
+const RELAY_BUNDLED_RIPGREP_PATH_ENV = 'RELAY_BUNDLED_RIPGREP';
+const RELAY_BUNDLED_NODE_ENV = 'RELAY_BUNDLED_NODE';
+const RELAY_LITEPARSE_RUNNER_ROOT_ENV = 'RELAY_LITEPARSE_RUNNER_ROOT';
 const RELAY_OFFICECLI_VERSION = '1.0.76';
 const RELAY_OFFICECLI_URL = 'https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe';
 const RELAY_OFFICECLI_SHA256 = 'f9e4895505858ab813e133d4d1f9f01004c7b4b08397408487f534caf9e2ec58';
@@ -40,10 +46,13 @@ const RELAY_DEFAULT_SKILLS = [
   'officecli-docx',
   'officecli-xlsx',
   'officecli-pptx',
-  'officecli-financial-model',
-  'officecli-data-dashboard',
+  'relay-document-search',
+  'workspace-search',
+  'find-files',
+  'read-office-file',
+  'summarize-with-evidence',
 ];
-const RELAY_DEFAULT_ASSISTANTS = [
+const RELAY_OFFICE_ASSISTANTS = [
   {
     id: 'word-creator',
     defaultEnabledSkills: ['officecli-docx'],
@@ -57,6 +66,376 @@ const RELAY_DEFAULT_ASSISTANTS = [
     defaultEnabledSkills: ['officecli-pptx'],
   },
 ];
+const RELAY_TASK_ASSISTANTS = [
+  {
+    id: 'relay-workspace-search',
+    defaultEnabledSkills: [
+      'relay-document-search',
+      'workspace-search',
+      'find-files',
+      'read-office-file',
+      'summarize-with-evidence',
+    ],
+    assistant: {
+      id: 'relay-workspace-search',
+      name: 'Find Materials',
+      nameI18n: {
+        'en-US': 'Find Materials',
+        'ja-JP': '資料を探す',
+      },
+      description: 'Find local files, check their contents when needed, and summarize them with evidence.',
+      descriptionI18n: {
+        'en-US': 'Find local files, check their contents when needed, and summarize them with evidence.',
+        'ja-JP': 'フォルダやファイルから必要な資料を探し、必要なら中身を読んで出典つきで要約します。',
+      },
+      avatar: '🔎',
+      enabled: true,
+      isPreset: true,
+      isBuiltin: false,
+      presetAgentType: 'aionrs',
+      context:
+        "You are Relay Agent's document finding assistant. Use AionUi workspace context and Relay workspace-search skills first, then read files and summarize with evidence only when the user asks for understanding, review, or summary. Ask for a folder only when no workspace is selected. Treat early filename hits as candidates until Relay marks them confirmed.",
+      contextI18n: {
+        'ja-JP':
+          'Relay Agentの資料検索アシスタントです。まずAionUIのWorkspaceとRelayの検索スキルを使い、ユーザーが理解・確認・要約を求めた場合だけファイルを読んで出典つきで要約します。Workspaceが未選択の場合だけフォルダ指定を促してください。Relayが確認済みにするまで、ファイル名だけの一致は候補として扱ってください。',
+      },
+      promptsI18n: {
+        'en-US': [
+          'Find files related to cash flow statement preparation in this folder',
+          'Find related files first, then summarize only confirmed evidence',
+          'Find the latest report in this workspace',
+          'Summarize this PDF with evidence',
+        ],
+        'ja-JP': [
+          'このフォルダからキャッシュフロー計算書に関係するファイルを探して',
+          '関係するファイルを探してから、確認済みの根拠だけで要約して',
+          'このフォルダの最新の報告書を探して',
+          'このPDFを根拠つきで要約して',
+        ],
+      },
+    },
+  },
+];
+const RELAY_DEFAULT_ASSISTANTS = [...RELAY_OFFICE_ASSISTANTS, ...RELAY_TASK_ASSISTANTS];
+const RELAY_VISIBLE_ASSISTANT_PRESET_IDS = RELAY_DEFAULT_ASSISTANTS.map((assistant) => assistant.id);
+const RELAY_HIDDEN_ASSISTANT_PRESET_IDS = [
+  'relay-grounded-summary',
+  'academic-paper',
+  'morph-ppt',
+  'morph-ppt-3d',
+  'cowork',
+  'openclaw-setup',
+  'star-office-helper',
+  'story-roleplay',
+  'moltbook',
+  'beautiful-mermaid',
+  'word-form-creator',
+  'pitch-deck-creator',
+  'dashboard-creator',
+  'financial-model-creator',
+  'game-3d',
+  'ui-ux-pro-max',
+  'planning-with-files',
+  'human-3-coach',
+  'social-job-publisher',
+  'x-recruiter',
+  'xiaohongshu-recruiter',
+];
+const RELAY_BEGINNER_TASK_LABELS = [
+  'Word文書を作る',
+  'Excelを編集',
+  'PowerPointを作る',
+  '資料を探す',
+];
+const RELAY_WORKSPACE_SEARCH_HIDDEN_TERMS = [
+  'AionUi',
+  'Dedoc',
+  'ParsedDocument',
+  'DocumentContent',
+  'DocumentMetadata',
+  'TreeNode',
+  'LineMetadata',
+  'TableMetadata',
+  'CellWithMeta',
+  'Annotation',
+  'IR',
+  'Evidence Pack',
+  'Query Trace',
+  'parser lineage',
+  'reader capabilities',
+  'structure profile',
+  'pattern set',
+];
+const RELAY_WORKSPACE_SEARCH_SKILLS = [
+  'relay-document-search',
+  'workspace-search',
+  'find-files',
+  'read-office-file',
+  'summarize-with-evidence',
+];
+const RELAY_DOCUMENT_SEARCH_HIGH_LEVEL_TOOL = {
+  name: 'relay_document_search',
+  requestContract: 'RelayDocumentSearchRequest.v1',
+  resultContract: 'RelayDocumentSearchResult.v1',
+  jobContract: 'RelayDocumentSearchJob.v1',
+  contractModule: 'src/process/utils/relayDocumentSearchContract.ts',
+  executorModule: 'src/process/utils/relayDocumentSearchExecutor.ts',
+  queryPlanModule: 'src/process/utils/relayDocumentSearchQueryPlan.ts',
+  queryPlanContract: 'RelayDocumentSearchQueryPlan.v1',
+  queryNormalizerVersion: 'relay-query-normalizer-v1',
+  indexReportModule: 'src/process/utils/relayDocumentSearchIndexReport.ts',
+  indexReportContract: 'RelayDocumentSearchIndexReport.v1',
+  resultGroupingModule: 'src/process/utils/relayDocumentSearchResultGrouping.ts',
+  resultGroupingContract: 'RelayDocumentSearchResultGrouping.v1',
+  productResultModule: 'src/process/utils/relayDocumentSearchProductResult.ts',
+  productResultContract: 'RelayDocumentSearchProductResult.v1',
+  folderRolesModule: 'src/process/utils/relayDocumentSearchFolderRoles.ts',
+  folderRolesContract: 'RelayDocumentSearchFolderRoles.v1',
+  userMemoryModule: 'src/process/utils/relayDocumentSearchUserMemory.ts',
+  userMemoryContract: 'RelayDocumentSearchUserMemory.v1',
+  cacheActionsModule: 'src/process/utils/relayDocumentSearchCacheActions.ts',
+  cacheActionsContract: 'RelayDocumentSearchCacheActions.v1',
+  syncJournalModule: 'src/process/utils/relayDocumentSearchSyncJournal.ts',
+  syncJournalContract: 'RelayDocumentSearchSyncJournal.v1',
+  schedulerReportModule: 'src/process/utils/relayDocumentSearchSchedulerReport.ts',
+  schedulerReportContract: 'RelayDocumentSearchSchedulerReport.v1',
+  backgroundSchedulerModule: 'src/process/utils/relayDocumentSearchBackgroundScheduler.ts',
+  backgroundSchedulerContract: 'RelayDocumentSearchBackgroundScheduler.v1',
+  syncProducerModule: 'src/process/utils/relayDocumentSearchSyncProducer.ts',
+  syncProducerContract: 'RelayDocumentSearchSyncProducer.v1',
+  indexMaintenanceModule: 'src/process/utils/relayDocumentSearchIndexMaintenance.ts',
+  indexMaintenanceContract: 'RelayDocumentSearchIndexMaintenance.v1',
+  qualityModule: 'src/process/utils/relayDocumentSearchQualityGates.ts',
+  qualityContract: 'RelayDocumentSearchQuality.v1',
+  queryTraceModule: 'src/process/utils/relayDocumentSearchQueryTrace.ts',
+  queryTraceContract: 'RelayDocumentSearchQueryTrace.v1',
+  evidenceRedactionModule: 'src/process/utils/relayDocumentSearchEvidenceRedaction.ts',
+  evidenceRedactionContract: 'RelayDocumentSearchEvidenceRedaction.v1',
+  evidencePackModule: 'src/process/utils/relayDocumentSearchEvidencePack.ts',
+  evidencePackContract: 'RelayDocumentSearchEvidencePack.v1',
+  localDraftModule: 'src/process/utils/relayDocumentSearchLocalDraft.ts',
+  localDraftContract: 'RelayDocumentSearchLocalDraft.v1',
+  polishRequestModule: 'src/process/utils/relayDocumentSearchPolishRequest.ts',
+  polishRequestContract: 'RelayDocumentSearchPolishRequest.v1',
+  polishProviderModule: 'src/process/utils/relayDocumentSearchPolishProvider.ts',
+  polishProviderContract: 'RelayDocumentSearchPolishProvider.v1',
+  polishValidationModule: 'src/process/utils/relayDocumentSearchPolishValidation.ts',
+  polishValidationContract: 'RelayDocumentSearchPolishValidation.v1',
+  polishedAnswerContract: 'RelayDocumentSearchPolishedAnswer.v1',
+  answerModule: 'src/process/utils/relayDocumentSearchAnswer.ts',
+  answerContract: 'RelayDocumentSearchAnswer.v1',
+  copilotStateModule: 'src/process/utils/relayDocumentSearchCopilotState.ts',
+  copilotStateContract: 'RelayDocumentSearchCopilotState.v1',
+  freshnessModule: 'src/process/utils/relayDocumentSearchFreshness.ts',
+  freshnessContract: 'RelayDocumentSearchFreshness.v1',
+  metadataCacheModule: 'src/process/utils/relayDocumentSearchMetadataCache.ts',
+  metadataCacheContract: 'RelayDocumentSearchMetadataCache.v1',
+  filenameIndexModule: 'src/process/utils/relayDocumentSearchFilenameIndex.ts',
+  filenameIndexContract: 'RelayDocumentSearchFilenameIndex.v1',
+  indexCoordinatorModule: 'src/process/utils/relayDocumentSearchIndexCoordinator.ts',
+  indexCoordinatorContract: 'RelayDocumentSearchIndexCoordinator.v1',
+  indexLockContract: 'RelayDocumentSearchIndexLock.v1',
+  indexHealthEventContract: 'RelayDocumentSearchIndexHealthEvent.v1',
+  parsedDocumentCacheModule: 'src/process/utils/relayParsedDocumentCache.ts',
+  parsedDocumentCacheContract: 'RelayParsedDocumentCache.v1',
+  parsedDocumentIrModule: 'src/process/utils/relayParsedDocumentIr.ts',
+  parsedDocumentIrContract: 'RelayParsedDocumentIR.v1',
+  parsedDocumentIrVersion: 'relay-ir-v1',
+  officeOpenXmlReaderVersion: 'relay-office-openxml-reader-v1',
+  derivedContentIndexModule: 'src/process/utils/relayDocumentSearchDerivedContentIndex.ts',
+  derivedContentIndexContract: 'RelayDocumentSearchDerivedContentIndex.v1',
+  previewAnchorContract: 'RelayDocumentSearchPreviewAnchor.v1',
+  jobLifecycleModule: 'src/process/utils/relayDocumentSearchJobLifecycle.ts',
+  jobLifecycleContract: 'RelayDocumentSearchJobLifecycle.v1',
+  jobLifecycleRunnerExport: 'runRelayDocumentSearchJob',
+  jobStoreModule: 'src/process/utils/relayDocumentSearchJobStore.ts',
+  jobStoreContract: 'RelayDocumentSearchJobStore.v1',
+  bridgeModule: 'src/process/utils/relayDocumentSearchBridge.ts',
+  displayModule: 'src/process/utils/relayDocumentSearchDisplay.ts',
+  displayContract: 'RelayDocumentSearchDisplay.v1',
+  resultFlowContract: 'RelayDocumentSearchResultFlow.v1',
+  aionuiResultFlowContract: 'RelayDocumentSearchAionUiResultFlow.v1',
+  displayAdapterExport: 'relayDocumentSearchResultToDisplayModel',
+  aionuiResultFlowExport: 'relayDocumentSearchExecutionToAionUiResultFlow',
+  mcpServerModule: 'src/process/utils/relayDocumentSearchMcpStdio.ts',
+  mcpServerOutfile: 'out/main/relay-document-search-mcp-stdio.js',
+  openAiToolSchemaExport: 'relayDocumentSearchOpenAiToolSchema',
+  bridgeToolDefinitionExport: 'relayDocumentSearchBridgeToolDefinition',
+  bridgeHandlerExport: 'handleRelayDocumentSearchToolCall',
+  resultFlowPolicy: {
+    rendererOwner: 'AionUi',
+    structuredResultCardsPrimary: true,
+    copilotProseSecondary: true,
+    continuationAction: 'show-more-results',
+    stableSelectionKeyField: 'ui_state.stableSelectionKey',
+  },
+  approvedAliases: [
+    'relay_document_search',
+    'relay-document-search',
+    'workspace_document_search',
+    'workspace-search',
+    'find-files',
+  ],
+};
+const RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS = [
+  'guid-page-assistant-selection',
+  'guid-page-input-card',
+  'guid-page-workspace-folder-select',
+  'conversation-preset-assistant-menu',
+  'sendbox-slash-command-menu',
+  'sendbox-at-file-mentions',
+  'workspace-toolbar-search',
+];
+const RELAY_AIONUI_UX_REUSED_SURFACES = [
+  'GuidPage',
+  'AssistantSelectionArea',
+  'GuidInputCard',
+  'GuidActionRow',
+  'ConversationTabs',
+  'SendBox',
+  'AtFileMenu',
+  'SlashCommandMenu',
+  'Workspace',
+  'PreviewPanel',
+  'ConversationSkillsIndicator',
+];
+const RELAY_GUID_BEGINNER_FLOW_STEPS = [
+  'choose-curated-task',
+  'select-folder-or-use-recent-workspace',
+  'use-example-prompt-or-type-request',
+  'start-conversation',
+  'review-chat-results',
+  'open-preview-or-refine',
+];
+const RELAY_GUID_REQUIRED_CONTROLS = [
+  'AssistantSelectionArea',
+  'GuidInputCard',
+  'GuidActionRow',
+  'WorkspaceFolderSelect',
+  'QuickActionButtons',
+];
+const RELAY_GUID_START_ACTION = {
+  owner: 'aionui',
+  trigger: 'normal-send-flow',
+  controls: ['GuidInputCard submit', 'GuidActionRow send', 'SendBox send'],
+  noStandaloneSearchStartButton: true,
+};
+const RELAY_GUID_EXAMPLE_PROMPTS = [
+  'このフォルダからキャッシュフロー計算書に関係するファイルを探して',
+  'このPDFを根拠つきで要約して',
+  'このExcelファイルの指定セルを編集して',
+  'このフォルダの最新の報告書を探して',
+  'この資料を開いて要点と根拠ページをまとめて',
+];
+const RELAY_SEARCH_STATE_LABELS = [
+  'フォルダ未選択',
+  '準備中',
+  '候補を表示中',
+  'ファイルの中身まで確認中',
+  '確認済みの結果',
+  '結果なし',
+  '一部のみ検索',
+  '権限なし',
+  '失敗',
+];
+const RELAY_SEARCH_RESULT_CARD_FIELDS = [
+  'fileType',
+  'title',
+  'path',
+  'modifiedTime',
+  'snippet',
+  'matchReason',
+  'matchMode',
+  'evidenceState',
+  'indexState',
+  'warningState',
+];
+const RELAY_SEARCH_RESULT_CARD_ACTIONS = [
+  'preview',
+  'open-containing-folder',
+  'open-file',
+  'copy-path',
+  'pin-result',
+  'hide-result',
+  'use-as-evidence',
+  'refine-search',
+  'show-more-results',
+  'retry-rebuild',
+];
+const RELAY_SEARCH_RESULT_BATCHING = {
+  strategy: 'capped-batches',
+  initialBatchSize: 20,
+  continuationAction: 'show-more-results',
+  preserveSelectionAcrossRefresh: true,
+  stableSelectionKeyField: 'ui_state.stableSelectionKey',
+  resultFlowContract: 'RelayDocumentSearchResultFlow.v1',
+  copilotProse: 'secondary',
+};
+const RELAY_QUERY_PLANNING = {
+  owner: 'relay',
+  copilotRole: 'suggestions-only',
+  acceptedSuggestionTypes: [
+    'related-terms',
+    'abbreviations',
+    'file-type-hints',
+    'clarification-questions',
+  ],
+  immutableWithoutRelayValidation: [
+    'roots',
+    'budgets',
+    'confirmation-policy',
+    'coverage-reporting',
+  ],
+};
+const RELAY_SEARCH_EMPTY_STATE_ACTIONS = [
+  'select-or-change-folder',
+  'broaden-keywords',
+  'try-related-terms',
+  'clear-extension-filters',
+  'show-index-status',
+];
+const RELAY_BEGINNER_VISIBLE_SETTINGS_TABS = [
+  'about',
+];
+const RELAY_BEGINNER_HIDDEN_SETTINGS_TABS = [
+  'gemini',
+  'model',
+  'agent',
+  'tools',
+  'webui',
+  'system',
+  'extension-settings',
+];
+const RELAY_BEGINNER_HIDDEN_SURFACES = [
+  'skills-market-banner',
+  'full-assistant-gallery',
+  'provider-onboarding',
+  'model-provider-settings',
+  'agent-management',
+  'tools-settings',
+  'system-dev-settings',
+  'remote-webui-settings',
+  'channel-bot-settings',
+  'extension-settings-tabs',
+  'model-switcher',
+  'agent-permission-mode-switcher',
+  'acp-config-selector',
+  'guid-auto-skills-menu',
+  'assistant-preset-add-button',
+  'guid-detected-agent-selector',
+  'preset-assistant-edit-button',
+  'preset-agent-backend-switcher',
+  'assistant-edit-drawer-entrypoint',
+];
+const RELAY_SHARED_SEARCH_DEFAULTS = {
+  RELAY_SHARED_SEARCH_INTERNAL_FILE_LIMIT: '5000',
+  RELAY_SHARED_SEARCH_MAX_RETURNED_FILES: '300',
+  RELAY_SHARED_SEARCH_PER_FOLDER_LIMIT: '25',
+  RELAY_SHARED_SEARCH_PER_BRANCH_LIMIT: '75',
+  RELAY_SHARED_SEARCH_BRANCH_DEPTH: '3',
+  RELAY_SHARED_SEARCH_NAMES_ONLY_MAX_MATCHES: '500',
+  RELAY_SHARED_SEARCH_MAX_MATCHES_PER_FILE: '1',
+};
 const GATEWAY_FILES = [
   'copilot_server.js',
   'copilot_server.mjs',
@@ -67,6 +446,8 @@ const GATEWAY_FILES = [
 
 type RelayGatewayStartupState = 'ready' | 'needs_attention' | 'disabled';
 type OfficeCliStatusState = 'ready-env' | 'ready-reused' | 'ready-downloaded' | 'skipped' | 'needs_attention';
+type RipgrepStatusState = 'ready-env' | 'ready-copied' | 'ready-reused' | 'skipped' | 'needs_attention';
+type PdfReaderStatusState = 'ready-env' | 'ready-bundled' | 'skipped' | 'needs_attention';
 
 type OfficeCliStatus = {
   state: OfficeCliStatusState;
@@ -75,6 +456,27 @@ type OfficeCliStatus = {
   message?: string;
   sha256?: string;
   size?: number;
+};
+
+type RipgrepStatus = {
+  state: RipgrepStatusState;
+  path: string;
+  source?: string;
+  reason?: string;
+  message?: string;
+};
+
+type PdfReaderStatus = {
+  state: PdfReaderStatusState;
+  nodePath?: string;
+  runnerRoot?: string;
+  reason?: string;
+  message?: string;
+};
+
+type SharedSearchStatus = {
+  state: 'ready';
+  defaults: Record<string, string>;
 };
 
 export type RelayGatewayStartupResult = {
@@ -115,6 +517,19 @@ function officeCliCacheRoot(): string {
 
 function officeCliCachedPath(): string {
   return join(officeCliCacheRoot(), RELAY_OFFICECLI_VERSION, RELAY_OFFICECLI_ENTRYPOINT);
+}
+
+function ripgrepExecutableName(): string {
+  return process.platform === 'win32' ? 'rg.exe' : 'rg';
+}
+
+function aionCliGlobalBinDir(): string {
+  const home = process.env.GEMINI_CLI_HOME?.trim() || homedir() || app.getPath('home');
+  return join(home || app.getPath('userData'), '.gemini', 'tmp', 'bin');
+}
+
+function aionCliRipgrepPath(): string {
+  return join(aionCliGlobalBinDir(), ripgrepExecutableName());
 }
 
 function sha256Buffer(buffer: Buffer): string {
@@ -163,6 +578,175 @@ function registerOfficeCliPath(path: string): void {
   process.env[RELAY_OFFICECLI_PATH_ENV] = path;
   process.env[RELAY_OFFICECLI_EXPECTED_PATH_ENV] = path;
   prependProcessPath(dirname(path));
+}
+
+function registerRipgrepPath(path: string): void {
+  process.env[RELAY_RIPGREP_PATH_ENV] = path;
+  process.env[RELAY_BUNDLED_RIPGREP_PATH_ENV] = path;
+  prependProcessPath(dirname(path));
+}
+
+function applySharedSearchDefaults(): SharedSearchStatus {
+  for (const [key, value] of Object.entries(RELAY_SHARED_SEARCH_DEFAULTS)) {
+    process.env[key] ||= value;
+  }
+  return {
+    state: 'ready',
+    defaults: Object.fromEntries(
+      Object.keys(RELAY_SHARED_SEARCH_DEFAULTS).map((key) => [
+        key,
+        process.env[key] || RELAY_SHARED_SEARCH_DEFAULTS[key as keyof typeof RELAY_SHARED_SEARCH_DEFAULTS],
+      ]),
+    ),
+  };
+}
+
+function bundledRipgrepCandidates(): string[] {
+  const resourcesPath = process.resourcesPath || '';
+  const appPath = app.getAppPath();
+  const executable = ripgrepExecutableName();
+  return [
+    process.env[RELAY_RIPGREP_PATH_ENV] || '',
+    process.env[RELAY_BUNDLED_RIPGREP_PATH_ENV] || '',
+    resourcesPath ? join(resourcesPath, 'relay-tools', 'ripgrep', executable) : '',
+    appPath ? join(dirname(appPath), 'relay-tools', 'ripgrep', executable) : '',
+    appPath ? join(appPath, 'resources', 'relay-tools', 'ripgrep', executable) : '',
+    join(process.cwd(), 'resources', 'relay-tools', 'ripgrep', executable),
+  ].filter(Boolean);
+}
+
+function resolveBundledRipgrepPath(): string | null {
+  for (const candidate of bundledRipgrepCandidates()) {
+    const candidatePath = resolve(candidate);
+    if (existsSync(candidatePath)) return candidatePath;
+  }
+  return null;
+}
+
+function bundledNodeExecutableName(): string {
+  return process.platform === 'win32' ? 'relay-node.exe' : 'relay-node';
+}
+
+function bundledRelayToolCandidates(...parts: string[]): string[] {
+  const resourcesPath = process.resourcesPath || '';
+  const appPath = app.getAppPath();
+  return [
+    resourcesPath ? join(resourcesPath, 'relay-tools', ...parts) : '',
+    appPath ? join(dirname(appPath), 'relay-tools', ...parts) : '',
+    appPath ? join(appPath, 'resources', 'relay-tools', ...parts) : '',
+    join(process.cwd(), 'resources', 'relay-tools', ...parts),
+  ].filter(Boolean);
+}
+
+function resolveBundledNodePath(): string | null {
+  const explicit = process.env[RELAY_BUNDLED_NODE_ENV]?.trim();
+  const candidates = [
+    explicit || '',
+    ...bundledRelayToolCandidates('node', bundledNodeExecutableName()),
+  ];
+  for (const candidate of candidates) {
+    const candidatePath = resolve(candidate);
+    if (existsSync(candidatePath)) return candidatePath;
+  }
+  return null;
+}
+
+function resolveBundledLiteparseRunnerRoot(): string | null {
+  const explicit = process.env[RELAY_LITEPARSE_RUNNER_ROOT_ENV]?.trim();
+  const candidates = [
+    explicit || '',
+    ...bundledRelayToolCandidates('liteparse-runner'),
+  ];
+  for (const candidate of candidates) {
+    const candidatePath = resolve(candidate);
+    if (existsSync(join(candidatePath, 'parse.mjs'))) return candidatePath;
+  }
+  return null;
+}
+
+function registerPdfReader(nodePath: string, runnerRoot: string): void {
+  process.env[RELAY_BUNDLED_NODE_ENV] = nodePath;
+  process.env[RELAY_LITEPARSE_RUNNER_ROOT_ENV] = runnerRoot;
+}
+
+function preparePdfReader(): PdfReaderStatus {
+  if (process.env.RELAY_SKIP_LITEPARSE_BOOTSTRAP === '1') {
+    return {
+      state: 'skipped',
+      reason: 'disabled',
+    };
+  }
+  const explicitNode = process.env[RELAY_BUNDLED_NODE_ENV]?.trim();
+  const explicitRunner = process.env[RELAY_LITEPARSE_RUNNER_ROOT_ENV]?.trim();
+  if (explicitNode && explicitRunner && existsSync(explicitNode) && existsSync(join(explicitRunner, 'parse.mjs'))) {
+    registerPdfReader(resolve(explicitNode), resolve(explicitRunner));
+    return {
+      state: 'ready-env',
+      nodePath: resolve(explicitNode),
+      runnerRoot: resolve(explicitRunner),
+    };
+  }
+
+  const nodePath = resolveBundledNodePath();
+  const runnerRoot = resolveBundledLiteparseRunnerRoot();
+  if (!nodePath || !runnerRoot) {
+    return {
+      state: 'needs_attention',
+      nodePath: nodePath ?? undefined,
+      runnerRoot: runnerRoot ?? undefined,
+      message: 'Bundled Node or LiteParse runner was not found; PDF text evidence will remain filename-only.',
+    };
+  }
+  registerPdfReader(nodePath, runnerRoot);
+  return {
+    state: 'ready-bundled',
+    nodePath,
+    runnerRoot,
+  };
+}
+
+function prepareRipgrep(): RipgrepStatus {
+  const targetPath = aionCliRipgrepPath();
+  if (process.env.RELAY_SKIP_RIPGREP_BOOTSTRAP === '1') {
+    return {
+      state: 'skipped',
+      path: targetPath,
+      reason: 'disabled',
+    };
+  }
+
+  const bundledPath = resolveBundledRipgrepPath();
+  if (!bundledPath) {
+    if (existsSync(targetPath)) {
+      registerRipgrepPath(targetPath);
+      return {
+        state: 'ready-reused',
+        path: targetPath,
+        reason: 'existing-aioncli-cache',
+      };
+    }
+    return {
+      state: 'needs_attention',
+      path: targetPath,
+      message: 'Bundled ripgrep was not found; AionUi may fall back to downloading rg or slower grep search.',
+    };
+  }
+
+  mkdirSync(dirname(targetPath), { recursive: true });
+  if (resolve(bundledPath) !== resolve(targetPath)) {
+    copyFileSync(bundledPath, targetPath);
+  }
+  try {
+    chmodSync(targetPath, 0o755);
+  } catch {
+    // Best effort on Windows.
+  }
+  registerRipgrepPath(targetPath);
+  return {
+    state: resolve(bundledPath) === resolve(targetPath) ? 'ready-env' : 'ready-copied',
+    path: targetPath,
+    source: bundledPath,
+  };
 }
 
 async function downloadOfficeCliArtifact(outputPath: string): Promise<OfficeCliStatus> {
@@ -323,6 +907,9 @@ function relayReadyStatus({
   cdpPort,
   gatewayDir,
   officeCli,
+  ripgrep,
+  pdfReader,
+  sharedSearch,
   prewarm,
 }: {
   baseUrl: string;
@@ -330,6 +917,9 @@ function relayReadyStatus({
   cdpPort: number;
   gatewayDir: string;
   officeCli?: OfficeCliStatus;
+  ripgrep?: RipgrepStatus;
+  pdfReader?: PdfReaderStatus;
+  sharedSearch?: SharedSearchStatus;
   prewarm?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
@@ -339,6 +929,9 @@ function relayReadyStatus({
     cdpPort,
     gatewayDir,
     ...(officeCli ? { officeCli } : {}),
+    ...(ripgrep ? { ripgrep } : {}),
+    ...(pdfReader ? { pdfReader } : {}),
+    ...(sharedSearch ? { sharedSearch } : {}),
     ...(prewarm ? { prewarm } : {}),
   };
 }
@@ -377,8 +970,20 @@ function relayProviderConfig(baseUrl: string, apiKey: string): Record<string, un
   };
 }
 
+function relayAssistantCatalog(): Record<string, unknown> {
+  return {
+    mode: 'curated',
+    visiblePresetIds: [...RELAY_VISIBLE_ASSISTANT_PRESET_IDS],
+    hiddenPresetIds: [...RELAY_HIDDEN_ASSISTANT_PRESET_IDS],
+    hideUnlistedBuiltinPresets: true,
+    beginnerTaskLabels: [...RELAY_BEGINNER_TASK_LABELS],
+    advancedAccess: 'advanced-only',
+  };
+}
+
 function relaySeedBundle(baseUrl: string, apiKey: string): Record<string, unknown> {
   const provider = relayProviderConfig(baseUrl, apiKey);
+  const assistantCatalog = relayAssistantCatalog();
   const defaults = {
     'model.config': [provider],
     'aionrs.defaultModel': relayDefaultModel(),
@@ -389,10 +994,64 @@ function relaySeedBundle(baseUrl: string, apiKey: string): Record<string, unknow
     'relay.channels.enabled': false,
     'relay.providerOnboarding.enabled': false,
     'relay.remoteAccess.enabled': false,
+    'relay.workspaceSearch.enabled': true,
+    'relay.workspaceSearch.surface': 'aionui',
+    'relay.workspaceSearch.integrationMode': 'skills-first',
+    'relay.workspaceSearch.rendererPolicy': 'lightweight-aionui-result-renderers',
+    'relay.workspaceSearch.defaultSkillEntrypoints': [...RELAY_WORKSPACE_SEARCH_SKILLS],
+    'relay.workspaceSearch.highLevelTool': { ...RELAY_DOCUMENT_SEARCH_HIGH_LEVEL_TOOL },
+    'relay.workspaceSearch.legacyDiagnosticShell': false,
+    'relay.workspaceSearch.hiddenBeginnerTerms': [...RELAY_WORKSPACE_SEARCH_HIDDEN_TERMS],
+    'relay.aionuiUx.integrationMode': 'reuse-core-conversation-workspace-preview',
+    'relay.aionuiUx.primaryEntrypoint': 'guid-page-task-launcher',
+    'relay.aionuiUx.searchEntrypoints': [...RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS],
+    'relay.aionuiUx.reusedSurfaces': [...RELAY_AIONUI_UX_REUSED_SURFACES],
+    'relay.aionuiUx.resultPlacement': 'chat-message-plus-preview-panel',
+    'relay.aionuiUx.noNewSearchShell': true,
+    'relay.aionuiUx.noFullAssistantGalleryDefault': true,
+    'relay.guidUx.mode': 'curated-task-launcher',
+    'relay.guidUx.primarySurface': 'GuidPage',
+    'relay.guidUx.beginnerFlowSteps': [...RELAY_GUID_BEGINNER_FLOW_STEPS],
+    'relay.guidUx.requiredControls': [...RELAY_GUID_REQUIRED_CONTROLS],
+    'relay.guidUx.defaultTaskEntries': [...RELAY_BEGINNER_TASK_LABELS],
+    'relay.guidUx.primaryCta': 'aionui-normal-send-flow',
+    'relay.guidUx.startAction': { ...RELAY_GUID_START_ACTION },
+    'relay.guidUx.noStandaloneSearchStartButton': true,
+    'relay.guidUx.examplePromptStrategy': 'task-aware-recent-and-popular',
+    'relay.guidUx.examplePrompts': [...RELAY_GUID_EXAMPLE_PROMPTS],
+    'relay.guidUx.allowSkipTutorial': true,
+    'relay.guidUx.noForcedTour': true,
+    'relay.searchUx.stateLabels': [...RELAY_SEARCH_STATE_LABELS],
+    'relay.searchUx.noResultsGuidance': true,
+    'relay.searchUx.resultCardFields': [...RELAY_SEARCH_RESULT_CARD_FIELDS],
+    'relay.searchUx.resultCardActions': [...RELAY_SEARCH_RESULT_CARD_ACTIONS],
+    'relay.searchUx.resultBatching': { ...RELAY_SEARCH_RESULT_BATCHING },
+    'relay.searchUx.emptyStateActions': [...RELAY_SEARCH_EMPTY_STATE_ACTIONS],
+    'relay.searchUx.defaultSearchMode': 'thorough',
+    'relay.searchUx.quickCandidateMode': 'progress-only',
+    'relay.searchUx.confirmedResultRequirement': 'content-or-evidence-backed',
+    'relay.searchUx.queryPlanning': { ...RELAY_QUERY_PLANNING },
+    'relay.searchUx.autocomplete': 'debounced-suggestions',
+    'relay.searchUx.progressiveDisclosure': 'status-chip-to-details-drawer',
+    'relay.searchUx.answerBoundary': 'candidate-until-evidence-backed',
+    'relay.beginnerUx.visibleSettingsTabs': [...RELAY_BEGINNER_VISIBLE_SETTINGS_TABS],
+    'relay.beginnerUx.hiddenSettingsTabs': [...RELAY_BEGINNER_HIDDEN_SETTINGS_TABS],
+    'relay.beginnerUx.hiddenSurfaces': [...RELAY_BEGINNER_HIDDEN_SURFACES],
+    'relay.beginnerUx.hideSkillsMarketBanner': true,
+    'relay.beginnerUx.hideModelAndModeSwitchers': true,
+    'relay.beginnerUx.hideExtensionSettings': true,
+    'relay.beginnerUx.advancedSurfacesGate': 'relay.advancedSurfaces.enabled',
     'skillsMarket.enabled': false,
     'system.autoPreviewOfficeFiles': true,
+    'tools.useRipgrep': true,
     'relay.defaultEnabledSkills': [...RELAY_DEFAULT_SKILLS],
     'relay.defaultAssistantPresetIds': RELAY_DEFAULT_ASSISTANTS.map((assistant) => assistant.id),
+    'relay.assistantCatalog.mode': assistantCatalog.mode,
+    'relay.assistantCatalog.visiblePresetIds': assistantCatalog.visiblePresetIds,
+    'relay.assistantCatalog.hiddenPresetIds': assistantCatalog.hiddenPresetIds,
+    'relay.assistantCatalog.hideUnlistedBuiltinPresets': assistantCatalog.hideUnlistedBuiltinPresets,
+    'relay.assistantCatalog.beginnerTaskLabels': assistantCatalog.beginnerTaskLabels,
+    'relay.assistantCatalog.advancedAccess': assistantCatalog.advancedAccess,
   };
 
   return {
@@ -408,10 +1067,53 @@ function relaySeedBundle(baseUrl: string, apiKey: string): Record<string, unknow
     },
     skills: {
       enabledByDefault: [...RELAY_DEFAULT_SKILLS],
-      assistantPresets: RELAY_DEFAULT_ASSISTANTS.map((assistant) => ({
-        id: assistant.id,
-        defaultEnabledSkills: [...assistant.defaultEnabledSkills],
-      })),
+      assistantPresets: RELAY_DEFAULT_ASSISTANTS.map((assistant) => {
+        const preset: Record<string, unknown> = {
+          id: assistant.id,
+          defaultEnabledSkills: [...assistant.defaultEnabledSkills],
+        };
+        if ('assistant' in assistant && assistant.assistant) {
+          preset.assistant = {
+            ...assistant.assistant,
+            enabledSkills: [...assistant.defaultEnabledSkills],
+          };
+        }
+        return preset;
+      }),
+      assistantCatalog,
+    },
+    ux: {
+      aionUiCore: {
+        primaryEntrypoint: 'guid-page-task-launcher',
+        searchEntrypoints: [...RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS],
+        reusedSurfaces: [...RELAY_AIONUI_UX_REUSED_SURFACES],
+      },
+      guidBeginnerFlow: {
+        mode: 'curated-task-launcher',
+        primarySurface: 'GuidPage',
+        flowSteps: [...RELAY_GUID_BEGINNER_FLOW_STEPS],
+        requiredControls: [...RELAY_GUID_REQUIRED_CONTROLS],
+        primaryCta: 'aionui-normal-send-flow',
+        startAction: { ...RELAY_GUID_START_ACTION },
+        examplePrompts: [...RELAY_GUID_EXAMPLE_PROMPTS],
+      },
+      search: {
+        states: [...RELAY_SEARCH_STATE_LABELS],
+        resultCardFields: [...RELAY_SEARCH_RESULT_CARD_FIELDS],
+        resultCardActions: [...RELAY_SEARCH_RESULT_CARD_ACTIONS],
+        resultBatching: { ...RELAY_SEARCH_RESULT_BATCHING },
+        emptyStateActions: [...RELAY_SEARCH_EMPTY_STATE_ACTIONS],
+        defaultSearchMode: 'thorough',
+        quickCandidateMode: 'progress-only',
+        confirmedResultRequirement: 'content-or-evidence-backed',
+        queryPlanning: { ...RELAY_QUERY_PLANNING },
+      },
+      beginnerVisibility: {
+        visibleSettingsTabs: [...RELAY_BEGINNER_VISIBLE_SETTINGS_TABS],
+        hiddenSettingsTabs: [...RELAY_BEGINNER_HIDDEN_SETTINGS_TABS],
+        hiddenSurfaces: [...RELAY_BEGINNER_HIDDEN_SURFACES],
+        advancedSurfacesGate: 'relay.advancedSurfaces.enabled',
+      },
     },
   };
 }
@@ -539,6 +1241,9 @@ function startRelayGatewayPrewarm({
   gatewayDir,
   token,
   officeCli,
+  ripgrep,
+  pdfReader,
+  sharedSearch,
 }: {
   baseUrl: string;
   seedFile: string;
@@ -546,6 +1251,9 @@ function startRelayGatewayPrewarm({
   gatewayDir: string;
   token: string;
   officeCli?: OfficeCliStatus;
+  ripgrep?: RipgrepStatus;
+  pdfReader?: PdfReaderStatus;
+  sharedSearch?: SharedSearchStatus;
 }): void {
   if (relayGatewayPrewarmStarted) return;
   relayGatewayPrewarmStarted = true;
@@ -557,6 +1265,9 @@ function startRelayGatewayPrewarm({
         cdpPort,
         gatewayDir,
         officeCli,
+        ripgrep,
+        pdfReader,
+        sharedSearch,
         prewarm: { state: 'disabled', message: 'Copilot background prewarm disabled by environment.' },
       }),
     );
@@ -570,6 +1281,9 @@ function startRelayGatewayPrewarm({
       cdpPort,
       gatewayDir,
       officeCli,
+      ripgrep,
+      pdfReader,
+      sharedSearch,
       prewarm: { state: 'starting', message: 'Opening Microsoft 365 Copilot in the background.' },
     }),
   );
@@ -597,6 +1311,9 @@ function startRelayGatewayPrewarm({
           cdpPort,
           gatewayDir,
           officeCli,
+          ripgrep,
+          pdfReader,
+          sharedSearch,
           prewarm: {
             state: loginRequired ? 'needs_sign_in' : prewarmed ? 'ready' : connected ? 'page_ready' : 'needs_attention',
             message,
@@ -618,6 +1335,9 @@ function startRelayGatewayPrewarm({
           cdpPort,
           gatewayDir,
           officeCli,
+          ripgrep,
+          pdfReader,
+          sharedSearch,
           prewarm: {
             state: 'needs_attention',
             message,
@@ -656,8 +1376,43 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
   }
 
   let officeCli: OfficeCliStatus | undefined;
+  let ripgrep: RipgrepStatus | undefined;
+  let pdfReader: PdfReaderStatus | undefined;
+  const sharedSearch = applySharedSearchDefaults();
   try {
-    writeStatus({ state: 'starting', message: 'Preparing OfficeCLI for Office file tools.', gatewayDir });
+    writeStatus({ state: 'starting', message: 'Preparing bundled ripgrep for fast shared-folder search.', gatewayDir, sharedSearch });
+    ripgrep = prepareRipgrep();
+    appendGatewayLog(
+      `[RelayGateway] ripgrep ${ripgrep.state}: ${ripgrep.path}${ripgrep.reason ? ` (${ripgrep.reason})` : ''}\n`,
+    );
+    appendGatewayLog(`[RelayGateway] shared search defaults: ${JSON.stringify(sharedSearch.defaults)}\n`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ripgrep = {
+      state: 'needs_attention',
+      path: aionCliRipgrepPath(),
+      message,
+    };
+    appendGatewayLog(`[RelayGateway] ripgrep bootstrap failed: ${message}\n`);
+  }
+
+  try {
+    writeStatus({ state: 'starting', message: 'Preparing LiteParse PDF reader for document search.', gatewayDir, ripgrep, sharedSearch });
+    pdfReader = preparePdfReader();
+    appendGatewayLog(
+      `[RelayGateway] PDF reader ${pdfReader.state}: node=${pdfReader.nodePath ?? 'none'} runner=${pdfReader.runnerRoot ?? 'none'}${pdfReader.reason ? ` (${pdfReader.reason})` : ''}\n`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    pdfReader = {
+      state: 'needs_attention',
+      message,
+    };
+    appendGatewayLog(`[RelayGateway] PDF reader bootstrap failed: ${message}\n`);
+  }
+
+  try {
+    writeStatus({ state: 'starting', message: 'Preparing OfficeCLI for Office file tools.', gatewayDir, ripgrep, pdfReader, sharedSearch });
     officeCli = await prepareOfficeCli();
     appendGatewayLog(`[RelayGateway] OfficeCLI ${officeCli.state}: ${officeCli.path}${officeCli.reason ? ` (${officeCli.reason})` : ''}\n`);
   } catch (error) {
@@ -669,7 +1424,7 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
     };
     appendGatewayLog(`[RelayGateway] OfficeCLI bootstrap failed: ${message}\n`);
   }
-  writeStatus({ state: 'starting', message: 'Starting Relay local M365 Copilot gateway.', gatewayDir, officeCli });
+  writeStatus({ state: 'starting', message: 'Starting Relay local M365 Copilot gateway.', gatewayDir, officeCli, ripgrep, pdfReader, sharedSearch });
 
   const token = readOrCreateToken();
   const cdpPort = intEnv('RELAY_EDGE_CDP_PORT', DEFAULT_RELAY_EDGE_CDP_PORT);
@@ -725,8 +1480,8 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
       seedFile,
       statusFile,
     };
-    writeStatus(relayReadyStatus({ baseUrl, seedFile, cdpPort, gatewayDir, officeCli }));
-    startRelayGatewayPrewarm({ baseUrl, seedFile, cdpPort, gatewayDir, token, officeCli });
+    writeStatus(relayReadyStatus({ baseUrl, seedFile, cdpPort, gatewayDir, officeCli, ripgrep, pdfReader, sharedSearch }));
+    startRelayGatewayPrewarm({ baseUrl, seedFile, cdpPort, gatewayDir, token, officeCli, ripgrep, pdfReader, sharedSearch });
     return relayGatewayResult;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -736,7 +1491,7 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
       statusFile,
       message,
     };
-    writeStatus({ state: 'needs_attention', message, gatewayDir, officeCli });
+    writeStatus({ state: 'needs_attention', message, gatewayDir, officeCli, ripgrep, pdfReader, sharedSearch });
     return relayGatewayResult;
   }
 }

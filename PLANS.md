@@ -68,8 +68,35 @@ Detailed plan: `docs/AIONUI_RELAY_MIGRATION.md`.
 Implications:
 
 - Relay-branded AionUi owns the first-run product UX.
+- The first-run product UX starts from AionUi's Relay-branded `/guid` task
+  launcher, not a standalone Relay search page. Beginners choose a curated task,
+  select a folder when needed, use an example or typed prompt, then continue in
+  AionUi's normal conversation/workspace/preview flow.
 - Relay seeds the M365 Copilot provider automatically.
 - Relay manages portable OfficeCLI without admin approval.
+- Workspace Document Search must show recoverable beginner states such as
+  `フォルダ未選択`, `候補を表示中`, `ファイルの中身まで確認中`,
+  `確認済みの結果`, `結果なし`, `一部のみ検索`, `権限なし`, and
+  `失敗`; advanced Dedoc/Docufinder terms stay in support details.
+- The `/guid` input is the primary search/task CTA. It should show task-aware
+  example prompts and recent/popular suggestions before exposing advanced
+  assistant controls.
+- Beginner-facing AionUi chrome must hide setup/platform surfaces that do not
+  help the first task: provider/model settings, Gemini setup, agent management,
+  tools/system/dev settings, WebUI/channel setup, extension settings, Skills
+  Market, model switchers, ACP config selectors, permission-mode controls,
+  detected-agent selectors, preset assistant edit controls, preset backend
+  switchers, and assistant-management entrypoints. Support can re-enable them
+  through `relay.advancedSurfaces.enabled`.
+- Search results must render as actionable cards with title, path, match
+  reason, index/warning state, preview/open/copy/refine actions, and careful
+  wording that distinguishes candidates from evidence-backed findings.
+- Result cards should follow the Docufinder-style content-first pattern:
+  first batch capped, `さらに表示` for continuation, stable selection across
+  refresh, and AI prose secondary to title/path/snippet/status/actions.
+- Default broad search is `しっかり検索`: early filename hits are displayed as
+  progress/candidates, while final answer text waits for content-backed or
+  evidence-backed confirmation or explicitly reports incomplete coverage.
 - OpenWork remains removed.
 - OpenCode Web is demoted to optional future backend capacity.
 - Do not add new production features to the Relay-owned Rust execution runtime.
@@ -402,6 +429,103 @@ entrypoint, confirms `pnpm dev` is bootstrap-first, confirms desktop
 `tauri:dev` has not returned as a primary script, and runs the Rust bootstrap
 preflight. The live Windows/M365 acceptance run remains pending on a clean
 Windows host.
+
+Status 2026-05-11: readiness-only preflight rerun passed on Linux with
+`RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0`. The report confirmed
+`pnpm dev` still points to `bootstrap:openwork-opencode:auto`, desktop
+`tauri:dev` remains absent as a primary script, the provider handoff is
+`http://127.0.0.1:18180/v1` / `relay-agent/m365-copilot`, and the pinned
+OpenCode Windows x64 artifact is version `1.14.25` with SHA256
+`8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`.
+The explicit artifact verification path was also run from Linux with
+`RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD=1` and reported `download_verified` for
+the cached Windows x64 OpenCode CLI zip with matching size and SHA256.
+Follow-up M365 live acceptance also passed on Linux with
+`pnpm live:m365:opencode-provider`: the provider text turn returned
+`OPEN_CODE_M365_PROVIDER_OK`, and the OpenCode-owned `read` tool turn completed
+and returned `OPEN_CODE_M365_TOOL_OK` with artifacts at
+`/tmp/relay-live-m365-opencode-provider-LVhfPR`. The local headless bootstrap,
+provider-gateway bootstrap, and auto-bootstrap smokes also passed. The Windows
+installer/browser handoff remains pending on a clean Windows host.
+
+Status 2026-05-12: the Linux-accessible B12 gates were rerun. Readiness-only
+preflight again passed with `status: ready_for_explicit_download`, and explicit
+Windows x64 OpenCode artifact verification again reported
+`status: download_verified` for the cached `1.14.25` zip with SHA256
+`8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`.
+The headless, provider-gateway, and auto-bootstrap smokes passed. The first
+M365 live provider run passed the text turn but failed the read-tool turn
+because Copilot did not return structured `tool_calls` after repair; a single
+retry passed both the provider text turn and OpenCode-owned `read` tool turn
+with artifacts at `/tmp/relay-live-m365-opencode-provider-YDGjaV`. B12 remains
+pending only for the clean-Windows installer/browser handoff.
+
+## New Task List: AionUi Release Acceptance And Windows Sign-off
+
+Goal: move the completed WDS/AionUi contract work into a releasable
+Relay-branded AionUi Windows acceptance bundle while keeping the remaining B12
+clean-Windows bootstrap handoff as an explicit gate.
+
+Status 2026-05-12: created in `.taskmaster/tasks/tasks.json` as
+`aionui_release_acceptance`. The list separates Linux-preparable release gates
+from clean-Windows acceptance tasks so work can continue while B12 waits for a
+Windows host.
+
+Status 2026-05-12 AION01: completed. `docs/AIONUI_WINDOWS_VALIDATION.md` now
+defines the installed-app acceptance matrix and evidence-bundle checklist,
+including task-to-evidence mapping for release workflow artifacts, B12
+handoff, provider seeding, OfficeCLI/ripgrep/Node/LiteParse, beginner AionUi
+surfaces, Office workflows, Workspace Document Search UX, support export, and
+release readiness. `docs/AIONUI_RELAY_MIGRATION.md` now points release
+acceptance at that installed-app validation boundary.
+
+Status 2026-05-12 AION02: completed. The AionUi release workflow now validates
+`RelayAionUiReleaseArtifactManifest.v1` before publishing any release asset.
+The gate asserts the Relay-branded installer asset name and SHA256, signing
+mode rules for formal releases versus prereleases, manifest upstream pins,
+overlay branding/provider/result-flow metadata, and bundled ripgrep,
+`relay-node`, and LiteParse payloads. The generated release manifest is
+uploaded alongside the installer and is listed in release notes and workflow
+summary output. `aionui-relay.json` now records the release artifact manifest
+contract that the workflow enforces.
+
+Status 2026-05-12 AION03: completed. `scripts/apply-aionui-overlay.test.mjs`
+now includes a pinned AionUi fixture application smoke. The smoke applies the
+Relay overlay to an AionUi `v1.9.25` fixture carrying the pinned tag/commit
+metadata, injects test portable tool payloads, and verifies that provider seed
+hooks, Relay branding, beginner chrome hiding, `/guid` action hiding,
+document-search skill/result-flow files, MCP injection, and bundled
+ripgrep/`relay-node`/LiteParse resources survive full overlay application.
+`applyAionuiOverlay` still defaults to the production payload locations, but
+accepts explicit test payload paths so CI can validate overlay behavior without
+requiring downloaded Windows binaries in the repo.
+
+Implementation order:
+
+1. `AION01` Create the installed-app Windows acceptance matrix and
+   evidence-bundle checklist. Completed 2026-05-12.
+2. `AION02` Harden the AionUi release workflow artifact/manifest gate.
+   Completed 2026-05-12.
+3. `AION03` Add a pinned AionUi overlay application smoke. Completed
+   2026-05-12.
+4. `AION04` Import the clean-Windows B12 handoff evidence after B12 is
+   complete.
+5. `AION05` Run the installed Relay-branded AionUi first-run provider smoke on
+   Windows.
+6. `AION06` Run installed Workspace Document Search UX acceptance on Windows.
+7. `AION07` Publish the AionUi release readiness decision with evidence links
+   and known limitations.
+
+Acceptance criteria:
+
+- Task Master has a dedicated `aionui_release_acceptance` phase with AION01
+  through AION03 completed and AION04 through AION07 tracked as pending tasks.
+- Linux-preparable checks do not claim the Windows installer/browser handoff is
+  complete.
+- B12 remains the source task for clean-Windows bootstrap handoff evidence.
+- The release readiness decision is not marked complete until workflow,
+  overlay, B12, installed first-run, and installed WDS acceptance artifacts are
+  linked from the validation docs.
 
 ## Completed Task: No-Thinking OpenWork/OpenCode Auto Bootstrap
 
@@ -1362,44 +1486,913 @@ Acceptance criteria:
 - Office/PDF extraction behavior belongs in OpenCode/OpenWork or its extension
   points, not in a Relay-owned Rust execution crate.
 
-### Cross-Cutting Feature: Agentic Workspace Search
+### Cross-Cutting Feature: Workspace Document Search
 
-Goal: add a Relay-only read-only orchestration layer above `glob`, `grep`, and
-`read` style evidence expansion so
-vague local lookup requests start with ranked candidates, snippets, searched
-scope, and truncation state instead of relying on the model to manually chain
-low-level tools.
+Goal: add a Docufinder/Dedoc-informed document-search workflow without changing
+Relay Agent's essence. Relay remains the bridge between M365 Copilot and the
+Relay-branded AionUi shell. Broad shared-folder lookup should start from AionUi
+skills, AionUi workspace/preview UX, progress-visible filename candidates,
+thorough content/evidence confirmation, and structured result/evidence
+contracts instead of relying on M365 Copilot to manually chain low-level
+`glob`, `grep`, and `read` tools correctly.
+
+Detailed plan: `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md`.
+
+Implementation order:
+
+1. Define the source-controlled `RelayDocumentSearchRequest.v1` /
+   `RelayDocumentSearchResult.v1` schemas, validators, TypeScript types, and
+   OpenAI-compatible model-facing tool schema. Internal fields such as job ids,
+   cache ids, parser versions, and redaction policy stay Relay-controlled. The
+   contract module is the single source of truth for OpenAI tool schema, AionUi
+   manifest metadata, runtime validation, fixtures, and generated skill/tool
+   instructions.
+   Copilot prompt templates are versioned alongside the contract so tool-call,
+   repair, query-suggestion, answer-polish, and polish-repair behavior can be
+   regression-tested.
+2. Advertise `relay_document_search` from the Relay/AionUi provider bridge and
+   accept aliases such as `workspace-search` / `find-files` only when the
+   advertised schema or `resultContract` matches the Relay high-level contract.
+3. Route document-search and grounded-summary intents through that high-level
+   tool whenever it is advertised. Copilot can provide the user's wording and
+   optional suggestions, but raw `glob`, `grep`, `read`, `bash`, and parser
+   tools are implementation details behind the executor, not first-step
+   planner choices.
+4. Implement the initial executor as a Relay-owned job lifecycle wrapper over
+   existing capabilities: root validation, metadata scan, ripgrep/filename
+   search, Phase -1 Office/PDF/text read support, evidence packaging, coverage
+   reporting, process/store locking, safe external command spawning,
+   cache/privacy/quota/at-rest-protection enforcement, upgrade/rollback
+   handling, enterprise/local-only policy enforcement, local observability and
+   support export, golden-query release gates, feature-flag promotion, Windows
+   long-path/sync-provider handling, warning-copy mapping, and deterministic
+   result-card output.
+5. Wire AionUi progress, cancel, retry, duplicate-submit attachment, timeout,
+   partial-result, and result rendering to the executor result contract so
+   beginners see status and evidence without waiting for Copilot final prose.
+6. Add Copilot integration guards: correlation ids from AionUi message through
+   Relay job, Copilot request, Evidence Pack, local draft, and accepted polish;
+   explicit Copilot session states for warming, sign-in, capture failure,
+   timeout, rate limit, tenant restriction, and policy disablement; and
+   citation-bound polish validation that can replace the local draft at most
+   once.
+7. Replace live workspace-search smoke coverage that expects model-visible
+   `glob_search` / `grep_search` first calls with high-level
+   `relay_document_search` smoke coverage.
+8. Keep the current low-level tool safety shim only as a degraded fallback and
+   test harness, with a visible warning when used.
+9. Then proceed into Docufinder-style metadata/filename indexing and
+   Dedoc-style ParsedDocument IR so search becomes faster and more complete
+   without changing the high-level product contract.
+
+Current implementation status:
+
+- Implemented the Relay document-search contract, validators,
+  OpenAI-compatible tool schema, approved-alias policy, and prompt-template ids.
+- Implemented provider/manifest seed metadata and Copilot gateway routing so
+  `relay_document_search` is preferred and uncontracted aliases fall back to
+  guarded low-level handling instead of masquerading as the high-level workflow.
+- Implemented a conservative filename/FileMetadata-only executor and a
+  Relay-owned job lifecycle coordinator for progress callbacks, cancellation,
+  timeout-to-partial results, retry tokens, and duplicate-submit attachment.
+- Extended the initial executor with bounded `.txt` / `.md` / `.csv` content
+  confirmation so safe text matches can produce `content_confirmed` anchors and
+  Evidence Pack items without overlapping future Office/PDF structured parsing.
+- Added a durable Docufinder-style metadata cache for path/name/type/size/mtime
+  discovery state. AionUi MCP sessions enable it by default, while extracted
+  text, Office/PDF contents, ParsedDocument IR, previews, and embeddings remain
+  out of this cache.
+- Added an atomic cache-write path with a stale-recoverable single-writer lock
+  so multiple Relay/AionUi sessions do not corrupt the metadata cache.
+- Added the first Dedoc-compatible ParsedDocument IR module with
+  `ReaderOutput`, `NormalizedDocument`, `ParsedDocument`, `DocumentContent`,
+  `TreeNode`, table/cell records, reader capabilities, parser profile metadata,
+  and text/CSV readers. Existing `.txt` / `.md` / `.csv` content confirmation
+  now produces evidence anchors from this IR instead of ad hoc line scans.
+- Added explicit reader-capability reporting for Phase -1 candidates. When a
+  request requires evidence but only Office/PDF filename candidates are
+  available, the executor now returns `partial` with `content_reader_unavailable`
+  warnings instead of silently treating the result as confirmed.
+- Added a deterministic QueryPlan module with shared CJK/NFKC normalization,
+  accounting synonym expansion, period/quarter hints, file-type hints, and
+  content-required confirmation policy. The executor now consumes that plan
+  instead of keeping query expansion as ad hoc inline logic.
+- Added the first optional PDF text reader on the same ParsedDocument IR. When
+  a LiteParse-compatible runner is available, `.pdf` files can produce
+  document-level text evidence; when it is missing or fails, PDF results remain
+  explicit `content_reader_unavailable` candidates rather than speculative
+  evidence.
+- Extended the AionUi release/overlay path so the Relay-branded AionUi package
+  prepares and bundles the Windows Node sidecar plus `liteparse-runner`, and
+  the startup gateway registers `RELAY_BUNDLED_NODE` /
+  `RELAY_LITEPARSE_RUNNER_ROOT` for PDF evidence extraction.
+- Added an optional durable ParsedDocument IR cache keyed by source
+  FileMetadata version, parser version, IR version, capability registry,
+  pattern set, and parser parameters. It is separate from the metadata cache
+  because it contains extracted document content, and it is only used when
+  explicitly enabled through executor options or environment policy.
+- Added a lightweight Office Open XML reader for `.docx`, `.xlsx`, `.xlsm`,
+  and `.pptx` on the same ParsedDocument IR. Word paragraphs, PowerPoint slide
+  text, and Excel sheet rows/cells can now become `content_confirmed` evidence
+  without launching Office, while hidden-sheet and missing cached-formula states
+  are surfaced as parser warnings.
+- Added the first ParsedDocument cache quota policy. The content-bearing IR
+  cache now has deterministic entry/byte limits, invalid-record cleanup,
+  oldest-first eviction, environment/option overrides, and quota summaries in
+  executor diagnostics without exposing document contents.
+- Added an explicit ParsedDocument cache at-rest policy gate. If policy
+  requires protection and no external/OS protection is declared, Relay still
+  parses the file for the current search but refuses to read or write
+  content-bearing cache records and reports the policy state in diagnostics.
+- Added richer Evidence Pack anchors for parsed documents. Spreadsheet/CSV
+  matches now prefer `cell_excerpt` anchors with table id, sheet, cell address,
+  row/column, hidden state, and cached-formula state, while PDF/text anchors
+  expose parser name, page anchor availability, extraction method, and anchor
+  confidence.
+- Added the first advisory document-search index coordinator. It creates a
+  single-writer lock, records lock owner/heartbeat/active job ids, recovers
+  stale locks, emits health events, and reports coordinator state in executor
+  diagnostics without changing the AionUi beginner workflow.
+- Added a search quality gate report. The executor now classifies coverage,
+  evidence, and freshness confidence, marks candidate-only or incomplete
+  searches, and exposes whether the Evidence Pack is safe to send to Copilot for
+  final wording.
+- Added directory diversity to broad filename ranking so one deep folder cannot
+  consume the whole first result batch when other matching folders exist.
+- Added Query Trace diagnostics for document search. Relay now records the
+  request, query normalization, index coordination, metadata/content scan,
+  ranking, quality gate, and redaction decisions without relying on Copilot
+  prose to explain search state.
+- Added the first Evidence Pack redaction boundary. Evidence is local-only by
+  default; optional Copilot polish can only receive bounded redacted snippets
+  when policy is explicitly `snippets_allowed` and the quality gate permits it.
+- Added a durable document-search job store. With `useJobStore` enabled, a
+  second Relay/AionUi process can attach to an already running equivalent search
+  instead of starting a duplicate scan, and stale active jobs are downgraded to
+  `abandoned` before a new scan starts.
+- Added a Docufinder-style filename/path index contract. The executor now builds
+  an in-memory index from FileMetadata for ranking and diagnostics, and AionUi
+  MCP sessions persist a metadata-backed filename index by default without
+  storing extracted document contents.
+- Added a per-root document-search index report. Results now carry a local-only
+  diagnostic summary of scanned files, metadata-ready files, filename-searchable
+  files, content-ready files, inaccessible paths, extension filtering, and cache
+  state so support can explain incomplete shared-folder searches.
+- Added result grouping for backup/copy/version variants. Broad searches now
+  collapse clear variant families under a representative result, expose the
+  grouped member count to AionUi display cards, and keep normal period/date
+  differences visible instead of hiding them.
+- Added metadata-only folder role classification. Search results now identify
+  likely filing, output, audit, backup, work, source, and review folders from
+  path segments, expose beginner-safe labels in the display model, and report
+  role counts in diagnostics.
+- Added the first Product Search Result contract. Each executor result now
+  carries `RelayDocumentSearchProductResult.v1` fields for match/evidence/index
+  state, score breakdown, anchors, preview/open state, action descriptors,
+  stable selection keys, and Copilot-independent preview/open/citation flags.
+  The display adapter now exposes preview/open labels and capped-result
+  continuation metadata for `さらに表示`.
+- Added result-level source provenance to Product Search Results. Executor
+  results now expose `source_indexes` and `primary_source_index` so AionUi can
+  distinguish metadata, filename index, fallback filename matching,
+  ParsedDocument IR, derived content index, table/cell matches, preview anchors,
+  and user-memory boosts without relying on Copilot prose.
+- Added deterministic warning-aware ranking. Search now records base/final
+  scores, applies explicit penalties for filename-only or unconfirmed-content
+  candidates, uses stable tie-breakers, and reports warning-penalty diagnostics
+  through Query Trace.
+- Added the first Evidence Pack contract. Executor results now include
+  `RelayDocumentSearchEvidencePack.v1` with candidate files, content evidence,
+  minimal document metadata, parser identity, coverage, query-plan facts,
+  warnings, and an explicit local-first AI boundary for future Copilot polish
+  validation.
+- Added the first deterministic local-draft contract. Executor results now
+  include `RelayDocumentSearchLocalDraft.v1`, generated only from the Evidence
+  Pack and Quality Gate, with citation ids, caveats, next actions, and a
+  strict rule that Copilot may replace it only after evidence-citation
+  validation.
+- Added the first citation-bound Copilot polish validation contract. Executor
+  diagnostics now include `RelayDocumentSearchPolishValidation.v1`, which
+  accepts only `RelayDocumentSearchPolishedAnswer.v1` candidates tied to the
+  current Evidence Pack/local draft citations, requests at most one strict
+  repair, records prompt template ids plus Relay/AionUi/Copilot correlation
+  fields, and otherwise keeps the deterministic local draft.
+- Added the first Copilot polish request contract. Executor results now include
+  `RelayDocumentSearchPolishRequest.v1`, which builds a
+  `relay_answer_polish_prompt.v1` payload only from redacted Evidence Pack
+  snippets and records why local-only or low-quality states cannot be sent.
+- Added the first optional Copilot polish provider invocation boundary.
+  Executor runs a `RelayDocumentSearchPolishProvider.v1` handoff only when an
+  injected runner or `RELAY_DOCUMENT_SEARCH_COPILOT_POLISH=1` enables it,
+  sends the prepared prompt to an OpenAI-compatible provider without tools or
+  original files, and still accepts output only through the existing
+  citation-bound polish validation.
+- Added the first final-answer selection contract. Executor results now include
+  `RelayDocumentSearchAnswer.v1`, which commits the validated local draft first
+  and replaces it at most once only when citation-bound Copilot polish is
+  accepted.
+- Added the first optional Copilot state contract. Executor diagnostics now
+  include `RelayDocumentSearchCopilotState.v1`, making warming, sign-in,
+  disconnected, capture, timeout, rate-limit, tenant, policy-disabled,
+  skipped, rejected, and accepted polish states visible while explicitly
+  keeping local search results, local drafts, preview/open, cancel, and retry
+  independent from Copilot availability.
+- Started Phase 5 freshness sync with a metadata-only freshness contract.
+  Executor diagnostics now include `RelayDocumentSearchFreshness.v1` reports
+  when an expired metadata cache is refreshed, comparing previous and current
+  size/mtime/source metadata versions and marking changed, created, or deleted
+  file metadata as `content_stale` without storing extracted contents.
+- Added first-pass high-confidence move freshness. `RelayDocumentSearchFreshness.v1`
+  now collapses unique size/mtime/extension delete-create pairs into `moved`
+  changes, preserves the previous stable file id for that event, and records
+  tombstones for deleted or moved paths without migrating content evidence.
+- Added first-pass ACL/access freshness. Metadata records can carry separate
+  metadata/content/preview/open access snapshots, freshness reports now mark
+  access changes as stale/unavailable evidence, and result cards downgrade
+  preview/open/citation state when current-user access is denied, offline,
+  locked, missing, or policy-blocked.
+- Added first-pass high-confidence move migration for user memory. Pins and
+  recent-search result paths/file ids are remapped only from
+  `RelayDocumentSearchFreshness.v1` `moved` events with `move_confidence: high`,
+  before ranking applies user-memory boosts. Derived-index ownership migration
+  remains a separate future step.
+- Added first-pass Dedoc-style progressive disclosure to the display contract.
+  Result cards keep the default view simple while detail/support sections carry
+  evidence locations, table/cell or structure anchors, attachment warnings, and
+  Query Trace facts for AionUi drawers or support views.
+- Completed the first-pass Phase 1.7 state-label surface. AionUi display cards
+  now have beginner-safe labels for filename-only, content-backed,
+  table-backed, stale, failed, skipped, metadata/content/table index, preview,
+  and open states.
+- Started Phase 3 with a rebuildable derived content index contract. Executor
+  content evidence now comes from `RelayDocumentSearchDerivedContentIndex.v1`
+  entries built from `ParsedDocument` IR, with `RelayDocumentSearchPreviewAnchor.v1`
+  anchors for text and table/cell matches.
+- Added first-pass preview spans for derived content matches.
+  `RelayDocumentSearchPreviewSpan.v1` now carries compact snippets,
+  matched terms, and deterministic highlight ranges alongside preview anchors
+  so AionUi preview/details surfaces can highlight evidence without Copilot
+  restating local document content.
+- Added first-pass durable derived-content-index caching. The cache records
+  source metadata/parser lineage, commits through temp-file staging plus atomic
+  rename, rejects stale source metadata, and participates in
+  `clear-derived-caches` / `rebuild-derived-indexes` maintenance.
+- Added first-pass durable derived search-store materialization.
+  `RelayDocumentSearchDerivedSearchStore.v1` is stored with derived-content
+  cache records and carries normalized keyword rows plus preview span seeds, so
+  cached documents can be searched from durable local artifacts without
+  rebuilding the full ParsedDocument-derived entry list.
+- Added first-pass SQLite/FTS readiness hardening.
+  `RelayDocumentSearchIndexDbHealth.v1` now makes the active JSON-store backend,
+  future SQLite/FTS required tables, content-bearing tables, DB-only
+  maintenance actions, and unsupported/not-enabled state explicit in index
+  maintenance results.
+- Added first-pass optional SQLite/FTS backend initialization.
+  `RelayDocumentSearchIndexDb.v1` creates the local SQLite schema and FTS5
+  tables when explicitly enabled, while index maintenance can run real WAL
+  checkpoint and compact actions against that backend without adding a package
+  dependency.
+- Added first-pass SQLite/FTS write/search helpers.
+  `RelayDocumentSearchIndexDb.v1` can mirror cached file metadata and
+  `RelayDocumentSearchDerivedSearchStore.v1` rows into local SQLite FTS tables
+  and run bounded content/table FTS searches. The executor still uses the
+  JSON-backed derived search store by default; runtime cutover, migration, and
+  ranking integration remain future work.
+- Added optional executor-side SQLite/FTS mirroring.
+  When `useIndexDb` or `RELAY_DOCUMENT_SEARCH_INDEX_DB=1` enables the backend,
+  the executor writes filtered FileMetadata and derived search-store rows into
+  SQLite/FTS, runs a bounded FTS probe, and reports content-free diagnostics.
+  Product ranking and evidence anchors still come from the JSON-backed derived
+  store until the later cutover.
+- Added first-pass SQLite/FTS ranking integration for content-confirmed
+  results. Enabled executor runs now add a `sqlite_fts_index` source index and
+  a bounded `sqlite_fts` score component only when the same file already has
+  JSON-derived evidence anchors.
+- Added guarded SQLite/FTS evidence-anchor promotion.
+  `RelayDocumentSearchIndexDb.v1` search rows now carry preview/source
+  metadata and serialized anchor JSON, with best-effort migrations for existing
+  preview-span tables. The executor can promote SQLite/FTS-only hits to
+  content-confirmed evidence only when source metadata is fresh and anchor plus
+  preview data are present; stale or incomplete rows are counted but not
+  promoted.
+- Added first-pass SQLite/FTS schema migration hardening.
+  `RelayDocumentSearchIndexDb.v1` now reports schema revision `2`, creates an
+  `index_schema_migrations` audit table, records preview-span expansion
+  migrations, sets SQLite `user_version`, and exposes migration state through
+  index maintenance health.
+- Added first-pass SQLite/FTS cutover diagnostics.
+  Runtime metadata writes, derived-store writes, and FTS searches now propagate
+  schema revision and migration state into `diagnostics.indexDb`, so enabled
+  executor runs can be evaluated for cutover readiness without consulting only
+  maintenance reports.
+- Added first-pass SQLite/FTS cutover readiness summary.
+  Enabled executor runs now include `diagnostics.indexDb.cutoverReadiness` with
+  status/reason codes plus schema, migration, write, search, and evidence
+  promotion readiness booleans for UI/support consumption. Backend write/search
+  report errors also participate in the readiness status and reasons.
+- Added first-pass SQLite/FTS result-usage diagnostics.
+  Enabled executor runs now include `diagnostics.indexDb.resultUsage`, separating
+  FTS-scored candidate/result counts from FTS-promoted evidence counts and total
+  returned SQLite score.
+- Added first-pass SQLite/FTS sync-journal cutover telemetry.
+  Metadata-only search completion events now record index DB enablement,
+  readiness status/reasons, matched-file count, scored-result count, and
+  promoted-result count without storing extracted content.
+- Added first-pass SQLite/FTS Query Trace cutover facts.
+  `RelayDocumentSearchQueryTrace.v1` now includes an `index_db` support stage
+  with enablement, readiness, result-usage, stale-row, and backend error
+  counters without storing extracted content.
+- Added first-pass SQLite/FTS support display cutover facts.
+  AionUi support detail items now surface Query Trace `index_db` readiness,
+  result-usage, stale-row, and error counters while omitting DB paths and
+  document content.
+- Added first-pass metadata-only document-search support export.
+  `RelayDocumentSearchSupportExport.v1` summarizes coverage, result metadata,
+  selected diagnostics, and SQLite/FTS cutover state without original files,
+  raw DB paths, or extracted text by default. Evidence snippets require an
+  explicit selected-snippet mode.
+- Added first-pass support-export cache quota/protection summary.
+  Support exports now summarize ParsedDocument cache protection policy, quota
+  pressure, eviction counts by reason, and derived-index cache activity without
+  exposing cache directories or evicted record paths.
+- Added first-pass SQLite/FTS stale-row reason diagnostics.
+  SQLite/FTS rows that cannot be promoted to evidence now record reason counts
+  such as source-metadata mismatch, missing parsed-document uid, missing
+  preview text, or missing anchor data. Executor diagnostics, Query Trace,
+  support display details, and metadata-only support export all expose the
+  counts without DB paths or document content.
+- Added first-pass SQLite/FTS search-limit diagnostics.
+  Bounded FTS searches now report max rows, raw row counts, dropped row counts,
+  and truncation state. Query Trace, sync-journal telemetry, and support
+  details mark result-limit truncation as a degraded cutover condition without
+  exposing raw FTS rows or document text.
+- Added first-pass SQLite/FTS outside-scan diagnostics.
+  FTS rows returned for file ids outside the current filtered scan set are now
+  counted separately, excluded from evidence promotion, surfaced through Query
+  Trace, sync-journal metadata, support details, and metadata-only support
+  export, and treated as a degraded cutover condition without exporting raw
+  rows or document text.
+- Added first-pass SQLite/FTS current-scan coverage diagnostics.
+  FTS rows returned for file ids inside the current filtered scan set are now
+  counted separately from outside-scan rows and surfaced through Query Trace,
+  sync-journal metadata, support details, and metadata-only support export
+  without exporting raw rows or document text.
+- Added first-pass SQLite/FTS fresh-row scoring hardening.
+  SQLite/FTS ranking now scores only current-scan rows that pass source
+  metadata, ParsedDocument uid, preview text, and anchor validation. Stale or
+  incomplete current rows are diagnosed but no longer boost ranked results or
+  count as fresh cutover evidence.
+- Added first-pass SQLite/FTS matched-file usage split.
+  `diagnostics.indexDb.resultUsage` now separates raw FTS matched files from
+  current-scan, fresh-current-scan, and outside-current-scan matched files, and
+  surfaces that split through Query Trace, support details, and metadata-only
+  support export.
+- Added first-pass SQLite/FTS stale current-scan diagnostics.
+  Stale/incomplete FTS rows that belong to the current filtered scan set are
+  now counted as stale current-scan rows/files and surfaced through Query
+  Trace, sync-journal metadata, support details, and metadata-only support
+  export.
+- Added first-pass SQLite/FTS stale matched-file usage split.
+  `diagnostics.indexDb.resultUsage` now includes
+  `staleCurrentScanMatchedFileCount` alongside raw, current, fresh, and
+  outside matched-file counts so support surfaces can identify stale current
+  SQLite/FTS matches without raw rows or document text.
+- Added first-pass SQLite/FTS sync-journal matched-file split.
+  Metadata-only `search_completed` details now record current, fresh, stale
+  current, and outside SQLite/FTS matched-file counts alongside the raw FTS
+  matched-file count without raw rows or document text.
+- Added first-pass SQLite/FTS sync-journal stale reason summary.
+  Metadata-only `search_completed` details now record stale SQLite/FTS row
+  counts and compact `reason=count` summaries without raw rows, DB paths, or
+  document text.
+- Added first-pass SQLite/FTS sync-journal readiness breakdown.
+  Metadata-only `search_completed` details now record schema, migration, write,
+  search, and evidence-promotion readiness booleans alongside cutover status
+  and reason codes without raw rows, DB paths, or document text.
+- Added first-pass SQLite/FTS Query Trace readiness breakdown.
+  Query Trace `index_db` facts, support details, and metadata-only support
+  export now carry schema, migration, write, search, and evidence-promotion
+  readiness booleans without raw rows, DB paths, or document text.
+- Added first-pass SQLite/FTS support export normalization.
+  Metadata-only support export now allowlists cutover readiness and
+  result-usage fields so unexpected diagnostics cannot leak DB paths, raw rows,
+  or document text through `diagnostics.indexDb` or Query Trace `index_db`
+  facts.
+- Added first-pass SQLite/FTS candidate score telemetry.
+  `resultUsage` now separates candidate score totals/max scores from
+  returned-result score totals/max scores, and surfaces the split through Query
+  Trace, support details, metadata-only support export, and sync-journal
+  search completion metadata without raw rows, DB paths, or document text.
+- Added first-pass SQLite/FTS non-returned candidate telemetry.
+  `resultUsage` now records scored/promoted candidates and SQLite/FTS score
+  totals that did not survive into the returned result set, while sync-journal
+  completion metadata records scored/promoted candidate counts alongside
+  result counts without raw rows, DB paths, or document text.
+- Added first-pass SQLite/FTS title/location ranking boost.
+  Fresh SQLite/FTS rows now receive small title and location-label boosts on
+  top of the existing text/table base score and cap, so preview-span metadata
+  can affect deterministic ranking without raw rows, DB paths, or document
+  text in diagnostics.
+- Added first-pass SQLite/FTS metadata-boost diagnostics.
+  Executor diagnostics now count fresh SQLite/FTS rows and files that received
+  title/location ranking boosts, and surface those counts through Query Trace,
+  support details, metadata-only support export, and sync-journal completion
+  metadata without raw rows, DB paths, or document text.
+- Added first-pass SQLite/FTS metadata-boost split diagnostics.
+  The same support surfaces now split fresh SQLite/FTS metadata boosts into
+  title-derived and location-label-derived row/file counts, while preserving
+  the combined counters for compatibility and avoiding raw rows, DB paths, or
+  document text.
+- Added first-pass SQLite/FTS score-cap diagnostics.
+  Result usage now records candidate/returned uncapped score totals, score-cap
+  loss totals, and capped candidate/result counts so ranking saturation is
+  visible in Query Trace, support details, metadata-only support export, and
+  sync-journal completion metadata without changing capped ranking behavior or
+  exposing raw rows, DB paths, or document text.
+- Added first-pass index health event surfacing.
+  Index maintenance actions can now record metadata-only health events for
+  completed/failed repairs, and executor runs carry recent health event
+  summaries into Query Trace, AionUi support details, and metadata-only support
+  export without exposing DB paths or document text. Index DB health now also
+  reports missing required tables and pending required migrations as explicit
+  metadata-only readiness facts, incomplete ParsedDocument staging counts, plus
+  WAL/SHM sidecar sizes and whether a WAL checkpoint is recommended.
+- Added first-pass derived-index move ownership diagnostics.
+  `RelayDocumentSearchDerivedIndexOwnership.v1` records high-confidence moves as
+  transfer-on-rebuild events owned by the current file id/source metadata while
+  explicitly blocking implicit cache reuse when path or metadata lineage
+  changes.
+- Added optional high-confidence move migration for ParsedDocument caches.
+  `RelayParsedDocumentCacheMoveMigration.v1` rewrites an existing content cache
+  record to the current file id/path/source metadata only after freshness has
+  identified a high-confidence move with matching size and modified time.
+- Added first-pass watcher/periodic sync reconciliation diagnostics.
+  `RelayDocumentSearchSyncReconciliation.v1` summarizes watcher event freshness
+  and periodic-scan due state from the metadata-only sync journal, giving
+  support surfaces an explainable fallback path for mapped/network folders and
+  watcher-missed events without persisting document contents.
+- Added local user-memory support for pinned files/folders and recent searches.
+  The executor applies small ranking boosts for user-confirmed files/folders,
+  records recent searches in the AionUi MCP path, and keeps this store separate
+  from metadata, filename indexes, and content-bearing ParsedDocument caches.
+- Added safe cache maintenance actions for document search. The default
+  `clear-derived-caches` repair removes only rebuildable filename and
+  ParsedDocument caches while preserving metadata, job snapshots, pins, and
+  search history.
+- Added a metadata-only document-search sync journal. AionUi MCP sessions now
+  enable it by default so local diagnostics can explain recent search starts,
+  metadata scans, content scans, inaccessible paths, truncation, cancellation,
+  timeout, and future filesystem freshness events without persisting extracted
+  document contents.
+- Added the first scheduler/backpressure report for document search. Results
+  now expose inline executor queue depth, promoted content-inspection count,
+  throttled roots, pause/busy/throttle reasons, per-root concurrency, writer
+  busy state, and scan/content budgets so support can explain waits and partial
+  results.
+- Added first-pass background scheduler execution for document search.
+  `RelayDocumentSearchBackgroundScheduler.v1` provides an in-process bounded
+  queue with pause/resume, cancellation, foreground promotion, global
+  concurrency, and per-root concurrency so foreground query-related work can
+  run ahead of idle indexing without creating unbounded background work.
+- Added first-pass watcher/periodic producer wiring for the background
+  scheduler. `RelayDocumentSearchSyncProducer.v1` starts filesystem watcher
+  handles and periodic scan timers, records metadata-only sync journal events,
+  and feeds `watcher_sync` / `periodic_sync` work into
+  `RelayDocumentSearchBackgroundScheduler.v1`.
+- Added startup/root-registration wiring and bounded recursive watcher
+  hardening for the sync producer. The MCP stdio entry can opt in with
+  `RELAY_DOCUMENT_SEARCH_SYNC_PRODUCER=1`, uses the current AionUi workspace
+  root, and the producer expands watchers across subdirectories with explicit
+  depth/count/exclude limits before feeding scheduler work.
+- Added first-pass production watcher policy defaults. Network-share-looking
+  roots now default to periodic-only sync instead of starting filesystem
+  watchers, while local roots keep watcher plus periodic coverage and the
+  policy reason is exposed per root in sync producer snapshots.
+- Added first-pass index maintenance actions. Relay can now run metadata-only
+  integrity checks over local document-search JSON stores and trigger a safe
+  rebuild of derived filename/ParsedDocument caches; DB-only operations report
+  `not_applicable` until a persistent index DB exists.
+- Implemented an AionUi-facing bridge that validates tool calls, rejects
+  untrusted aliases, invokes the job lifecycle runner, and emits
+  `RelayDocumentSearchResult.v1` tool results.
+- Implemented a Relay document-search stdio MCP entry and AionUi overlay patch
+  so aionrs sessions receive the high-level `relay_document_search` tool with
+  the current AionUi workspace root.
+- Implemented a renderer-neutral display adapter that converts
+  `RelayDocumentSearchResult.v1` into beginner-safe result cards/status copy for
+  AionUi chat and preview surfaces.
+- Phase 1.5, Phase 1.6, and the first-pass Phase 1.7 product result/display
+  contracts are implemented. Phase 4 now has first-pass Evidence Pack,
+  redaction, local draft, Copilot polish request, polish-validation,
+  final-answer selection, and optional Copilot state boundaries. Phase 5 has a
+  metadata freshness report with move tombstones, ACL/access-change freshness,
+  user-memory/content-cache migration for high-confidence moves, sync
+  reconciliation diagnostics, first-pass background scheduler execution,
+  watcher/periodic scheduler producers, opt-in MCP startup wiring, bounded
+  recursive watcher coverage, optional SQLite/FTS schema initialization, and an
+  optional provider invocation boundary for prepared polish requests. Recent
+  index health events, missing-table/pending-migration health facts, and
+  incomplete-staging/WAL-checkpoint recommendations now reach Query
+  Trace/support export paths where applicable. Preview rebuild,
+  scheduler-backed index maintenance, full rescan, root rebuild, and
+  retry-failed-files are now first-pass concrete actions. Retry-failed-files
+  also records/selects metadata-only failed-file retry candidates and
+  invalidates only matching content caches plus SQLite FTS rows when candidates
+  exist. SQLite/FTS cutover diagnostics now also flag FTS rows outside the
+  current filtered scan set, report current-scan FTS coverage, and prevent
+  stale/incomplete FTS rows from contributing SQLite ranking score. Result
+  usage now splits raw, current, fresh, stale current, and outside matched-file
+  counts, and stale current-scan row/file counts are explicit support
+  diagnostics. Sync-journal events now carry the same matched-file split plus
+  compact stale reason summaries and readiness booleans; Query Trace and
+  support surfaces now preserve the same readiness breakdown, with support
+  export allowlisting readiness and result-usage fields to avoid unexpected
+  diagnostic leakage. Result usage now also separates candidate and returned
+  score totals/max scores for cutover tuning, and identifies scored/promoted
+  SQLite/FTS candidates that did not survive into returned results. Fresh
+  SQLite/FTS rows now also apply small title/location metadata boosts within
+  the existing score cap, with combined and title/location-split metadata-only
+  boost row/file counts available in support surfaces. Result usage also now
+  reports uncapped SQLite/FTS score totals, cap-loss totals, and capped
+  candidate/result counts for score-saturation tuning. The abstract broader
+  SQLite/FTS cutover tuning bucket is now closed for the MVP diagnostics slice;
+  remaining work is split into the follow-up tasks below.
+
+Follow-up tasks after MVP diagnostics:
+
+- WDS01: Completed local SQLite/FTS search-quality evaluation.
+  `docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md` records the
+  repository-local docs baseline, privacy boundary, expected-hit outcomes,
+  stale-row/cap-loss diagnostics, and score-weight recommendation. The run
+  found SQLite/FTS usable as advisory data but not ready for primary cutover:
+  all four probes reported degraded index DB state from bounded FTS truncation,
+  and only one of four cases returned an expected file.
+- WDS02: Completed primary-path SQLite/FTS cutover gate.
+  The executor now supports `disabled`, `shadow`, `primary`, and `rollback`
+  primary modes through Relay-controlled options/environment flags. SQLite/FTS
+  becomes the active primary path only when readiness is `ready`, the FTS probe
+  is not truncated, stale/outside-scan rows are absent, write/search errors are
+  absent, and fresh current-scan FTS evidence exists. Otherwise the gate records
+  rollback to the filename/content path in Query Trace, support export, display
+  support details, and sync-journal metadata.
+- WDS03: Completed synthetic large-folder SQLite/FTS performance tuning.
+  `docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_PERFORMANCE.md` records synthetic
+  600-file / 1,800-row write, search, DB-size, WAL/SHM, checkpoint, and
+  scheduler-backpressure measurements. The executor now separates the FTS probe
+  cap from citation anchors: candidate scoring defaults to 20 FTS rows, is
+  configurable through Relay-controlled options/environment, and remains
+  bounded at 100 rows while evidence anchors stay capped at 3.
+- WDS04: Completed user-facing Workspace Search index status UX.
+  The display adapter now exposes beginner-safe index status, active path
+  labels, partial-result explanations, and retry/rebuild/status actions without
+  DB paths, raw FTS rows, or document text. Product result action models also
+  add retry/rebuild affordances for stale or failed index states.
+
+New follow-up task list after WDS01-WDS04:
+
+- WDS05: Completed cache quota, retention, and at-rest protection gate.
+  ParsedDocument IR cache policy/quota diagnostics now extend to the
+  content-bearing derived-content-index cache. The executor accepts
+  Relay-controlled derived-cache quota/protection options, records policy,
+  quota, eviction, and write-error diagnostics, and forwards metadata-only
+  summaries through the index report and support export without raw paths,
+  snippets, raw DB rows, or document text. Metadata, filename, user memory,
+  ParsedDocument IR, derived search/preview indexes, and SQLite FTS remain
+  separate stores for retention and cleanup policy.
+- WDS06: Completed scoped root removal and derived-cache cleanup.
+  A confirmed `remove-root` maintenance path now deletes only the selected
+  root's metadata, parsed payload cache records, derived-content-index cache
+  records, SQLite FTS rows, parsed-document rows, and preview spans. It
+  preserves unrelated roots, jobs, user memory, pins, and search-history policy;
+  the current implementation has no separate short-lived root-scoped result
+  cache outside those stores.
+- WDS07: Completed transactional content-index commit semantics.
+  ParsedDocument and derived-content-index writes now stage records before
+  promotion, SQLite derived FTS/table/preview rows are written in one
+  transaction, and the index coordinator atomically swaps an active content
+  pointer only after required artifacts are complete. Failed staging, DB writes,
+  or promotion attempts keep any previous pointer usable while marking it
+  stale, with metadata-only commit diagnostics and health events.
+- WDS08: Completed schema migration and rebuild recovery gates.
+  Metadata cache and ParsedDocument cache now expose version inspection records;
+  newer durable/content-bearing records are preserved read-only instead of being
+  overwritten. SQLite/FTS detects newer `user_version` stores and returns a
+  read-only downgrade report without running schema SQL or migrations. Index
+  maintenance now reports a metadata-only schema migration gate across
+  metadata, query analyzer, parser pipeline, ParsedDocument cache, derived
+  indexes, SQLite/FTS, Evidence Pack, result contract, and preserved user
+  state, with Query Trace, support export, and health events carrying only
+  counts/statuses.
+- WDS09: Completed golden-query search quality regression gate.
+  `scripts/relay-document-search-golden-query-gate.mjs` now creates a
+  synthetic Markdown corpus and fails on expected top-k misses, folder skew,
+  forbidden false positives, unsupported final-answer policy, missing warning
+  codes, or latency budget regression. The committed
+  `docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md` report records only
+  aggregate counts, warning codes, and synthetic labels; the quality gate and
+  Query Trace can also carry a metadata-only `golden_query_regression` blocker
+  when release promotion is blocked.
+- WDS10: Completed deterministic ranking and grouping score breakdown.
+  Product results now carry `RelayDocumentSearchScoreBreakdown.v1` inside
+  `score_breakdown`, preserving legacy numeric keys while exposing component
+  contributions for filename, path, keyword, SQLite/FTS, content, table/cell,
+  recency tie-breaks, pin/history, grouping, warning penalties, and hybrid
+  merge totals. Result grouping, Query Trace, display cards, and support export
+  expose metadata-only score summaries without document contents.
+- WDS11: Completed parser structure-profile validation gates.
+  ParsedDocument IR now records `RelayParsedDocumentStructureProfile.v1`
+  summaries for the selected parser profile, validates tree nodes, tables,
+  cells, annotations, metadata, warnings, and attachments as separate fields,
+  downgrades lossy or unsupported reader output with parser warnings, rejects
+  flattened text-only parser output, and carries metadata-only profile
+  summaries through the ParsedDocument cache, derived-content index, Evidence
+  Pack, executor diagnostics, and tests.
+- WDS12: Completed AionUi result-flow continuation and stable selection.
+  `RelayDocumentSearchDisplay.v1` now carries
+  `RelayDocumentSearchResultFlow.v1` with capped batches, show-more/refine
+  actions, stable selection-key state, visible partial/index states, and
+  Copilot prose marked secondary to structured result cards. Bridge/MCP
+  responses expose a Relay-branded AionUi result-flow envelope while OpenAI tool
+  messages keep the raw search result contract.
 
 Change targets:
 
 - `apps/desktop/src-tauri/crates/desktop-core/src/copilot_adapter.rs`
 - `apps/desktop/src-tauri/src/opencode_runtime.rs`
+- Relay bridge/status/evidence contract modules introduced by the plan
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchContract.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexCoordinator.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchEvidenceRedaction.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchQualityGates.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchJobLifecycle.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchJobStore.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchBridge.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchMcpStdio.ts`
+- `integrations/aionui/overlay/src/process/utils/relayGateway.ts`
+- `apps/desktop/src-tauri/binaries/copilot_server.mjs`
+- `apps/desktop/src/**` legacy diagnostic surfaces only when needed for
+  compatibility checks
+- Relay-branded AionUi overlay/fork skill entries and lightweight result
+  renderers introduced by
+  `docs/AIONUI_RELAY_MIGRATION.md`
+- `apps/desktop/src-tauri/bootstrap/aionui-relay.json`
+- `scripts/apply-aionui-overlay.mjs`
+- `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md`
+- `docs/AIONUI_RELAY_MIGRATION.md`
 - `docs/IMPLEMENTATION.md`
 
 Acceptance criteria:
 
-- The active search surface stays close to opencode-style low-level tools:
-  `glob` for path discovery, `grep` for plaintext/code content, and `read` for
-  exact file inspection including extracted Office/PDF text.
-- Standard ignore directories such as `.git`, `node_modules`, and `target`,
-  plus `.gitignore` patterns, are skipped by default, and
-  large/plainly unreadable/binary files do not bloat results.
-- `glob` and `grep` emit baseline search telemetry for counts, elapsed time,
-  truncation, and failure surfaces; `office_search` is not part of the target
-  provider surface.
-- Search roots are constrained to the current workspace; paths or symlink
-  resolutions that escape the workspace are not read.
-- CDP prompt guidance prefers concrete `glob`, `grep`, or `read` calls for
-  implementation, related-file, and evidence lookup requests.
-- Important conclusions, reviews, edits, comparisons, and recommendations must
-  expand relevant search candidates with `read`; search snippets are
-  candidate evidence, not a substitute for full-file inspection.
-- Deterministic provider/desktop-core coverage verifies low-level search
-  behavior.
+- A registered workspace root starts a metadata scan immediately and remains
+  able to show filename candidates from an in-memory filename cache before
+  content indexing completes; those candidates are progress, not final findings.
+- Search UX and file actions work through AionUi without Copilot and without
+  network access for already available local/shared-folder data.
+- Copilot integration never becomes the search source of truth: local results
+  and local drafts render when Copilot is unavailable, prompt versions and
+  correlation ids are recorded, and unsupported/duplicated/truncated Copilot
+  polish is rejected instead of displayed.
+- Workspace, metadata, filename, content, parser/index, result, and evidence
+  responsibilities are separated behind AionUi skills or extension points, with
+  Relay defining only the bridge contracts needed for Copilot/AionUi handoff.
+- Sync journal and product search-result objects expose created/modified/deleted
+  events, preview/open actions, match mode, evidence state, index state, score
+  breakdown, anchors, and warnings.
+- Workspace Document Search is implemented as AionUi skills plus lightweight
+  result renderers inside the Relay-branded AionUi shell; AionUi owns the shell,
+  navigation, conversations, skill invocation UX, approvals, preview surfaces,
+  file actions, search interaction, and history while Relay owns provider
+  connectivity, tool-call normalization, status translation, skill/result
+  contracts, diagnostics, and evidence validation/redaction boundaries.
+- Current UX recheck keeps the SolidJS/Tauri shell as a legacy diagnostics-only
+  surface. It cannot expose Workspace Document Search as the normal product path
+  or be used as evidence that the beginner AionUi search UX is ready.
+- The AionUi provider seed and copied overlay force Workspace Document Search
+  guard keys, including hidden beginner terms, so upgraded profiles cannot
+  preserve stale AionUi defaults that conflict with the Relay UX contract.
+- The AionUi provider seed and copied overlay also force a curated assistant
+  catalog: Word, Excel, PowerPoint, and one document-finding entry are the
+  beginner-facing choices; unrelated upstream builtin presets are hidden or
+  advanced-only.
+- The AionUi / Docufinder / Dedoc collision boundary has one owner per concern:
+  AionUi owns visible routes, panels, preview/open controls, approvals,
+  conversation storage, skill selection, skill invocation UX, normal file/search
+  interaction, and result rendering; Relay owns the Copilot provider bridge,
+  tool-call normalization, seed/defaults, skill/result schemas, status
+  translation, evidence validation, diagnostics, and privacy/redaction
+  boundaries.
+- The legacy Relay SolidJS desktop shell remains diagnostic-only and is not a
+  second production document-search UI.
+- UX follows a Docufinder-style local search information architecture expressed
+  through concrete AionUi primitives: `/guid` curated task entries,
+  `GuidInputCard`, `GuidActionRow` folder selection, SendBox slash commands,
+  `@` file mentions, existing workspace controls, structured result renderer,
+  preview/evidence details, optional answer content, and advanced drawer for
+  diagnostics.
+- AionUi's `/guid` task chips come from actual preset assistant records. Relay
+  therefore seeds `relay-workspace-search` as one Relay-managed AionUi preset
+  assistant named `資料を探す` instead of relying on metadata-only labels or
+  splitting search and summary into two beginner-facing choices.
+- `資料を探す` is backed by a high-level document-search contract. When AionUi
+  or the execution backend advertises `relay_document_search`,
+  `relay-document-search`, `workspace_document_search`, `workspace-search`, or
+  `find-files`, Relay routes Copilot to that tool before raw `glob`, `grep`,
+  or `read`, so Copilot supplies intent and query context while Relay/AionUi own
+  search planning, coverage, skew checks, reading, and evidence packaging.
+- The high-level contract is not just prompt guidance: AionUi/OpenCode must
+  advertise `relay_document_search` or an approved alias in the tool catalog,
+  and Relay must provide an executor that returns
+  `RelayDocumentSearchResult.v1` with status, progress, coverage, results,
+  evidence, display, and diagnostics fields.
+- The high-level contract includes concrete schema/validator files, a
+  model-facing OpenAI tool schema, alias validation, executor ownership, and a
+  job lifecycle for progress, cancel, retry, duplicate-submit handling,
+  timeouts, and partial results.
+- The implementation also includes single-writer store locks, stale-lock
+  recovery, shell-free subprocess execution, cache quota and at-rest protection
+  policy, schema upgrade/rollback behavior, Windows long-path/DFS/OneDrive
+  handling, enterprise/local-only policy, local log/support-export redaction,
+  golden-query release gates, feature-flag promotion/rollback, and a
+  warning-code-to-Japanese-copy map.
+- Low-level `glob`, `grep`, `read`, `bash`, and parser calls are allowed only
+  inside the executor or in advanced/support flows. If Copilot tries to use
+  them as the first step for a beginner document-search request while the
+  high-level tool is advertised, Relay rejects the call before execution.
+- Search starts through AionUi's normal send flow (`GuidInputCard`,
+  `GuidActionRow`, or `SendBox` send). Do not add a standalone Relay
+  `検索開始` button or a separate search form.
+- AionUi's default assistant/skill picker behaves as a curated task launcher,
+  not a full upstream gallery, so beginner search and Office tasks stay visible
+  without requiring users to understand AionUi's broader built-in preset set.
+- AionUi `/guid` beginner mode hides detected-agent pill bars, preset edit
+  entrypoints, preset backend switchers, provider/model switchers, and the
+  assistant-management drawer unless `relay.advancedSurfaces.enabled` is
+  deliberately enabled for support. The `GuidActionRow` plus menu also hides
+  the auto-injected skills submenu in beginner mode, while keeping file/folder
+  actions visible.
+- AionUi core UX is reused rather than replaced: ConversationTabs creates
+  task-specific sessions, SendBox owns `/` commands and `@` file mentions, the
+  right Workspace panel owns folder/file search and operations, PreviewPanel
+  owns evidence preview, and ConversationSkillsIndicator shows loaded skills.
+- The existing Workspace toolbar search is treated as a quick tree/filename
+  filter plus compact status surface, not as the full document-search product.
+  Broad document search remains an AionUi skill/result-card flow.
+- ConversationSkillsIndicator must be passive in beginner mode or route only
+  when `relay.advancedSurfaces.enabled` is enabled, so it does not become a
+  hidden path into advanced capability settings.
+- Beginner UX uses Japanese-first task language, a one-action folder-add first
+  run, visible scan/candidate progress, thorough-by-default confirmation,
+  simple mode labels, no-results recovery guidance, and collapsed advanced
+  details.
+- Dedoc-derived structure is progressively disclosed: friendly snippets and
+  anchors first, document structure/tables/attachments/warnings in details, and
+  Dedoc-compatible fields plus Query Trace only in advanced/support views.
+- Search mode contracts distinguish filename, keyword, hybrid, semantic,
+  evidence, and similar-document behavior; mode fallthrough is visible rather
+  than silent.
+- Query construction is Relay-owned: Relay builds, validates, and executes the
+  `QueryPlan`; Copilot may suggest related terms, abbreviations, file-type
+  hints, or clarification questions, but suggestions cannot change roots,
+  budgets, confirmation policy, or searched coverage without Relay validation.
+- Shared query normalization covers Japanese/CJK search, NFKC, punctuation,
+  C/F/CF/CFS-style synonyms, period/quarter aliases, and extension handling.
+- Versioned analyzer strategies cover path, filename, content, table, heading,
+  and query analysis, with dependent indexes rebuilt or marked stale when an
+  analyzer changes.
+- The indexing ladder makes folders useful before full indexing by separating
+  discovery, metadata, filename cache, text extraction, ParsedDocument IR,
+  keyword/table/preview indexes, and optional semantic/OCR indexes.
+- Docufinder-style discovery metadata and Dedoc-style document metadata are
+  separate artifacts: `FileRecord`/`FileMetadata` owns root/path/access/freshness
+  and filename cache state, while `DocumentMetadata` lives inside
+  `ParsedDocument` and is produced only by parser/reader stages for a supplied
+  FileRecord snapshot.
+- The indexer scheduler/backpressure contract supports foreground query
+  promotion, idle/background indexing, per-root concurrency, network-drive
+  throttling, pause/resume, cancellation, restart resume, and explicit CPU,
+  disk, battery, and network budgets.
+- Indexing and rebuilds are idempotent and staging-based, preserving the
+  previous searchable state when parser or index generation fails.
+- Delete/move/rename semantics preserve stable file identity only when
+  confidence is high, keep tombstones for old paths, migrate pins/history only
+  for high-confidence moves, and keep historical Evidence Packs stale rather
+  than silently rewritten.
+- Path security boundaries canonicalize local, mapped-drive, and UNC paths,
+  block traversal and escaping symlink/junction/reparse-point targets, and
+  apply denylist plus hidden/system-folder policy before read, parse, index,
+  preview, open, or support export.
+- Permission/ACL freshness records current-user metadata/content/preview/open
+  access separately, marks denied or offline content stale/unavailable, and
+  never reuses previously indexed denied content as fresh evidence.
+- Document parsing follows a Dedoc-style pipeline with strict ParsedDocument IR
+  versioning, DocumentMetadata, TreeNode structure, tables, annotations,
+  warnings, recursive attachments, parser confidence, source freshness, and
+  configurable structure profiles.
+- The parser, Dedoc adapter, and optional converters never walk workspace roots
+  or start independent discovery. They consume FileRecord queues owned by the
+  scheduler and include the source FileMetadata version in parser cache keys.
+- Dedoc compatibility is field-level: `ParsedDocument`, `DocumentContent`,
+  `DocumentMetadata`, `TreeNode`, `LineMetadata`, `Table`, `TableMetadata`,
+  `CellWithMeta`, and `Annotation` keep their own branches instead of being
+  flattened into parser text.
+- Structure profiles use Dedoc-style pattern sets: reader tags, formatting,
+  regex, and table patterns are versioned, diagnosable, and cache-key inputs.
+- Converter lineage records source file, converter output, reader input,
+  parser/profile/parameters, cleanup state, and stage-specific warnings so
+  conversion and reader failures are separately diagnosable.
+- Reader Capability Registry records table, annotation, attachment,
+  page-anchor, cell-anchor, cached-formula, OCR, hidden-state, and safety-budget
+  support so search and Evidence Packs cannot claim unsupported evidence.
+- Parser parameters and budgets are explicit cache-key inputs so profile,
+  document type, structure pattern version, attachment, PDF policy, OCR,
+  page/sheet filter, hidden-sheet policy, and safety-budget changes cannot
+  reuse incompatible ParsedDocument payloads.
+- Attachment policy bounds recursive child documents by depth, count, bytes,
+  timeout, archive path canonicalization, and archive-bomb safeguards while
+  preserving parent-child provenance and stable anchors.
+- Optional feature packs make OCR, semantic/vector, converter, archive/email,
+  and Dedoc-adapter capabilities explicit; disabled or unhealthy packs change
+  mode availability and warnings without breaking core filename/keyword/IR
+  search.
+- Dedoc-style intermediate stages separate ReaderOutput, NormalizedDocument,
+  ParsedDocument, and DerivedIndex so parser and structure-construction failures
+  are diagnosable.
+- Metadata, analyzer, parser pipeline, structure profile, ParsedDocument,
+  derived index, Evidence Pack, and Search Result schema versions evolve
+  independently with explicit invalidation/rebuild rules.
+- The format strategy matrix keeps unsupported formats filename-searchable while
+  content indexing reports normalized warnings instead of hiding them.
+- Relay-specific parser extensions preserve the Dedoc-compatible top-level
+  `ParsedDocument` shape and normalize parser/search warnings through a shared
+  warning taxonomy.
+- The AI Boundary Contract keeps Copilot as an optional Evidence Pack consumer,
+  not the local search or coverage authority.
+- A local privacy/data-flow contract documents which artifacts stay local and
+  which selected Evidence Pack snippets may be sent for optional Copilot polish.
+- Evidence Pack redaction and Query Trace records make optional Copilot polish
+  auditable without sending original files or full ParsedDocument payloads.
+- SQLite/FTS-backed local stores keep metadata, ParsedDocument payloads,
+  warnings, content nodes, table cells, previews, pins, and search history
+  rebuildable without copying original files.
+- Index DB health and repair supports integrity checks, WAL checkpoint, compact,
+  derived-index rebuild, preview-cache rebuild, one-root rebuild, full rescan,
+  and non-destructive repair that preserves roots, pins, history, and scan
+  policy. Cache-backed repair actions honor cancellation before destructive
+  work, and maintenance actions can be queued through the document-search
+  background scheduler as `index_maintenance` work. Full rescan clears
+  metadata and rebuildable indexes while preserving user memory and job state;
+  root rebuild clears one root's metadata/filename index and optional SQLite
+  FTS rows while preserving other roots and user state. Retry-failed-files uses
+  the metadata-only failure registry for root-scoped candidate selection,
+  applies per-file content-cache and SQLite FTS invalidation when candidates
+  exist, and falls back to the root-scoped invalidation path only for an empty
+  registry.
+- Preview/open/evidence UX keeps result preview state, open state, retry/rebuild
+  actions, and answer anchors tied to the same Search Result object without
+  requiring Copilot.
+- AionUi conversation/history state can reference result/evidence anchors after
+  restart without duplicating file actions or creating Copilot-only search
+  paths.
+- AionUi renders contracted result/status state and never re-derives evidence
+  state from filenames, snippets, or Copilot answer text.
+- A release that advertises Workspace Document Search includes AionUi overlay
+  snapshots for folder add, candidates-visible progress,
+  checking-file-contents, confirmed results, preview/open, no-results,
+  advanced drawer, and Copilot-unavailable states.
+- UI accessibility covers keyboard navigation, visible focus, ARIA status and
+  progress labels, color-not-only status badges, reduced motion, capped
+  result batches with explicit continuation, stable selection, and Japanese font
+  fallback.
+- Broad lookup answers include searched roots, coverage, skipped/failed/stale
+  counts, candidate/evidence status, and truncation state.
+- Filename-only matches are never treated as document-content evidence.
+- Important conclusions, comparisons, recommendations, and "necessary file"
+  claims require exact-file reads or indexed IR evidence.
+- Copilot may polish a Relay draft only after validation against the Evidence
+  Pack; it cannot introduce files, searched paths, or claims outside the pack.
+- `office_search` is not reintroduced as an unrestricted model-facing tool.
+- Deterministic coverage verifies query planning, metadata scanning, filename
+  cache rebuild, filename search, ParsedDocument IR schema, warning-driven
+  downgrade, Evidence Pack validation, index consistency, scheduler
+  backpressure, delete/move/rename tombstones, path security boundaries, reader
+  capabilities, permission/ACL freshness, converter lineage, attachment
+  limits/provenance, optional feature packs, index DB repair, preview/open UX,
+  AionUi workspace integration, AionUi/Docufinder/Dedoc collision avoidance,
+  current UX recheck, beginner UX, progressive Dedoc detail disclosure,
+  accessibility, parser parameter cache keys, query normalization, golden-query
+  relevance, local privacy/data flow, analyzer versioning, query trace,
+  redaction policy, schema evolution, optional-adapter adoption criteria, index
+  status reporting, evaluation-corpus relevance, and search quality metrics.
 
 ## Forward-Looking Designs (Not Yet Scheduled)
 
 - `docs/OFFICE_SEARCH_DESIGN.md` — Phase A has source implementation in progress/landed under the Office File Search track above. Future Phase B remains semantic retrieval on top of the extraction cache.
+- `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` — Docufinder/Dedoc-aligned
+  workspace search plan. This is the target direction for broad shared-folder
+  lookup and should supersede ad-hoc model-only chaining for document search.
 
 ## Out Of Scope
 

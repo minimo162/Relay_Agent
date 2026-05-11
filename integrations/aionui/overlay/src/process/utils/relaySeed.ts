@@ -27,6 +27,15 @@ type RelaySeedProvider = {
   contextLimit?: number;
 };
 
+type RelayAssistantCatalog = {
+  mode?: string;
+  visiblePresetIds?: string[];
+  hiddenPresetIds?: string[];
+  hideUnlistedBuiltinPresets?: boolean;
+  beginnerTaskLabels?: string[];
+  advancedAccess?: string;
+};
+
 type RelaySeed = {
   schemaVersion?: number;
   source?: string;
@@ -37,7 +46,9 @@ type RelaySeed = {
     assistantPresets?: Array<{
       id: string;
       defaultEnabledSkills?: string[];
+      assistant?: Record<string, any>;
     }>;
+    assistantCatalog?: RelayAssistantCatalog;
   };
 };
 
@@ -86,10 +97,64 @@ export async function applyRelayProviderSeed(configFile: ConfigStore): Promise<v
     'relay.channels.enabled',
     'relay.providerOnboarding.enabled',
     'relay.remoteAccess.enabled',
+    'relay.workspaceSearch.enabled',
+    'relay.workspaceSearch.surface',
+    'relay.workspaceSearch.integrationMode',
+    'relay.workspaceSearch.rendererPolicy',
+    'relay.workspaceSearch.defaultSkillEntrypoints',
+    'relay.workspaceSearch.highLevelTool',
+    'relay.workspaceSearch.legacyDiagnosticShell',
+    'relay.workspaceSearch.hiddenBeginnerTerms',
+    'relay.aionuiUx.integrationMode',
+    'relay.aionuiUx.primaryEntrypoint',
+    'relay.aionuiUx.searchEntrypoints',
+    'relay.aionuiUx.reusedSurfaces',
+    'relay.aionuiUx.resultPlacement',
+    'relay.aionuiUx.noNewSearchShell',
+    'relay.aionuiUx.noFullAssistantGalleryDefault',
+    'relay.guidUx.mode',
+    'relay.guidUx.primarySurface',
+    'relay.guidUx.beginnerFlowSteps',
+    'relay.guidUx.requiredControls',
+    'relay.guidUx.defaultTaskEntries',
+    'relay.guidUx.primaryCta',
+    'relay.guidUx.startAction',
+    'relay.guidUx.noStandaloneSearchStartButton',
+    'relay.guidUx.examplePromptStrategy',
+    'relay.guidUx.examplePrompts',
+    'relay.guidUx.allowSkipTutorial',
+    'relay.guidUx.noForcedTour',
+    'relay.searchUx.stateLabels',
+    'relay.searchUx.noResultsGuidance',
+    'relay.searchUx.resultCardFields',
+    'relay.searchUx.resultCardActions',
+    'relay.searchUx.resultBatching',
+    'relay.searchUx.emptyStateActions',
+    'relay.searchUx.defaultSearchMode',
+    'relay.searchUx.quickCandidateMode',
+    'relay.searchUx.confirmedResultRequirement',
+    'relay.searchUx.queryPlanning',
+    'relay.searchUx.autocomplete',
+    'relay.searchUx.progressiveDisclosure',
+    'relay.searchUx.answerBoundary',
+    'relay.beginnerUx.visibleSettingsTabs',
+    'relay.beginnerUx.hiddenSettingsTabs',
+    'relay.beginnerUx.hiddenSurfaces',
+    'relay.beginnerUx.hideSkillsMarketBanner',
+    'relay.beginnerUx.hideModelAndModeSwitchers',
+    'relay.beginnerUx.hideExtensionSettings',
+    'relay.beginnerUx.advancedSurfacesGate',
     'skillsMarket.enabled',
     'system.autoPreviewOfficeFiles',
+    'tools.useRipgrep',
     'relay.defaultEnabledSkills',
     'relay.defaultAssistantPresetIds',
+    'relay.assistantCatalog.mode',
+    'relay.assistantCatalog.visiblePresetIds',
+    'relay.assistantCatalog.hiddenPresetIds',
+    'relay.assistantCatalog.hideUnlistedBuiltinPresets',
+    'relay.assistantCatalog.beginnerTaskLabels',
+    'relay.assistantCatalog.advancedAccess',
   ];
 
   for (const key of keysToForce) {
@@ -101,24 +166,73 @@ export async function applyRelayProviderSeed(configFile: ConfigStore): Promise<v
   await configFile.set('migration.relayProviderSeedApplied', seed.schemaVersion ?? 1);
 }
 
+function builtinPresetId(assistant: unknown): string | null {
+  if (!assistant || typeof assistant !== 'object') return null;
+  const id = (assistant as { id?: unknown }).id;
+  if (typeof id !== 'string' || !id.startsWith('builtin-')) return null;
+  return id.slice('builtin-'.length);
+}
+
 export async function applyRelayAssistantSeed(configFile: ConfigStore): Promise<void> {
   const seed = readRelaySeed();
   const assistantPresets = seed?.skills?.assistantPresets;
   if (!assistantPresets?.length) return;
 
   const assistants = (await configFile.get('assistants').catch(() => [])) || [];
-  if (!Array.isArray(assistants) || assistants.length === 0) return;
+  if (!Array.isArray(assistants)) return;
 
-  const presetById = new Map(assistantPresets.map((preset) => [`builtin-${preset.id}`, preset]));
+  const assistantCatalog = seed.skills?.assistantCatalog;
+  const visiblePresetIds = new Set(
+    assistantCatalog?.visiblePresetIds?.length
+      ? assistantCatalog.visiblePresetIds
+      : assistantPresets.map((preset) => preset.id),
+  );
+  const hiddenPresetIds = new Set(assistantCatalog?.hiddenPresetIds ?? []);
+  const hideUnlistedBuiltinPresets = assistantCatalog?.hideUnlistedBuiltinPresets === true;
+  const presetById = new Map<string, (typeof assistantPresets)[number]>();
+  for (const preset of assistantPresets) {
+    presetById.set(`builtin-${preset.id}`, preset);
+    if (preset.assistant?.id && typeof preset.assistant.id === 'string') {
+      presetById.set(preset.assistant.id, preset);
+    }
+  }
   let changed = false;
   const updated = assistants.map((assistant) => {
     const preset = presetById.get(assistant?.id);
-    if (!preset) return assistant;
+    if (!preset) {
+      const assistantId = typeof assistant?.id === 'string' ? assistant.id : null;
+      if (assistantId && hiddenPresetIds.has(assistantId)) {
+        const next = {
+          ...assistant,
+          enabled: false,
+        };
+        if (JSON.stringify(next) !== JSON.stringify(assistant)) changed = true;
+        return next;
+      }
+
+      const presetId = builtinPresetId(assistant);
+      if (
+        !presetId ||
+        (!hiddenPresetIds.has(presetId) && (!hideUnlistedBuiltinPresets || visiblePresetIds.has(presetId)))
+      ) {
+        return assistant;
+      }
+
+      const next = {
+        ...assistant,
+        enabled: false,
+      };
+      if (JSON.stringify(next) !== JSON.stringify(assistant)) changed = true;
+      return next;
+    }
 
     const next = {
       ...assistant,
+      ...(preset.assistant ?? {}),
       enabled: true,
-      presetAgentType: assistant.presetAgentType ?? 'aionrs',
+      isPreset: preset.assistant?.isPreset ?? assistant.isPreset ?? true,
+      isBuiltin: preset.assistant?.isBuiltin ?? assistant.isBuiltin,
+      presetAgentType: assistant.presetAgentType ?? preset.assistant?.presetAgentType ?? 'aionrs',
       enabledSkills:
         preset.defaultEnabledSkills && preset.defaultEnabledSkills.length > 0
           ? preset.defaultEnabledSkills
@@ -128,6 +242,25 @@ export async function applyRelayAssistantSeed(configFile: ConfigStore): Promise<
     if (JSON.stringify(next) !== JSON.stringify(assistant)) changed = true;
     return next;
   });
+
+  const existingIds = new Set(updated.map((assistant) => assistant?.id).filter((id) => typeof id === 'string'));
+  for (const preset of assistantPresets) {
+    if (!preset.assistant?.id || typeof preset.assistant.id !== 'string') continue;
+    if (existingIds.has(preset.assistant.id)) continue;
+    updated.push({
+      ...preset.assistant,
+      enabled: true,
+      isPreset: preset.assistant.isPreset ?? true,
+      isBuiltin: preset.assistant.isBuiltin ?? false,
+      presetAgentType: preset.assistant.presetAgentType ?? 'aionrs',
+      enabledSkills:
+        preset.defaultEnabledSkills && preset.defaultEnabledSkills.length > 0
+          ? preset.defaultEnabledSkills
+          : preset.assistant.enabledSkills,
+    });
+    existingIds.add(preset.assistant.id);
+    changed = true;
+  }
 
   if (changed) {
     await configFile.set('assistants', updated);

@@ -15,14 +15,2129 @@
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `docs/CLAW_CODE_ALIGNMENT.md`
-- Active task graph: `.taskmaster/tasks/tasks.json` still describes the
-  OpenCode provider gateway product path plus diagnostic desktop support; the
-  AionUi-first migration baseline is now captured in
+- Active task graph: `.taskmaster/tasks/tasks.json` now includes the
+  OpenCode provider gateway reference path, completed Workspace Document Search
+  hardening, and the new AionUi release acceptance / Windows sign-off phase.
+  The AionUi-first migration baseline is captured in
   `docs/AIONUI_RELAY_MIGRATION.md`.
 - Packaging policy: `docs/PACKAGING_POLICY.md` still fixes the packaged end-user release path to Windows 10/11 x64 via NSIS, with installer-driven updates and preserved app-local storage across upgrades.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-12 AION03 pinned AionUi overlay application smoke
+
+AION03 is complete. `scripts/apply-aionui-overlay.test.mjs` now builds a
+temporary AionUi `v1.9.25` fixture with the pinned tag and commit recorded from
+`aionui-relay.json`, applies the full Relay overlay to it, and verifies the
+release-critical outputs from the patched tree. The smoke checks Relay package
+metadata, Electron Builder resources, provider seed and assistant seed hooks,
+gateway-before-shell startup, beginner `/guid` chrome hiding, settings/WebUI
+advanced-surface guards, the `relay-document-search` skill, copied
+document-search bridge/display/result-flow files, MCP build and aionrs session
+injection, and bundled ripgrep, `relay-node`, and LiteParse runner resources.
+
+`applyAionuiOverlay` now accepts optional `relayToolSources` for tests. The
+CLI and release workflow still use the production Windows payload locations,
+but the smoke can inject tiny fixture payloads so CI validates overlay behavior
+without needing the downloaded Windows Node binary committed to the repo.
+
+Verification:
+
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 21 tests.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/aionui-release-workflow.test.mjs
+  apps/desktop/scripts/aionui_relay_manifest.test.mjs`: passed, 14 tests.
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-12 AION02 release workflow artifact manifest gate
+
+AION02 is complete. The AionUi Windows release workflow now has a
+`Validate release artifact manifest gate` step between installer SHA256
+collection and GitHub Release publication. The gate reads
+`apps/desktop/src-tauri/bootstrap/aionui-relay.json`, enforces
+`RelayAionUiReleaseArtifactManifest.v1`, verifies the Relay-branded Windows
+x64 installer asset name and SHA256, checks signing-mode policy for formal
+releases versus prereleases, confirms AionUi tag/commit pins match the Relay
+manifest, validates overlay branding/provider/result-flow metadata, and
+requires bundled ripgrep, `relay-node`, and LiteParse runner payloads to exist
+in the AionUi resources.
+
+The workflow now writes `Relay.Agent-AionUi-release-manifest.json`, uploads it
+with the installer release asset, and includes the manifest schema and overlay
+version in release notes and workflow summary output. The Relay AionUi
+manifest now records the release artifact gate metadata, including allowed
+signing modes, formal/prerelease signing rules, required bundled payloads,
+overlay assertion names, and required release metadata. The Windows validation
+checklist now tells operators to download and inspect the release manifest.
+
+Verification:
+
+- `node --test scripts/aionui-release-workflow.test.mjs`: passed, 5 tests.
+- `node --test apps/desktop/scripts/aionui_relay_manifest.test.mjs`: passed,
+  9 tests.
+- `node --test scripts/aionui-windows-validation-doc.test.mjs`: passed,
+  2 tests.
+- `jq . apps/desktop/src-tauri/bootstrap/aionui-relay.json >/dev/null`:
+  passed.
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-12 AION01 installed-app acceptance matrix
+
+AION01 is complete. `docs/AIONUI_WINDOWS_VALIDATION.md` now has an
+installed-app acceptance matrix and evidence-bundle checklist for the
+Relay-branded AionUi Windows release path. The matrix maps release workflow
+artifacts, B12 clean-Windows bootstrap handoff, installed first launch,
+provider seed and M365 recovery, OfficeCLI/ripgrep/bundled Node/LiteParse,
+beginner AionUi surfaces, Office workflows, Workspace Document Search UX,
+support export/privacy, and the final readiness decision to concrete task
+owners and bundle locations.
+
+The evidence bundle convention keeps the source-controlled record to a
+sanitized `MANIFEST.md` and explicitly excludes source documents, extracted
+document contents, prompt payloads, tokens, cookies, tenant identifiers, and
+unredacted private screenshots from the repo. `docs/AIONUI_RELAY_MIGRATION.md`
+now calls out that installed-app release acceptance is governed by that
+validation boundary and that Linux-preparable gates cannot replace
+clean-Windows evidence.
+
+Verification:
+
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-12 AionUi release acceptance task list
+
+Created the next Task Master phase,
+`aionui_release_acceptance`, for post-WDS Relay-branded AionUi release
+acceptance. The list keeps B12 as the existing clean-Windows bootstrap handoff
+gate and separates Linux-preparable work from Windows-only installed-app
+acceptance.
+
+New tasks:
+
+- `AION01` Create the installed-app Windows acceptance matrix and
+  evidence-bundle checklist.
+- `AION02` Harden the AionUi release workflow artifact/manifest gate.
+- `AION03` Add a pinned AionUi overlay application smoke.
+- `AION04` Import clean-Windows B12 handoff evidence after B12 is complete.
+- `AION05` Run installed Relay-branded AionUi first-run provider smoke on
+  Windows.
+- `AION06` Run installed Workspace Document Search UX acceptance on Windows.
+- `AION07` Publish the AionUi release readiness decision with evidence links
+  and known limitations.
+
+Verification:
+
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS12 AionUi result-flow continuation and stable selection
+
+WDS12 is complete. `RelayDocumentSearchDisplay.v1` now embeds
+`RelayDocumentSearchResultFlow.v1`, including capped-batch offset/limit/range
+metadata, `show-more-results` continuation, refine actions, partial/index
+state summaries, and a `stableSelectionKey` selection state that can preserve a
+selected card across refresh and continuation batches. Product result selection
+keys are now file-id based so metadata-version refreshes do not change the
+selection identity.
+
+The AionUi bridge now builds a display model alongside the raw
+`RelayDocumentSearchResult.v1` and exposes
+`RelayDocumentSearchAionUiResultFlow.v1` for AionUi/MCP consumers. OpenAI tool
+messages still return the raw search result JSON, so Copilot remains secondary
+to structured local result cards rather than becoming the UI source of truth.
+The AionUi manifest, gateway metadata, and provider seed now advertise the
+result-flow contract, stable selection-key field, and secondary Copilot prose
+policy.
+
+Verification:
+
+- `node --test scripts/relay-document-search-display.test.mjs scripts/relay-document-search-product-result.test.mjs scripts/relay-document-search-bridge.test.mjs scripts/relay-document-search-mcp.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs scripts/apply-aionui-overlay.test.mjs`: passed, 42 tests.
+- `node --test apps/desktop/scripts/aionui_provider_seed.test.mjs`: passed, 8 tests.
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `git diff --check`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS11 parser structure-profile validation gates
+
+WDS11 is complete. ParsedDocument IR now emits
+`RelayParsedDocumentStructureProfile.v1` for the selected parser profile and
+validates that tree nodes, tables, cells, annotations, metadata, warnings, and
+attachments remain separate Dedoc-compatible channels. The validator rejects
+flattened text-only parser output, marks profile-specific structural failures
+as invalid, and records lossy or unsupported reader behavior such as PDF
+document-level text without page anchors as structure warnings instead of
+silently promoting it as fully precise evidence.
+
+The ParsedDocument cache now keys and reads records by inferred parser profile
+and refuses invalid profile output. The derived-content index validates the IR
+before building entries and records profile/status counts in diagnostics.
+Evidence Pack includes only a metadata-only structure-profile summary per
+evidence item, not full IR or original file contents. The executor aggregates
+structure-profile status counts in diagnostics while leaving the WDS10
+deterministic score contract unchanged.
+
+Verification:
+
+- `node --test scripts/relay-parsed-document-ir.test.mjs scripts/relay-parsed-document-cache.test.mjs scripts/relay-document-search-derived-content-index.test.mjs scripts/relay-document-search-evidence-pack.test.mjs scripts/relay-document-search-executor.test.mjs`: passed, 58 tests.
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `git diff --check`: passed.
+- `pnpm typecheck`: passed.
+- `node --no-warnings scripts/relay-document-search-golden-query-gate.mjs --generated-at 2026-05-11T00:00:00.000Z`: passed, 5/5 cases and 5/5 expected top-k coverage.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS10 deterministic ranking score breakdown
+
+WDS10 is complete. Built product results now normalize `score_breakdown` to
+`RelayDocumentSearchScoreBreakdown.v1` while preserving the previous numeric
+fields such as `filename_score`, `sqlite_fts`, `memory`, `warning_penalty`, and
+`final_score`. The new contract records deterministic component contributions
+for filename, path, normalized keyword, SQLite/FTS, derived content, table/cell
+matches, recency tie-breaks, pin/history boosts, grouping, warning penalties,
+and hybrid merge totals. It also records totals, cap loss, tie-break order, and
+metadata-only explanation codes.
+
+The executor now builds those score records per result and exposes aggregate
+component totals in ranking diagnostics and Query Trace. Result grouping records
+representative/highest/collapsed score facts without changing result score.
+The display adapter surfaces a compact ranking label and a details section for
+score components, while support export keeps only score metadata and strips
+paths, document contents, snippets, raw SQLite/FTS rows, DB contents, and
+private cache details.
+
+Verification:
+
+- `node --test scripts/relay-document-search-product-result.test.mjs`: passed.
+- `node --test scripts/relay-document-search-result-grouping.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --no-warnings scripts/relay-document-search-golden-query-gate.mjs --generated-at 2026-05-11T00:00:00.000Z`: passed, 5/5 cases passed and 5/5 expected top-k coverage after the ranking contract change.
+- `pnpm typecheck`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS09 golden-query search quality regression gate
+
+WDS09 is complete. `scripts/relay-document-search-golden-query-gate.mjs` now
+creates a temporary synthetic Markdown corpus and runs the current Workspace
+Document Search executor through five privacy-safe golden cases: expected
+top-k cash-flow coverage, folder-skew control, forbidden payroll false
+positives for a legal-contract query, candidate-only warning correctness, and
+unsupported no-result claim prevention. The gate writes
+`docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md` with aggregate counts,
+warning codes, synthetic fixture labels, and latency budgets only; it does not
+export original documents, snippets, extracted text, raw SQLite/FTS rows, DB
+contents, or absolute source paths.
+
+The quality-gate contract now has an optional metadata-only golden-query
+summary and emits a blocker `golden_query_regression` warning when a release
+gate fails. Query Trace records that summary under the `quality_gate` stage so
+support exports and release checks can see why promotion is blocked without
+including document content. The WDS01 SQLite/FTS evaluation report now points to
+WDS09 as the synthetic regression gate that complements the repository-corpus
+baseline.
+
+Verification:
+
+- `node --test scripts/relay-document-search-quality-gates.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-golden-query-gate.test.mjs`: passed.
+- `node --no-warnings scripts/relay-document-search-golden-query-gate.mjs --generated-at 2026-05-11T00:00:00.000Z`: passed, generated `docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md` with 5/5 cases passed and 5/5 expected top-k coverage.
+- `node --no-warnings scripts/relay-document-search-quality-evaluation.mjs --generated-at 2026-05-11T00:00:00.000Z`: passed, regenerated `docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md`.
+- `pnpm typecheck`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS08 schema migration and rebuild recovery gates
+
+WDS08 is complete. Metadata cache records now expose
+`RelayDocumentSearchMetadataCacheMigration.v1` inspection, and a newer durable
+metadata cache version blocks overwrite with a read-only downgrade error instead
+of replacing the record. ParsedDocument cache records now expose
+`RelayParsedDocumentCacheSchemaMigration.v1`; newer content-bearing cache
+records are not overwritten, while older or incompatible records are reported as
+rebuild-required.
+
+SQLite/FTS initialization now checks `PRAGMA user_version` before running schema
+SQL. If the on-disk store is newer than the bundled schema revision, the helper
+returns `read_only`, preserves the DB, and skips table creation/migration/write
+paths. Index maintenance now builds a metadata-only
+`RelayDocumentSearchSchemaMigrationGate.v1` across metadata cache, query
+analyzer, parser pipeline, ParsedDocument cache, derived indexes, SQLite/FTS,
+Evidence Pack, result contract, and user-state preservation policy. The gate
+feeds maintenance health events, Query Trace, and support export with
+status/counts only; paths, cache keys, DB rows, snippets, and document text stay
+out of support artifacts.
+
+Verification:
+
+- `node --test scripts/relay-document-search-metadata-cache.test.mjs`: passed.
+- `node --test scripts/relay-parsed-document-cache.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS07 transactional content-index commits
+
+WDS07 is complete. ParsedDocument cache writes and derived-content-index cache
+writes now support explicit staging handles, so parser output and derived
+search/preview artifacts are first written under staging paths and are promoted
+to active cache records only after the required content-index work succeeds.
+The existing direct cache write helpers now use the same stage-and-promote path.
+
+SQLite derived search-store writes now run inside one transaction for the
+content FTS rows, table-cell FTS rows, preview spans, and parsed-document row.
+The index coordinator also owns a versioned active content-index pointer per
+source file. The executor commits that pointer only after the staged
+ParsedDocument cache, staged derived-content-index cache, and SQLite derived
+rows have completed. If staging, DB writes, or cache promotion fail, any
+previous active pointer is left available and marked stale with a metadata-only
+health event. Executor diagnostics, sync-journal metadata, and support export
+now report commit counts/statuses without exposing source paths, cache keys, raw
+DB rows, snippets, or document text. The AionUi overlay copier also now carries
+the SQLite index DB helper module explicitly, because the executor and
+maintenance paths depend on it.
+
+Verification:
+
+- `node --test scripts/relay-parsed-document-cache.test.mjs`: passed.
+- `node --test scripts/relay-document-search-derived-content-index.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-coordinator.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS06 scoped root cleanup
+
+WDS06 is complete. Cache maintenance now exposes a confirmed
+`remove-root-caches` action that refuses to run without `root` and
+`confirmRootRemoval: true`. The action removes only the selected root's
+metadata cache entry, filename index entry, ParsedDocument cache records, and
+derived-content-index cache records. Parsed and derived content-bearing caches
+are scanned record-by-record and matched by root/source path, so unrelated root
+records remain in place. Job snapshots and user memory remain preserved,
+including pins and search-history policy.
+
+Index maintenance now exposes `remove-root`, which layers the cache cleanup with
+SQLite root invalidation when the FTS backend is enabled. The SQLite path
+already deletes content FTS rows, table-cell FTS rows, preview spans,
+parsed-document rows, and file metadata for the selected root. The current code
+does not have a separate short-lived root-scoped result cache outside these
+stores, so there is no additional result-cache directory to purge.
+
+Verification:
+
+- `node --test scripts/relay-document-search-cache-actions.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS05 cache quota and protection gate
+
+WDS05 is complete. The content-bearing derived-content-index cache now has the
+same kind of quota and local-protection gate that the ParsedDocument cache
+already used: `plaintext_allowed`, `protection_required`, and `disabled`
+policy modes, declared protected-at-rest state, entry/byte quota limits,
+invalid-record cleanup, deterministic oldest-entry eviction, and metadata-only
+policy/quota callbacks. The executor accepts Relay-controlled derived-cache
+quota/protection options and records derived-cache policy, quota, eviction, and
+write-error diagnostics beside the existing ParsedDocument cache diagnostics.
+
+The index report now summarizes content cache protection denial, quota
+pressure, latest size/count limits, eviction counts/bytes, and write-error
+counts for ParsedDocument and derived-content-index stores. Metadata-only
+support export now includes those summaries while continuing to strip cache
+paths, raw FTS/database details, snippets unless explicitly selected, full
+extracted text, and original files. Metadata, filename index, user memory,
+ParsedDocument IR, derived search/preview indexes, and SQLite FTS remain
+separate logical stores for later root cleanup and retention policy.
+
+Verification:
+
+- `node --test scripts/relay-document-search-derived-content-index.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-report.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: next hardening task list
+
+After WDS01-WDS04 completed, the next Workspace Document Search implementation
+list was added to `.taskmaster/tasks/tasks.json`, `PLANS.md`, and
+`docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` as WDS05-WDS12. The new list keeps B12
+separate as the only current Windows-host pending acceptance item, and focuses
+the next search work on the remaining product-hardening path: cache
+quota/retention/at-rest protection, scoped root cleanup, transactional
+content-index commits, schema migration and rebuild recovery, golden-query
+quality gates, deterministic ranking score breakdown, parser structure-profile
+validation, and AionUi result-flow continuation/stable selection.
+
+The first implementation task from this list was WDS05 because content-bearing
+caches needed explicit quota, retention, and protection behavior before the
+indexed content path could be treated as a safe default.
+
+Verification:
+
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 B12 bootstrap readiness and M365 live rerun
+
+B12 remains pending for the Windows-specific download/installer handoff
+acceptance, but the readiness-only path was rerun from this Linux workspace with
+`RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0`. The run verified that the
+production entrypoint is still the auto bootstrap path, desktop `tauri:dev` is
+not present as a primary script, the provider handoff remains
+`http://127.0.0.1:18180/v1` with model `relay-agent/m365-copilot`, and the
+Rust bootstrap preflight reports `verified`.
+
+The readiness report identified the pinned OpenCode Windows x64 CLI artifact as
+version `1.14.25`, URL
+`https://github.com/anomalyco/opencode/releases/download/v1.14.25/opencode-windows-x64.zip`,
+SHA256 `8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`,
+and size `53772841`. The script ended with
+`status: ready_for_explicit_download`, which is the expected non-Windows
+readiness result. The explicit artifact verification path was then run from
+Linux with `RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD=1` and
+`RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0`; it reported
+`status: download_verified` for
+`/tmp/relay-live-windows-openwork-opencode-bootstrap/windows-x64/opencode-cli/1.14.25/opencode-windows-x64.zip`
+with matching size and SHA256.
+
+The M365 Copilot live acceptance subset was then run from the same Linux
+workspace with `pnpm live:m365:opencode-provider`. The provider connected to
+the signed-in M365 Copilot session without login required, and OpenCode used
+the Relay provider at `http://127.0.0.1:18180/v1`. The plain provider text turn
+returned exactly `OPEN_CODE_M365_PROVIDER_OK`, and the OpenCode-owned `read`
+tool turn completed against the fixture file before returning exactly
+`OPEN_CODE_M365_TOOL_OK`. Artifacts were written to
+`/tmp/relay-live-m365-opencode-provider-LVhfPR`.
+
+The remaining local bootstrap handoff smokes were also rerun. The headless
+bootstrap preflight reported `headless_bootstrap_preflight_ok`, the provider
+gateway bootstrap smoke started a gateway and verified `/health` plus
+`/v1/models`, and the auto bootstrap smoke reported `auto_bootstrap_ok` with
+non-Windows mode `preflight` and provider gateway status `started`.
+
+A clean Windows host still needs to run the installer/browser handoff before
+B12 can be marked complete.
+
+Verification:
+
+- `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0 pnpm live:windows:openwork-bootstrap`: passed; readiness-only status `ready_for_explicit_download`.
+- `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0 RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD=1 pnpm live:windows:openwork-bootstrap`: passed; status `download_verified` for OpenCode Windows x64 `1.14.25`.
+- `pnpm live:m365:opencode-provider`: passed; provider text turn and OpenCode-owned `read` tool turn both passed with artifact directory `/tmp/relay-live-m365-opencode-provider-LVhfPR`.
+- `pnpm smoke:openwork-opencode-bootstrap-headless`: passed; `headless_bootstrap_preflight_ok`.
+- `pnpm smoke:openwork-opencode-bootstrap-gateway`: passed; `provider_gateway_bootstrap_ok`.
+- `pnpm smoke:openwork-opencode-bootstrap-auto`: passed; `auto_bootstrap_ok`.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-12 B12 Linux-accessible bootstrap and M365 live rerun
+
+B12 is still pending because the final acceptance requires a clean Windows host
+for the installer/browser handoff. The Linux-accessible readiness, artifact,
+local bootstrap, and M365 live portions were rerun.
+
+The readiness-only Windows bootstrap preflight passed again with
+`RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0`. It confirmed `pnpm dev` still
+uses `pnpm bootstrap:openwork-opencode:auto`, desktop `tauri:dev` remains absent
+as a primary script, provider handoff is `http://127.0.0.1:18180/v1` with model
+`relay-agent/m365-copilot`, and the Rust bootstrap preflight reported
+`verified`. The explicit artifact verification path also passed with
+`RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD=1`; it reused and verified the cached
+Windows x64 OpenCode CLI `1.14.25` zip at
+`/tmp/relay-live-windows-openwork-opencode-bootstrap/windows-x64/opencode-cli/1.14.25/opencode-windows-x64.zip`
+with size `53772841` and SHA256
+`8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`.
+
+The local bootstrap smokes passed: headless bootstrap reported
+`headless_bootstrap_preflight_ok`, provider gateway bootstrap reported
+`provider_gateway_bootstrap_ok`, and auto bootstrap reported
+`auto_bootstrap_ok`.
+
+M365 live validation was rerun through `pnpm live:m365:opencode-provider`.
+The first run connected to M365 Copilot and passed the plain provider text
+turn, but the OpenCode-owned read-tool turn failed because M365 Copilot did not
+return structured `tool_calls` after a required repair retry. A single rerun
+passed both acceptance turns: the provider text turn returned exactly
+`OPEN_CODE_M365_PROVIDER_OK`, OpenCode completed the `read` tool against the
+fixture file, and the final response returned exactly
+`OPEN_CODE_M365_TOOL_OK`. Passing artifacts were written to
+`/tmp/relay-live-m365-opencode-provider-YDGjaV`; the failed first attempt is
+available at `/tmp/relay-live-m365-opencode-provider-JKwfSr`.
+
+Verification:
+
+- `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0 pnpm --filter @relay-agent/desktop live:windows:openwork-bootstrap`: passed; readiness-only status `ready_for_explicit_download`.
+- `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0 RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD=1 pnpm --filter @relay-agent/desktop live:windows:openwork-bootstrap`: passed; status `download_verified`.
+- `pnpm --filter @relay-agent/desktop smoke:openwork-opencode-bootstrap-headless`: passed; `headless_bootstrap_preflight_ok`.
+- `pnpm --filter @relay-agent/desktop smoke:openwork-opencode-bootstrap-gateway`: passed; `provider_gateway_bootstrap_ok`.
+- `pnpm --filter @relay-agent/desktop smoke:openwork-opencode-bootstrap-auto`: passed; `auto_bootstrap_ok`.
+- `pnpm --filter @relay-agent/desktop live:m365:opencode-provider`: first run failed at structured tool-call repair for the read turn; one rerun passed text and read-tool turns with artifact directory `/tmp/relay-live-m365-opencode-provider-YDGjaV`.
+- `jq . .taskmaster/tasks/tasks.json >/dev/null`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS04 user-facing index status
+
+WDS04 is complete. The display adapter now promotes index state from
+support-only diagnostics into beginner-safe display fields:
+`indexStatus`, `partialResultExplanations`, and `repairActions`. It maps
+readiness, active path, rollback, truncation, stale-row, and outside-scan
+signals into readable labels and a normal `索引状態` detail section, while raw
+DB paths, raw FTS rows, internal DB contents, and document text remain absent
+from normal UI fields.
+
+Product result action models now add `retry_result` and `rebuild_index`
+affordances for stale, failed, skipped, or otherwise retryable index states.
+Support-only Query Trace details still carry internal reason codes for support,
+but normal display surfaces show beginner-safe explanations and repair actions.
+
+Verification:
+
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-product-result.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS03 SQLite FTS performance tuning
+
+WDS03 is complete for a synthetic large-folder-like corpus. The new
+`scripts/relay-document-search-index-db-performance.mjs` benchmark writes
+metadata and derived FTS rows through the real SQLite backend, measures
+selective and broad FTS query latency, records DB/WAL/SHM sizes before and
+after checkpoint, and exercises scheduler per-root backpressure. The generated
+report is `docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_PERFORMANCE.md` and keeps
+the same privacy boundary as WDS01: no real documents, snippets, raw rows, raw
+DB contents, absolute temp paths, or copied files are recorded.
+
+The executor now separates SQLite/FTS candidate probing from citation anchoring.
+`indexDbSearchMaxRows` defaults to 20 rows, can be overridden through
+Relay-controlled options or `RELAY_DOCUMENT_SEARCH_INDEX_DB_SEARCH_MAX_ROWS`,
+and is bounded to 100 rows. Evidence anchors remain capped separately at 3 per
+result. The WDS02 gate still treats any truncated broad probe as a rollback
+signal, so the larger default improves scoring visibility without silently
+promoting broad SQLite/FTS results to primary.
+
+Verification:
+
+- `node --check scripts/relay-document-search-module-loader.mjs && node --check scripts/relay-document-search-index-db-performance.mjs`: passed.
+- `node --no-warnings scripts/relay-document-search-index-db-performance.mjs`: passed; generated the 600-file / 1,800-row performance report.
+- `node --no-warnings scripts/relay-document-search-quality-evaluation.mjs`: passed after the probe-cap tuning; regenerated the WDS01 local baseline with 4 cases, expected coverage 1, and top coverage 1.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS02 SQLite FTS primary cutover gate
+
+WDS02 is complete. The executor now has a Relay-controlled SQLite/FTS primary
+mode gate with `disabled`, `shadow`, `primary`, and `rollback` modes via
+`indexDbPrimaryMode` or the `RELAY_DOCUMENT_SEARCH_INDEX_DB_PRIMARY_MODE` /
+`RELAY_DOCUMENT_SEARCH_INDEX_DB_PRIMARY` environment flags. Default behavior
+stays conservative: SQLite/FTS remains advisory unless primary mode is
+explicitly requested and the gate is eligible.
+
+The gate activates `sqlite_fts_primary` only when cutover readiness is `ready`,
+the FTS probe is not truncated, stale/incomplete rows are absent, outside-scan
+rows are absent, write/search errors are absent, and at least one fresh
+current-scan FTS row/file exists. If primary mode is requested while any
+threshold fails, the active path remains `filename_content` and
+`rollbackActive` is recorded with concrete reasons. Query Trace, support export,
+AionUi support display details, and sync-journal completion metadata now expose
+the active path, mode, eligibility, rollback state, and gate reasons without raw
+rows, DB paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+
+### 2026-05-11 Workspace Document Search: WDS01 SQLite FTS quality evaluation
+
+WDS01 is complete for the available local corpus. The new evaluator
+`scripts/relay-document-search-quality-evaluation.mjs` runs the document-search
+executor against repository-local Markdown docs through the real SQLite/FTS
+backend, and writes the aggregate-only report at
+`docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md`. The report records
+result basenames, expected-hit coverage, cutover readiness, truncation,
+stale-row count, and score-cap loss while excluding snippets, raw FTS rows, raw
+DB contents, absolute source paths, and copied document contents.
+
+The evaluation also exposed a real SQLite binding bug in the preview-span write
+path: `preview_spans` listed fourteen insert columns but only supplied thirteen
+placeholders. The insert now has the correct placeholder count, and
+`scripts/relay-document-search-index-db.test.mjs` includes a real `node:sqlite`
+regression so fake binding tests cannot miss this class of failure again.
+
+Outcome: SQLite/FTS is usable as advisory evidence, but the WDS01 local baseline
+does not justify primary cutover. The generated report shows expected-file
+coverage of 1/4 cases, top-rank expected-file coverage of 1/4 cases, degraded
+index DB state for all probes due to bounded FTS truncation, zero stale rows,
+and score-cap loss on two probes. WDS02 should implement the primary-path gate
+as opt-in/rollback-capable and should block primary promotion while readiness is
+degraded or FTS probes truncate.
+
+Verification:
+
+- `node --check scripts/relay-document-search-module-loader.mjs && node --check scripts/relay-document-search-quality-evaluation.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --no-warnings scripts/relay-document-search-quality-evaluation.mjs`: passed; generated `docs/WORKSPACE_DOCUMENT_SEARCH_SQLITE_FTS_EVALUATION.md` with 4 cases, expected coverage 1, and top coverage 1.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS follow-up task split
+
+The broad `broader SQLite/FTS cutover tuning` bucket is now closed for MVP
+diagnostics and split into four explicit follow-up tasks in `PLANS.md`,
+`docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md`, and `.taskmaster/tasks/tasks.json`:
+real-data search-quality evaluation, primary-path cutover gate, large-folder
+performance tuning, and user-facing index-status UX. At the split point all
+four were pending because they required evaluation, feature-gate, performance,
+or product-UX work beyond the completed metadata-only diagnostic surface.
+
+Verification:
+
+- `jq . .taskmaster/tasks/tasks.json`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS score-cap diagnostics
+
+SQLite/FTS result-usage diagnostics now expose score-cap saturation without
+changing ranking behavior. The executor still ranks with the capped SQLite/FTS
+score, but `resultUsage` now records candidate/returned uncapped score totals,
+cap-loss totals, and capped candidate/result counts. Query Trace, support
+details, metadata-only support export, and sync-journal completion metadata
+carry those aggregate counters without raw rows, DB paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS metadata-boost split diagnostics
+
+SQLite/FTS metadata-boost diagnostics now split the fresh-row boost counts by
+title metadata and location-label metadata. The executor preserves the existing
+combined `metadataBoostedFreshFts*` counters, adds title/location row and file
+counts, and surfaces them through Query Trace, support details,
+metadata-only support export, and sync-journal completion metadata without raw
+rows, DB paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS metadata-boost diagnostics
+
+SQLite/FTS diagnostics now count fresh FTS rows and files that received the
+title/location ranking boost. The executor records
+`metadataBoostedFreshFtsRowCount` and `metadataBoostedFreshFtsFileCount`, and
+surfaces them through Query Trace, support details, metadata-only support
+export, and sync-journal completion metadata without raw rows, DB paths, or
+document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS title and location score boost
+
+SQLite/FTS ranking now gives fresh FTS rows a small score boost when the row
+has title or location metadata from preview spans. This keeps the existing
+text/table base scoring and score cap, while making table/location/heading-like
+metadata from the persistent index visible to ranking without storing raw DB
+rows, DB paths, or document text in diagnostics.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS non-returned candidate telemetry
+
+SQLite/FTS result-usage diagnostics now identify scored/promoted candidates
+that did not survive into the returned result set. `resultUsage` records
+non-returned scored candidate count, non-returned promoted candidate count,
+and non-returned SQLite/FTS score total, while sync-journal search completion
+metadata also records scored/promoted candidate counts alongside result counts.
+Query Trace, support details, and metadata-only support export expose the
+same primitive counters without raw rows, DB paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS candidate score telemetry
+
+SQLite/FTS result-usage diagnostics now split score telemetry between all
+ranked candidates and the returned result set. `resultUsage` keeps
+candidate/returned score totals plus max candidate/result scores, while the
+existing `scoreTotal` and `maxScore` remain as returned-result compatibility
+aliases. Query Trace, support details, metadata-only support export, and
+sync-journal search completion metadata expose the split without raw rows, DB
+paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS support export normalization
+
+Metadata-only support export now normalizes SQLite/FTS cutover readiness and
+result-usage diagnostics through explicit allowlists. The export keeps the
+status, reason codes, readiness booleans, and numeric usage counters needed
+for support triage, while dropping any unexpected diagnostic fields that could
+carry DB paths, raw rows, or document text from older or malformed result
+payloads.
+
+Verification:
+
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS Query Trace readiness breakdown
+
+SQLite/FTS Query Trace facts now preserve the cutover readiness breakdown
+already computed by the executor. The `index_db` stage carries schema,
+migration, write, search, and evidence-promotion readiness booleans alongside
+the existing status and reason codes. Support details display those gates when
+present, and metadata-only support export preserves them without inventing
+false values for older traces that did not include the fields.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS sync-journal readiness booleans
+
+Metadata-only sync journal search completion events now preserve the
+SQLite/FTS cutover readiness breakdown, not only the status and reason string.
+`search_completed.details` records schema, migration, write, search, and
+evidence-promotion readiness booleans, so offline journal inspection can tell
+which cutover gate blocked or degraded a run without loading Query Trace or
+raw diagnostic payloads. The added fields remain primitive metadata and do not
+store raw FTS rows, DB paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS sync-journal stale reason summary
+
+Metadata-only sync journal search completion events now also record why
+SQLite/FTS rows were considered stale or incomplete. `search_completed.details`
+includes `indexDbStaleEvidenceRowCount` plus a compact
+`indexDbStaleEvidenceReasons` string such as `missing_anchor=1`, preserving
+the same reason codes already exposed in Query Trace without storing raw FTS
+rows, DB paths, or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS sync-journal matched-file split
+
+Metadata-only sync journal search completion events now record the same
+SQLite/FTS matched-file split exposed in `diagnostics.indexDb.resultUsage`.
+`search_completed.details` includes current-scan, fresh-current-scan,
+stale-current-scan, and outside-current-scan matched-file counts in addition
+to the raw bounded FTS matched-file count, so offline sync-journal reviews can
+explain whether a search used fresh local SQLite evidence or stale /
+out-of-scope index contents without storing raw FTS rows or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS stale matched-file usage split
+
+SQLite/FTS result-usage diagnostics now include
+`staleCurrentScanMatchedFileCount` alongside raw, current, fresh, and outside
+matched-file counts. The value mirrors files in the current filtered scan set
+that had stale or incomplete FTS rows, so support surfaces can distinguish
+fresh usable matches from stale current-scan matches without deriving the
+answer from separate coverage counters. Query Trace, support details, and
+metadata-only support export preserve the field without exposing raw FTS rows
+or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS stale current-scan diagnostics
+
+SQLite/FTS cutover diagnostics now explicitly count stale or incomplete rows
+that still belong to files in the current filtered scan set. The executor
+reports `staleCurrentScanFtsRowCount` and
+`staleCurrentScanFtsFileCount` alongside current, fresh, and outside-scan FTS
+coverage, and projects those counters through Query Trace, sync-journal
+metadata, support details, and metadata-only support export. This avoids
+support tools having to infer stale current coverage by subtracting fresh rows
+from current rows, while still keeping raw FTS rows and document text out of
+diagnostics.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS matched-file usage split
+
+SQLite/FTS result-usage diagnostics now separate raw FTS matched files from
+current-scan, fresh-current-scan, and outside-current-scan matched files.
+`diagnostics.indexDb.resultUsage` still reports `searchMatchedFileCount` for
+the bounded raw FTS result set, but now also includes
+`currentScanMatchedFileCount`, `freshCurrentScanMatchedFileCount`, and
+`outsideCurrentScanMatchedFileCount`. Query Trace, support details, and
+metadata-only support export preserve those fields so support surfaces can
+explain whether SQLite/FTS matches are usable fresh local evidence or stale /
+out-of-scope index contents without exposing raw rows or document text.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS fresh-row scoring gate
+
+SQLite/FTS ranking now uses only current-scan rows that pass source metadata,
+ParsedDocument uid, preview text, and anchor validation. The executor validates
+FTS rows against the current `FileMetadata` before assigning SQLite scores or
+promoting FTS-only evidence, records stale/incomplete rows even when existing
+content evidence would otherwise skip promotion, and treats fresh current-scan
+rows as evidence-promotion-ready for cutover readiness. Stale or incomplete
+FTS rows can still appear in diagnostics, but they no longer boost ranked
+results.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS current-scan coverage diagnostics
+
+SQLite/FTS cutover diagnostics now report how much of the bounded FTS probe
+belongs to the current filtered scan set. Executor diagnostics count
+`currentScanFtsRowCount` and `currentScanFtsFileCount` separately from rows
+outside the current scan, so support surfaces can distinguish useful current
+coverage from stale or over-broad DB contents without exporting raw FTS rows or
+document text. Query Trace, sync-journal metadata, support details, and
+metadata-only support export now carry the same counters.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: SQLite FTS outside-scan diagnostics
+
+SQLite/FTS cutover diagnostics now distinguish rows returned by the FTS probe
+that do not belong to the current filtered scan set. The executor counts those
+rows/files as `outsideCurrentScanFtsRowCount` and
+`outsideCurrentScanFtsFileCount`, keeps them out of evidence promotion, and
+marks cutover readiness degraded with `fts_rows_outside_current_scan` so stale
+or over-broad DB contents are visible without exporting raw rows or document
+text. Query Trace, sync-journal metadata, support details, and metadata-only
+support export now carry the same counters.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-11 Workspace Document Search: index health event surfacing
+
+Index maintenance and search diagnostics now surface recent index health events
+without exposing document contents or DB paths. Maintenance actions can record
+metadata-only `maintenance_completed` / `maintenance_failed` events when an
+index coordinator event directory is supplied, including action, status, store
+names, schema revision, missing required table counts, pending required
+migration counts, incomplete ParsedDocument staging counts, WAL/SHM sidecar
+sizes, checkpoint recommendations, and warning/error counts. Index DB health
+also reports explicit `missingTables`, `pendingMigrations`, incomplete staging,
+and WAL checkpoint readiness facts. Executor runs read recent health event
+summaries and carry them into Query Trace, support-only display details, and
+metadata-only support export. Preview repair now clears only the rebuildable
+derived content/preview cache, and cache-backed repair actions can be cancelled
+before destructive work. Maintenance actions can also be queued through the
+document-search background scheduler as `index_maintenance` work for shared
+backpressure and cancellation metadata. Full rescan now clears metadata plus
+rebuildable search indexes while preserving user memory and job state.
+Root rebuild now clears one root's metadata and filename index while preserving
+other roots, user memory, job state, and content-bearing caches; when SQLite FTS
+is enabled it also invalidates matching root rows. Retry-failed-files now reads
+a metadata-only failure registry, marks root-scoped failed file candidates for
+retry, invalidates only matching ParsedDocument/derived-content caches and
+SQLite FTS content rows when candidates exist, and keeps the older root-scoped
+fallback only for an empty registry.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexCoordinator.ts`
+  adds explicit maintenance health event recording.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts`
+  records repair/check outcomes as index health events and reports
+  missing-table/pending-migration/incomplete-staging/WAL-checkpoint health
+  facts; `rebuild-previews` now runs as a concrete non-destructive cache repair
+  and maintenance actions can be scheduled through the background scheduler.
+  `full-rescan`, `rebuild-root`, and `retry-failed-files` now run as concrete
+  non-destructive repair actions, with `retry-failed-files` selecting
+  root-scoped failed-file candidates from the failure registry and using
+  per-file invalidation when candidates exist.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchBackgroundScheduler.ts`
+  accepts `index_maintenance` work items.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchCacheActions.ts`
+  exposes cancellation-aware cache repair results before destructive removals
+  and supports root-scoped metadata/filename cache invalidation.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchFailureRegistry.ts`
+  stores metadata-only per-file parser/content/index failures and retry-plan
+  selections, and executes per-file content-cache invalidation, without
+  extracted text, previews, embeddings, or original files.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  supports file-targeted invalidation of parsed/FTS/preview rows while
+  preserving `file_metadata`.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  reads recent index health events for diagnostics and records parser/content
+  failures into the failure registry when that local registry is enabled.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts`
+  includes recent health event counts/kinds/summaries in the `index_db` stage.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  shows recent index health summaries in support-only details.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts`
+  exports sanitized health event summaries, including root-invalidation and
+  per-file retry invalidation counts, without raw paths or contents.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record the completed
+  repair/health-surfacing/preview-rebuild slice and remaining
+  scheduler-backed repair work.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-cache-actions.test.mjs`: passed.
+- `node --test scripts/relay-document-search-failure-registry.test.mjs`: passed.
+- `node --test scripts/relay-document-search-background-scheduler.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS search-limit diagnostics
+
+SQLite/FTS searches now report when the bounded FTS probe hit its row limit.
+`RelayDocumentSearchIndexDb.v1` returns the max row limit, raw row counts,
+dropped row count, and truncation state while keeping raw FTS rows bounded.
+Executor diagnostics propagate those fields, Query Trace exposes content-free
+limit facts, sync-journal telemetry records the same metadata-only counts,
+support details show a result-limit warning, and cutover readiness degrades
+when the limit was reached.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  records `maxRows`, raw row counts, `droppedRowCount`, and `truncated`.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  carries search-limit facts, sync-journal telemetry, and marks
+  `fts_result_limit_reached` as degraded cutover readiness.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts`
+  includes content-free search-limit facts in the `index_db` stage.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  shows the FTS result-limit summary in support-only details.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts`
+  includes sanitized search-limit fields in metadata-only support exports.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next SQLite/FTS cutover-tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS stale-row reason diagnostics
+
+SQLite/FTS cutover diagnostics now explain why matched FTS rows were not safe
+to promote into evidence. The executor records reason counts for stale or
+incomplete rows, including source-metadata mismatch, missing parsed-document
+uid, missing preview text, and missing anchor data. Query Trace, AionUi support
+details, and metadata-only support export surface those counts without DB
+paths, raw FTS rows, or document content.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  records `diagnostics.indexDb.staleEvidenceReasons`.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts`
+  passes stale-row reason counts through the `index_db` stage facts.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  shows the reason summary in support-only details.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts`
+  includes sanitized reason counts in metadata-only exports.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next SQLite/FTS cutover-tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: support-export cache quota and protection summary
+
+Support exports now include cache safety diagnostics needed for the
+cache/privacy gate. The metadata-only export summarizes ParsedDocument cache
+protection policy, quota pressure, latest cache size, eviction counts by
+reason, move-migration counts, and derived-index cache activity without
+including cache directories, evicted record paths, original files, or extracted
+text.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts`
+  adds sanitized cache summaries to `diagnostics.cache`.
+- `scripts/relay-document-search-support-export.test.mjs` covers protection
+  denial, quota pressure, eviction reason counts, derived-index cache activity,
+  and redaction of cache directories/evicted paths.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next cache quota/protection slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: metadata-only support export
+
+Document Search now has a first support-export contract for previewable local
+diagnostics. `RelayDocumentSearchSupportExport.v1` summarizes coverage, result
+metadata, evidence metadata, selected diagnostics, and SQLite/FTS cutover state
+without original files, raw SQLite DB paths, full extracted text, or snippets by
+default. A separate selected-snippet mode includes only explicitly requested
+evidence snippets.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSupportExport.ts`
+  builds the metadata-only export and selected-snippet variant.
+- `scripts/relay-document-search-support-export.test.mjs` covers default
+  redaction, DB path omission, root-relative paths, and selected-snippet export.
+- `scripts/apply-aionui-overlay.mjs` and
+  `scripts/apply-aionui-overlay.test.mjs` include the export module in the
+  AionUi overlay copy set.
+- `package.json` adds the support-export test to `pnpm check:aionui-relay`.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next broader SQLite/FTS cutover/support slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-support-export.test.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS support display cutover facts
+
+AionUi support details now surface the SQLite/FTS cutover facts already carried
+by Query Trace. The support-only execution log includes index DB readiness,
+backend/schema, reason codes, matched/scored/promoted result counts, stale-row
+count, and backend error counters while intentionally omitting DB paths and
+document content.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  extracts metadata-only `index_db` Query Trace facts for support details.
+- `scripts/relay-document-search-display.test.mjs` covers the support detail
+  output and verifies the DB path is not exposed.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next broader SQLite/FTS cutover tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS Query Trace cutover facts
+
+Enabled executor runs now expose SQLite/FTS cutover facts in
+`RelayDocumentSearchQueryTrace.v1`. The new `index_db` support stage records
+enablement, backend, readiness status/reasons, result-usage counters,
+stale-row count, and backend error counters without storing extracted content
+or snippets.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryTrace.ts`
+  adds the `index_db` stage and metadata-only facts.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  feeds the stage from `diagnostics.indexDb` readiness and result-usage state.
+- `scripts/relay-document-search-query-trace.test.mjs` covers the new stage for
+  ready and partial searches.
+- `scripts/relay-document-search-executor.test.mjs` covers trace facts for
+  SQLite/FTS score assist, FTS-only promotion, and failed backend search.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next broader SQLite/FTS cutover tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-query-trace.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS sync-journal cutover telemetry
+
+Metadata-only sync journal search completion events now retain a compact
+SQLite/FTS cutover snapshot. The event details record whether the index DB was
+enabled, readiness status/reasons, matched-file count, scored-result count, and
+promoted-result count without storing extracted content or snippets.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  adds SQLite/FTS cutover counters to `search_completed` sync journal details.
+- `scripts/relay-document-search-executor.test.mjs` covers enabled SQLite/FTS
+  sync journal telemetry and verifies document body text is still absent from
+  the journal.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next broader SQLite/FTS cutover tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS result usage diagnostics
+
+Enabled executor runs now expose how SQLite/FTS affected the product result set
+without requiring UI/support code to scan every result card. The new
+`diagnostics.indexDb.resultUsage` summary separates FTS-scored candidates and
+returned results from FTS-promoted evidence results, and records returned SQLite
+score totals.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  records result-level SQLite/FTS usage after ranking and diversity selection.
+- `scripts/relay-document-search-executor.test.mjs` covers JSON-derived results
+  with FTS score assist, FTS-only evidence promotion, and failed FTS search
+  reports.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  next broader SQLite/FTS cutover tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS cutover readiness summary
+
+Enabled executor runs now expose a machine-readable SQLite/FTS cutover summary
+at `diagnostics.indexDb.cutoverReadiness`. The summary reports a compact
+`ready` / `degraded` / `blocked` / `disabled` status, reason codes, and the
+individual schema, migration, write, search, and evidence-promotion readiness
+booleans used to derive it. Report-level write/search errors are folded into
+readiness reasons, so failed backend reports do not have to throw to become
+visible to support surfaces.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  derives cutover readiness after SQLite/FTS write, search, and evidence
+  promotion diagnostics are known.
+- `scripts/relay-document-search-executor.test.mjs` covers degraded readiness
+  for both JSON-evidence ranking plus FTS scoring and FTS-only evidence
+  promotion with stale rows present, plus blocked readiness for failed SQLite
+  FTS search reports.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record the readiness
+  summary as the next broader SQLite/FTS cutover tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS cutover diagnostics
+
+Enabled executor runs now expose SQLite/FTS schema readiness directly in
+`diagnostics.indexDb`. Metadata writes, derived-store writes, and FTS searches
+carry schema revision plus required/applied/existing migration ids, and the
+executor keeps the latest migration state at the top level for cutover
+readiness checks.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  includes schema revision and migration state in write/search reports.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  summarizes the write/search migration fields and propagates them into
+  `diagnostics.indexDb`.
+- `scripts/relay-document-search-index-db.test.mjs` covers migration fields in
+  write/search reports.
+- `scripts/relay-document-search-executor.test.mjs` covers migration fields in
+  runtime `diagnostics.indexDb`.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` record this as the
+  first broader SQLite/FTS cutover tuning slice.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: watcher policy defaults
+
+Sync producer startup now applies a first production watcher policy per root.
+Local roots keep watcher plus periodic coverage, but network-share-looking roots
+default to periodic-only sync so unreliable filesystem watchers are not started
+for UNC/share-style paths. The root snapshot exposes both the policy and reason
+for diagnostics.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSyncProducer.ts`
+  adds per-root watcher policy, network-share detection, watcher suppression
+  for periodic-only roots, and policy fields in snapshots.
+- `scripts/relay-document-search-sync-producer.test.mjs` covers local watcher
+  behavior, explicit watcher disablement, and network-share periodic-only
+  defaults.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now narrow remaining
+  Workspace Document Search work to broader SQLite/FTS cutover tuning.
+
+Verification:
+
+- `node --test scripts/relay-document-search-sync-producer.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS schema migration hardening
+
+SQLite/FTS initialization now carries explicit production migration diagnostics
+instead of only best-effort ALTER statements. The schema report exposes revision
+`2`, required/applied/existing migration ids, the new
+`index_schema_migrations` audit table, and SQLite `user_version` alignment.
+Index maintenance health surfaces the same migration state for support and
+repair flows.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  creates the migration audit table, records preview-span expansion migrations,
+  skips already-expanded columns, and sets `PRAGMA user_version = 2`.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts`
+  includes schema revision and migration state in `RelayDocumentSearchIndexDbHealth.v1`.
+- `scripts/relay-document-search-index-db.test.mjs` covers applied and already
+  existing preview-span migrations.
+- `scripts/relay-document-search-index-maintenance.test.mjs` covers the
+  migration fields exposed through index maintenance.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now narrow remaining
+  SQLite work to broader cutover tuning.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS evidence-anchor promotion
+
+SQLite/FTS can now provide citation-ready local evidence when the stored row is
+fresh and carries the required preview/anchor data. Search rows include
+preview/source metadata and serialized anchors from the derived search store,
+with best-effort schema migrations for existing preview-span tables. The
+executor promotes FTS-only hits only when the row source metadata matches the
+current FileMetadata version and anchor plus preview text are present; stale or
+incomplete rows are counted in diagnostics and are not promoted.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  extends preview-span storage with entry/source/anchor fields, runs
+  best-effort migrations, writes serialized anchors, and returns rich FTS rows.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  promotes fresh SQLite/FTS rows to `sqlite_fts_index` evidence without
+  re-parsing the file, while rejecting stale or incomplete rows.
+- `scripts/relay-document-search-index-db.test.mjs` covers rich preview/anchor
+  persistence and FTS row parsing.
+- `scripts/relay-document-search-executor.test.mjs` covers FTS-only evidence
+  promotion and stale-row diagnostics.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now narrow remaining
+  SQLite work to migration hardening and broader cutover tuning.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-product-result.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS ranking integration
+
+SQLite/FTS now participates in product ranking, but only for results that
+already have JSON-derived evidence anchors. Enabled executor runs add a
+`sqlite_fts_index` source index plus a bounded `sqlite_fts` score component
+when the FTS probe matches the same file as confirmed local evidence. FTS-only
+matches are still not promoted to citation-ready evidence; that remains the
+next cutover step.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now converts bounded FTS probe rows into per-file ranking scores only after
+  local evidence exists for the file.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchProductResult.ts`
+  adds the `sqlite_fts_index` source-index kind and label.
+- `scripts/relay-document-search-executor.test.mjs` verifies the opt-in
+  SQLite/FTS source index, score component, and content-free matched-file
+  diagnostics.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now narrow remaining
+  SQLite work to FTS-backed evidence-anchor cutover and migration.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-product-result.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS executor mirroring
+
+The executor now has an opt-in runtime path for the SQLite/FTS backend without
+changing evidence generation semantics. When `useIndexDb` or
+`RELAY_DOCUMENT_SEARCH_INDEX_DB=1` enables the backend, the executor mirrors
+filtered FileMetadata and derived search-store rows into SQLite/FTS, runs a
+bounded FTS probe, and reports content-free index DB diagnostics. Product
+ranking, preview anchors, and evidence still come from the JSON-backed derived
+search store until the later cutover.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  adds the `useIndexDb`, `indexDbPath`, and injectable `sqliteModule` options,
+  mirrors metadata and derived search rows through `RelayDocumentSearchIndexDb.v1`,
+  and summarizes FTS search health without exposing row text in diagnostics.
+- `scripts/relay-document-search-executor.test.mjs` covers the opt-in executor
+  path with a fake SQLite backend.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now distinguish
+  runtime mirroring from the remaining product ranking/evidence cutover.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite FTS write/search helpers
+
+Document search now has a first reusable SQLite/FTS data path beyond schema
+initialization. `RelayDocumentSearchIndexDb.v1` can mirror cached file metadata
+and `RelayDocumentSearchDerivedSearchStore.v1` rows into the local SQLite FTS
+tables, then execute bounded FTS searches across content nodes and table cells.
+The runtime executor still uses the JSON-backed derived search store by default;
+SQLite runtime cutover, migration, and ranking integration remain future work.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  adds metadata writes, derived search-store FTS writes, bounded FTS search, and
+  deterministic write timestamps through the existing optional SQLite module
+  boundary.
+- `scripts/relay-document-search-index-db.test.mjs` covers schema-backed fake
+  SQLite writes and content/table FTS search parsing.
+- `package.json` includes the index DB test in `check:aionui-relay`.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now narrow remaining
+  SQLite work to runtime cutover, migration, and ranking integration.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: optional SQLite FTS backend init
+
+Document search now has a first optional SQLite/FTS backend implementation
+slice. `RelayDocumentSearchIndexDb.v1` initializes the local SQLite schema,
+including FTS5 content/table indexes, when explicitly enabled. Index maintenance
+uses that backend for real WAL checkpoint and compact operations while keeping
+the JSON-store path active by default.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts`
+  defines `RelayDocumentSearchIndexDb.v1`, schema creation, optional
+  `node:sqlite` loading, and maintenance SQL execution.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts`
+  reports enabled SQLite/FTS health and runs DB maintenance when the backend is
+  explicitly enabled.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now narrow remaining
+  SQLite work to migrating/searching live document data through the backend.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: sync producer startup and recursive watchers
+
+The sync producer now has the first production startup boundary and bounded
+recursive watcher coverage. `RelayDocumentSearchSyncProducer.v1` can expand
+watcher handles across subdirectories with explicit max-depth, max-directory,
+and excluded-directory limits, reports watched/skipped/limit state per root, and
+the AionUi MCP stdio entry can opt into producer startup with
+`RELAY_DOCUMENT_SEARCH_SYNC_PRODUCER=1` using the current workspace root.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSyncProducer.ts`
+  now includes bounded recursive watcher enumeration and an environment-gated
+  startup helper.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchMcpStdio.ts`
+  wires the sync producer into MCP stdio startup only when explicitly enabled.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark first-pass
+  startup/root-registration wiring and recursive watcher hardening complete.
+
+Verification:
+
+- `node --test scripts/relay-document-search-sync-producer.test.mjs`: passed.
+- `node --test scripts/relay-document-search-mcp.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: sync producer scheduler wiring
+
+Phase 5 now has a first-pass producer that feeds real watcher and periodic scan
+signals into the background scheduler. `RelayDocumentSearchSyncProducer.v1`
+starts filesystem watcher handles through an injectable/default `fs.watch`
+adapter, schedules periodic root scans, records metadata-only sync journal
+events, and enqueues `watcher_sync` / `periodic_sync` work into
+`RelayDocumentSearchBackgroundScheduler.v1`.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSyncProducer.ts`
+  defines `RelayDocumentSearchSyncProducer.v1` and connects watcher/periodic
+  producers to the background scheduler.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchBridge.ts`
+  and `integrations/aionui/overlay/src/process/utils/relayGateway.ts` advertise
+  the sync producer contract/module for AionUi support surfaces.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark first-pass
+  watcher/periodic producer wiring complete while keeping production
+  startup/root-registration wiring, recursive watcher hardening, and SQLite/FTS
+  backend implementation as remaining work.
+
+Verification:
+
+- `node --test scripts/relay-document-search-sync-producer.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: background scheduler execution
+
+Phase 5 now has a first-pass real scheduler execution boundary instead of only
+inline executor diagnostics. `RelayDocumentSearchBackgroundScheduler.v1`
+provides an in-process bounded queue for document-search background work with
+pause/resume, cancellation, foreground promotion, global concurrency, and
+per-root concurrency. This gives future watcher and periodic-scan producers a
+concrete execution target while leaving persistent SQLite/FTS storage and
+production startup/root-registration wiring as future work.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchBackgroundScheduler.ts`
+  defines `RelayDocumentSearchBackgroundScheduler.v1` and executes queued work
+  with bounded backpressure.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchBridge.ts`
+  and `integrations/aionui/overlay/src/process/utils/relayGateway.ts` advertise
+  the background scheduler contract/module alongside the existing scheduler
+  diagnostics.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark first-pass
+  background scheduler execution complete while keeping real filesystem watcher
+  producers and SQLite/FTS backend implementation as remaining work.
+
+Verification:
+
+- `node --test scripts/relay-document-search-background-scheduler.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: SQLite readiness and moved content-cache migration
+
+Index maintenance now exposes a first-pass SQLite/FTS readiness boundary without
+pretending a database backend exists. `RelayDocumentSearchIndexDbHealth.v1`
+records the active JSON-store backend, future SQLite/FTS required tables,
+content-bearing tables, DB-only maintenance actions, and unsupported/not-enabled
+state. High-confidence moved files also have an explicit ParsedDocument cache
+rewrite path: `RelayParsedDocumentCacheMoveMigration.v1` rewrites an existing
+cache record to the current file id/path/source metadata only when freshness
+reports a high-confidence move with matching size and modified time.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexMaintenance.ts`
+  emits `RelayDocumentSearchIndexDbHealth.v1` in all maintenance results.
+- `integrations/aionui/overlay/src/process/utils/relayParsedDocumentCache.ts`
+  defines `RelayParsedDocumentCacheMoveMigration.v1` and rewrites moved cache
+  records with current source lineage.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  runs the ParsedDocument cache move migration before content evidence
+  inspection when the cache and freshness reports are available.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark the
+  readiness boundary and moved content-cache migration complete while keeping
+  actual SQLite/FTS backend implementation as future work.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-maintenance.test.mjs`: passed.
+- `node --test scripts/relay-parsed-document-cache.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: sync reconciliation diagnostics
+
+Phase 5 watcher/periodic sync handling now has a metadata-only reconciliation
+contract. `RelayDocumentSearchSyncReconciliation.v1` derives watcher freshness
+and periodic-scan due state from sync journal events, and executor diagnostics
+surface the report when the journal is enabled. This gives support/UI surfaces
+an explainable fallback path for watcher-missed, mapped-drive, or network-share
+cases without persisting extracted document content.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchSyncJournal.ts`
+  defines `RelayDocumentSearchSyncReconciliation.v1` and computes per-root
+  watcher/periodic state from metadata-only journal entries.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  attaches the reconciliation report to sync-journal diagnostics.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark first-pass
+  watcher/periodic reconciliation complete, with real background
+  watcher/scheduler execution left as future work.
+
+Verification:
+
+- `node --test scripts/relay-document-search-sync-journal.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: derived-index move ownership
+
+Phase 5 move handling now exposes a derived-index ownership boundary for
+high-confidence moves. `RelayDocumentSearchDerivedIndexOwnership.v1` records
+move events as transfer-on-rebuild decisions owned by the current file id and
+source metadata version, while explicitly disallowing implicit reuse of old
+content-bearing caches when the source path or metadata lineage changed.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDerivedContentIndex.ts`
+  defines `RelayDocumentSearchDerivedIndexOwnership.v1` and builds ownership
+  reports from `RelayDocumentSearchFreshness.v1`.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  includes the ownership report in derived-content diagnostics.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark first-pass
+  derived-index move ownership complete, with content-cache record rewrite for
+  moved files left as future hardening.
+
+Verification:
+
+- `node --test scripts/relay-document-search-derived-content-index.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: durable derived search store
+
+Phase 3 derived-content caching now persists a first-pass durable search-store
+artifact. `RelayDocumentSearchDerivedSearchStore.v1` is stored inside
+`RelayDocumentSearchDerivedContentIndexCache.v1` records and carries normalized
+keyword rows plus preview span seeds derived from ParsedDocument IR. Executor
+content matching now searches that store, so cache hits can return the same
+compact preview spans and highlight ranges without rebuilding the full derived
+entry list.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDerivedContentIndex.ts`
+  defines `RelayDocumentSearchDerivedSearchStore.v1`, writes it with derived
+  cache records, validates it on read, and searches it for preview spans.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  uses the derived search store for content evidence and reports search-store
+  row/preview seed diagnostics.
+- `PLANS.md` and `docs/WORKSPACE_DOCUMENT_SEARCH_PLAN.md` now mark the
+  JSON-backed durable search-store boundary complete while keeping SQLite/FTS
+  backend hardening as future work.
+
+Verification:
+
+- `node --test scripts/relay-document-search-derived-content-index.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: derived preview spans
+
+Phase 3 derived content search now emits explicit preview spans for matched
+evidence. `RelayDocumentSearchPreviewSpan.v1` is generated from returned
+derived-content matches and carries the compact snippet, matched terms,
+deterministic highlight ranges, source metadata lineage, and the corresponding
+preview anchor. Executor anchors now carry the preview span directly, and
+derived-content diagnostics count returned preview spans separately from raw
+anchors.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDerivedContentIndex.ts`
+  defines `RelayDocumentSearchPreviewSpan.v1` and attaches preview spans to
+  returned search anchors.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  reports returned preview span counts in derived-content diagnostics.
+
+Verification:
+
+- `node --test scripts/relay-document-search-derived-content-index.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: high-confidence move user-memory migration
+
+Phase 5 move handling now migrates user memory for high-confidence file moves.
+`RelayDocumentSearchUserMemory.v1` remaps pinned file paths and recent-search
+result paths/file ids only from `RelayDocumentSearchFreshness.v1` changes with
+`reason: moved` and `move_confidence: high`. The executor applies that
+migration after freshness reconciliation and before ranking, so moved files can
+keep user-confirmed pin/history boosts without treating low-confidence moves as
+stable identity migration. Derived-content-index ownership migration remains a
+future step until content identity and parser-compatibility checks are promoted.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchUserMemory.ts`
+  defines `RelayDocumentSearchUserMemoryMoveMigration.v1` and applies
+  high-confidence move remaps to pins and recent searches.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  applies the user-memory move migration before ranking and exposes the report
+  in user-memory diagnostics.
+
+Verification:
+
+- `node --test scripts/relay-document-search-user-memory.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: ACL access freshness
+
+Phase 5 freshness now has a first metadata-only ACL/access-change boundary.
+File metadata can carry separate metadata/content/preview/open access
+snapshots, and `RelayDocumentSearchFreshness.v1` reports access changes as
+stale or unavailable evidence without storing extracted document contents.
+Executor result cards now downgrade preview, open, and citation state when
+current-user access is denied, missing, offline, locked, or policy-blocked, so
+cached historical content cannot be reused as fresh evidence after an ACL/share
+change.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchMetadataCache.ts`
+  defines access snapshot states for metadata, content, preview, and open
+  actions.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchFreshness.ts`
+  now reports `access_changed`, access warning codes, access-stale flags, and
+  unavailable counts.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  skips content inspection for cached access-unavailable files and surfaces
+  access warnings in ranking/results.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchProductResult.ts`
+  and `relayDocumentSearchDisplay.ts` map access warnings to preview/open
+  states and beginner-safe labels.
+
+Verification:
+
+- `node --test scripts/relay-document-search-metadata-cache.test.mjs`: passed.
+- `node --test scripts/relay-document-search-freshness.test.mjs`: passed.
+- `node --test scripts/relay-document-search-product-result.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: move freshness tombstones
+
+Phase 5 freshness now has a first metadata-only move/tombstone boundary.
+`RelayDocumentSearchFreshness.v1` detects high-confidence moves when exactly
+one deleted metadata record and one created metadata record share extension,
+size, and modified time. Those events are recorded as `moved`, preserve the
+previous stable file id for the freshness event, and add tombstone accounting
+for moved/deleted paths without migrating parsed content, derived indexes, pins,
+or history yet.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchFreshness.ts`
+  now reports `moved_file_count`, `tombstone_count`, previous/current path
+  fields, high-confidence move markers, and tombstone flags.
+- `scripts/relay-document-search-freshness.test.mjs` covers the new move
+  collapse and stable-id preservation behavior.
+
+Verification:
+
+- `node --test scripts/relay-document-search-freshness.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: Copilot polish provider invocation
+
+Phase 4 now has the first live handoff boundary for optional Copilot answer
+polish. Relay still commits the deterministic local draft first, but when an
+injected runner or `RELAY_DOCUMENT_SEARCH_COPILOT_POLISH=1` enables polish,
+`RelayDocumentSearchPolishProvider.v1` sends only the prepared redacted
+`RelayDocumentSearchPolishRequest.v1` prompt to an OpenAI-compatible provider
+with no tools or original files. Returned JSON is treated as an untrusted
+candidate and must still pass `RelayDocumentSearchPolishValidation.v1` before
+it can replace the local draft.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchPolishProvider.ts`
+  defines the provider handoff contract, seed/env provider discovery, bounded
+  OpenAI-compatible request body, callback injection seam, and validation
+  helper.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now optionally invokes the provider after building a ready polish request and
+  before final polish validation.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  exposes provider state in the support-only AI文章チェック section.
+
+Verification:
+
+- `node --test scripts/relay-document-search-polish-provider.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: Copilot polish request payload
+
+Phase 4 now has a first Copilot-facing polish request boundary. Relay builds
+`RelayDocumentSearchPolishRequest.v1` only from the validated local draft and
+redacted Evidence Pack snippets, records the `relay_answer_polish_prompt.v1`
+template and expected `RelayDocumentSearchPolishedAnswer.v1` output schema, and
+returns `not_allowed` without a prompt when local-only policy, redaction, or
+draft quality blocks Copilot.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchPolishRequest.ts`
+  defines the versioned polish handoff payload and validation helper.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now emits `polishRequest` plus support diagnostics before validating any
+  optional polished answer candidate.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  exposes polish-request readiness in the support-only AI文章チェック section.
+
+Verification:
+
+- `node --test scripts/relay-document-search-polish-request.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: accepted polish answer boundary
+
+Phase 4 answer selection now has a first explicit contract. Executor results
+include `RelayDocumentSearchAnswer.v1`, which commits the deterministic local
+draft first and replaces it at most once only after
+`RelayDocumentSearchPolishValidation.v1` accepts citation-bound Copilot polish.
+The display adapter exposes the selected answer source while keeping validation
+and Copilot state in detail/support sections.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchAnswer.ts`
+  defines final-answer selection, replacement limits, and validation helpers.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  accepts an optional polished-answer candidate, validates it, emits
+  `answer`, and records replacement diagnostics.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  exposes the selected answer text/source without deriving search facts from
+  Copilot prose.
+
+Verification:
+
+- `node --test scripts/relay-document-search-answer.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: metadata freshness report
+
+Phase 5 freshness sync has a first metadata-only implementation. When Relay
+refreshes an expired metadata cache, it compares the previous FileMetadata
+snapshot to the current stat results and emits `RelayDocumentSearchFreshness.v1`
+reports for created, deleted, mtime-changed, size-changed, and unchanged files.
+Changed entries are marked `content_stale` in diagnostics without storing
+extracted document contents or original files.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchFreshness.ts`
+  defines freshness reports and summaries.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now emits `diagnostics.freshness` when stale metadata cache records are
+  refreshed.
+- `scripts/apply-aionui-overlay.mjs` and gateway metadata copy and advertise
+  the freshness boundary in the Relay-branded AionUi overlay.
+
+Verification:
+
+- `node --test scripts/relay-document-search-freshness.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: optional Copilot state contract
+
+Workspace Document Search now records Copilot availability as optional polish
+state instead of treating Copilot as a prerequisite for local search.
+`RelayDocumentSearchCopilotState.v1` covers ready, warming, sign-in required,
+disconnected, capture unhealthy, timeout, rate-limited, tenant-restricted,
+policy-disabled, skipped, rejected, and accepted polish states. The contract
+keeps local results, local drafts, preview/open actions, cancel, and retry
+independent from Copilot by making the non-blocking flags explicit.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchCopilotState.ts`
+  defines the optional Copilot state contract and builder.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now emits `diagnostics.copilotState` beside polish validation.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  exposes a support-only `Copilot状態` detail section.
+- `scripts/apply-aionui-overlay.mjs` and gateway metadata copy and advertise
+  the Copilot state boundary in the Relay-branded AionUi overlay.
+
+Verification:
+
+- `node --test scripts/relay-document-search-copilot-state.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: polish prompt and correlation trace
+
+The polish-validation boundary now carries the first prompt/correlation trace
+surface needed before a real Copilot polish call can be attached. Validation
+reports include the answer-polish and polish-repair template ids, Relay
+job/query ids, AionUi conversation/message ids when available, optional Copilot
+session/request/turn ids for the future transport handoff, and the Evidence
+Pack/local draft/polished answer ids. The display adapter exposes these values
+only in the support detail section.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchPolishValidation.ts`
+  now defines `RelayDocumentSearchPolishCorrelation` and validates declared
+  polish prompt template ids.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  passes Relay job/query and AionUi message correlation into the polish
+  validation report.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  surfaces prompt/correlation trace items under `AI文章チェック`.
+
+Verification:
+
+- `node --test scripts/relay-document-search-polish-validation.test.mjs`:
+  passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: citation-bound Copilot polish validation
+
+Workspace Document Search now has a first-pass validation boundary for optional
+Copilot polish. `RelayDocumentSearchPolishValidation.v1` accepts only
+`RelayDocumentSearchPolishedAnswer.v1` candidates that reference the current
+Evidence Pack and local draft, use known local-draft citation ids inline, avoid
+unsupported file/sheet/cell mentions, and pass duplication/truncation checks.
+Invalid polish requests one strict repair at most; if that repair still fails,
+Relay keeps the deterministic local draft.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchPolishValidation.ts`
+  defines the validation and polished-answer contracts.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now records `diagnostics.polishValidation` for every completed local search.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  exposes an `AI文章チェック` support detail section for polish state.
+- `scripts/apply-aionui-overlay.mjs` and the gateway metadata now copy and
+  advertise the polish-validation boundary in the Relay-branded AionUi overlay.
+
+Verification:
+
+- `node --test scripts/relay-document-search-polish-validation.test.mjs`:
+  passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-05-10 Workspace Document Search: deterministic local draft
+
+Workspace Document Search now produces a first-pass validated local draft before
+any optional Copilot polish. `RelayDocumentSearchLocalDraft.v1` is generated
+only from the local Evidence Pack and Quality Gate, carries citation ids,
+candidate-only wording, caveats, next actions, and an AI boundary that allows
+Copilot to replace the draft only after evidence-citation validation. Executor
+results expose the draft as `localDraft`, diagnostics summarize the draft
+policy, and the renderer-neutral display adapter can surface the draft summary
+and citation labels without relying on Copilot prose.
+
+Implementation artifacts:
+
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchLocalDraft.ts`
+  defines the local draft contract, builder, and validator.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchExecutor.ts`
+  now attaches `localDraft` to every completed search result.
+- `integrations/aionui/overlay/src/process/utils/relayDocumentSearchDisplay.ts`
+  exposes local draft summary/citation fields and a collapsed `回答下書き`
+  detail section.
+- `scripts/apply-aionui-overlay.mjs` copies the local draft module into the
+  Relay-branded AionUi overlay, and the gateway manifest metadata now advertises
+  the `RelayDocumentSearchLocalDraft.v1` boundary.
+
+Verification:
+
+- `node --test scripts/relay-document-search-local-draft.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `node --test scripts/relay-document-search-job-lifecycle.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs`: passed.
+- `pnpm check:aionui-relay`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
 
 ### 2026-05-08 Direction: AionUi-first Relay Agent migration baseline
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -13,6 +13,8 @@ const relayJapaneseUiFontStack =
   '"Yu Gothic UI", "Meiryo UI", "Yu Gothic", Meiryo, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "BIZ UDPGothic", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
 const relayJapaneseMonoFontStack =
   'ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SFMono-Regular", "Noto Sans Mono CJK JP", monospace';
+const relaySharedFolderSearchMarker = "Relay Agent shared-folder search override";
+const relaySharedFolderGrepMarker = "Relay Agent shared-folder grep override";
 const rendererThemeBaseCandidates = [
   "src/renderer/styles/themes/base.css",
   "src/renderer/styles/base.css",
@@ -292,9 +294,126 @@ export function patchRendererThemeBaseContent(input) {
     ".xterm {",
     "  font-family: var(--relay-font-mono) !important;",
     "}",
+    "",
+    "/* Relay Agent beginner mode: hide AionUi advanced model/mode controls. */",
+    ".guid-config-btn,",
+    ".header-model-btn,",
+    ".agent-mode-compact-pill,",
+    "[data-testid='btn-add-preset'] {",
+    "  display: none !important;",
+    "}",
   ].join("\n");
 
   return `${fontOverride}\n\n${ensureTrailingNewline(input)}`;
+}
+
+export function patchGuidPageContent(input) {
+  let output = input;
+
+  if (!output.includes("Relay Agent beginner mode: Skills Market hidden")) {
+    output = output.replace("import SkillsMarketBanner from './components/SkillsMarketBanner';\n", "");
+    const bannerAnchor = "        <SkillsMarketBanner />";
+    if (!output.includes(bannerAnchor)) {
+      throw new Error("Could not find GuidPage SkillsMarketBanner anchor");
+    }
+    output = output.replace(
+      bannerAnchor,
+      "        {/* Relay Agent beginner mode: Skills Market hidden. */}",
+    );
+  }
+
+  if (!output.includes("Relay Agent beginner mode: assistant edit hidden")) {
+    const assistantEditAnchor = [
+      "                  <Button",
+      "                    size='mini'",
+      "                    type='text'",
+      "                    icon={<Write theme='outline' size={16} fill='currentColor' />}",
+      "                    className={styles.heroTitleEdit}",
+      "                    onClick={() => openAssistantDetailsRef.current?.()}",
+      "                    aria-label={t('settings.editAssistant', { defaultValue: 'Assistant Details' })}",
+      "                  />",
+    ].join("\n");
+    if (!output.includes(assistantEditAnchor)) {
+      throw new Error("Could not find GuidPage assistant edit anchor");
+    }
+    output = output.replace(
+      assistantEditAnchor,
+      [
+        "                  {false ? (",
+        assistantEditAnchor,
+        "                  ) : (",
+        "                    /* Relay Agent beginner mode: assistant edit hidden. */",
+        "                    null",
+        "                  )}",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent beginner mode: preset backend switcher hidden")) {
+    const presetSwitcherPattern =
+      /                <div className=\{styles\.heroHeaderRight\}>[\s\S]*?                  <\/Dropdown>\n                <\/div>/u;
+    if (!presetSwitcherPattern.test(output)) {
+      throw new Error("Could not find GuidPage preset backend switcher anchor");
+    }
+    output = output.replace(
+      presetSwitcherPattern,
+      (match) =>
+        [
+          "                {false ? (",
+          match,
+          "                ) : (",
+          "                  /* Relay Agent beginner mode: preset backend switcher hidden. */",
+          "                  null",
+          "                )}",
+        ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent beginner mode: detected agent selector hidden")) {
+    const agentPillPattern =
+      /          \) : agentSelection\.availableAgents === undefined \? \(\n            <AgentPillBarSkeleton \/>\n          \) : agentSelection\.availableAgents\.length > 0 \? \(\n            <AgentPillBar[\s\S]*?            \/>\n          \) : null\}/u;
+    if (!agentPillPattern.test(output)) {
+      throw new Error("Could not find GuidPage detected agent selector anchor");
+    }
+    output = output.replace(
+      agentPillPattern,
+      (match) => {
+        const hiddenBranch = match.replace(/^          \) : /u, "").replace(/\}$/u, "");
+        const indentedBranch = hiddenBranch
+          .split("\n")
+          .map((line) => `            ${line}`)
+          .join("\n");
+        return [
+          "          ) : false ? (",
+          indentedBranch,
+          "          ) : (",
+          "            /* Relay Agent beginner mode: detected agent selector hidden. */",
+          "            null",
+          "          )}",
+        ].join("\n");
+      },
+    );
+  }
+
+  return output;
+}
+
+export function patchGuidActionRowContent(input) {
+  if (input.includes("Relay Agent beginner mode: auto skill menu hidden")) {
+    return input;
+  }
+
+  const skillMenuAnchor = "      {builtinAutoSkills.length > 0 && (";
+  if (!input.includes(skillMenuAnchor)) {
+    throw new Error("Could not find GuidActionRow builtin auto skills menu anchor");
+  }
+  return input.replace(
+    skillMenuAnchor,
+    [
+      "      {/* Relay Agent beginner mode: auto skill menu hidden. */}",
+      "      {false && builtinAutoSkills.length > 0 && (",
+    ].join("\n"),
+  );
 }
 
 export function patchPublicManifestContent(input, branding = relayBranding()) {
@@ -462,7 +581,387 @@ export function patchElectronBuilderContent(input, branding = relayBranding()) {
     }
     output = output.replace(anchor, `${anchor}  - from: resources/relay-gateway\n    to: relay-gateway\n`);
   }
+  if (!output.includes("from: resources/relay-tools")) {
+    const anchor = "extraResources:\n";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find electron-builder extraResources anchor");
+    }
+    output = output.replace(anchor, `${anchor}  - from: resources/relay-tools\n    to: relay-tools\n`);
+  }
   return output;
+}
+
+export function patchAionCliCoreGlobContent(input) {
+  if (input.includes(relaySharedFolderSearchMarker)) return ensureTrailingNewline(input);
+
+  let output = input;
+  const importAnchor = "import { resolveToolDeclaration } from './definitions/resolver.js';";
+  if (!output.includes(importAnchor)) {
+    throw new Error("Could not find AionCLI glob import anchor");
+  }
+  output = output.replace(
+    importAnchor,
+    [
+      importAnchor,
+      "import { ensureRgPath } from './ripGrep.js';",
+      "import { execStreaming } from '../utils/shell-utils.js';",
+    ].join("\n"),
+  );
+
+  const classAnchor = "class GlobToolInvocation extends BaseToolInvocation {";
+  if (!output.includes(classAnchor)) {
+    throw new Error("Could not find AionCLI GlobToolInvocation anchor");
+  }
+  const helpers = [
+    `// ${relaySharedFolderSearchMarker}`,
+    "function relayIntEnv(name, fallback) {",
+    "    const value = Number.parseInt(process.env[name] || '', 10);",
+    "    return Number.isFinite(value) && value > 0 ? value : fallback;",
+    "}",
+    "",
+    "function relayNormalizeGlobPattern(pattern) {",
+    "    return String(pattern || '').replace(/\\\\/g, '/').replace(/^\\.\\//, '');",
+    "}",
+    "",
+    "function relayIsBroadGlobPattern(pattern) {",
+    "    const normalized = relayNormalizeGlobPattern(pattern).trim();",
+    "    return normalized === '*' || normalized === '**' || normalized === '**/*' || normalized === './**/*';",
+    "}",
+    "",
+    "function relayEntryFullPath(entry) {",
+    "    return typeof entry.fullpath === 'function' ? entry.fullpath() : entry.fullpath;",
+    "}",
+    "",
+    "function relayIsInsideDirectory(root, absolutePath) {",
+    "    const relative = path.relative(path.resolve(root), absolutePath);",
+    "    return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));",
+    "}",
+    "",
+    "function relaySearchRootForEntry(absolutePath, targetDir, searchDirectories) {",
+    "    const roots = Array.isArray(searchDirectories) ? searchDirectories : [];",
+    "    for (const searchDir of roots) {",
+    "        if (relayIsInsideDirectory(searchDir, absolutePath)) return path.resolve(searchDir);",
+    "    }",
+    "    return path.resolve(targetDir);",
+    "}",
+    "",
+    "function relaySegmentKey(relativePath, depth) {",
+    "    const parts = String(relativePath || '').split(/[\\\\/]+/).filter(Boolean).filter((part) => part !== '.');",
+    "    if (!parts.length) return '<root>';",
+    "    return parts.slice(0, Math.max(1, depth)).join(path.sep);",
+    "}",
+    "",
+    "function relayApplySharedFolderResultCaps(entries, targetDir, searchDirectories = []) {",
+    "    const maxResults = relayIntEnv('RELAY_SHARED_SEARCH_MAX_RETURNED_FILES', 300);",
+    "    const perFolderLimit = relayIntEnv('RELAY_SHARED_SEARCH_PER_FOLDER_LIMIT', 25);",
+    "    const perBranchLimit = relayIntEnv('RELAY_SHARED_SEARCH_PER_BRANCH_LIMIT', 75);",
+    "    const branchDepth = relayIntEnv('RELAY_SHARED_SEARCH_BRANCH_DEPTH', 3);",
+    "    const byFolder = new Map();",
+    "    const byBranch = new Map();",
+    "    const selected = [];",
+    "    for (const entry of entries) {",
+    "        if (selected.length >= maxResults) break;",
+    "        const absolutePath = relayEntryFullPath(entry);",
+    "        const searchRoot = relaySearchRootForEntry(absolutePath, targetDir, searchDirectories);",
+    "        const relativeParent = path.dirname(path.relative(searchRoot, absolutePath));",
+    "        const folderKey = relativeParent && relativeParent !== '.' ? relativeParent : '<root>';",
+    "        const branchKey = relaySegmentKey(relativeParent, branchDepth);",
+    "        const branchUsed = byBranch.get(branchKey) || 0;",
+    "        if (branchUsed >= perBranchLimit) continue;",
+    "        const used = byFolder.get(folderKey) || 0;",
+    "        if (used >= perFolderLimit) continue;",
+    "        byBranch.set(branchKey, branchUsed + 1);",
+    "        byFolder.set(folderKey, used + 1);",
+    "        selected.push(entry);",
+    "    }",
+    "    return {",
+    "        entries: selected,",
+    "        limited: selected.length < entries.length,",
+    "        maxResults,",
+    "        perFolderLimit,",
+    "        perBranchLimit,",
+    "        branchDepth,",
+    "    };",
+    "}",
+    "",
+  ].join("\n");
+  output = output.replace(classAnchor, `${helpers}${classAnchor}`);
+
+  const constructorAnchor = [
+    "    constructor(config, params, messageBus, _toolName, _toolDisplayName) {",
+    "        super(params, messageBus, _toolName, _toolDisplayName);",
+    "        this.config = config;",
+    "    }",
+  ].join("\n");
+  if (!output.includes(constructorAnchor)) {
+    throw new Error("Could not find AionCLI GlobToolInvocation constructor anchor");
+  }
+  const method = [
+    constructorAnchor,
+    "    async performRelayRipgrepFileListing(searchDirectories, signal) {",
+    "        const rgPath = await ensureRgPath();",
+    "        const fileDiscovery = this.config.getFileService();",
+    "        const internalLimit = relayIntEnv('RELAY_SHARED_SEARCH_INTERNAL_FILE_LIMIT', 5000);",
+    "        const allEntries = [];",
+    "        const normalizedPattern = relayNormalizeGlobPattern(this.params.pattern);",
+    "        const includePatterns = relayIsBroadGlobPattern(normalizedPattern) ? [] : [normalizedPattern];",
+    "        const globFlag = this.params.case_sensitive ? '--glob' : '--iglob';",
+    "        const respectGitIgnore = this.params?.respect_git_ignore ??",
+    "            this.config.getFileFilteringOptions().respectGitIgnore ??",
+    "            DEFAULT_FILE_FILTERING_OPTIONS.respectGitIgnore;",
+    "        const respectGeminiIgnore = this.params?.respect_gemini_ignore ??",
+    "            this.config.getFileFilteringOptions().respectGeminiIgnore ??",
+    "            DEFAULT_FILE_FILTERING_OPTIONS.respectGeminiIgnore;",
+    "",
+    "        for (const searchDir of searchDirectories) {",
+    "            const rgArgs = ['--files', '--hidden'];",
+    "            for (const includePattern of includePatterns) {",
+    "                rgArgs.push(globFlag, includePattern);",
+    "            }",
+    "            if (!respectGitIgnore) {",
+    "                rgArgs.push('--no-ignore-vcs', '--no-ignore-exclude');",
+    "            }",
+    "            for (const exclude of this.config.getFileExclusions().getGlobExcludes()) {",
+    "                rgArgs.push('--glob', `!${relayNormalizeGlobPattern(exclude)}`);",
+    "            }",
+    "            rgArgs.push(searchDir);",
+    "",
+    "            const generator = execStreaming(rgPath, rgArgs, { signal, allowedExitCodes: [0, 1] });",
+    "            for await (const line of generator) {",
+    "                const rawPath = line.trim();",
+    "                if (!rawPath) continue;",
+    "                const absolutePath = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(searchDir, rawPath);",
+    "                const relativeToSearchRoot = path.relative(searchDir, absolutePath);",
+    "                if (relativeToSearchRoot === '..' || relativeToSearchRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToSearchRoot)) {",
+    "                    continue;",
+    "                }",
+    "                try {",
+    "                    const stat = fs.statSync(absolutePath);",
+    "                    if (!stat.isFile()) continue;",
+    "                    allEntries.push({",
+    "                        fullpath: () => absolutePath,",
+    "                        mtimeMs: stat.mtimeMs,",
+    "                    });",
+    "                }",
+    "                catch {",
+    "                    continue;",
+    "                }",
+    "                if (allEntries.length >= internalLimit) break;",
+    "            }",
+    "            if (allEntries.length >= internalLimit) break;",
+    "        }",
+    "",
+    "        const relativePaths = allEntries.map((entry) => path.relative(this.config.getTargetDir(), relayEntryFullPath(entry)));",
+    "        const { filteredPaths, ignoredCount } = fileDiscovery.filterFilesWithReport(relativePaths, {",
+    "            respectGitIgnore,",
+    "            respectGeminiIgnore,",
+    "        });",
+    "        const filteredAbsolutePaths = new Set(filteredPaths.map((p) => path.resolve(this.config.getTargetDir(), p)));",
+    "        const filteredEntries = allEntries.filter((entry) => filteredAbsolutePaths.has(relayEntryFullPath(entry)));",
+    "        return {",
+    "            filteredEntries,",
+    "            ignoredCount,",
+    "            internalTruncated: allEntries.length >= internalLimit,",
+    "            backend: 'ripgrep',",
+    "        };",
+    "    }",
+  ].join("\n");
+  output = output.replace(constructorAnchor, method);
+
+  const listingBlock = [
+    "            // Get centralized file discovery service",
+    "            const fileDiscovery = this.config.getFileService();",
+    "            // Collect entries from all search directories",
+    "            const allEntries = [];",
+    "            for (const searchDir of searchDirectories) {",
+    "                let pattern = this.params.pattern;",
+    "                const fullPath = path.join(searchDir, pattern);",
+    "                if (fs.existsSync(fullPath)) {",
+    "                    pattern = escape(pattern);",
+    "                }",
+    "                const entries = (await glob(pattern, {",
+    "                    cwd: searchDir,",
+    "                    withFileTypes: true,",
+    "                    nodir: true,",
+    "                    stat: true,",
+    "                    nocase: !this.params.case_sensitive,",
+    "                    dot: true,",
+    "                    ignore: this.config.getFileExclusions().getGlobExcludes(),",
+    "                    follow: false,",
+    "                    signal,",
+    "                }));",
+    "                allEntries.push(...entries);",
+    "            }",
+    "            const relativePaths = allEntries.map((p) => path.relative(this.config.getTargetDir(), p.fullpath()));",
+    "            const { filteredPaths, ignoredCount } = fileDiscovery.filterFilesWithReport(relativePaths, {",
+    "                respectGitIgnore: this.params?.respect_git_ignore ??",
+    "                    this.config.getFileFilteringOptions().respectGitIgnore ??",
+    "                    DEFAULT_FILE_FILTERING_OPTIONS.respectGitIgnore,",
+    "                respectGeminiIgnore: this.params?.respect_gemini_ignore ??",
+    "                    this.config.getFileFilteringOptions().respectGeminiIgnore ??",
+    "                    DEFAULT_FILE_FILTERING_OPTIONS.respectGeminiIgnore,",
+    "            });",
+    "            const filteredAbsolutePaths = new Set(filteredPaths.map((p) => path.resolve(this.config.getTargetDir(), p)));",
+    "            const filteredEntries = allEntries.filter((entry) => filteredAbsolutePaths.has(entry.fullpath()));",
+  ].join("\n");
+  if (!output.includes(listingBlock)) {
+    throw new Error("Could not find AionCLI glob file listing block");
+  }
+  const replacementListingBlock = [
+    "            let filteredEntries;",
+    "            let ignoredCount = 0;",
+    "            let relaySearchBackend = 'ripgrep';",
+    "            let relayInternalTruncated = false;",
+    "            const relayResult = await this.performRelayRipgrepFileListing(searchDirectories, signal).catch((error) => {",
+    "                debugLogger.warn('Relay ripgrep glob fallback to JS glob', error);",
+    "                return null;",
+    "            });",
+    "            if (relayResult) {",
+    "                filteredEntries = relayResult.filteredEntries;",
+    "                ignoredCount = relayResult.ignoredCount;",
+    "                relayInternalTruncated = relayResult.internalTruncated;",
+    "            }",
+    "            else {",
+    "                relaySearchBackend = 'glob';",
+    "                const fileDiscovery = this.config.getFileService();",
+    "                const allEntries = [];",
+    "                for (const searchDir of searchDirectories) {",
+    "                    let pattern = this.params.pattern;",
+    "                    const fullPath = path.join(searchDir, pattern);",
+    "                    if (fs.existsSync(fullPath)) {",
+    "                        pattern = escape(pattern);",
+    "                    }",
+    "                    const entries = (await glob(pattern, {",
+    "                        cwd: searchDir,",
+    "                        withFileTypes: true,",
+    "                        nodir: true,",
+    "                        stat: true,",
+    "                        nocase: !this.params.case_sensitive,",
+    "                        dot: true,",
+    "                        ignore: this.config.getFileExclusions().getGlobExcludes(),",
+    "                        follow: false,",
+    "                        signal,",
+    "                    }));",
+    "                    allEntries.push(...entries);",
+    "                }",
+    "                const relativePaths = allEntries.map((p) => path.relative(this.config.getTargetDir(), p.fullpath()));",
+    "                const report = fileDiscovery.filterFilesWithReport(relativePaths, {",
+    "                    respectGitIgnore: this.params?.respect_git_ignore ??",
+    "                        this.config.getFileFilteringOptions().respectGitIgnore ??",
+    "                        DEFAULT_FILE_FILTERING_OPTIONS.respectGitIgnore,",
+    "                    respectGeminiIgnore: this.params?.respect_gemini_ignore ??",
+    "                        this.config.getFileFilteringOptions().respectGeminiIgnore ??",
+    "                        DEFAULT_FILE_FILTERING_OPTIONS.respectGeminiIgnore,",
+    "                });",
+    "                ignoredCount = report.ignoredCount;",
+    "                const filteredAbsolutePaths = new Set(report.filteredPaths.map((p) => path.resolve(this.config.getTargetDir(), p)));",
+    "                filteredEntries = allEntries.filter((entry) => filteredAbsolutePaths.has(entry.fullpath()));",
+    "            }",
+  ].join("\n");
+  output = output.replace(listingBlock, replacementListingBlock);
+
+  const resultBlock = [
+    "            const sortedEntries = sortFileEntries(filteredEntries, nowTimestamp, oneDayInMs);",
+    "            const sortedAbsolutePaths = sortedEntries.map((entry) => entry.fullpath());",
+    "            const fileListDescription = sortedAbsolutePaths.join('\\n');",
+    "            const fileCount = sortedAbsolutePaths.length;",
+    "            let resultMessage = `Found ${fileCount} file(s) matching \"${this.params.pattern}\"`;",
+    "            if (searchDirectories.length === 1) {",
+    "                resultMessage += ` within ${searchDirectories[0]}`;",
+    "            }",
+    "            else {",
+    "                resultMessage += ` across ${searchDirectories.length} workspace directories`;",
+    "            }",
+    "            if (ignoredCount > 0) {",
+    "                resultMessage += ` (${ignoredCount} additional files were ignored)`;",
+    "            }",
+    "            resultMessage += `, sorted by modification time (newest first):\\n${fileListDescription}`;",
+  ].join("\n");
+  if (!output.includes(resultBlock)) {
+    throw new Error("Could not find AionCLI glob result block");
+  }
+  const replacementResultBlock = [
+    "            const sortedEntries = sortFileEntries(filteredEntries, nowTimestamp, oneDayInMs);",
+    "            const relayLimited = relayApplySharedFolderResultCaps(sortedEntries, this.config.getTargetDir(), searchDirectories);",
+    "            const sortedAbsolutePaths = relayLimited.entries.map((entry) => relayEntryFullPath(entry));",
+    "            const fileListDescription = sortedAbsolutePaths.join('\\n');",
+    "            const fileCount = filteredEntries.length;",
+    "            const fileCountLabel = relayInternalTruncated ? `${fileCount}+` : `${fileCount}`;",
+    "            let resultMessage = `Found ${fileCountLabel} file(s) matching \"${this.params.pattern}\"`;",
+    "            if (searchDirectories.length === 1) {",
+    "                resultMessage += ` within ${searchDirectories[0]}`;",
+    "            }",
+    "            else {",
+    "                resultMessage += ` across ${searchDirectories.length} workspace directories`;",
+    "            }",
+    "            resultMessage += ` using ${relaySearchBackend}`;",
+    "            if (ignoredCount > 0) {",
+    "                resultMessage += ` (${ignoredCount} additional files were ignored)`;",
+    "            }",
+    "            if (relayLimited.limited || relayInternalTruncated) {",
+    "                resultMessage += `; showing ${sortedAbsolutePaths.length} representative result(s) capped at ${relayLimited.maxResults} total, ${relayLimited.perFolderLimit} per folder, and ${relayLimited.perBranchLimit} per branch group`;",
+    "            }",
+    "            resultMessage += `, sorted by modification time (newest first):\\n${fileListDescription}`;",
+  ].join("\n");
+  output = output.replace(resultBlock, replacementResultBlock);
+
+  return ensureTrailingNewline(output);
+}
+
+export function patchAionCliCoreRipGrepContent(input) {
+  if (input.includes(relaySharedFolderGrepMarker)) return ensureTrailingNewline(input);
+
+  let output = input;
+  const functionAnchor = "function getRgCandidateFilenames() {";
+  if (!output.includes(functionAnchor)) {
+    throw new Error("Could not find AionCLI ripGrep helper anchor");
+  }
+  output = output.replace(
+    functionAnchor,
+    [
+      `// ${relaySharedFolderGrepMarker}`,
+      "function relayIntEnv(name, fallback) {",
+      "    const value = Number.parseInt(process.env[name] || '', 10);",
+      "    return Number.isFinite(value) && value > 0 ? value : fallback;",
+      "}",
+      "",
+      functionAnchor,
+    ].join("\n"),
+  );
+
+  const maxAnchor = "            const totalMaxMatches = this.params.total_max_matches ?? DEFAULT_TOTAL_MAX_MATCHES;";
+  if (!output.includes(maxAnchor)) {
+    throw new Error("Could not find AionCLI ripGrep max matches anchor");
+  }
+  output = output.replace(
+    maxAnchor,
+    [
+      "            const totalMaxMatches = this.params.total_max_matches ??",
+      "                (this.params.names_only ? relayIntEnv('RELAY_SHARED_SEARCH_NAMES_ONLY_MAX_MATCHES', 500) : DEFAULT_TOTAL_MAX_MATCHES);",
+      "            const relayMaxMatchesPerFile = this.params.max_matches_per_file ??",
+      "                (this.params.names_only ? relayIntEnv('RELAY_SHARED_SEARCH_MAX_MATCHES_PER_FILE', 1) : undefined);",
+    ].join("\n"),
+  );
+
+  const perFileAnchor = "                    max_matches_per_file: this.params.max_matches_per_file,";
+  if (!output.includes(perFileAnchor)) {
+    throw new Error("Could not find AionCLI ripGrep per-file max anchor");
+  }
+  output = output.replace(perFileAnchor, "                    max_matches_per_file: relayMaxMatchesPerFile,");
+  return ensureTrailingNewline(output);
+}
+
+export function patchAionCliCoreToolDefinitionsContent(input) {
+  let output = input;
+  const oldGrepDescription = "description: 'Searches for a regular expression pattern within file contents.',";
+  const newGrepDescription =
+    "description: 'Searches file contents with ripgrep. For broad shared-folder or network-drive searches, first use names_only=true, max_matches_per_file=1, and a focused include glob before reading file content.',";
+  output = output.replaceAll(oldGrepDescription, newGrepDescription);
+  output = output.replace(
+    "description: 'Efficiently finds files matching specific glob patterns",
+    "description: 'Efficiently finds files matching specific glob patterns. Relay Agent caps broad shared-folder results and avoids slow full JS glob walks where possible",
+  );
+  return ensureTrailingNewline(output);
 }
 
 export function patchDeepLinkContent(input, branding = relayBranding()) {
@@ -507,7 +1006,7 @@ export function patchSettingsModalContent(input) {
       typeAnchor.trimEnd(),
       "",
       "function isRelayAdvancedSurfaceTab(tab: SettingTab): boolean {",
-      "  return tab === 'gemini' || tab === 'model' || tab === 'agent' || tab === 'webui';",
+      "  return tab === 'gemini' || tab === 'model' || tab === 'agent' || tab === 'tools' || tab === 'webui' || tab === 'system';",
       "}",
       "",
     ].join("\n"),
@@ -577,13 +1076,40 @@ export function patchSettingsModalContent(input) {
       "",
       "  useEffect(() => {",
       "    if (!relayAdvancedSurfacesEnabled && isRelayAdvancedSurfaceTab(activeTab)) {",
-      "      setActiveTab('tools');",
+      "      setActiveTab('about');",
       "    }",
       "  }, [activeTab, relayAdvancedSurfacesEnabled]);",
       "",
       extensionEffectPrefix,
     ].join("\n"),
   );
+  const extensionGuardAnchor = [
+    "  useEffect(() => {",
+    "    if (!visible) return;",
+    "    void extensionsIpc.getSettingsTabs",
+  ].join("\n");
+  if (output.includes(extensionGuardAnchor)) {
+    output = output.replace(
+      extensionGuardAnchor,
+      [
+        "  useEffect(() => {",
+        "    if (!visible) return;",
+        "    if (!relayAdvancedSurfacesEnabled) {",
+        "      setExtensionTabs([]);",
+        "      return;",
+        "    }",
+        "    void extensionsIpc.getSettingsTabs",
+      ].join("\n"),
+    );
+    output = output.replace(
+      "  }, [visible]);\n\n  // 检测是否在 Electron 桌面环境 / Check if running in Electron desktop environment",
+      "  }, [visible, relayAdvancedSurfacesEnabled]);\n\n  // 检测是否在 Electron 桌面环境 / Check if running in Electron desktop environment",
+    );
+    output = output.replace(
+      "  }, [visible]);\n  // 检测是否在 Electron 桌面环境 / Check if running in Electron desktop environment",
+      "  }, [visible, relayAdvancedSurfacesEnabled]);\n  // 检测是否在 Electron 桌面环境 / Check if running in Electron desktop environment",
+    );
+  }
 
   const menuAnchor = [
     "    const builtinItems: MenuItem[] = [",
@@ -629,15 +1155,43 @@ export function patchSettingsModalContent(input) {
       "      );",
       "    }",
       "",
-      "    builtinItems.push({",
-      "      key: 'tools',",
-      "      label: t('settings.tools'),",
-      "      icon: <Toolkit theme='outline' size='20' fill={iconColors.secondary} />,",
-      "    });",
+      "    if (relayAdvancedSurfacesEnabled) {",
+      "      builtinItems.push({",
+      "        key: 'tools',",
+      "        label: t('settings.tools'),",
+      "        icon: <Toolkit theme='outline' size='20' fill={iconColors.secondary} />,",
+      "      });",
+      "    }",
       "",
       "    if (isDesktop && relayAdvancedSurfacesEnabled) {",
     ].join("\n"),
   );
+  const systemAboutAnchor = [
+    "    builtinItems.push(",
+    "      {",
+    "        key: 'system',",
+    "        label: t('settings.system'),",
+    "        icon: <Computer theme='outline' size='20' fill={iconColors.secondary} />,",
+    "      },",
+    "      { key: 'about', label: t('settings.about'), icon: <Info theme='outline' size='20' fill={iconColors.secondary} /> }",
+    "    );",
+  ].join("\n");
+  if (output.includes(systemAboutAnchor)) {
+    output = output.replace(
+      systemAboutAnchor,
+      [
+        "    if (relayAdvancedSurfacesEnabled) {",
+        "      builtinItems.push({",
+        "        key: 'system',",
+        "        label: t('settings.system'),",
+        "        icon: <Computer theme='outline' size='20' fill={iconColors.secondary} />,",
+        "      });",
+        "    }",
+        "",
+        "    builtinItems.push({ key: 'about', label: t('settings.about'), icon: <Info theme='outline' size='20' fill={iconColors.secondary} /> });",
+      ].join("\n"),
+    );
+  }
 
   output = output.replace(
     "  }, [t, isDesktop, extensionTabs, resolveExtTabName]);",
@@ -656,7 +1210,7 @@ export function patchSettingsModalContent(input) {
     [
       "  const renderBuiltinContent = () => {",
       "    if (!relayAdvancedSurfacesEnabled && isRelayAdvancedSurfaceTab(activeTab)) {",
-      "      return <ToolsModalContent />;",
+      "      return <AboutModalContent />;",
       "    }",
       "",
       "    switch (activeTab) {",
@@ -958,6 +1512,85 @@ function copyRelayGatewayResources(targetRoot) {
   return resourcesDir;
 }
 
+function copyRelayToolResources(targetRoot, sources = {}) {
+  const ripgrepSourcePath =
+    sources.ripgrepSourcePath ??
+    resolve(repoRoot, "apps/desktop/src-tauri/binaries/relay-rg-x86_64-pc-windows-msvc.exe");
+  if (!existsSync(ripgrepSourcePath)) {
+    throw new Error(
+      `Bundled ripgrep was not found: ${ripgrepSourcePath}. Run TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-msvc node apps/desktop/scripts/fetch-bundled-ripgrep.mjs before applying the AionUi overlay.`,
+    );
+  }
+  const nodeSourcePath =
+    sources.nodeSourcePath ??
+    resolve(repoRoot, "apps/desktop/src-tauri/binaries/relay-node-x86_64-pc-windows-msvc.exe");
+  if (!existsSync(nodeSourcePath)) {
+    throw new Error(
+      `Bundled Node was not found: ${nodeSourcePath}. Run TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-msvc node apps/desktop/scripts/fetch-bundled-node.mjs before applying the AionUi overlay.`,
+    );
+  }
+  const liteparseSourceDir =
+    sources.liteparseSourceDir ?? resolve(repoRoot, "apps/desktop/src-tauri/liteparse-runner");
+  if (!existsSync(resolve(liteparseSourceDir, "parse.mjs")) || !existsSync(resolve(liteparseSourceDir, "node_modules"))) {
+    throw new Error(
+      `LiteParse runner was not prepared: ${liteparseSourceDir}. Run npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner before applying the AionUi overlay.`,
+    );
+  }
+
+  const ripgrepDir = resolve(targetRoot, "resources/relay-tools/ripgrep");
+  const nodeDir = resolve(targetRoot, "resources/relay-tools/node");
+  const liteparseDir = resolve(targetRoot, "resources/relay-tools/liteparse-runner");
+  mkdirSync(ripgrepDir, { recursive: true });
+  mkdirSync(nodeDir, { recursive: true });
+  copyFileSync(ripgrepSourcePath, resolve(ripgrepDir, "rg.exe"));
+  copyFileSync(nodeSourcePath, resolve(nodeDir, "relay-node.exe"));
+  cpSync(liteparseSourceDir, liteparseDir, { recursive: true });
+  return resolve(targetRoot, "resources/relay-tools");
+}
+
+export function relayDocumentSearchSkillContent() {
+  return ensureTrailingNewline(
+    [
+      "---",
+      "name: relay-document-search",
+      'description: "Use this skill for beginner-facing document search, local file discovery, Office/PDF reading, and evidence-backed summaries in Relay Agent."',
+      "---",
+      "",
+      "# Relay Document Search Skill",
+      "",
+      "This skill is the single beginner-facing `資料を探す` workflow. It covers file discovery, content checks, and evidence-backed summaries. Do not ask the user to choose between separate search and summary modes before starting.",
+      "",
+      "## Routing",
+      "",
+      "- Treat requests to find files, search folders, inspect local documents, or summarize local files as one document-finding workflow.",
+      "- If the provider tool catalog exposes `relay_document_search`, `relay-document-search`, `workspace_document_search`, `workspace-search`, or `find-files`, call that high-level tool first.",
+      "- Do not manually decompose the first step into raw `glob`, `grep`, and `read` calls when a high-level document search tool is available.",
+      "- If only low-level tools are available, use broad discovery first, then read exact candidates, then summarize from confirmed evidence only.",
+      "",
+      "## Search Quality",
+      "",
+      "- Expand the user's terms with obvious Japanese/English variants, abbreviations, fiscal-period terms, and supporting workpaper terms.",
+      "- For finance/CFS work, search direct terms such as `キャッシュフロー`, `CFS`, `CF`, `連結CF`, and `連結CFS`, plus supporting terms such as `精算表`, `設備投資`, `償却`, `有利子負債`, `BS`, and `PL`.",
+      "- Treat filing, disclosure, output, review, and backup folders as candidates, not proof that the files are source workpapers.",
+      "- If early results are concentrated in one branch, quarter, filing folder, backup folder, or filename family, continue searching sibling folders and alternate terms before finalizing.",
+      "",
+      "## Evidence",
+      "",
+      "- Never present a file as required, latest, authoritative, or source-of-truth unless tool results prove it.",
+      "- Separate direct source/workpaper candidates, supporting evidence, disclosure/output files, and backups.",
+      "- For summaries, cite the available file, page, sheet, cell range, heading, or excerpt anchor. If extraction is unavailable, say so instead of guessing.",
+      "- Keep internal terms such as AionUi, Dedoc, Evidence Pack, Query Trace, parser lineage, and reader capabilities out of beginner-facing answers unless the user opens support details.",
+    ].join("\n"),
+  );
+}
+
+function copyRelaySkillResources(targetRoot) {
+  const skillDir = resolve(targetRoot, "src/process/resources/skills/relay-document-search");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(resolve(skillDir, "SKILL.md"), relayDocumentSearchSkillContent(), "utf8");
+  return skillDir;
+}
+
 function patchRendererLocaleFiles(targetRoot) {
   const localeRoot = resolve(targetRoot, "src/renderer/services/i18n/locales");
   if (!existsSync(localeRoot)) return;
@@ -972,6 +1605,140 @@ function patchRendererLocaleFiles(targetRoot) {
   }
 }
 
+function patchAionCliCoreSearchFiles(targetRoot) {
+  const coreRoot = resolve(targetRoot, "node_modules/@office-ai/aioncli-core/dist/src");
+  if (!existsSync(coreRoot)) {
+    return null;
+  }
+
+  const globPath = resolve(coreRoot, "tools/glob.js");
+  const ripGrepPath = resolve(coreRoot, "tools/ripGrep.js");
+  const definitionPaths = [
+    resolve(coreRoot, "tools/definitions/model-family-sets/default-legacy.js"),
+    resolve(coreRoot, "tools/definitions/model-family-sets/gemini-3.js"),
+  ];
+
+  for (const requiredPath of [globPath, ripGrepPath, ...definitionPaths]) {
+    if (!existsSync(requiredPath)) {
+      throw new Error(`AionCLI shared search patch target was not found: ${requiredPath}`);
+    }
+  }
+
+  writeFileSync(globPath, patchAionCliCoreGlobContent(readFileSync(globPath, "utf8")), "utf8");
+  writeFileSync(ripGrepPath, patchAionCliCoreRipGrepContent(readFileSync(ripGrepPath, "utf8")), "utf8");
+  for (const definitionPath of definitionPaths) {
+    writeFileSync(
+      definitionPath,
+      patchAionCliCoreToolDefinitionsContent(readFileSync(definitionPath, "utf8")),
+      "utf8",
+    );
+  }
+
+  return {
+    coreRoot,
+    globPath,
+    ripGrepPath,
+    definitionPaths,
+  };
+}
+
+export function patchAionuiBuildMcpServersContent(input) {
+  if (input.includes("relay-document-search-mcp-stdio.js")) {
+    return input;
+  }
+
+  const anchor = [
+    "    esbuild.build({",
+    "      ...SHARED_OPTIONS,",
+    "      entryPoints: [path.join(ROOT, 'src/process/team/mcp/guide/teamGuideMcpStdio.ts')],",
+    "      outfile: path.join(ROOT, 'out/main/team-guide-mcp-stdio.js'),",
+    "    }),",
+  ].join("\n");
+  if (!input.includes(anchor)) {
+    throw new Error("Could not find build-mcp-servers team-guide entry anchor");
+  }
+  return input.replace(
+    anchor,
+    [
+      anchor,
+      "    esbuild.build({",
+      "      ...SHARED_OPTIONS,",
+      "      entryPoints: [path.join(ROOT, 'src/process/utils/relayDocumentSearchMcpStdio.ts')],",
+      "      outfile: path.join(ROOT, 'out/main/relay-document-search-mcp-stdio.js'),",
+      "    }),",
+    ].join("\n"),
+  );
+}
+
+export function patchAionrsManagerContent(input) {
+  let output = input;
+  if (!output.includes("import path from 'path';")) {
+    const anchor = "import { ipcBridge } from '@/common';";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find AionrsManager import anchor");
+    }
+    output = output.replace(anchor, `${anchor}\nimport path from 'path';`);
+  }
+
+  const injection = [
+    "      const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig(mergedData.workspace);",
+    "      if (relayDocumentSearch) stdioMcpServers.push(relayDocumentSearch);",
+  ].join("\n");
+  if (!output.includes(injection)) {
+    const anchor = [
+      "      const teamGuide = await this.buildTeamGuideMcpStdioConfig();",
+      "      if (teamGuide) stdioMcpServers.push(teamGuide);",
+      "    }",
+    ].join("\n");
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find AionrsManager team-guide MCP injection anchor");
+    }
+    output = output.replace(anchor, `${anchor}\n${injection}`);
+  }
+
+  if (!output.includes("private buildRelayDocumentSearchMcpStdioConfig")) {
+    const anchor = [
+      "  }",
+      "",
+      "  async stop() {",
+    ].join("\n");
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find AionrsManager stop method anchor");
+    }
+    output = output.replace(
+      anchor,
+      [
+        "  }",
+        "",
+        "  private buildRelayDocumentSearchMcpStdioConfig(workspace?: string): StdioMcpOption | undefined {",
+        "    const scriptPath = path.join(__dirname, 'relay-document-search-mcp-stdio.js');",
+        "    return {",
+        "      name: 'relay-document-search',",
+        "      command: 'node',",
+        "      args: [scriptPath],",
+        "      env: [",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_WORKSPACE', value: workspace || '' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_CONVERSATION_ID', value: this.conversation_id },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'metadata-cache') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'filename-index') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'user-memory') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'sync-journal') },",
+        "      ],",
+        "    };",
+        "  }",
+        "",
+        "  async stop() {",
+      ].join("\n"),
+    );
+  }
+
+  return output;
+}
+
 function findRendererThemeBasePath(targetRoot) {
   for (const candidate of rendererThemeBaseCandidates) {
     const candidatePath = resolve(targetRoot, candidate);
@@ -982,7 +1749,7 @@ function findRendererThemeBasePath(targetRoot) {
   );
 }
 
-export function applyAionuiOverlay(aionuiDir) {
+export function applyAionuiOverlay(aionuiDir, options = {}) {
   const targetRoot = resolve(aionuiDir);
   const indexPath = resolve(targetRoot, "src/index.ts");
   const initStoragePath = resolve(targetRoot, "src/process/utils/initStorage.ts");
@@ -1004,12 +1771,16 @@ export function applyAionuiOverlay(aionuiDir) {
   const agentLogoPath = resolve(targetRoot, "src/renderer/utils/model/agentLogo.ts");
   const titlebarPath = resolve(targetRoot, "src/renderer/components/layout/Titlebar/index.tsx");
   const layoutPath = resolve(targetRoot, "src/renderer/components/layout/Layout.tsx");
+  const guidPagePath = resolve(targetRoot, "src/renderer/pages/guid/GuidPage.tsx");
+  const guidActionRowPath = resolve(targetRoot, "src/renderer/pages/guid/components/GuidActionRow.tsx");
   const rendererThemeBasePath = findRendererThemeBasePath(targetRoot);
   const settingsModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/index.tsx");
   const webuiModalPath = resolve(
     targetRoot,
     "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx",
   );
+  const buildMcpServersPath = resolve(targetRoot, "scripts/build-mcp-servers.js");
+  const aionrsManagerPath = resolve(targetRoot, "src/process/task/AionrsManager.ts");
   for (const requiredPath of [
     indexPath,
     packageJsonPath,
@@ -1027,9 +1798,13 @@ export function applyAionuiOverlay(aionuiDir) {
     agentLogoPath,
     titlebarPath,
     layoutPath,
+    guidPagePath,
+    guidActionRowPath,
     rendererThemeBasePath,
     settingsModalPath,
     webuiModalPath,
+    buildMcpServersPath,
+    aionrsManagerPath,
   ]) {
     if (!existsSync(requiredPath)) {
       throw new Error(`AionUi overlay target was not found: ${requiredPath}`);
@@ -1041,10 +1816,334 @@ export function applyAionuiOverlay(aionuiDir) {
   const relaySeedTarget = resolve(targetRoot, "src/process/utils/relaySeed.ts");
   const relayGatewaySource = resolve(overlayRoot, "src/process/utils/relayGateway.ts");
   const relayGatewayTarget = resolve(targetRoot, "src/process/utils/relayGateway.ts");
+  const relayDocumentSearchContractSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchContract.ts",
+  );
+  const relayDocumentSearchContractTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchContract.ts",
+  );
+  const relayDocumentSearchExecutorSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchExecutor.ts",
+  );
+  const relayDocumentSearchExecutorTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchExecutor.ts",
+  );
+  const relayDocumentSearchQueryPlanSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchQueryPlan.ts",
+  );
+  const relayDocumentSearchQueryPlanTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchQueryPlan.ts",
+  );
+  const relayDocumentSearchIndexReportSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchIndexReport.ts",
+  );
+  const relayDocumentSearchIndexReportTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchIndexReport.ts",
+  );
+  const relayDocumentSearchResultGroupingSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchResultGrouping.ts",
+  );
+  const relayDocumentSearchResultGroupingTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchResultGrouping.ts",
+  );
+  const relayDocumentSearchProductResultSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchProductResult.ts",
+  );
+  const relayDocumentSearchProductResultTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchProductResult.ts",
+  );
+  const relayDocumentSearchFolderRolesSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchFolderRoles.ts",
+  );
+  const relayDocumentSearchFolderRolesTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchFolderRoles.ts",
+  );
+  const relayDocumentSearchUserMemorySource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchUserMemory.ts",
+  );
+  const relayDocumentSearchUserMemoryTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchUserMemory.ts",
+  );
+  const relayDocumentSearchCacheActionsSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchCacheActions.ts",
+  );
+  const relayDocumentSearchCacheActionsTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchCacheActions.ts",
+  );
+  const relayDocumentSearchSyncJournalSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchSyncJournal.ts",
+  );
+  const relayDocumentSearchSyncJournalTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchSyncJournal.ts",
+  );
+  const relayDocumentSearchSchedulerReportSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchSchedulerReport.ts",
+  );
+  const relayDocumentSearchSchedulerReportTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchSchedulerReport.ts",
+  );
+  const relayDocumentSearchIndexMaintenanceSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchIndexMaintenance.ts",
+  );
+  const relayDocumentSearchIndexMaintenanceTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchIndexMaintenance.ts",
+  );
+  const relayDocumentSearchQualityGatesSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchQualityGates.ts",
+  );
+  const relayDocumentSearchQualityGatesTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchQualityGates.ts",
+  );
+  const relayDocumentSearchQueryTraceSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchQueryTrace.ts",
+  );
+  const relayDocumentSearchQueryTraceTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchQueryTrace.ts",
+  );
+  const relayDocumentSearchEvidenceRedactionSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchEvidenceRedaction.ts",
+  );
+  const relayDocumentSearchEvidenceRedactionTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchEvidenceRedaction.ts",
+  );
+  const relayDocumentSearchEvidencePackSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchEvidencePack.ts",
+  );
+  const relayDocumentSearchEvidencePackTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchEvidencePack.ts",
+  );
+  const relayDocumentSearchLocalDraftSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchLocalDraft.ts",
+  );
+  const relayDocumentSearchLocalDraftTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchLocalDraft.ts",
+  );
+  const relayDocumentSearchPolishRequestSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchPolishRequest.ts",
+  );
+  const relayDocumentSearchPolishRequestTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchPolishRequest.ts",
+  );
+  const relayDocumentSearchPolishProviderSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchPolishProvider.ts",
+  );
+  const relayDocumentSearchPolishProviderTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchPolishProvider.ts",
+  );
+  const relayDocumentSearchPolishValidationSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchPolishValidation.ts",
+  );
+  const relayDocumentSearchPolishValidationTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchPolishValidation.ts",
+  );
+  const relayDocumentSearchAnswerSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchAnswer.ts",
+  );
+  const relayDocumentSearchAnswerTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchAnswer.ts",
+  );
+  const relayDocumentSearchCopilotStateSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchCopilotState.ts",
+  );
+  const relayDocumentSearchCopilotStateTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchCopilotState.ts",
+  );
+  const relayDocumentSearchFreshnessSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchFreshness.ts",
+  );
+  const relayDocumentSearchFreshnessTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchFreshness.ts",
+  );
+  const relayDocumentSearchMetadataCacheSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchMetadataCache.ts",
+  );
+  const relayDocumentSearchMetadataCacheTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchMetadataCache.ts",
+  );
+  const relayDocumentSearchFilenameIndexSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchFilenameIndex.ts",
+  );
+  const relayDocumentSearchFilenameIndexTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchFilenameIndex.ts",
+  );
+  const relayDocumentSearchIndexCoordinatorSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchIndexCoordinator.ts",
+  );
+  const relayDocumentSearchIndexCoordinatorTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchIndexCoordinator.ts",
+  );
+  const relayDocumentSearchIndexDbSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchIndexDb.ts",
+  );
+  const relayDocumentSearchIndexDbTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchIndexDb.ts",
+  );
+  const relayParsedDocumentCacheSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayParsedDocumentCache.ts",
+  );
+  const relayParsedDocumentCacheTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayParsedDocumentCache.ts",
+  );
+  const relayParsedDocumentIrSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayParsedDocumentIr.ts",
+  );
+  const relayParsedDocumentIrTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayParsedDocumentIr.ts",
+  );
+  const relayDocumentSearchDerivedContentIndexSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchDerivedContentIndex.ts",
+  );
+  const relayDocumentSearchDerivedContentIndexTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchDerivedContentIndex.ts",
+  );
+  const relayDocumentSearchJobLifecycleSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchJobLifecycle.ts",
+  );
+  const relayDocumentSearchJobLifecycleTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchJobLifecycle.ts",
+  );
+  const relayDocumentSearchJobStoreSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchJobStore.ts",
+  );
+  const relayDocumentSearchJobStoreTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchJobStore.ts",
+  );
+  const relayDocumentSearchBridgeSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchBridge.ts",
+  );
+  const relayDocumentSearchBridgeTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchBridge.ts",
+  );
+  const relayDocumentSearchDisplaySource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchDisplay.ts",
+  );
+  const relayDocumentSearchDisplayTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchDisplay.ts",
+  );
+  const relayDocumentSearchSupportExportSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchSupportExport.ts",
+  );
+  const relayDocumentSearchSupportExportTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchSupportExport.ts",
+  );
+  const relayDocumentSearchMcpSource = resolve(
+    overlayRoot,
+    "src/process/utils/relayDocumentSearchMcpStdio.ts",
+  );
+  const relayDocumentSearchMcpTarget = resolve(
+    targetRoot,
+    "src/process/utils/relayDocumentSearchMcpStdio.ts",
+  );
 
   mkdirSync(dirname(relaySeedTarget), { recursive: true });
   copyFileSync(relaySeedSource, relaySeedTarget);
   copyFileSync(relayGatewaySource, relayGatewayTarget);
+  copyFileSync(relayDocumentSearchContractSource, relayDocumentSearchContractTarget);
+  copyFileSync(relayDocumentSearchExecutorSource, relayDocumentSearchExecutorTarget);
+  copyFileSync(relayDocumentSearchQueryPlanSource, relayDocumentSearchQueryPlanTarget);
+  copyFileSync(relayDocumentSearchIndexReportSource, relayDocumentSearchIndexReportTarget);
+  copyFileSync(relayDocumentSearchResultGroupingSource, relayDocumentSearchResultGroupingTarget);
+  copyFileSync(relayDocumentSearchProductResultSource, relayDocumentSearchProductResultTarget);
+  copyFileSync(relayDocumentSearchFolderRolesSource, relayDocumentSearchFolderRolesTarget);
+  copyFileSync(relayDocumentSearchUserMemorySource, relayDocumentSearchUserMemoryTarget);
+  copyFileSync(relayDocumentSearchCacheActionsSource, relayDocumentSearchCacheActionsTarget);
+  copyFileSync(relayDocumentSearchSyncJournalSource, relayDocumentSearchSyncJournalTarget);
+  copyFileSync(relayDocumentSearchSchedulerReportSource, relayDocumentSearchSchedulerReportTarget);
+  copyFileSync(relayDocumentSearchIndexMaintenanceSource, relayDocumentSearchIndexMaintenanceTarget);
+  copyFileSync(relayDocumentSearchQualityGatesSource, relayDocumentSearchQualityGatesTarget);
+  copyFileSync(relayDocumentSearchQueryTraceSource, relayDocumentSearchQueryTraceTarget);
+  copyFileSync(relayDocumentSearchEvidenceRedactionSource, relayDocumentSearchEvidenceRedactionTarget);
+  copyFileSync(relayDocumentSearchEvidencePackSource, relayDocumentSearchEvidencePackTarget);
+  copyFileSync(relayDocumentSearchLocalDraftSource, relayDocumentSearchLocalDraftTarget);
+  copyFileSync(relayDocumentSearchPolishRequestSource, relayDocumentSearchPolishRequestTarget);
+  copyFileSync(relayDocumentSearchPolishProviderSource, relayDocumentSearchPolishProviderTarget);
+  copyFileSync(relayDocumentSearchPolishValidationSource, relayDocumentSearchPolishValidationTarget);
+  copyFileSync(relayDocumentSearchAnswerSource, relayDocumentSearchAnswerTarget);
+  copyFileSync(relayDocumentSearchCopilotStateSource, relayDocumentSearchCopilotStateTarget);
+  copyFileSync(relayDocumentSearchFreshnessSource, relayDocumentSearchFreshnessTarget);
+  copyFileSync(relayDocumentSearchMetadataCacheSource, relayDocumentSearchMetadataCacheTarget);
+  copyFileSync(relayDocumentSearchFilenameIndexSource, relayDocumentSearchFilenameIndexTarget);
+  copyFileSync(relayDocumentSearchIndexCoordinatorSource, relayDocumentSearchIndexCoordinatorTarget);
+  copyFileSync(relayDocumentSearchIndexDbSource, relayDocumentSearchIndexDbTarget);
+  copyFileSync(relayParsedDocumentCacheSource, relayParsedDocumentCacheTarget);
+  copyFileSync(relayParsedDocumentIrSource, relayParsedDocumentIrTarget);
+  copyFileSync(relayDocumentSearchDerivedContentIndexSource, relayDocumentSearchDerivedContentIndexTarget);
+  copyFileSync(relayDocumentSearchJobLifecycleSource, relayDocumentSearchJobLifecycleTarget);
+  copyFileSync(relayDocumentSearchJobStoreSource, relayDocumentSearchJobStoreTarget);
+  copyFileSync(relayDocumentSearchBridgeSource, relayDocumentSearchBridgeTarget);
+  copyFileSync(relayDocumentSearchDisplaySource, relayDocumentSearchDisplayTarget);
+  copyFileSync(relayDocumentSearchSupportExportSource, relayDocumentSearchSupportExportTarget);
+  copyFileSync(relayDocumentSearchMcpSource, relayDocumentSearchMcpTarget);
 
   const patched = patchInitStorageContent(readFileSync(initStoragePath, "utf8"));
   writeFileSync(indexPath, patchIndexContent(readFileSync(indexPath, "utf8")), "utf8");
@@ -1072,12 +2171,19 @@ export function applyAionuiOverlay(aionuiDir) {
   writeFileSync(agentLogoPath, patchAgentLogoContent(readFileSync(agentLogoPath, "utf8")), "utf8");
   writeFileSync(titlebarPath, patchTitlebarContent(readFileSync(titlebarPath, "utf8")), "utf8");
   writeFileSync(layoutPath, patchLayoutBrandContent(readFileSync(layoutPath, "utf8")), "utf8");
+  writeFileSync(guidPagePath, patchGuidPageContent(readFileSync(guidPagePath, "utf8")), "utf8");
+  writeFileSync(guidActionRowPath, patchGuidActionRowContent(readFileSync(guidActionRowPath, "utf8")), "utf8");
   writeFileSync(rendererThemeBasePath, patchRendererThemeBaseContent(readFileSync(rendererThemeBasePath, "utf8")), "utf8");
   patchRendererLocaleFiles(targetRoot);
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");
+  writeFileSync(buildMcpServersPath, patchAionuiBuildMcpServersContent(readFileSync(buildMcpServersPath, "utf8")), "utf8");
+  writeFileSync(aionrsManagerPath, patchAionrsManagerContent(readFileSync(aionrsManagerPath, "utf8")), "utf8");
+  const aionCliCoreSearchPatch = patchAionCliCoreSearchFiles(targetRoot);
   const brandingAssets = copyBrandingAssets(targetRoot);
   const relayGatewayResourcesDir = copyRelayGatewayResources(targetRoot);
+  const relayToolsResourcesDir = copyRelayToolResources(targetRoot, options.relayToolSources);
+  const relayDocumentSearchSkillDir = copyRelaySkillResources(targetRoot);
 
   return {
     brandingAssets,
@@ -1085,16 +2191,57 @@ export function applyAionuiOverlay(aionuiDir) {
     electronBuilderPath,
     rendererIndexHtmlPath,
     publicManifestPath,
+    guidPagePath,
     rendererThemeBasePath,
     indexPath,
     initStoragePath,
     packageJsonPath,
     trayPath,
     relayGatewayResourcesDir,
+    relayToolsResourcesDir,
+    relayDocumentSearchSkillDir,
+    relayDocumentSearchContractTarget,
+    relayDocumentSearchExecutorTarget,
+    relayDocumentSearchQueryPlanTarget,
+    relayDocumentSearchIndexReportTarget,
+    relayDocumentSearchResultGroupingTarget,
+    relayDocumentSearchProductResultTarget,
+    relayDocumentSearchFolderRolesTarget,
+    relayDocumentSearchUserMemoryTarget,
+    relayDocumentSearchCacheActionsTarget,
+    relayDocumentSearchSyncJournalTarget,
+    relayDocumentSearchSchedulerReportTarget,
+    relayDocumentSearchIndexMaintenanceTarget,
+    relayDocumentSearchQualityGatesTarget,
+    relayDocumentSearchQueryTraceTarget,
+    relayDocumentSearchEvidenceRedactionTarget,
+    relayDocumentSearchEvidencePackTarget,
+    relayDocumentSearchLocalDraftTarget,
+    relayDocumentSearchPolishRequestTarget,
+    relayDocumentSearchPolishProviderTarget,
+    relayDocumentSearchPolishValidationTarget,
+    relayDocumentSearchAnswerTarget,
+    relayDocumentSearchCopilotStateTarget,
+    relayDocumentSearchFreshnessTarget,
+    relayDocumentSearchMetadataCacheTarget,
+    relayDocumentSearchFilenameIndexTarget,
+    relayDocumentSearchIndexCoordinatorTarget,
+    relayDocumentSearchIndexDbTarget,
+    relayParsedDocumentCacheTarget,
+    relayParsedDocumentIrTarget,
+    relayDocumentSearchJobLifecycleTarget,
+    relayDocumentSearchJobStoreTarget,
+    relayDocumentSearchBridgeTarget,
+    relayDocumentSearchDisplayTarget,
+    relayDocumentSearchSupportExportTarget,
+    relayDocumentSearchMcpTarget,
     relayGatewayTarget,
     relaySeedTarget,
+    aionCliCoreSearchPatch,
     settingsModalPath,
     webuiModalPath,
+    buildMcpServersPath,
+    aionrsManagerPath,
   };
 }
 

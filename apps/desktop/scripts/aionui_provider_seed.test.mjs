@@ -11,6 +11,28 @@ import {
   aionuiRelayConfigSeed,
   aionuiRelayDefaultModel,
   aionuiRelayProviderConfig,
+  AIONUI_RELAY_BEGINNER_HIDDEN_SETTINGS_TABS,
+  AIONUI_RELAY_BEGINNER_HIDDEN_SURFACES,
+  AIONUI_RELAY_BEGINNER_TASK_LABELS,
+  AIONUI_RELAY_BEGINNER_VISIBLE_SETTINGS_TABS,
+  AIONUI_RELAY_AIONUI_UX_REUSED_SURFACES,
+  AIONUI_RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS,
+  AIONUI_RELAY_DEFAULT_ASSISTANTS,
+  AIONUI_RELAY_DEFAULT_SKILLS,
+  AIONUI_RELAY_GUID_BEGINNER_FLOW_STEPS,
+  AIONUI_RELAY_GUID_EXAMPLE_PROMPTS,
+  AIONUI_RELAY_GUID_REQUIRED_CONTROLS,
+  AIONUI_RELAY_GUID_START_ACTION,
+  AIONUI_RELAY_HIDDEN_ASSISTANT_PRESET_IDS,
+  AIONUI_RELAY_QUERY_PLANNING,
+  AIONUI_RELAY_SEARCH_EMPTY_STATE_ACTIONS,
+  AIONUI_RELAY_SEARCH_RESULT_BATCHING,
+  AIONUI_RELAY_SEARCH_RESULT_CARD_ACTIONS,
+  AIONUI_RELAY_SEARCH_RESULT_CARD_FIELDS,
+  AIONUI_RELAY_SEARCH_STATE_LABELS,
+  AIONUI_RELAY_VISIBLE_ASSISTANT_PRESET_IDS,
+  AIONUI_RELAY_WORKSPACE_SEARCH_HIDDEN_TERMS,
+  AIONUI_RELAY_WORKSPACE_SEARCH_SKILLS,
   mergeAionuiModelConfig,
   writeAionuiProviderSeedFile,
 } from "./aionui_provider_seed.mjs";
@@ -58,16 +80,120 @@ test("AionUi config seed disables beginner-hostile surfaces by default", () => {
   assert.equal(seed["relay.channels.enabled"], false);
   assert.equal(seed["relay.providerOnboarding.enabled"], false);
   assert.equal(seed["relay.remoteAccess.enabled"], false);
+  assert.equal(seed["relay.workspaceSearch.enabled"], true);
+  assert.equal(seed["relay.workspaceSearch.surface"], "aionui");
+  assert.equal(seed["relay.workspaceSearch.integrationMode"], "skills-first");
+  assert.equal(seed["relay.workspaceSearch.rendererPolicy"], "lightweight-aionui-result-renderers");
+  assert.deepEqual(
+    seed["relay.workspaceSearch.defaultSkillEntrypoints"],
+    [...AIONUI_RELAY_WORKSPACE_SEARCH_SKILLS],
+  );
+  assert.equal(seed["relay.workspaceSearch.legacyDiagnosticShell"], false);
+  assert.deepEqual(
+    seed["relay.workspaceSearch.hiddenBeginnerTerms"],
+    [...AIONUI_RELAY_WORKSPACE_SEARCH_HIDDEN_TERMS],
+  );
+  assert.equal(seed["relay.aionuiUx.integrationMode"], "reuse-core-conversation-workspace-preview");
+  assert.equal(seed["relay.aionuiUx.primaryEntrypoint"], "guid-page-task-launcher");
+  assert.deepEqual(seed["relay.aionuiUx.searchEntrypoints"], [
+    ...AIONUI_RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS,
+  ]);
+  assert.deepEqual(seed["relay.aionuiUx.reusedSurfaces"], [
+    ...AIONUI_RELAY_AIONUI_UX_REUSED_SURFACES,
+  ]);
+  assert.equal(seed["relay.aionuiUx.resultPlacement"], "chat-message-plus-preview-panel");
+  assert.equal(seed["relay.aionuiUx.noNewSearchShell"], true);
+  assert.equal(seed["relay.aionuiUx.noFullAssistantGalleryDefault"], true);
+  assert.equal(seed["relay.guidUx.mode"], "curated-task-launcher");
+  assert.equal(seed["relay.guidUx.primarySurface"], "GuidPage");
+  assert.deepEqual(seed["relay.guidUx.beginnerFlowSteps"], [
+    ...AIONUI_RELAY_GUID_BEGINNER_FLOW_STEPS,
+  ]);
+  assert.deepEqual(seed["relay.guidUx.requiredControls"], [
+    ...AIONUI_RELAY_GUID_REQUIRED_CONTROLS,
+  ]);
+  assert.deepEqual(seed["relay.guidUx.defaultTaskEntries"], [
+    ...AIONUI_RELAY_BEGINNER_TASK_LABELS,
+  ]);
+  assert.equal(seed["relay.guidUx.primaryCta"], "aionui-normal-send-flow");
+  assert.deepEqual(seed["relay.guidUx.startAction"], {
+    ...AIONUI_RELAY_GUID_START_ACTION,
+  });
+  assert.equal(seed["relay.guidUx.noStandaloneSearchStartButton"], true);
+  assert.equal(seed["relay.guidUx.examplePromptStrategy"], "task-aware-recent-and-popular");
+  assert.deepEqual(seed["relay.guidUx.examplePrompts"], [
+    ...AIONUI_RELAY_GUID_EXAMPLE_PROMPTS,
+  ]);
+  assert.equal(seed["relay.guidUx.allowSkipTutorial"], true);
+  assert.equal(seed["relay.guidUx.noForcedTour"], true);
+  assert.deepEqual(seed["relay.searchUx.stateLabels"], [
+    ...AIONUI_RELAY_SEARCH_STATE_LABELS,
+  ]);
+  assert.equal(seed["relay.searchUx.noResultsGuidance"], true);
+  assert.deepEqual(seed["relay.searchUx.resultCardFields"], [
+    ...AIONUI_RELAY_SEARCH_RESULT_CARD_FIELDS,
+  ]);
+  assert.deepEqual(seed["relay.searchUx.resultCardActions"], [
+    ...AIONUI_RELAY_SEARCH_RESULT_CARD_ACTIONS,
+  ]);
+  assert.deepEqual(seed["relay.searchUx.resultBatching"], {
+    ...AIONUI_RELAY_SEARCH_RESULT_BATCHING,
+  });
+  assert.deepEqual(seed["relay.searchUx.emptyStateActions"], [
+    ...AIONUI_RELAY_SEARCH_EMPTY_STATE_ACTIONS,
+  ]);
+  assert.equal(seed["relay.searchUx.defaultSearchMode"], "thorough");
+  assert.equal(seed["relay.searchUx.quickCandidateMode"], "progress-only");
+  assert.equal(seed["relay.searchUx.confirmedResultRequirement"], "content-or-evidence-backed");
+  assert.deepEqual(seed["relay.searchUx.queryPlanning"], {
+    ...AIONUI_RELAY_QUERY_PLANNING,
+  });
+  assert.equal(seed["relay.searchUx.autocomplete"], "debounced-suggestions");
+  assert.equal(seed["relay.searchUx.progressiveDisclosure"], "status-chip-to-details-drawer");
+  assert.equal(seed["relay.searchUx.answerBoundary"], "candidate-until-evidence-backed");
+  assert.deepEqual(seed["relay.beginnerUx.visibleSettingsTabs"], [
+    ...AIONUI_RELAY_BEGINNER_VISIBLE_SETTINGS_TABS,
+  ]);
+  assert.deepEqual(seed["relay.beginnerUx.hiddenSettingsTabs"], [
+    ...AIONUI_RELAY_BEGINNER_HIDDEN_SETTINGS_TABS,
+  ]);
+  assert.deepEqual(seed["relay.beginnerUx.hiddenSurfaces"], [
+    ...AIONUI_RELAY_BEGINNER_HIDDEN_SURFACES,
+  ]);
+  assert.ok(seed["relay.beginnerUx.hiddenSurfaces"].includes("assistant-preset-add-button"));
+  assert.ok(seed["relay.beginnerUx.hiddenSurfaces"].includes("guid-auto-skills-menu"));
+  assert.ok(seed["relay.beginnerUx.hiddenSurfaces"].includes("preset-agent-backend-switcher"));
+  assert.equal(seed["relay.beginnerUx.hideSkillsMarketBanner"], true);
+  assert.equal(seed["relay.beginnerUx.hideModelAndModeSwitchers"], true);
+  assert.equal(seed["relay.beginnerUx.hideExtensionSettings"], true);
+  assert.equal(seed["relay.beginnerUx.advancedSurfacesGate"], "relay.advancedSurfaces.enabled");
   assert.equal(seed["skillsMarket.enabled"], false);
   assert.equal(seed["system.autoPreviewOfficeFiles"], true);
-  assert.deepEqual(seed["relay.defaultAssistantPresetIds"], [
-    "word-creator",
-    "excel-creator",
-    "ppt-creator",
-  ]);
+  assert.equal(seed["tools.useRipgrep"], true);
+  assert.deepEqual(
+    seed["relay.defaultAssistantPresetIds"],
+    AIONUI_RELAY_DEFAULT_ASSISTANTS.map((assistant) => assistant.id),
+  );
   assert.ok(seed["relay.defaultEnabledSkills"].includes("officecli-docx"));
   assert.ok(seed["relay.defaultEnabledSkills"].includes("officecli-xlsx"));
   assert.ok(seed["relay.defaultEnabledSkills"].includes("officecli-pptx"));
+  assert.ok(seed["relay.defaultEnabledSkills"].includes("relay-document-search"));
+  assert.ok(seed["relay.defaultEnabledSkills"].includes("workspace-search"));
+  assert.ok(seed["relay.defaultEnabledSkills"].includes("find-files"));
+  assert.ok(seed["relay.defaultEnabledSkills"].includes("read-office-file"));
+  assert.ok(seed["relay.defaultEnabledSkills"].includes("summarize-with-evidence"));
+  assert.ok(!seed["relay.defaultEnabledSkills"].includes("officecli-financial-model"));
+  assert.equal(seed["relay.assistantCatalog.mode"], "curated");
+  assert.deepEqual(seed["relay.assistantCatalog.visiblePresetIds"], [
+    ...AIONUI_RELAY_VISIBLE_ASSISTANT_PRESET_IDS,
+  ]);
+  assert.ok(seed["relay.assistantCatalog.hiddenPresetIds"].includes("cowork"));
+  assert.ok(seed["relay.assistantCatalog.hiddenPresetIds"].includes("openclaw-setup"));
+  assert.equal(seed["relay.assistantCatalog.hideUnlistedBuiltinPresets"], true);
+  assert.deepEqual(seed["relay.assistantCatalog.beginnerTaskLabels"], [
+    ...AIONUI_RELAY_BEGINNER_TASK_LABELS,
+  ]);
+  assert.equal(seed["relay.assistantCatalog.advancedAccess"], "advanced-only");
 });
 
 test("Relay provider merge replaces only the Relay provider", () => {
@@ -131,9 +257,76 @@ test("seed bundle records provider-before-shell lifecycle contract", () => {
   assert.equal(seed.launch.gatewayMustStartBeforeShell, true);
   assert.deepEqual(
     seed.skills.assistantPresets.map((assistant) => assistant.id),
-    ["word-creator", "excel-creator", "ppt-creator"],
+    AIONUI_RELAY_DEFAULT_ASSISTANTS.map((assistant) => assistant.id),
   );
-  assert.ok(seed.skills.enabledByDefault.includes("officecli-financial-model"));
+  assert.deepEqual(seed.skills.enabledByDefault, [...AIONUI_RELAY_DEFAULT_SKILLS]);
+  const workspaceSearchPreset = seed.skills.assistantPresets.find(
+    (assistant) => assistant.id === "relay-workspace-search",
+  );
+  assert.equal(workspaceSearchPreset.assistant.nameI18n["ja-JP"], "資料を探す");
+  assert.equal(workspaceSearchPreset.assistant.presetAgentType, "aionrs");
+  assert.deepEqual(workspaceSearchPreset.assistant.enabledSkills, [
+    "relay-document-search",
+    "workspace-search",
+    "find-files",
+    "read-office-file",
+    "summarize-with-evidence",
+  ]);
+  assert.equal(
+    seed.skills.assistantPresets.some((assistant) => assistant.id === "relay-grounded-summary"),
+    false,
+  );
+  assert.deepEqual(seed.skills.assistantCatalog.visiblePresetIds, [
+    ...AIONUI_RELAY_VISIBLE_ASSISTANT_PRESET_IDS,
+  ]);
+  assert.deepEqual(seed.skills.assistantCatalog.hiddenPresetIds, [
+    ...AIONUI_RELAY_HIDDEN_ASSISTANT_PRESET_IDS,
+  ]);
+  assert.equal(seed.skills.assistantCatalog.hideUnlistedBuiltinPresets, true);
+  assert.deepEqual(seed.ux.aionUiCore.primaryEntrypoint, "guid-page-task-launcher");
+  assert.deepEqual(seed.ux.aionUiCore.searchEntrypoints, [
+    ...AIONUI_RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS,
+  ]);
+  assert.deepEqual(seed.ux.guidBeginnerFlow.flowSteps, [
+    ...AIONUI_RELAY_GUID_BEGINNER_FLOW_STEPS,
+  ]);
+  assert.deepEqual(seed.ux.guidBeginnerFlow.requiredControls, [
+    ...AIONUI_RELAY_GUID_REQUIRED_CONTROLS,
+  ]);
+  assert.deepEqual(seed.ux.guidBeginnerFlow.examplePrompts, [
+    ...AIONUI_RELAY_GUID_EXAMPLE_PROMPTS,
+  ]);
+  assert.deepEqual(seed.ux.search.states, [...AIONUI_RELAY_SEARCH_STATE_LABELS]);
+  assert.deepEqual(seed.ux.search.resultCardFields, [
+    ...AIONUI_RELAY_SEARCH_RESULT_CARD_FIELDS,
+  ]);
+  assert.deepEqual(seed.ux.search.resultCardActions, [
+    ...AIONUI_RELAY_SEARCH_RESULT_CARD_ACTIONS,
+  ]);
+  assert.deepEqual(seed.ux.search.resultBatching, {
+    ...AIONUI_RELAY_SEARCH_RESULT_BATCHING,
+  });
+  assert.deepEqual(seed.ux.search.emptyStateActions, [
+    ...AIONUI_RELAY_SEARCH_EMPTY_STATE_ACTIONS,
+  ]);
+  assert.equal(seed.ux.search.defaultSearchMode, "thorough");
+  assert.equal(seed.ux.search.quickCandidateMode, "progress-only");
+  assert.equal(seed.ux.search.confirmedResultRequirement, "content-or-evidence-backed");
+  assert.deepEqual(seed.ux.search.queryPlanning, {
+    ...AIONUI_RELAY_QUERY_PLANNING,
+  });
+  assert.deepEqual(seed.ux.beginnerVisibility.visibleSettingsTabs, [
+    ...AIONUI_RELAY_BEGINNER_VISIBLE_SETTINGS_TABS,
+  ]);
+  assert.deepEqual(seed.ux.beginnerVisibility.hiddenSettingsTabs, [
+    ...AIONUI_RELAY_BEGINNER_HIDDEN_SETTINGS_TABS,
+  ]);
+  assert.deepEqual(seed.ux.beginnerVisibility.hiddenSurfaces, [
+    ...AIONUI_RELAY_BEGINNER_HIDDEN_SURFACES,
+  ]);
+  assert.ok(seed.ux.beginnerVisibility.hiddenSurfaces.includes("assistant-preset-add-button"));
+  assert.ok(seed.ux.beginnerVisibility.hiddenSurfaces.includes("preset-agent-backend-switcher"));
+  assert.equal(seed.ux.beginnerVisibility.advancedSurfacesGate, "relay.advancedSurfaces.enabled");
 });
 
 test("seed file writer persists a JSON bundle for the AionUi fork to import", () => {
@@ -188,6 +381,84 @@ test("seed applier makes Relay the selected AionUi provider without dropping unr
   assert.equal(applied["relay.channels.enabled"], false);
   assert.equal(applied["relay.providerOnboarding.enabled"], false);
   assert.equal(applied["relay.remoteAccess.enabled"], false);
+  assert.equal(applied["relay.workspaceSearch.enabled"], true);
+  assert.equal(applied["relay.workspaceSearch.surface"], "aionui");
+  assert.equal(applied["relay.workspaceSearch.integrationMode"], "skills-first");
+  assert.equal(applied["relay.workspaceSearch.rendererPolicy"], "lightweight-aionui-result-renderers");
+  assert.deepEqual(
+    applied["relay.workspaceSearch.defaultSkillEntrypoints"],
+    [...AIONUI_RELAY_WORKSPACE_SEARCH_SKILLS],
+  );
+  assert.equal(applied["relay.workspaceSearch.legacyDiagnosticShell"], false);
+  assert.deepEqual(
+    applied["relay.workspaceSearch.hiddenBeginnerTerms"],
+    [...AIONUI_RELAY_WORKSPACE_SEARCH_HIDDEN_TERMS],
+  );
+  assert.equal(applied["relay.aionuiUx.integrationMode"], "reuse-core-conversation-workspace-preview");
+  assert.deepEqual(applied["relay.aionuiUx.searchEntrypoints"], [
+    ...AIONUI_RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS,
+  ]);
+  assert.deepEqual(applied["relay.aionuiUx.reusedSurfaces"], [
+    ...AIONUI_RELAY_AIONUI_UX_REUSED_SURFACES,
+  ]);
+  assert.equal(applied["relay.aionuiUx.noNewSearchShell"], true);
+  assert.equal(applied["relay.guidUx.primarySurface"], "GuidPage");
+  assert.deepEqual(applied["relay.guidUx.beginnerFlowSteps"], [
+    ...AIONUI_RELAY_GUID_BEGINNER_FLOW_STEPS,
+  ]);
+  assert.deepEqual(applied["relay.guidUx.requiredControls"], [
+    ...AIONUI_RELAY_GUID_REQUIRED_CONTROLS,
+  ]);
+  assert.deepEqual(applied["relay.guidUx.examplePrompts"], [
+    ...AIONUI_RELAY_GUID_EXAMPLE_PROMPTS,
+  ]);
+  assert.deepEqual(applied["relay.searchUx.stateLabels"], [
+    ...AIONUI_RELAY_SEARCH_STATE_LABELS,
+  ]);
+  assert.equal(applied["relay.searchUx.noResultsGuidance"], true);
+  assert.deepEqual(applied["relay.searchUx.resultCardFields"], [
+    ...AIONUI_RELAY_SEARCH_RESULT_CARD_FIELDS,
+  ]);
+  assert.deepEqual(applied["relay.searchUx.resultCardActions"], [
+    ...AIONUI_RELAY_SEARCH_RESULT_CARD_ACTIONS,
+  ]);
+  assert.deepEqual(applied["relay.searchUx.resultBatching"], {
+    ...AIONUI_RELAY_SEARCH_RESULT_BATCHING,
+  });
+  assert.deepEqual(applied["relay.searchUx.emptyStateActions"], [
+    ...AIONUI_RELAY_SEARCH_EMPTY_STATE_ACTIONS,
+  ]);
+  assert.equal(applied["relay.searchUx.defaultSearchMode"], "thorough");
+  assert.equal(applied["relay.searchUx.quickCandidateMode"], "progress-only");
+  assert.equal(applied["relay.searchUx.confirmedResultRequirement"], "content-or-evidence-backed");
+  assert.deepEqual(applied["relay.searchUx.queryPlanning"], {
+    ...AIONUI_RELAY_QUERY_PLANNING,
+  });
+  assert.deepEqual(applied["relay.beginnerUx.visibleSettingsTabs"], [
+    ...AIONUI_RELAY_BEGINNER_VISIBLE_SETTINGS_TABS,
+  ]);
+  assert.deepEqual(applied["relay.beginnerUx.hiddenSettingsTabs"], [
+    ...AIONUI_RELAY_BEGINNER_HIDDEN_SETTINGS_TABS,
+  ]);
+  assert.deepEqual(applied["relay.beginnerUx.hiddenSurfaces"], [
+    ...AIONUI_RELAY_BEGINNER_HIDDEN_SURFACES,
+  ]);
+  assert.ok(applied["relay.beginnerUx.hiddenSurfaces"].includes("assistant-preset-add-button"));
+  assert.ok(applied["relay.beginnerUx.hiddenSurfaces"].includes("guid-auto-skills-menu"));
+  assert.ok(applied["relay.beginnerUx.hiddenSurfaces"].includes("preset-agent-backend-switcher"));
+  assert.equal(applied["relay.beginnerUx.hideSkillsMarketBanner"], true);
+  assert.equal(applied["relay.beginnerUx.hideModelAndModeSwitchers"], true);
+  assert.deepEqual(applied["relay.defaultEnabledSkills"], [...AIONUI_RELAY_DEFAULT_SKILLS]);
+  assert.deepEqual(
+    applied["relay.defaultAssistantPresetIds"],
+    AIONUI_RELAY_DEFAULT_ASSISTANTS.map((assistant) => assistant.id),
+  );
+  assert.equal(applied["relay.assistantCatalog.mode"], "curated");
+  assert.deepEqual(applied["relay.assistantCatalog.visiblePresetIds"], [
+    ...AIONUI_RELAY_VISIBLE_ASSISTANT_PRESET_IDS,
+  ]);
+  assert.ok(applied["relay.assistantCatalog.hiddenPresetIds"].includes("moltbook"));
+  assert.equal(applied["relay.assistantCatalog.hideUnlistedBuiltinPresets"], true);
   assert.equal(applied["model.config"][0].id, "relay-agent");
   assert.equal(applied["model.config"][1].id, "other-provider");
   assert.deepEqual(applied["aionrs.defaultModel"], {

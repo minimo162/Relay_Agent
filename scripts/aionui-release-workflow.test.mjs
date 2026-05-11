@@ -29,21 +29,39 @@ test("AionUi release workflow checks out the pinned upstream baseline", () => {
   assert.match(text, new RegExp(`AIONUI_COMMIT: ${pinned.commit}`));
   assert.match(text, /git clone --branch "\$AIONUI_TAG" --depth 1 "\$AIONUI_REPOSITORY" aionui/);
   assert.match(text, /AionUi baseline drift/);
+  assert.match(text, /AionUi tag drifted from the Relay manifest/);
+  assert.match(text, /AionUi commit drifted from the Relay manifest/);
 });
 
 test("AionUi release workflow installs pinned dependencies before overlay and builds after overlay", () => {
   const text = workflow();
   const installIndex = text.indexOf("bun install --frozen-lockfile");
+  const ripgrepIndex = text.indexOf("node apps/desktop/scripts/fetch-bundled-ripgrep.mjs");
+  const nodeIndex = text.indexOf("node apps/desktop/scripts/fetch-bundled-node.mjs");
+  const liteparseIndex = text.indexOf("npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner");
   const overlayIndex = text.indexOf("node scripts/apply-aionui-overlay.mjs --aionui-dir aionui");
   const validateIndex = text.indexOf("name: Validate Relay overlay");
   const buildIndex = text.indexOf("bun run build-win:x64");
 
   assert.ok(installIndex > 0, "workflow should install pinned upstream dependencies");
-  assert.ok(overlayIndex > installIndex, "workflow should apply Relay overlay after frozen install");
+  assert.ok(ripgrepIndex > installIndex, "workflow should fetch bundled ripgrep after frozen install");
+  assert.ok(nodeIndex > ripgrepIndex, "workflow should fetch bundled Node after bundled ripgrep");
+  assert.ok(liteparseIndex > nodeIndex, "workflow should prepare LiteParse after bundled Node");
+  assert.ok(overlayIndex > liteparseIndex, "workflow should apply Relay overlay after PDF search resources are ready");
   assert.ok(validateIndex > overlayIndex, "workflow should validate overlay after applying it");
   assert.ok(buildIndex > validateIndex, "workflow should build after overlay validation");
   assert.match(text, /Relay overlay did not update productName/);
   assert.match(text, /resources\/relay-gateway/);
+  assert.match(text, /resources\/relay-tools/);
+  assert.match(text, /TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc/);
+  assert.match(text, /relay-tools\\ripgrep\\rg\.exe/);
+  assert.match(text, /relay-tools\\node\\relay-node\.exe/);
+  assert.match(text, /relay-tools\\liteparse-runner\\parse\.mjs/);
+  assert.match(text, /Relay Agent shared-folder search override/);
+  assert.match(text, /Relay Agent shared-folder grep override/);
+  assert.match(text, /performRelayRipgrepFileListing/);
+  assert.match(text, /RELAY_SHARED_SEARCH_PER_BRANCH_LIMIT/);
+  assert.match(text, /RELAY_SHARED_SEARCH_NAMES_ONLY_MAX_MATCHES/);
   assert.match(text, /copilot_server\.js/);
   assert.match(text, /copilot_dom_poll\.mjs/);
   assert.match(text, /copilot_send_timing\.mjs/);
@@ -56,6 +74,31 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
 });
 
+test("AionUi release workflow validates artifact manifest gate before publishing", () => {
+  const text = workflow();
+  const digestIndex = text.indexOf("name: Collect installer digest");
+  const manifestGateIndex = text.indexOf("name: Validate release artifact manifest gate");
+  const publishIndex = text.indexOf("name: Publish installer to GitHub Releases");
+
+  assert.ok(digestIndex > 0, "workflow should collect installer digest");
+  assert.ok(manifestGateIndex > digestIndex, "workflow should validate the release manifest after digest collection");
+  assert.ok(publishIndex > manifestGateIndex, "workflow should publish only after the manifest gate");
+  assert.match(text, /releaseArtifactManifest/);
+  assert.match(text, /RelayAionUiReleaseArtifactManifest\.v1/);
+  assert.match(text, /primaryArtifactPattern/);
+  assert.match(text, /requiredBundledPayloads/);
+  assert.match(text, /formalReleaseSigningMode/);
+  assert.match(text, /prereleaseSigningModes/);
+  assert.match(text, /release-workflow-artifact-manifest-verified/);
+  assert.match(text, /Workspace Document Search result-flow contract is missing/);
+  assert.match(text, /Installer asset name does not match the Relay-branded Windows x64 pattern/);
+  assert.match(text, /Required bundled payload '\$\(\$payload\.id\)' is missing/);
+  assert.match(text, /AION02/);
+  assert.match(text, /ConvertTo-Json -Depth 20/);
+  assert.match(text, /RELEASE_MANIFEST_PATH: \$\{\{ steps\.release_manifest\.outputs\.path \}\}/);
+  assert.match(text, /Release manifest: \$env:RELEASE_MANIFEST_NAME/);
+});
+
 test("AionUi release workflow publishes signed or clearly marked prerelease assets", () => {
   const text = workflow();
 
@@ -64,8 +107,12 @@ test("AionUi release workflow publishes signed or clearly marked prerelease asse
   assert.match(text, /self-signed for smoke testing only/);
   assert.match(text, /\$unsignedName = "\$stem-unsigned\.exe"/);
   assert.match(text, /\$releaseName = \$name -replace '\^Relay Agent-', 'Relay\.Agent-'/);
+  assert.match(text, /\$assets = @\(\$env:INSTALLER_PATH, \$env:RELEASE_MANIFEST_PATH\)/);
+  assert.match(text, /RELEASE_MANIFEST_NAME: \$\{\{ steps\.release_manifest\.outputs\.name \}\}/);
+  assert.match(text, /RELAY_OVERLAY_VERSION: \$\{\{ steps\.release_manifest\.outputs\.overlay_version \}\}/);
   assert.match(text, /gh release upload \$env:RELEASE_TAG @assets --clobber/);
   assert.match(text, /gh @args/);
+  assert.match(text, /Manifest schema: \\`\$\{\{ steps\.release_manifest\.outputs\.schema \}\}\\`/);
 });
 
 test("legacy Tauri/OpenCode release workflow is manual-only and guarded", () => {

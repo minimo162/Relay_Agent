@@ -39,6 +39,18 @@ pnpm live:windows:openwork-bootstrap
 
 Expected status is `ready_for_explicit_download`.
 
+Latest Linux-accessible rerun:
+
+- 2026-05-12 readiness-only preflight passed with
+  `RELAY_LIVE_WINDOWS_BOOTSTRAP_REQUIRE_WINDOWS=0`.
+- 2026-05-12 explicit artifact verification passed with
+  `RELAY_LIVE_WINDOWS_BOOTSTRAP_DOWNLOAD=1`; the cached OpenCode Windows x64
+  `1.14.25` zip matched size `53772841` and SHA256
+  `8eada3506f0e22071de5d28d5f82df198d4c39f941c2bbf74d6c5de639f8e05b`.
+- 2026-05-12 M365 live provider/read smoke passed on one retry with artifacts
+  at `/tmp/relay-live-m365-opencode-provider-YDGjaV`. This does not replace
+  the clean-Windows installer/browser handoff required to close B12.
+
 ## Download And Verify
 
 Only on Windows, with the operator ready to continue:

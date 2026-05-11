@@ -14,6 +14,7 @@ import {
   extractOpenAiToolCallsFromText,
   formatPromptForCopilot,
   parseOpenAiRequest,
+  shouldAttemptOpenAiToolRepair,
   shouldStartNewChatForRequest,
 } from "./copilot_server.mjs";
 
@@ -261,6 +262,128 @@ test("parseOpenAiRequest treats Windows folder search as first-pass tool plannin
   assert.match(parsed.systemPrompt, /CFS/);
   assert.match(parsed.systemPrompt, /ファイリング/);
   assert.match(parsed.systemPrompt, /XSA/);
+});
+
+test("parseOpenAiRequest prefers high-level document search when advertised", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "user",
+        content: '"H:\\shr1\\05_経理部\\03_連結財務G" 内でキャッシュフロー計算書の作成に使用する資料を探して。',
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "relay_document_search",
+          description: "Run Relay's document finding pipeline",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              path: { type: "string" },
+              mode: { type: "string" },
+            },
+          },
+        },
+      },
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+      { type: "function", function: { name: "grep", parameters: { type: "object" } } },
+      { type: "function", function: { name: "read", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_file_discovery");
+  assert.equal(parsed.toolIntent.preferredTools[0], "relay_document_search");
+  assert.match(parsed.systemPrompt, /call the high-level document search tool first/);
+  assert.match(parsed.systemPrompt, /Do not decompose the first step into glob\/grep\/read/);
+  assert.match(parsed.systemPrompt, /Document finding pipeline/);
+});
+
+test("parseOpenAiRequest accepts document-search aliases only with Relay contract metadata", () => {
+  const contractedAlias = parseOpenAiRequest({
+    messages: [{ role: "user", content: "このフォルダから必要な資料を探して" }],
+    tools: [
+      {
+        type: "function",
+        resultContract: "RelayDocumentSearchResult.v1",
+        function: { name: "workspace-search", parameters: { type: "object" } },
+      },
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(contractedAlias.toolIntent.intent, "local_file_discovery");
+  assert.equal(contractedAlias.toolIntent.preferredTools[0], "workspace-search");
+  assert.match(contractedAlias.systemPrompt, /call the high-level document search tool first \(workspace-search\)/);
+
+  const uncontractedAlias = parseOpenAiRequest({
+    messages: [{ role: "user", content: "このフォルダから必要な資料を探して" }],
+    tools: [
+      {
+        type: "function",
+        function: { name: "workspace-search", parameters: { type: "object" } },
+      },
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(uncontractedAlias.toolIntent.intent, "local_file_discovery");
+  assert.equal(uncontractedAlias.toolIntent.preferredTools[0], "glob");
+  assert.match(uncontractedAlias.systemPrompt, /File discovery: use `glob`/);
+  assert.doesNotMatch(uncontractedAlias.systemPrompt, /call the high-level document search tool first \(workspace-search\)/);
+});
+
+test("tool repair rejects low-level first calls when document search is advertised", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "このフォルダから必要な資料を探して" }],
+    tools: [
+      { type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } },
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+    ],
+  });
+  const lowLevelRecord = {
+    body: {
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "glob", arguments: "{}" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+  const highLevelRecord = {
+    body: {
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "relay_document_search", arguments: "{}" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  assert.equal(shouldAttemptOpenAiToolRepair(lowLevelRecord, parsed), true);
+  assert.equal(shouldAttemptOpenAiToolRepair(highLevelRecord, parsed), false);
 });
 
 test("parseOpenAiRequest routes Office filename lookup but warns away from Office binary content tools", () => {

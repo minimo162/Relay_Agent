@@ -138,6 +138,19 @@ jobs:
         working-directory: aionui
         run: bun install --frozen-lockfile
 
+      - name: Fetch bundled ripgrep for Relay search
+        env:
+          TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: node apps/desktop/scripts/fetch-bundled-ripgrep.mjs
+
+      - name: Fetch bundled Node for Relay PDF search
+        env:
+          TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: node apps/desktop/scripts/fetch-bundled-node.mjs
+
+      - name: Prepare LiteParse runner for Relay PDF search
+        run: npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner
+
       - name: Apply Relay overlay
         run: node scripts/apply-aionui-overlay.mjs --aionui-dir aionui
 
@@ -162,6 +175,9 @@ jobs:
           if ($builderConfig -notmatch "resources/relay-gateway") {
             throw "Relay overlay did not bundle the local Copilot gateway resource."
           }
+          if ($builderConfig -notmatch "resources/relay-tools") {
+            throw "Relay overlay did not bundle Relay-managed portable tools."
+          }
 
           $gatewayFiles = @(
             "copilot_server.js",
@@ -175,6 +191,35 @@ jobs:
             if (-not (Test-Path -LiteralPath $gatewayPath)) {
               throw "Relay Copilot gateway resource was not copied into AionUi resources: $gatewayFile"
             }
+          }
+          $ripgrepPath = "aionui\resources\relay-tools\ripgrep\rg.exe"
+          if (-not (Test-Path -LiteralPath $ripgrepPath)) {
+            throw "Bundled ripgrep was not copied into AionUi resources."
+          }
+          & $ripgrepPath --version
+          $relayNodePath = "aionui\resources\relay-tools\node\relay-node.exe"
+          if (-not (Test-Path -LiteralPath $relayNodePath)) {
+            throw "Bundled Node was not copied into AionUi resources."
+          }
+          & $relayNodePath --version
+          $liteparseRunnerPath = "aionui\resources\relay-tools\liteparse-runner\parse.mjs"
+          if (-not (Test-Path -LiteralPath $liteparseRunnerPath)) {
+            throw "LiteParse runner was not copied into AionUi resources."
+          }
+          $aionCliGlobPath = "aionui\node_modules\@office-ai\aioncli-core\dist\src\tools\glob.js"
+          $aionCliRipGrepPath = "aionui\node_modules\@office-ai\aioncli-core\dist\src\tools\ripGrep.js"
+          foreach ($searchPatchPath in @($aionCliGlobPath, $aionCliRipGrepPath)) {
+            if (-not (Test-Path -LiteralPath $searchPatchPath)) {
+              throw "AionCLI shared search patch target was not found: $searchPatchPath"
+            }
+          }
+          $aionCliGlob = Get-Content -LiteralPath $aionCliGlobPath -Raw
+          if ($aionCliGlob -notmatch "Relay Agent shared-folder search override" -or $aionCliGlob -notmatch "performRelayRipgrepFileListing" -or $aionCliGlob -notmatch "RELAY_SHARED_SEARCH_PER_BRANCH_LIMIT") {
+            throw "Relay overlay did not install the ripgrep-backed shared-folder glob patch."
+          }
+          $aionCliRipGrep = Get-Content -LiteralPath $aionCliRipGrepPath -Raw
+          if ($aionCliRipGrep -notmatch "Relay Agent shared-folder grep override" -or $aionCliRipGrep -notmatch "RELAY_SHARED_SEARCH_NAMES_ONLY_MAX_MATCHES") {
+            throw "Relay overlay did not install the shared-folder grep search policy patch."
           }
           if (-not (Test-Path -LiteralPath "aionui\src\process\utils\relayGateway.ts")) {
             throw "Relay gateway startup overlay was not copied into AionUi."
@@ -352,6 +397,183 @@ jobs:
           $hash = Get-FileHash "${{ steps.release_asset.outputs.path }}" -Algorithm SHA256
           "sha256=$($hash.Hash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Validate release artifact manifest gate
+        id: release_manifest
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
+          INSTALLER_PATH: ${{ steps.release_asset.outputs.path }}
+          INSTALLER_NAME: ${{ steps.release_asset.outputs.name }}
+          INSTALLER_SHA256: ${{ steps.installer_digest.outputs.sha256 }}
+          SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
+          SIGNING_ENABLED: ${{ steps.signing_mode.outputs.enabled }}
+          TRUSTED_AUTHENTICODE_STATUS: ${{ steps.signature.outputs.status }}
+          TRUSTED_SIGNER_SUBJECT: ${{ steps.signature.outputs.subject }}
+          TRUSTED_SIGNER_THUMBPRINT: ${{ steps.signature.outputs.thumbprint }}
+          SELF_SIGNED_AUTHENTICODE_STATUS: ${{ steps.self_signed.outputs.status }}
+          SELF_SIGNED_SIGNER_SUBJECT: ${{ steps.self_signed.outputs.subject }}
+          SELF_SIGNED_SIGNER_THUMBPRINT: ${{ steps.self_signed.outputs.thumbprint }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Assert-Equal($actual, $expected, $message) {
+            if ($actual -ne $expected) {
+              throw "$message Expected '$expected', got '$actual'."
+            }
+          }
+
+          $relayManifestPath = Join-Path $env:GITHUB_WORKSPACE "apps\desktop\src-tauri\bootstrap\aionui-relay.json"
+          $relayManifest = Get-Content -LiteralPath $relayManifestPath -Raw | ConvertFrom-Json
+          $releaseSpec = $relayManifest.releaseArtifactManifest
+          if (-not $releaseSpec) {
+            throw "aionui-relay.json does not define releaseArtifactManifest."
+          }
+
+          Assert-Equal $releaseSpec.schema "RelayAionUiReleaseArtifactManifest.v1" "Unexpected release artifact manifest schema."
+          Assert-Equal $releaseSpec.workflow ".github/workflows/release-aionui-windows-installer.yml" "Unexpected release workflow path."
+          Assert-Equal $env:AIONUI_TAG $relayManifest.upstreams.aionUi.tag "AionUi tag drifted from the Relay manifest."
+          Assert-Equal $env:AIONUI_COMMIT $relayManifest.upstreams.aionUi.commit "AionUi commit drifted from the Relay manifest."
+
+          if (-not (Test-Path -LiteralPath $env:INSTALLER_PATH)) {
+            throw "Release installer asset does not exist at $env:INSTALLER_PATH."
+          }
+          if ($env:INSTALLER_NAME -notmatch '^Relay\.Agent-.+-win-x64(?:-(?:unsigned|selfsigned))?\.exe$') {
+            throw "Installer asset name does not match the Relay-branded Windows x64 pattern: $env:INSTALLER_NAME"
+          }
+          if ($env:INSTALLER_SHA256 -notmatch '^[a-f0-9]{64}$') {
+            throw "Installer SHA256 is not a lowercase 64-character hex digest: $env:INSTALLER_SHA256"
+          }
+
+          $allowedSigningModes = @($releaseSpec.allowedSigningModes)
+          if ($allowedSigningModes -notcontains $env:SIGNING_MODE) {
+            throw "Signing mode '$env:SIGNING_MODE' is not allowed by releaseArtifactManifest."
+          }
+
+          $isPrerelease = $env:RELEASE_TAG.Contains("-")
+          if (-not $isPrerelease -and $env:SIGNING_MODE -ne $releaseSpec.formalReleaseSigningMode) {
+            throw "Formal release '$env:RELEASE_TAG' must use signing mode '$($releaseSpec.formalReleaseSigningMode)', got '$env:SIGNING_MODE'."
+          }
+          if ($isPrerelease -and (@($releaseSpec.prereleaseSigningModes) -notcontains $env:SIGNING_MODE)) {
+            throw "Prerelease '$env:RELEASE_TAG' uses unsupported signing mode '$env:SIGNING_MODE'."
+          }
+
+          $authenticodeStatus = "not checked (unsigned prerelease)"
+          $signerSubject = ""
+          $signerThumbprint = ""
+          if ($env:SIGNING_MODE -eq "trusted-signing") {
+            $authenticodeStatus = $env:TRUSTED_AUTHENTICODE_STATUS
+            $signerSubject = $env:TRUSTED_SIGNER_SUBJECT
+            $signerThumbprint = $env:TRUSTED_SIGNER_THUMBPRINT
+            Assert-Equal $authenticodeStatus "Valid" "Trusted Signing did not produce a valid Authenticode signature."
+          } elseif ($env:SIGNING_MODE -eq "self-signed-prerelease") {
+            $authenticodeStatus = $env:SELF_SIGNED_AUTHENTICODE_STATUS
+            $signerSubject = $env:SELF_SIGNED_SIGNER_SUBJECT
+            $signerThumbprint = $env:SELF_SIGNED_SIGNER_THUMBPRINT
+            if ([string]::IsNullOrWhiteSpace($signerThumbprint)) {
+              throw "Self-signed prerelease did not report a signer thumbprint."
+            }
+          } elseif (-not $isPrerelease) {
+            throw "Unsigned installer assets are only allowed for prerelease tags."
+          }
+
+          $package = Get-Content -LiteralPath "aionui\package.json" -Raw | ConvertFrom-Json
+          Assert-Equal $package.name $relayManifest.branding.packageName "Relay overlay package name is not reflected in AionUi."
+          Assert-Equal $package.productName $relayManifest.branding.productName "Relay overlay productName is not reflected in AionUi."
+
+          $builderConfig = Get-Content -LiteralPath "aionui\electron-builder.yml" -Raw
+          if ($builderConfig -notmatch "(?m)^productName:\s+Relay Agent$" -or $builderConfig -notmatch "(?m)^executableName:\s+Relay Agent$") {
+            throw "Relay overlay branding is missing from electron-builder.yml."
+          }
+          if ($builderConfig -notmatch "resources/relay-gateway" -or $builderConfig -notmatch "resources/relay-tools") {
+            throw "Relay gateway or portable tool resources are missing from electron-builder.yml."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($relayManifest.workspaceSearch.highLevelTool.resultFlowContract)) {
+            throw "Workspace Document Search result-flow contract is missing from the Relay manifest."
+          }
+
+          $bundledPayloads = @()
+          foreach ($payload in @($releaseSpec.requiredBundledPayloads)) {
+            $payloadPath = Join-Path "aionui" ($payload.installedPath -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $payloadPath)) {
+              throw "Required bundled payload '$($payload.id)' is missing at $payloadPath."
+            }
+            $bundledPayloads += [ordered]@{
+              id = $payload.id
+              installedPath = $payload.installedPath
+              requiredFor = $payload.requiredFor
+              present = $true
+            }
+          }
+
+          $artifactManifest = [ordered]@{
+            schema = $releaseSpec.schema
+            selectedTrack = $relayManifest.selectedTrack
+            release = [ordered]@{
+              tag = $env:RELEASE_TAG
+              name = $env:RELEASE_NAME
+              prerelease = $isPrerelease
+              workflow = $releaseSpec.workflow
+              runId = $env:GITHUB_RUN_ID
+              runAttempt = $env:GITHUB_RUN_ATTEMPT
+              sourceSha = $env:GITHUB_SHA
+            }
+            installer = [ordered]@{
+              assetName = $env:INSTALLER_NAME
+              sha256 = $env:INSTALLER_SHA256
+              pattern = $releaseSpec.primaryArtifactPattern
+            }
+            signing = [ordered]@{
+              mode = $env:SIGNING_MODE
+              enabled = $env:SIGNING_ENABLED -eq "true"
+              authenticodeStatus = $authenticodeStatus
+              signerSubject = $signerSubject
+              signerThumbprint = $signerThumbprint
+            }
+            upstreams = [ordered]@{
+              aionUi = [ordered]@{
+                repository = $relayManifest.upstreams.aionUi.repository
+                tag = $relayManifest.upstreams.aionUi.tag
+                commit = $relayManifest.upstreams.aionUi.commit
+                license = $relayManifest.upstreams.aionUi.license
+              }
+              officeCli = [ordered]@{
+                repository = $relayManifest.upstreams.officeCli.repository
+                version = $relayManifest.upstreams.officeCli.version
+                tag = $relayManifest.upstreams.officeCli.tag
+                commit = $relayManifest.upstreams.officeCli.commit
+                license = $relayManifest.upstreams.officeCli.license
+              }
+            }
+            overlay = [ordered]@{
+              version = $releaseSpec.overlayVersion
+              packageName = $relayManifest.branding.packageName
+              productName = $relayManifest.branding.productName
+              executableName = $relayManifest.branding.executableName
+              protocol = $relayManifest.branding.protocol
+              installerArtifactPrefix = $relayManifest.branding.installerArtifactPrefix
+              providerDisplayModelRef = $relayManifest.providerSeed.displayModelRef
+              resultFlowContract = $relayManifest.workspaceSearch.highLevelTool.resultFlowContract
+              requiredAssertions = @($releaseSpec.requiredOverlayAssertions)
+            }
+            bundledPayloads = $bundledPayloads
+            evidenceBundleRow = $releaseSpec.evidenceBundleRow
+            gate = [ordered]@{
+              task = "AION02"
+              status = "release-workflow-artifact-manifest-verified"
+              requiredMetadata = @($releaseSpec.requiredReleaseMetadata)
+            }
+          }
+
+          $releaseManifestPath = Join-Path $env:RUNNER_TEMP $releaseSpec.manifestAssetName
+          $artifactManifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $releaseManifestPath -Encoding UTF8
+
+          "path=$releaseManifestPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($releaseSpec.manifestAssetName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "schema=$($releaseSpec.schema)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "overlay_version=$($releaseSpec.overlayVersion)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Publish installer to GitHub Releases
         shell: pwsh
         env:
@@ -363,14 +585,20 @@ jobs:
           INSTALLER_SHA256: ${{ steps.installer_digest.outputs.sha256 }}
           SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
           SELF_SIGNED_CERT_PATH: ${{ steps.self_signed.outputs.cert_path }}
+          RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.path }}
+          RELEASE_MANIFEST_NAME: ${{ steps.release_manifest.outputs.name }}
+          RELEASE_MANIFEST_SCHEMA: ${{ steps.release_manifest.outputs.schema }}
+          RELAY_OVERLAY_VERSION: ${{ steps.release_manifest.outputs.overlay_version }}
         run: |
-          $assets = @($env:INSTALLER_PATH)
+          $assets = @($env:INSTALLER_PATH, $env:RELEASE_MANIFEST_PATH)
           $releaseNotes = @"
           Relay-branded AionUi Windows NSIS installer for Relay Agent.
 
           - AionUi baseline: $env:AIONUI_TAG / $env:AIONUI_COMMIT
-          - Overlay: Relay provider seed, Relay branding, relay-agent protocol, Relay icons
+          - Overlay version: $env:RELAY_OVERLAY_VERSION
+          - Overlay contents: Relay provider seed, Relay branding, relay-agent protocol, Relay icons
           - Installer SHA256: $env:INSTALLER_SHA256
+          - Release manifest: $env:RELEASE_MANIFEST_NAME ($env:RELEASE_MANIFEST_SCHEMA)
 
           Download the attached installer asset to install or upgrade Relay Agent on Windows 10/11 x64.
           "@
@@ -421,6 +649,9 @@ jobs:
             echo "- AionUi baseline: \`${{ env.AIONUI_TAG }} / ${{ env.AIONUI_COMMIT }}\`"
             echo "- Installer asset: \`${{ steps.release_asset.outputs.name }}\`"
             echo "- Installer SHA256: \`${{ steps.installer_digest.outputs.sha256 }}\`"
+            echo "- Release manifest: \`${{ steps.release_manifest.outputs.name }}\`"
+            echo "- Manifest schema: \`${{ steps.release_manifest.outputs.schema }}\`"
+            echo "- Overlay version: \`${{ steps.release_manifest.outputs.overlay_version }}\`"
             echo "- Signing mode: \`${{ steps.signing_mode.outputs.mode }}\`"
             if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
               echo "- Authenticode status: \`${{ steps.signature.outputs.status }}\`"

@@ -1,0 +1,105 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, resolve } from "node:path";
+import test from "node:test";
+import { pathToFileURL } from "node:url";
+
+import ts from "typescript";
+
+const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const queryPlanPath = resolve(
+  repoRoot,
+  "integrations/aionui/overlay/src/process/utils/relayDocumentSearchQueryPlan.ts",
+);
+
+function transpile(path) {
+  const source = readFileSync(path, "utf8");
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+      verbatimModuleSyntax: false,
+    },
+    fileName: path,
+    reportDiagnostics: true,
+  });
+  assert.deepEqual(
+    (compiled.diagnostics ?? []).map((diagnostic) => diagnostic.messageText),
+    [],
+  );
+  return compiled.outputText;
+}
+
+async function loadQueryPlanModule() {
+  const dir = mkdtempSync(resolve(tmpdir(), "relay-document-search-query-plan-module-"));
+  writeFileSync(resolve(dir, "relayDocumentSearchQueryPlan.mjs"), transpile(queryPlanPath), "utf8");
+  try {
+    return {
+      module: await import(pathToFileURL(resolve(dir, "relayDocumentSearchQueryPlan.mjs")).href),
+      cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+test("Relay document search query plan normalizes accounting terms and period hints", async () => {
+  const { module, cleanup } = await loadQueryPlanModule();
+  try {
+    const plan = module.buildRelayDocumentSearchQueryPlan(
+      {
+        schemaVersion: "RelayDocumentSearchRequest.v1",
+        query: "160期-1Q の C/F 精算表 Excel を探して",
+        roots: ["H:/shr1/05_経理部"],
+        intent: "answer_with_evidence",
+        thoroughness: "thorough",
+        fileTypes: ["any"],
+        maxResults: 50,
+        evidence: "required",
+      },
+      ["H:/shr1/05_経理部"],
+    );
+
+    assert.equal(plan.schemaVersion, "RelayDocumentSearchQueryPlan.v1");
+    assert.equal(plan.normalizerVersion, "relay-query-normalizer-v1");
+    assert.equal(plan.mode, "evidence");
+    assert.equal(plan.confirmationPolicy, "content_required");
+    assert.ok(plan.normalizedTerms.includes("キャッシュフロー"));
+    assert.ok(plan.normalizedTerms.includes("cfs"));
+    assert.ok(plan.normalizedTerms.includes("精算表"));
+    assert.ok(plan.periodHints.includes("160期-1Q"));
+    assert.ok(plan.periodHints.includes("FY160-1Q"));
+    assert.deepEqual(plan.fileTypeHints, ["xlsx"]);
+    assert.deepEqual(plan.synonymExpansions.map((item) => item.source), ["cash_flow", "adjustment"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Relay document search query plan keeps quick searches candidate-only", async () => {
+  const { module, cleanup } = await loadQueryPlanModule();
+  try {
+    const plan = module.buildRelayDocumentSearchQueryPlan(
+      {
+        schemaVersion: "RelayDocumentSearchRequest.v1",
+        query: "BS",
+        roots: ["C:/work"],
+        intent: "find_files",
+        thoroughness: "quick",
+        fileTypes: ["pdf"],
+        maxResults: 20,
+        evidence: "candidate",
+      },
+      ["C:/work"],
+    );
+
+    assert.equal(plan.mode, "filename");
+    assert.equal(plan.confirmationPolicy, "candidate_ok");
+    assert.ok(plan.normalizedTerms.includes("貸借対照表"));
+    assert.deepEqual(plan.fileTypeHints, ["pdf"]);
+  } finally {
+    cleanup();
+  }
+});

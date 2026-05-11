@@ -25,7 +25,8 @@ pnpm install
   portable OpenCode automatically.
 - **Target first run:** launch Relay Agent. It starts the provider gateway,
   seeds Relay as AionUi's selected custom provider, prepares portable
-  OfficeCLI, and opens the Relay-branded AionUi shell.
+  OfficeCLI and bundled ripgrep, applies shared-folder search limits, and opens
+  the Relay-branded AionUi shell.
 - **One-command repo first run:** `pnpm dev`.
 - **Explicit auto bootstrap:** `pnpm bootstrap:openwork-opencode:auto`.
 - **Deterministic bootstrap smoke:** `pnpm smoke:openwork-opencode-bootstrap-gateway`.
