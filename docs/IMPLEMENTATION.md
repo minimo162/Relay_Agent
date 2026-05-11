@@ -25,6 +25,21 @@
 
 ## Milestone Log
 
+### 2026-05-12 Windows CI executor display path test fix
+
+The following Windows `ci` run reached
+`scripts/relay-document-search-executor.test.mjs` and failed in the backup/copy
+result grouping assertion because `display_path` preserves the host path
+separator from `rootRelativePath()`. The assertion now normalizes backslashes to
+`/` before checking the representative work-folder path, keeping the product
+behavior unchanged while making the test platform-neutral.
+
+Verification:
+
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed, 31 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 Windows CI ParsedDocument cache move path fix
 
 The next Windows `ci` run reached the ParsedDocument cache move migration and

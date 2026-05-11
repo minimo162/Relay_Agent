@@ -727,7 +727,11 @@ test("executeRelayDocumentSearch groups backup and copy variants under one repre
     assert.equal(result.results[0].ui_state.openIndependentOfCopilot, true);
     assert.equal(result.results[0].result_group.memberCount, 3);
     assert.equal(result.results[0].result_group.collapsedCount, 2);
-    assert.ok(String(result.results[0].display_path).includes("作業/FY160-1Q_連結CFS精算表.xlsx"));
+    assert.ok(
+      String(result.results[0].display_path)
+        .replace(/\\/gu, "/")
+        .includes("作業/FY160-1Q_連結CFS精算表.xlsx"),
+    );
     assert.ok(result.results.some((candidate) => String(candidate.display_name).includes("FY160-2Q")));
     assert.equal(
       result.diagnostics.queryTrace.stages.find((stage) => stage.name === "ranking").facts.collapsedCandidateCount,
