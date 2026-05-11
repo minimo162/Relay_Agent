@@ -320,7 +320,7 @@ function parsedDocumentCacheRecordForFile(
   if (!validation.ok || parsedDocument.parser_confidence === 'low') return undefined;
   if (parsedDocument.source_file_id !== file.fileId) return undefined;
   if (parsedDocument.source_metadata_version !== file.sourceMetadataVersion) return undefined;
-  if (parsedDocument.source_path !== file.path) return undefined;
+  if (resolve(parsedDocument.source_path) !== resolve(file.path)) return undefined;
   if (parsedDocument.parser.profile !== profileForDocumentFile(file)) return undefined;
 
   const parserVersion = parsedDocument.parser.version;
@@ -388,7 +388,7 @@ function parseCacheRecord(
   if (!validation.ok) return undefined;
   if (parsedDocument.source_file_id !== file.fileId) return undefined;
   if (parsedDocument.source_metadata_version !== file.sourceMetadataVersion) return undefined;
-  if (parsedDocument.source_path !== file.path) return undefined;
+  if (resolve(parsedDocument.source_path) !== resolve(file.path)) return undefined;
   if (parsedDocument.parser.version !== parserVersion) return undefined;
   if (parsedDocument.parser.profile !== parsed.parserProfile) return undefined;
   if (parsedDocument.parser_confidence === 'low') return undefined;

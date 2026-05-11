@@ -25,6 +25,20 @@
 
 ## Milestone Log
 
+### 2026-05-12 Windows CI ParsedDocument cache move path fix
+
+The next Windows `ci` run reached the ParsedDocument cache move migration and
+failed because the embedded `RelayParsedDocument.source_path` was compared with
+the requested file path by raw string equality. Cache keys and cache records
+already use `path.resolve()`, so the ParsedDocument cache now validates
+`source_path` by resolved path equivalence on both writes and reads.
+
+Verification:
+
+- `node --test scripts/relay-parsed-document-cache.test.mjs`: passed, 11 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 Windows CI SQLite FTS path expectation fix
 
 The second post-release `ci` run on Windows reached the SQLite FTS tests and
