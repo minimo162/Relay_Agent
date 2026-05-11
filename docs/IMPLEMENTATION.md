@@ -25,6 +25,21 @@
 
 ## Milestone Log
 
+### 2026-05-12 Windows CI SQLite FTS path expectation fix
+
+The second post-release `ci` run on Windows reached the SQLite FTS tests and
+failed because `scripts/relay-document-search-index-db.test.mjs` expected a
+POSIX literal path while the index DB writer intentionally stores
+`path.resolve(file.path)`. On Windows, `/workspace/fy.xlsx` resolves to the
+runner drive path, so the test now derives the expected metadata path with the
+same `resolve()` call as the implementation.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed, 8 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 Windows CI path normalization for document-search tests
 
 The first post-release `ci` run on Windows failed in

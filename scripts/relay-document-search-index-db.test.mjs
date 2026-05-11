@@ -342,7 +342,7 @@ test("index DB writes metadata and derived search-store rows into SQLite FTS tab
       (call) => call.kind === "run" && /INSERT INTO file_metadata/.test(call.sql),
     );
     assert.ok(metadataRun);
-    assert.deepEqual(metadataRun.params.slice(0, 4), ["file-1", "/workspace/fy.xlsx", "fy.xlsx", "xlsx"]);
+    assert.deepEqual(metadataRun.params.slice(0, 4), ["file-1", resolve("/workspace/fy.xlsx"), "fy.xlsx", "xlsx"]);
     assert.equal(metadataRun.params.at(-1), "2026-05-10T00:00:00.000Z");
 
     const textRun = fake.calls.find(
