@@ -25,6 +25,30 @@
 
 ## Milestone Log
 
+### 2026-05-12 AION release overlay dependency closure fix
+
+The first GitHub Actions run for the Relay-branded AionUi Windows installer
+failed while building the bundled MCP server because two transitive
+document-search modules were not copied into the patched AionUi tree:
+`relayDocumentSearchFailureRegistry.ts` and
+`relayDocumentSearchSyncProducer.ts`. The sync producer also depends on
+`relayDocumentSearchBackgroundScheduler.ts`.
+
+`scripts/apply-aionui-overlay.mjs` now copies every
+`integrations/aionui/overlay/src/process/utils/*.ts` module into
+`src/process/utils/` before applying the targeted overlay patches. The pinned
+AionUi overlay smoke now compares every copied utility file against the overlay
+source so future transitive module additions are caught before the release
+workflow reaches the Windows installer build.
+
+Verification:
+
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 21 tests.
+- `node --test scripts/aionui-release-workflow.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs`: passed, 14 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AION03 pinned AionUi overlay application smoke
 
 AION03 is complete. `scripts/apply-aionui-overlay.test.mjs` now builds a

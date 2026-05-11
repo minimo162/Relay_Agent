@@ -34,6 +34,17 @@ function ensureTrailingNewline(text) {
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 
+function copyOverlayProcessUtils(overlayRoot, targetRoot) {
+  const sourceDir = resolve(overlayRoot, "src/process/utils");
+  const targetDir = resolve(targetRoot, "src/process/utils");
+  mkdirSync(targetDir, { recursive: true });
+
+  for (const fileName of readdirSync(sourceDir)) {
+    if (!fileName.endsWith(".ts")) continue;
+    copyFileSync(resolve(sourceDir, fileName), resolve(targetDir, fileName));
+  }
+}
+
 export function isCliEntrypoint(metaUrl, argv1 = process.argv[1]) {
   if (!argv1) return false;
   return metaUrl === pathToFileURL(resolve(argv1)).href;
@@ -2106,6 +2117,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   );
 
   mkdirSync(dirname(relaySeedTarget), { recursive: true });
+  copyOverlayProcessUtils(overlayRoot, targetRoot);
   copyFileSync(relaySeedSource, relaySeedTarget);
   copyFileSync(relayGatewaySource, relayGatewayTarget);
   copyFileSync(relayDocumentSearchContractSource, relayDocumentSearchContractTarget);

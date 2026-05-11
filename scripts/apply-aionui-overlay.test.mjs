@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -931,6 +931,15 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/process/utils/relayGateway.ts"), /RelayDocumentSearchResultFlow\.v1/);
     assert.match(readFixture(fixtureRoot, "src/process/utils/relayDocumentSearchBridge.ts"), /RelayDocumentSearchAionUiResultFlow\.v1/);
     assert.match(readFixture(fixtureRoot, "src/process/utils/relayDocumentSearchDisplay.ts"), /stableSelectionKey/);
+    for (const fileName of readdirSync("integrations/aionui/overlay/src/process/utils").filter((name) =>
+      name.endsWith(".ts"),
+    )) {
+      assert.equal(
+        readFixture(fixtureRoot, `src/process/utils/${fileName}`),
+        readFileSync(`integrations/aionui/overlay/src/process/utils/${fileName}`, "utf8"),
+        `Relay utility overlay was not copied: ${fileName}`,
+      );
+    }
     assert.match(readFixture(fixtureRoot, "src/process/resources/skills/relay-document-search/SKILL.md"), /資料を探す/);
     assert.match(readFixture(fixtureRoot, "src/process/resources/skills/relay-document-search/SKILL.md"), /relay_document_search/);
 
