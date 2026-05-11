@@ -1,11 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import ts from "typescript";
 
-const defaultRepoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const moduleNames = [
   "relayDocumentSearchContract",
   "relayDocumentSearchMetadataCache",

@@ -3,11 +3,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import ts from "typescript";
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadataCachePath = resolve(
   repoRoot,
   "integrations/aionui/overlay/src/process/utils/relayDocumentSearchMetadataCache.ts",

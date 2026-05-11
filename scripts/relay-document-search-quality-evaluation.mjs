@@ -1,10 +1,11 @@
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { loadRelayDocumentSearchExecutorModule } from "./relay-document-search-module-loader.mjs";
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultGeneratedAt = "2026-05-11T00:00:00.000Z";
 const defaultCases = [
   {

@@ -25,6 +25,28 @@
 
 ## Milestone Log
 
+### 2026-05-12 Windows CI path normalization for document-search tests
+
+The first post-release `ci` run on Windows failed in
+`scripts/relay-document-search-contract.test.mjs` because several
+document-search scripts derived `repoRoot` from
+`new URL(import.meta.url).pathname`. On Windows this produced a
+drive-prefixed pathname that `path.resolve()` expanded into `D:\D:\...`.
+
+The document-search test/module-loader scripts now use
+`fileURLToPath(import.meta.url)` before `dirname()`, matching Node's
+cross-platform file URL handling. The same fix was applied to helper scripts
+that used the same pathname pattern.
+
+Verification:
+
+- `node --test scripts/relay-document-search-contract.test.mjs scripts/relay-document-search-mcp.test.mjs scripts/relay-document-search-golden-query-gate.test.mjs`: passed, 7 tests.
+- `node --check apps/desktop/src-tauri/binaries/build-copilot-dom-modules.mjs`: passed.
+- `node --check scripts/relay-document-search-quality-evaluation.mjs`: passed.
+- `node --check scripts/relay-document-search-golden-query-gate.mjs`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AION release overlay dependency closure fix
 
 The first GitHub Actions run for the Relay-branded AionUi Windows installer

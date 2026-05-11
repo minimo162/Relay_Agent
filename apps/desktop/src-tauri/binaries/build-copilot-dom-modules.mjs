@@ -4,8 +4,9 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = path.dirname(new URL(import.meta.url).pathname);
+const root = path.dirname(fileURLToPath(import.meta.url));
 const targets = [
   {
     path: path.join(root, "copilot_dom_poll.mjs"),

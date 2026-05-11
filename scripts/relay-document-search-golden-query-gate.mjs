@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadRelayDocumentSearchExecutorModule } from "./relay-document-search-module-loader.mjs";
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultGeneratedAt = "2026-05-11T00:00:00.000Z";
 const defaultOutput = resolve(repoRoot, "docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md");
 const defaultJsonOutput = "";
