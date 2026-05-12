@@ -60,7 +60,8 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /Relay team-guide MCP document-search fallback does not lazy-load the search bridge/);
   assert.match(text, /import\\\('\\\.\/relayDocumentSearchBridge'\\\)/);
   assert.match(text, /import\\\('\\\.\/relayDocumentSearchSyncProducer'\\\)/);
-  assert.match(text, /import\\\('@process\/utils\/relayDocumentSearchBridge'\\\)/);
+  assert.match(text, /await import\\\(/);
+  assert.match(text, /@process\/utils\/relayDocumentSearchBridge/);
   assert.match(text, /TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc/);
   assert.match(text, /relay-tools\\ripgrep\\rg\.exe/);
   assert.match(text, /relay-tools\\node\\relay-node\.exe/);
