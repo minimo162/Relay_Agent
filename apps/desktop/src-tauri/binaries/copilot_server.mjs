@@ -264,6 +264,10 @@ var RELAY_DOCUMENT_SEARCH_APPROVED_ALIASES = Object.freeze([
   "workspace-search",
   "find-files",
 ]);
+var RELAY_TASK_MODES = Object.freeze({
+  DOCUMENT_SEARCH: "document_search",
+  OFFICE_EDIT: "office_edit",
+});
 
 /**
  * When RELAY_COPILOT_NO_WINDOW_FOCUS=1, skip CDP Target.activateTarget / Page.bringToFront
@@ -4938,6 +4942,13 @@ function parseOpenAiRequest(payload) {
   const relayProbeMode = payload.relay_probe_mode === true;
   const relayNewChat = payload.relay_new_chat === true;
   const relayForceFreshChat = payload.relay_force_fresh_chat === true;
+  const relayTaskMode = normalizeRelayTaskMode(
+    payload.relay_task_mode ||
+      payload.relayTaskMode ||
+      payload.metadata?.relay_task_mode ||
+      payload.metadata?.relayTaskMode ||
+      extractRelayTaskModeFromText(systemPromptBase),
+  );
   const model = String(payload.model || OPENAI_COMPAT_DEFAULT_MODEL).trim() || OPENAI_COMPAT_DEFAULT_MODEL;
   const toolIntent = classifyToolIntent({
     tools,
@@ -4945,6 +4956,7 @@ function parseOpenAiRequest(payload) {
     openAiToolChoice,
     userPrompt,
     relayStageLabel,
+    relayTaskMode,
   });
   const toolProtocolMode = decideToolProtocolMode({
     tools,
@@ -4953,6 +4965,7 @@ function parseOpenAiRequest(payload) {
     userPrompt,
     relayStageLabel,
     toolIntent,
+    relayTaskMode,
   });
   const requiresStrictToolCalls = toolProtocolModeRequiresStrict(toolProtocolMode);
   const systemPrompt = buildToolProtocolSystemPrompt({
@@ -4962,10 +4975,12 @@ function parseOpenAiRequest(payload) {
     openAiToolChoice,
     hasToolResultMessages,
     toolIntent,
+    relayTaskMode,
   });
   return {
     model,
     systemPrompt,
+    systemPromptBase,
     userPrompt,
     imageB64,
     attachmentPaths,
@@ -4973,6 +4988,7 @@ function parseOpenAiRequest(payload) {
     hasToolResultMessages,
     toolResultFailure,
     toolIntent,
+    relayTaskMode,
     openAiToolChoice,
     toolProtocolMode,
     requiresStrictToolCalls,
@@ -5173,6 +5189,29 @@ function stableIdFragment(value) {
     .slice(0, 96) || "default";
 }
 
+function normalizeRelayTaskMode(value = "") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/gu, "_");
+  if (["document_search", "documents", "find_materials", "workspace_search", "relay_workspace_search"].includes(normalized)) {
+    return RELAY_TASK_MODES.DOCUMENT_SEARCH;
+  }
+  if (["office_edit", "office_file_edit", "edit_office", "officecli", "relay_office_edit"].includes(normalized)) {
+    return RELAY_TASK_MODES.OFFICE_EDIT;
+  }
+  return "";
+}
+
+function extractRelayTaskModeFromText(text = "") {
+  const raw = String(text || "");
+  const marker = raw.match(/\bRELAY_TASK_MODE\s*:\s*([a-zA-Z0-9_-]+)/u);
+  if (marker?.[1]) return normalizeRelayTaskMode(marker[1]);
+  const assistantId = raw.match(/\b(?:relay[_-]assistant|assistant[_-]id)\s*:\s*([a-zA-Z0-9_-]+)/iu);
+  if (!assistantId?.[1]) return "";
+  return normalizeRelayTaskMode(assistantId[1]);
+}
+
 function normalizeOpenAiTools(rawTools) {
   if (!Array.isArray(rawTools)) return [];
   return rawTools
@@ -5277,6 +5316,23 @@ function classifyToolIntent(prompt = {}) {
       intent: "tool_choice_required",
       reason: "The OpenAI-compatible caller required tool use.",
       preferredTools: preferredTools(available, ["glob", "read", "write", "edit", "bash", "shell", "exec", "run"]),
+    });
+  }
+  const relayTaskMode = normalizeRelayTaskMode(prompt.relayTaskMode || prompt.taskMode || "");
+  if (relayTaskMode === RELAY_TASK_MODES.DOCUMENT_SEARCH) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "local_file_discovery",
+      reason: "The user selected Relay's document search mode.",
+      preferredTools: preferredDocumentSearchTools(tools, ["glob", "grep", "read", "question"]),
+    });
+  }
+  if (relayTaskMode === RELAY_TASK_MODES.OFFICE_EDIT) {
+    return toolIntentResult({
+      decision: "tool_required",
+      intent: "office_file_edit",
+      reason: "The user selected Relay's Office file editing mode.",
+      preferredTools: preferredTools(available, ["bash", "shell", "exec", "run", "Skill", "skill", "question"]),
     });
   }
   if (promptExplicitlyRequestsAvailableTool(prompt)) {
@@ -5570,6 +5626,7 @@ function buildToolProtocolSystemPrompt({
   openAiToolChoice = null,
   hasToolResultMessages = false,
   toolIntent = null,
+  relayTaskMode = "",
 } = {}) {
   const parts = [basePrompt].filter(Boolean);
   if (!tools.length) return parts.join("\n\n");
@@ -5579,12 +5636,13 @@ function buildToolProtocolSystemPrompt({
     openAiToolChoice,
     hasToolResultMessages,
     toolIntent,
+    relayTaskMode,
   });
   const promptToolIntent = constrainToolIntentToPromptTools(toolIntent, promptTools);
   const selectedTool =
     typeof openAiToolChoice === "object" ? String(openAiToolChoice?.function?.name || "").trim() : "";
   if (mode !== TOOL_PROTOCOL_MODES.FINAL_ANSWER) {
-    parts.push(formatStrictToolCompilerPrompt({ tools: promptTools, mode, selectedTool, toolIntent: promptToolIntent }));
+    parts.push(formatStrictToolCompilerPrompt({ tools: promptTools, mode, selectedTool, toolIntent: promptToolIntent, relayTaskMode }));
     return parts.filter(Boolean).join("\n\n");
   }
   const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(promptTools);
@@ -5600,6 +5658,7 @@ function buildToolProtocolSystemPrompt({
   );
   parts.push(
     modePrompt.join("\n"),
+    formatRelayTaskModePolicy(relayTaskMode, promptTools),
     formatToolIntentPolicy(promptToolIntent),
     formatReliableToolPolicy(promptTools),
     toolProtocolPrompt,
@@ -5613,9 +5672,15 @@ function selectToolProtocolPromptTools({
   openAiToolChoice = null,
   hasToolResultMessages = false,
   toolIntent = null,
+  relayTaskMode = "",
 } = {}) {
   const allTools = Array.isArray(tools) ? tools : [];
   if (!allTools.length || hasToolResultMessages || !toolProtocolModeRequiresStrict(mode)) return allTools;
+  if (normalizeRelayTaskMode(relayTaskMode) === RELAY_TASK_MODES.OFFICE_EDIT) {
+    const allowed = new Set(["bash", "shell", "exec", "run", "skill", "question"]);
+    const narrowed = allTools.filter((tool) => allowed.has(normalizeToolName(tool?.function?.name || "").toLowerCase()));
+    return narrowed.length ? narrowed : allTools;
+  }
   const documentSearchTools = availableDocumentSearchTools(allTools);
   if (!documentSearchTools.length || !isDocumentSearchIntent(toolIntent?.intent)) return allTools;
   const selectedTool =
@@ -5652,6 +5717,7 @@ function formatStrictToolCompilerPrompt({
   mode = TOOL_PROTOCOL_MODES.TOOL_PLANNING,
   selectedTool = "",
   toolIntent = null,
+  relayTaskMode = "",
 } = {}) {
   const names = tools.map((tool) => tool.function.name).join(", ");
   const documentSearchTools = availableDocumentSearchTools(tools);
@@ -5681,6 +5747,7 @@ function formatStrictToolCompilerPrompt({
     documentSearchTools.length
       ? "For requests that mention a folder/path and ask to search/find/list/summarize candidate files, pass the user-supplied root/path and objective to the high-level document search tool using the advertised schema."
       : "For requests that mention a folder/path and ask to search/find/list candidate files, emit `glob` with the folder in `path` when the schema supports it and a filename-oriented `pattern`.",
+    formatRelayTaskModePolicy(relayTaskMode, tools),
     formatToolIntentPolicy(toolIntent),
     formatReliableToolPolicy(tools),
     `Available tools: ${names}`,
@@ -5690,6 +5757,44 @@ function formatStrictToolCompilerPrompt({
     lines.push(`Selected tool constraint: call ${selectedTool} unless the request is impossible with that tool schema.`);
   }
   return lines.join("\n");
+}
+
+function formatRelayTaskModePolicy(relayTaskMode = "", tools = []) {
+  const mode = normalizeRelayTaskMode(relayTaskMode);
+  if (!mode) return "";
+  const available = new Set(
+    (tools || [])
+      .map((tool) => normalizeToolName(tool?.function?.name || ""))
+      .filter(Boolean)
+      .map((name) => name.toLowerCase()),
+  );
+  const executionToolName = ["bash", "shell", "exec", "run"].find((name) => available.has(name)) || "";
+  const documentSearchTools = availableDocumentSearchTools(tools);
+  if (mode === RELAY_TASK_MODES.DOCUMENT_SEARCH) {
+    return [
+      "RELAY SELECTED MODE: document_search.",
+      documentSearchTools.length
+        ? `Allowed first tool: ${documentSearchTools.join(", ")}.`
+        : "Preferred first tool: relay_document_search when advertised; otherwise use the safest available local file discovery tool.",
+      "Preserve the user's request text as `query`. Pass the selected workspace/folder as `roots` or `path` when the schema supports it.",
+      "Do not add `fileTypes`, folder restrictions, keyword narrowing, or Microsoft 365/SharePoint/Web search unless the user explicitly asked for that scope.",
+      "For search-only requests, prefer candidate-first arguments: `intent=find_files`, `evidence=candidate`, `thoroughness=quick`, and a broad `maxResults` when accepted by the schema.",
+      "Only request content extraction or evidence-backed reading when the user asks for summary, inspection, comparison, or confirmed evidence.",
+    ].join("\n");
+  }
+  if (mode === RELAY_TASK_MODES.OFFICE_EDIT) {
+    return [
+      "RELAY SELECTED MODE: office_edit.",
+      executionToolName
+        ? `Allowed execution path: load OfficeCLI skill instructions if needed, then call \`${executionToolName}\` with an actual \`officecli ... --json\` command.`
+        : "Allowed execution path: use OfficeCLI Skill calls only when no execution tool is advertised.",
+      "Do not use document search, Microsoft 365 built-in editing, web search, or text edit tools for binary Office file mutation.",
+      "If the file path, target sheet/range/object, or requested edit is missing, return the advertised question/clarification tool if available instead of guessing.",
+      "For existing Excel workbooks, inspect sheets with `officecli view <file> outline --json` before using a sheet-qualified range when the sheet name is not already known.",
+      "Claim completion only after an executor tool result exists.",
+    ].join("\n");
+  }
+  return "";
 }
 
 function formatToolIntentPolicy(toolIntent = null) {
@@ -5748,6 +5853,7 @@ function formatReliableToolPolicy(tools = []) {
       `Document finding pipeline: use the high-level document search tool first (${documentSearchTools.join(", ")}). It owns root selection, broad query expansion, ripgrep/glob planning, skew checks, Office/PDF reading, candidate ranking, and evidence packaging.`,
       "Do not ask Copilot to manually choose glob/grep/read as the first step for document search or document summary when the high-level document search tool is available.",
       "Pass the user intent, folder/path if present, and whether the user wants search-only, content review, or summary-with-evidence according to the advertised schema. If the schema is generic, use fields such as `query`, `path`, `objective`, `mode`, and `evidence` only when accepted by the catalog.",
+      "For search-only document finding, keep the first call candidate-first and broad: preserve the raw user query, avoid unrequested fileTypes/root narrowing, use quick/candidate arguments when accepted, and let Relay continue with deeper reading only after a selected result or evidence request.",
     );
   }
   if (available.has("glob")) {
@@ -6010,7 +6116,7 @@ function buildDeterministicDocumentSearchArgs(prompt = {}, tool = null) {
     if (thoroughness) args.thoroughness = thoroughness;
   }
   if (hasProp("maxResults")) {
-    args.maxResults = schemaNumberValue(properties.maxResults, needsContentEvidence ? 80 : 30);
+    args.maxResults = schemaNumberValue(properties.maxResults, 120);
   }
   if (!Object.keys(args).length) args.query = query;
   return args;
@@ -6224,6 +6330,7 @@ function buildOpenAiToolRepairPrompt(prompt, invalidText) {
     tools: repairTools,
     mode: TOOL_PROTOCOL_MODES.REPAIR,
     openAiToolChoice: prompt.openAiToolChoice,
+    relayTaskMode: prompt.relayTaskMode,
   });
   return {
     ...prompt,
@@ -6283,6 +6390,12 @@ function selectOpenAiToolRepairTools(prompt = {}) {
   const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
   if (!chosen.length && isDocumentSearchIntent(toolIntent.intent)) {
     for (const name of availableDocumentSearchTools(tools)) {
+      const tool = byName.get(name);
+      if (tool) chosen.push(tool);
+    }
+  }
+  if (!chosen.length && normalizeRelayTaskMode(prompt.relayTaskMode) === RELAY_TASK_MODES.OFFICE_EDIT) {
+    for (const name of ["bash", "shell", "exec", "run", "Skill", "skill", "question"]) {
       const tool = byName.get(name);
       if (tool) chosen.push(tool);
     }

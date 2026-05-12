@@ -92,27 +92,40 @@ test("AionUi Relay manifest curates noisy upstream assistant presets", () => {
   const manifest = loadManifest();
 
   assert.deepEqual(manifest.assistantCatalog.visiblePresetIds, [
-    "word-creator",
-    "excel-creator",
-    "ppt-creator",
     "relay-workspace-search",
+    "relay-office-edit",
   ]);
   assert.deepEqual(manifest.assistantCatalog.relayManagedPresetIds, [
     "relay-workspace-search",
+    "relay-office-edit",
   ]);
   assert.equal(manifest.assistantCatalog.mode, "curated");
   assert.equal(manifest.assistantCatalog.hideUnlistedBuiltinPresets, true);
   assert.equal(manifest.assistantCatalog.advancedAccess, "advanced-only");
   assert.deepEqual(manifest.assistantCatalog.beginnerTaskLabels, [
-    "Word文書を作る",
-    "Excelを編集",
-    "PowerPointを作る",
     "資料を探す",
+    "Officeファイルを編集する",
   ]);
+  assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("word-creator"));
+  assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("excel-creator"));
+  assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("ppt-creator"));
   assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("relay-grounded-summary"));
   assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("cowork"));
   assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("openclaw-setup"));
   assert.ok(manifest.assistantCatalog.hiddenPresetIds.includes("moltbook"));
+});
+
+test("AionUi Relay manifest requires one of two beginner task modes", () => {
+  const manifest = loadManifest();
+
+  assert.equal(manifest.taskMode.required, true);
+  assert.deepEqual(manifest.taskMode.allowedModes, ["document_search", "office_edit"]);
+  assert.equal(manifest.taskMode.modeByAssistantId["relay-workspace-search"], "document_search");
+  assert.equal(manifest.taskMode.modeByAssistantId["relay-office-edit"], "office_edit");
+  assert.equal(manifest.taskMode.sendWithoutMode, "blocked");
+  assert.equal(manifest.taskMode.promptTemplates.document_search.firstTool, "relay_document_search");
+  assert.equal(manifest.taskMode.promptTemplates.document_search.defaultArguments.maxResults, 120);
+  assert.equal(manifest.taskMode.promptTemplates.office_edit.firstTool, "officecli");
 });
 
 test("AionUi Relay manifest prevents Workspace Search UX ownership conflicts", () => {
@@ -350,6 +363,11 @@ test("AionUi Relay manifest defines the GuidPage beginner search flow", () => {
     defaultSearchMode: "thorough",
     quickCandidateMode: "progress-only",
     confirmedResultRequirement: "content-or-evidence-backed",
+    candidateFirst: true,
+    candidateLimit: 120,
+    displayLimit: 30,
+    deferContentExtractionByDefault: true,
+    continuation: "show-more-results",
     queryPlanning: {
       owner: "relay",
       copilotRole: "suggestions-only",
@@ -393,6 +411,16 @@ test("AionUi Relay manifest defines the GuidPage beginner search flow", () => {
         "acp-config-selector",
         "guid-auto-skills-menu",
         "assistant-preset-add-button",
+        "settings-button",
+        "webui-button",
+        "feedback-button",
+        "evaluation-button",
+        "rating-button",
+        "provider-model-selector",
+        "assistant-management",
+        "skills-market",
+        "permission-mode-control",
+        "advanced-dev-menus",
         "guid-detected-agent-selector",
         "preset-assistant-edit-button",
         "preset-agent-backend-switcher",
@@ -411,6 +439,7 @@ test("AionUi Relay manifest defines the GuidPage beginner search flow", () => {
       "No-results and partial-results states must suggest next actions instead of ending silently.",
       "Use candidate language until an answer is backed by current Evidence Pack items.",
       "Hide provider/model setup, tool settings, WebUI/channel setup, extension settings, Skills Market, model switchers, permission-mode controls, detected-agent selectors, preset edit controls, backend switchers, and assistant-management entrypoints from beginner views.",
+      "Beginner send flow requires selecting either 資料を探す or Officeファイルを編集する before execution.",
       "Expose hidden AionUi surfaces only when relay.advancedSurfaces.enabled is deliberately enabled for support.",
       "Advanced parser, Evidence Pack, and Query Trace terms stay in support details only.",
     ],

@@ -109,7 +109,7 @@ The Relay fork/wrapper must apply these fixed branding values from
 - The first-run path must not ask the user to add a provider, paste an API key,
   choose a backend, install OfficeCLI manually, or open a terminal.
 - The beginner first screen is AionUi's `/guid` task launcher, Relay-branded and
-  curated for Word, Excel, PowerPoint, and document finding. Do not
+  curated for document finding and Office-file editing. Do not
   start beginners from a separate Relay search page or the full upstream
   assistant/gallery surface.
 - Because AionUi `/guid` renders real preset assistant entries, `資料を探す`
@@ -138,9 +138,15 @@ The Relay fork/wrapper must apply these fixed branding values from
 - First startup imports the Relay seed bundle into AionUi config storage,
   replacing any stale `relay-agent` provider while preserving unrelated user
   settings.
-- The seed bundle carries the Office assistant policy: `word-creator`,
-  `excel-creator`, and `ppt-creator` are the default visible assistants, with
-  `officecli-docx`, `officecli-xlsx`, and `officecli-pptx` enabled by default.
+- The seed bundle carries the two-mode beginner policy:
+  `relay-workspace-search` (`資料を探す`) and `relay-office-edit`
+  (`Officeファイルを編集する`) are the only default visible assistants. The
+  legacy `word-creator`, `excel-creator`, and `ppt-creator` presets are hidden
+  from beginner mode.
+- The Office edit assistant enables `officecli-docx`, `officecli-xlsx`, and
+  `officecli-pptx` by default and carries `RELAY_TASK_MODE: office_edit`, so
+  Copilot tool planning is constrained to OfficeCLI-backed inspection/editing
+  and missing-field clarification.
 - The seed bundle carries the document-finding policy: `relay-workspace-search`
   is the single beginner-facing `資料を探す` preset, with
   `relay-document-search`, `workspace-search`, `find-files`,
@@ -149,8 +155,8 @@ The Relay fork/wrapper must apply these fixed branding values from
   Copilot must call that first instead of choosing raw `glob`, `grep`, or
   `read`.
 - AionUi's broad upstream assistant catalog is curated before it reaches the
-  beginner UI. Relay shows only Word, Excel, PowerPoint, and document-finding
-  task language by default; niche presets such as Cowork,
+  beginner UI. Relay shows only document-finding and Office-file-editing task
+  language by default; niche presets such as Cowork,
   OpenClaw setup, story roleplay, Mermaid, Moltbook, academic paper, dashboard,
   and financial-model helpers are hidden or advanced-only.
 - Beginner views hide AionUi surfaces that look like setup or platform
@@ -484,8 +490,8 @@ Windows gates:
 - M365 Copilot sign-in state is visible and recoverable.
 - OfficeCLI downloads into a user-local Relay directory, verifies SHA256, and
   runs `officecli --version`.
-- Word, Excel, and PowerPoint assistants can create a file in the selected
-  workspace.
+- `Officeファイルを編集する` can inspect/edit Word, Excel, and PowerPoint files in
+  the selected workspace through OfficeCLI.
 - Workspace Document Search can add a folder, show candidates-visible progress,
   continue into file-content/evidence confirmation, return confirmed results or
   clearly marked candidates, open/preview a result, and keep result anchors

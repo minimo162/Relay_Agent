@@ -466,11 +466,63 @@ test("buildDeterministicRequiredToolCallRecord emits high-level document search 
   assert.deepEqual(JSON.parse(toolCall.function.arguments), {
     evidence: "candidate",
     intent: "find_files",
-    maxResults: 30,
+    maxResults: 120,
     query: userPrompt,
     roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
     thoroughness: "quick",
   });
+});
+
+test("parseOpenAiRequest honors Relay selected document search mode markers", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "system",
+        content: "RELAY_TASK_MODE: document_search\nWorking directory: H:\\shr1\\05_経理部\\03_連結財務G\\160連結",
+      },
+      { role: "user", content: "このフォルダからキャッシュフロー計算書に関係するファイルを探して" },
+    ],
+    tools: [
+      { type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } },
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.relayTaskMode, "document_search");
+  assert.equal(parsed.toolIntent.intent, "local_file_discovery");
+  assert.deepEqual(parsed.tools.map((tool) => tool.function.name), ["relay_document_search", "glob"]);
+  assert.match(parsed.systemPrompt, /RELAY SELECTED MODE: document_search/);
+  assert.match(parsed.systemPrompt, /Allowed first tool: relay_document_search/);
+  assert.match(parsed.systemPrompt, /Do not add `fileTypes`/);
+  assert.match(parsed.systemPrompt, /Available tools: relay_document_search/);
+  assert.doesNotMatch(parsed.systemPrompt, /"name":"glob"/);
+});
+
+test("parseOpenAiRequest honors Relay selected Office edit mode markers", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "system",
+        content: "RELAY_TASK_MODE: office_edit",
+      },
+      { role: "user", content: "このExcelファイルの指定セルを編集して" },
+    ],
+    tools: [
+      { type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } },
+      { type: "function", function: { name: "Skill", parameters: { type: "object" } } },
+      { type: "function", function: { name: "bash", parameters: { type: "object" } } },
+      { type: "function", function: { name: "question", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.relayTaskMode, "office_edit");
+  assert.equal(parsed.toolIntent.intent, "office_file_edit");
+  assert.deepEqual(parsed.toolIntent.preferredTools, ["bash", "Skill", "question"]);
+  assert.match(parsed.systemPrompt, /RELAY SELECTED MODE: office_edit/);
+  assert.match(parsed.systemPrompt, /Allowed execution path/);
+  assert.match(parsed.systemPrompt, /file path, target sheet\/range\/object/);
+  assert.match(parsed.systemPrompt, /Available tools: Skill, bash, question/);
+  assert.doesNotMatch(parsed.systemPrompt, /relay_document_search/);
 });
 
 test("tool repair rejects low-level first calls when document search is advertised", () => {

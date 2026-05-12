@@ -55,9 +55,8 @@ test("AionUi Windows validation checklist covers install, provider, tools, and O
   assert.match(validationDoc, /SendBox `\/` command menu/);
   assert.match(validationDoc, /PreviewPanel/);
   assert.match(validationDoc, /relay\.advancedSurfaces\.enabled/);
-  assert.match(validationDoc, /Word assistant/);
-  assert.match(validationDoc, /Excel assistant/);
-  assert.match(validationDoc, /PowerPoint assistant/);
+  assert.match(validationDoc, /Officeファイルを編集する/);
+  assert.match(validationDoc, /through OfficeCLI/);
 });
 
 test("signing docs point normal releases at the AionUi workflow and mark Tauri release as legacy", () => {

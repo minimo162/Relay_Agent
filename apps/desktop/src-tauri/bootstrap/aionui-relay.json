@@ -326,6 +326,11 @@
     "defaultSearchMode": "thorough",
     "quickCandidateMode": "progress-only",
     "confirmedResultRequirement": "content-or-evidence-backed",
+    "candidateFirst": true,
+    "candidateLimit": 120,
+    "displayLimit": 30,
+    "deferContentExtractionByDefault": true,
+    "continuation": "show-more-results",
     "queryPlanning": {
       "owner": "relay",
       "copilotRole": "suggestions-only",
@@ -371,6 +376,16 @@
         "acp-config-selector",
         "guid-auto-skills-menu",
         "assistant-preset-add-button",
+        "settings-button",
+        "webui-button",
+        "feedback-button",
+        "evaluation-button",
+        "rating-button",
+        "provider-model-selector",
+        "assistant-management",
+        "skills-market",
+        "permission-mode-control",
+        "advanced-dev-menus",
         "guid-detected-agent-selector",
         "preset-assistant-edit-button",
         "preset-agent-backend-switcher",
@@ -389,9 +404,41 @@
       "No-results and partial-results states must suggest next actions instead of ending silently.",
       "Use candidate language until an answer is backed by current Evidence Pack items.",
       "Hide provider/model setup, tool settings, WebUI/channel setup, extension settings, Skills Market, model switchers, permission-mode controls, detected-agent selectors, preset edit controls, backend switchers, and assistant-management entrypoints from beginner views.",
+      "Beginner send flow requires selecting either 資料を探す or Officeファイルを編集する before execution.",
       "Expose hidden AionUi surfaces only when relay.advancedSurfaces.enabled is deliberately enabled for support.",
       "Advanced parser, Evidence Pack, and Query Trace terms stay in support details only."
     ]
+  },
+  "taskMode": {
+    "required": true,
+    "allowedModes": [
+      "document_search",
+      "office_edit"
+    ],
+    "modeByAssistantId": {
+      "relay-workspace-search": "document_search",
+      "relay-office-edit": "office_edit"
+    },
+    "sendWithoutMode": "blocked",
+    "promptTemplates": {
+      "document_search": {
+        "selectedModeMarker": "RELAY_TASK_MODE: document_search",
+        "firstTool": "relay_document_search",
+        "defaultArguments": {
+          "intent": "find_files",
+          "evidence": "candidate",
+          "thoroughness": "quick",
+          "maxResults": 120
+        },
+        "responsePolicy": "Return candidate files quickly first. Defer Office/PDF content extraction until evidence, summary, inspection, or a selected file requires it."
+      },
+      "office_edit": {
+        "selectedModeMarker": "RELAY_TASK_MODE: office_edit",
+        "firstTool": "officecli",
+        "missingFieldsPolicy": "If the file path, target sheet/range/object, or requested edit is missing, ask for the missing field instead of guessing.",
+        "responsePolicy": "Compile the user request into the smallest safe OfficeCLI execution or inspection step, add --json to OfficeCLI commands, and claim completion only after a tool result exists."
+      }
+    }
   },
   "enabledByDefaultSkills": [
     "officecli-docx",
@@ -406,15 +453,17 @@
   "assistantCatalog": {
     "mode": "curated",
     "visiblePresetIds": [
+      "relay-workspace-search",
+      "relay-office-edit"
+    ],
+    "relayManagedPresetIds": [
+      "relay-workspace-search",
+      "relay-office-edit"
+    ],
+    "hiddenPresetIds": [
       "word-creator",
       "excel-creator",
       "ppt-creator",
-      "relay-workspace-search"
-    ],
-    "relayManagedPresetIds": [
-      "relay-workspace-search"
-    ],
-    "hiddenPresetIds": [
       "relay-grounded-summary",
       "academic-paper",
       "morph-ppt",
@@ -439,10 +488,8 @@
     ],
     "hideUnlistedBuiltinPresets": true,
     "beginnerTaskLabels": [
-      "Word文書を作る",
-      "Excelを編集",
-      "PowerPointを作る",
-      "資料を探す"
+      "資料を探す",
+      "Officeファイルを編集する"
     ],
     "advancedAccess": "advanced-only"
   },

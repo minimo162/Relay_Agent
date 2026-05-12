@@ -86,17 +86,23 @@ Implications:
   tools/system/dev settings, WebUI/channel setup, extension settings, Skills
   Market, model switchers, ACP config selectors, permission-mode controls,
   detected-agent selectors, preset assistant edit controls, preset backend
-  switchers, and assistant-management entrypoints. Support can re-enable them
-  through `relay.advancedSurfaces.enabled`.
+  switchers, settings/WebUI buttons, feedback/evaluation/rating buttons, and
+  assistant-management entrypoints. Support can re-enable them through
+  `relay.advancedSurfaces.enabled`.
+- Beginner execution is now a required two-mode choice: `資料を探す` routes to
+  candidate-first `relay_document_search`, and `Officeファイルを編集する` routes
+  to OfficeCLI-backed inspection/editing. The old Word/Excel/PowerPoint creator
+  chips are not beginner-facing product modes.
 - Search results must render as actionable cards with title, path, match
   reason, index/warning state, preview/open/copy/refine actions, and careful
   wording that distinguishes candidates from evidence-backed findings.
 - Result cards should follow the Docufinder-style content-first pattern:
   first batch capped, `さらに表示` for continuation, stable selection across
   refresh, and AI prose secondary to title/path/snippet/status/actions.
-- Default broad search is `しっかり検索`: early filename hits are displayed as
-  progress/candidates, while final answer text waits for content-backed or
-  evidence-backed confirmation or explicitly reports incomplete coverage.
+- Default broad search is candidate-first: early filename/path hits are returned
+  quickly with broad query expansion and continuation, while Office/PDF content
+  extraction waits for summary, inspection, comparison, selected-file, or
+  evidence-backed requests.
 - OpenWork remains removed.
 - OpenCode Web is demoted to optional future backend capacity.
 - Do not add new production features to the Relay-owned Rust execution runtime.
@@ -2174,9 +2180,9 @@ Acceptance criteria:
   guard keys, including hidden beginner terms, so upgraded profiles cannot
   preserve stale AionUi defaults that conflict with the Relay UX contract.
 - The AionUi provider seed and copied overlay also force a curated assistant
-  catalog: Word, Excel, PowerPoint, and one document-finding entry are the
-  beginner-facing choices; unrelated upstream builtin presets are hidden or
-  advanced-only.
+  catalog: `資料を探す` and `Officeファイルを編集する` are the beginner-facing
+  choices; legacy Word/Excel/PowerPoint creators and unrelated upstream builtin
+  presets are hidden or advanced-only.
 - The AionUi / Docufinder / Dedoc collision boundary has one owner per concern:
   AionUi owns visible routes, panels, preview/open controls, approvals,
   conversation storage, skill selection, skill invocation UX, normal file/search

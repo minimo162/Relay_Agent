@@ -52,20 +52,37 @@ const RELAY_DEFAULT_SKILLS = [
   'read-office-file',
   'summarize-with-evidence',
 ];
-const RELAY_OFFICE_ASSISTANTS = [
-  {
-    id: 'word-creator',
-    defaultEnabledSkills: ['officecli-docx'],
+const RELAY_TASK_MODE_IDS = ['document_search', 'office_edit'];
+const RELAY_TASK_MODE_BY_ASSISTANT_ID: Record<string, string> = {
+  'relay-workspace-search': 'document_search',
+  'relay-office-edit': 'office_edit',
+};
+const RELAY_TASK_MODE_PROMPT_TEMPLATES = {
+  document_search: {
+    selectedModeMarker: 'RELAY_TASK_MODE: document_search',
+    firstTool: 'relay_document_search',
+    requiredToolPolicy:
+      'Use the high-level Relay document search tool first. Preserve the user request in query, pass the selected workspace root when available, and do not narrow roots, fileTypes, or keywords unless the user explicitly asked for that filter.',
+    defaultArguments: {
+      intent: 'find_files',
+      evidence: 'candidate',
+      thoroughness: 'quick',
+      maxResults: 120,
+    },
+    responsePolicy:
+      'Return candidate files quickly first. Defer Office/PDF content extraction until evidence, summary, inspection, or a selected file requires it.',
   },
-  {
-    id: 'excel-creator',
-    defaultEnabledSkills: ['officecli-xlsx'],
+  office_edit: {
+    selectedModeMarker: 'RELAY_TASK_MODE: office_edit',
+    firstTool: 'officecli',
+    requiredToolPolicy:
+      'Use OfficeCLI-backed tools only for Office document inspection and edits. Do not use Microsoft 365 built-in editing, shell prose, or text-file edit tools for binary Office files.',
+    missingFieldsPolicy:
+      'If the file path, target sheet/range/object, or requested edit is missing, ask for the missing field instead of guessing. For existing workbooks, inspect sheets before using a sheet-qualified range when the sheet is not known.',
+    responsePolicy:
+      'Compile the user request into the smallest safe OfficeCLI execution or inspection step, add --json to OfficeCLI commands, and claim completion only after a tool result exists.',
   },
-  {
-    id: 'ppt-creator',
-    defaultEnabledSkills: ['officecli-pptx'],
-  },
-];
+};
 const RELAY_TASK_ASSISTANTS = [
   {
     id: 'relay-workspace-search',
@@ -94,10 +111,10 @@ const RELAY_TASK_ASSISTANTS = [
       isBuiltin: false,
       presetAgentType: 'aionrs',
       context:
-        "You are Relay Agent's document finding assistant. Use AionUi workspace context and Relay workspace-search skills first, then read files and summarize with evidence only when the user asks for understanding, review, or summary. Ask for a folder only when no workspace is selected. Treat early filename hits as candidates until Relay marks them confirmed.",
+        "RELAY_TASK_MODE: document_search\nYou are Relay Agent's document finding assistant. Use AionUi workspace context and the high-level Relay document search tool first; do not decompose the first step into raw glob/grep/read when relay_document_search is advertised. Preserve the user's request as the query, keep the selected workspace root broad, and avoid adding file type or folder filters unless the user explicitly asked for them. Return candidate files quickly first; read files and summarize with evidence only when the user asks for understanding, review, or summary. Ask for a folder only when no workspace is selected. Treat early filename hits as candidates until Relay marks them confirmed.",
       contextI18n: {
         'ja-JP':
-          'Relay Agentの資料検索アシスタントです。まずAionUIのWorkspaceとRelayの検索スキルを使い、ユーザーが理解・確認・要約を求めた場合だけファイルを読んで出典つきで要約します。Workspaceが未選択の場合だけフォルダ指定を促してください。Relayが確認済みにするまで、ファイル名だけの一致は候補として扱ってください。',
+          'RELAY_TASK_MODE: document_search\nRelay Agentの資料検索アシスタントです。まずAionUIのWorkspaceとRelayの高レベル資料検索ツールを使い、relay_document_search が利用できる場合は raw glob/grep/read に分解しないでください。ユーザーの依頼文をqueryとして保ち、選択中Workspace rootを広く使い、ユーザーが明示した場合以外はファイル種別やフォルダで絞らないでください。最初は候補ファイルを高速に返し、ユーザーが理解・確認・要約を求めた場合だけファイルを読んで出典つきで要約します。Workspaceが未選択の場合だけフォルダ指定を促してください。Relayが確認済みにするまで、ファイル名だけの一致は候補として扱ってください。',
       },
       promptsI18n: {
         'en-US': [
@@ -115,10 +132,55 @@ const RELAY_TASK_ASSISTANTS = [
       },
     },
   },
+  {
+    id: 'relay-office-edit',
+    defaultEnabledSkills: ['officecli-docx', 'officecli-xlsx', 'officecli-pptx'],
+    assistant: {
+      id: 'relay-office-edit',
+      name: 'Edit Office Files',
+      nameI18n: {
+        'en-US': 'Edit Office Files',
+        'ja-JP': 'Officeファイルを編集する',
+      },
+      description: 'Inspect and edit local Word, Excel, and PowerPoint files through OfficeCLI-backed tools.',
+      descriptionI18n: {
+        'en-US': 'Inspect and edit local Word, Excel, and PowerPoint files through OfficeCLI-backed tools.',
+        'ja-JP': 'OfficeCLIベースのツールでローカルのWord、Excel、PowerPointを確認・編集します。',
+      },
+      avatar: '📝',
+      enabled: true,
+      isPreset: true,
+      isBuiltin: false,
+      presetAgentType: 'aionrs',
+      context:
+        "RELAY_TASK_MODE: office_edit\nYou are Relay Agent's Office file editing assistant. Use OfficeCLI-backed tools for Word, Excel, and PowerPoint inspection and edits. Do not use Microsoft 365 built-in editing, web search, or text edit tools for binary Office files. If the file path, target sheet/range/object, or requested edit is missing, ask for the missing field instead of guessing. For existing workbooks, inspect sheets with OfficeCLI before using a sheet-qualified range when the sheet is not known. Add --json to OfficeCLI commands and claim completion only after an executor result exists.",
+      contextI18n: {
+        'ja-JP':
+          'RELAY_TASK_MODE: office_edit\nRelay AgentのOfficeファイル編集アシスタントです。Word、Excel、PowerPointの確認・編集にはOfficeCLIベースのツールを使ってください。Microsoft 365の組み込み編集、Web検索、バイナリOfficeファイルへのテキスト編集ツールは使わないでください。ファイルパス、対象シート・範囲・オブジェクト、編集内容が不足している場合は推測せず不足項目を確認してください。既存ブックでシート名が不明な場合は、シート修飾範囲を使う前にOfficeCLIでシートを確認してください。OfficeCLIコマンドには--jsonを付け、実行結果が返るまで完了を主張しないでください。',
+      },
+      promptsI18n: {
+        'en-US': [
+          'Change the specified Excel cell formatting in this workbook',
+          'Inspect the sheets in this workbook before editing',
+          'Update the specified paragraph in this Word file',
+          'Edit the selected PowerPoint slide title',
+        ],
+        'ja-JP': [
+          'このExcelファイルの指定セルを編集して',
+          'このブックのシートを確認してから編集して',
+          'このWordファイルの指定箇所を更新して',
+          'このPowerPointの指定スライドのタイトルを編集して',
+        ],
+      },
+    },
+  },
 ];
-const RELAY_DEFAULT_ASSISTANTS = [...RELAY_OFFICE_ASSISTANTS, ...RELAY_TASK_ASSISTANTS];
+const RELAY_DEFAULT_ASSISTANTS = [...RELAY_TASK_ASSISTANTS];
 const RELAY_VISIBLE_ASSISTANT_PRESET_IDS = RELAY_DEFAULT_ASSISTANTS.map((assistant) => assistant.id);
 const RELAY_HIDDEN_ASSISTANT_PRESET_IDS = [
+  'word-creator',
+  'excel-creator',
+  'ppt-creator',
   'relay-grounded-summary',
   'academic-paper',
   'morph-ppt',
@@ -142,10 +204,8 @@ const RELAY_HIDDEN_ASSISTANT_PRESET_IDS = [
   'xiaohongshu-recruiter',
 ];
 const RELAY_BEGINNER_TASK_LABELS = [
-  'Word文書を作る',
-  'Excelを編集',
-  'PowerPointを作る',
   '資料を探す',
+  'Officeファイルを編集する',
 ];
 const RELAY_WORKSPACE_SEARCH_HIDDEN_TERMS = [
   'AionUi',
@@ -422,6 +482,16 @@ const RELAY_BEGINNER_HIDDEN_SURFACES = [
   'acp-config-selector',
   'guid-auto-skills-menu',
   'assistant-preset-add-button',
+  'settings-button',
+  'webui-button',
+  'feedback-button',
+  'evaluation-button',
+  'rating-button',
+  'provider-model-selector',
+  'assistant-management',
+  'skills-market',
+  'permission-mode-control',
+  'advanced-dev-menus',
   'guid-detected-agent-selector',
   'preset-assistant-edit-button',
   'preset-agent-backend-switcher',
@@ -1016,6 +1086,17 @@ function relaySeedBundle(baseUrl: string, apiKey: string): Record<string, unknow
     'relay.guidUx.defaultTaskEntries': [...RELAY_BEGINNER_TASK_LABELS],
     'relay.guidUx.primaryCta': 'aionui-normal-send-flow',
     'relay.guidUx.startAction': { ...RELAY_GUID_START_ACTION },
+    'relay.taskMode.required': true,
+    'relay.taskMode.allowedModes': [...RELAY_TASK_MODE_IDS],
+    'relay.taskMode.modeByAssistantId': { ...RELAY_TASK_MODE_BY_ASSISTANT_ID },
+    'relay.taskMode.sendWithoutMode': 'blocked',
+    'relay.taskMode.promptTemplates': { ...RELAY_TASK_MODE_PROMPT_TEMPLATES },
+    'relay.documentSearch.candidateFirst': true,
+    'relay.documentSearch.preserveQueryExpansion': true,
+    'relay.documentSearch.deferContentExtractionByDefault': true,
+    'relay.documentSearch.candidateLimit': 120,
+    'relay.documentSearch.displayLimit': 30,
+    'relay.documentSearch.continuation': 'show-more-results',
     'relay.guidUx.noStandaloneSearchStartButton': true,
     'relay.guidUx.examplePromptStrategy': 'task-aware-recent-and-popular',
     'relay.guidUx.examplePrompts': [...RELAY_GUID_EXAMPLE_PROMPTS],
@@ -1097,6 +1178,13 @@ function relaySeedBundle(baseUrl: string, apiKey: string): Record<string, unknow
         startAction: { ...RELAY_GUID_START_ACTION },
         examplePrompts: [...RELAY_GUID_EXAMPLE_PROMPTS],
       },
+      taskMode: {
+        required: true,
+        allowedModes: [...RELAY_TASK_MODE_IDS],
+        modeByAssistantId: { ...RELAY_TASK_MODE_BY_ASSISTANT_ID },
+        sendWithoutMode: 'blocked',
+        promptTemplates: { ...RELAY_TASK_MODE_PROMPT_TEMPLATES },
+      },
       search: {
         states: [...RELAY_SEARCH_STATE_LABELS],
         resultCardFields: [...RELAY_SEARCH_RESULT_CARD_FIELDS],
@@ -1107,6 +1195,11 @@ function relaySeedBundle(baseUrl: string, apiKey: string): Record<string, unknow
         quickCandidateMode: 'progress-only',
         confirmedResultRequirement: 'content-or-evidence-backed',
         queryPlanning: { ...RELAY_QUERY_PLANNING },
+        candidateFirst: true,
+        candidateLimit: 120,
+        displayLimit: 30,
+        deferContentExtractionByDefault: true,
+        continuation: 'show-more-results',
       },
       beginnerVisibility: {
         visibleSettingsTabs: [...RELAY_BEGINNER_VISIBLE_SETTINGS_TABS],

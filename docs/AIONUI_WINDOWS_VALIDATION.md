@@ -21,8 +21,8 @@ available.
 | Installed first launch | `AION05` | Installer run notes, first-launch screenshots, app name/title/protocol/icon checks, provider-ready or sign-in-required state, default model evidence | The first visible product surface is Relay-branded AionUi, not OpenCode Web/OpenWork, and no API-key/backend setup is required | `installed-first-run/` |
 | Provider seed and M365 recovery | `AION05` | Provider settings screenshot or redacted config export, local provider health output, M365 sign-in/recovery notes, model id `relay-agent/m365-copilot` | Relay provider is selected by default and sign-in recovery needs no terminal steps | `provider/` |
 | User-local runtime tools | `AION05` | `officecli --version`, `rg --version`, bundled Node path, LiteParse runner path, cache paths, no-admin install notes | OfficeCLI, ripgrep, bundled Node, and LiteParse are available to AionUi child processes from user-local or installed resources | `runtime-tools/` |
-| Beginner AionUi surface | `AION05` | `/guid` screenshots, curated assistant list, hidden advanced/provider/platform surfaces, advanced flag state | Beginners see Word, Excel, PowerPoint, and `資料を探す` without setup/platform management surfaces | `beginner-surface/` |
-| Office workflows | `AION05` | Created `.docx`, `.xlsx`, `.pptx` filenames, Office/preview readability notes, sanitized logs | Word/Excel/PowerPoint tasks create readable files in the selected workspace | `office-workflows/` |
+| Beginner AionUi surface | `AION05` | `/guid` screenshots, curated assistant list, hidden advanced/provider/platform surfaces, advanced flag state | Beginners see only `資料を探す` and `Officeファイルを編集する` without setup/platform management surfaces | `beginner-surface/` |
+| Office workflows | `AION05` | OfficeCLI command/result logs, edited `.docx`/`.xlsx`/`.pptx` filenames, Office/preview readability notes, sanitized logs | Office edits run through OfficeCLI-backed tools and do not rely on M365 built-in editing | `office-workflows/` |
 | Workspace Document Search UX | `AION06` | Search prompts, selected root, result-card screenshots, preview/open/copy/refine/show-more evidence, partial/no-result/permission states, local draft/Copilot polish state | Search uses structured result cards and local evidence state; filename-only candidates are not presented as confirmed findings | `workspace-search/` |
 | Support export and privacy | `AION06` / `AION07` | Support export archive or manifest, redaction notes, Query Trace/support summaries, list of excluded private artifacts | Export contains diagnostics and metadata only; source documents, extracted contents, tokens, cookies, and tenant-private data are excluded or redacted | `support-export/` |
 | Release readiness decision | `AION07` | Final readiness note, known limitations, unresolved Windows-only gaps, unsigned/signed status, links to every accepted row | Release decision cites all required evidence and explicitly names any residual limitation | `readiness-decision/` |
@@ -169,8 +169,8 @@ Get-AuthenticodeSignature ".\Relay.Agent-*-win-x64*.exe" | Format-List
       submenu in beginner mode.
 - [ ] Confirm OpenCode Web is not the first-run product screen.
 - [ ] Confirm the first beginner task screen is the Relay-branded AionUi
-      `/guid` surface, with curated choices for Word, Excel, PowerPoint,
-      and `資料を探す`.
+      `/guid` surface, with only `資料を探す` and
+      `Officeファイルを編集する` as beginner task choices.
 - [ ] Confirm `資料を探す` is one real preset assistant entry that can be
       selected from `/guid`, not separate metadata-only search and summary
       labels.
@@ -189,8 +189,9 @@ Get-AuthenticodeSignature ".\Relay.Agent-*-win-x64*.exe" | Format-List
 - [ ] Confirm `資料を探す` loads the `relay-document-search` skill and, when a
       high-level document-search tool is advertised, Copilot routes the first
       call there instead of starting with raw `glob`, `grep`, or `read`.
-- [ ] Confirm the default assistant/skill picker is curated: Word, Excel,
-      PowerPoint, and `資料を探す` are visible, while
+- [ ] Confirm the default assistant/skill picker is curated: only
+      `資料を探す` and `Officeファイルを編集する` are visible, while
+      the legacy Word/Excel/PowerPoint creator presets and
       unrelated upstream AionUi presets such as Cowork, OpenClaw setup,
       roleplay, Moltbook, Mermaid, academic paper, dashboard, and
       financial-model helpers are hidden or advanced-only.
@@ -229,11 +230,14 @@ Get-AuthenticodeSignature ".\Relay.Agent-*-win-x64*.exe" | Format-List
 Create a test workspace, for example `C:\relay-aionui-test`, and run these from
 Relay Agent:
 
-- [ ] Ask Word assistant to create a `.docx` summary file in the workspace.
-- [ ] Ask Excel assistant to create a `.xlsx` table file in the workspace.
-- [ ] Ask PowerPoint assistant to create a small `.pptx` deck in the workspace.
-- [ ] Open each output in Microsoft Office or the configured preview path and
-      confirm the file is readable.
+- [ ] Use `Officeファイルを編集する` to inspect or edit a `.docx` file in the
+      workspace through OfficeCLI.
+- [ ] Use `Officeファイルを編集する` to inspect sheets and edit a `.xlsx` file in
+      the workspace through OfficeCLI.
+- [ ] Use `Officeファイルを編集する` to inspect or edit a `.pptx` file in the
+      workspace through OfficeCLI.
+- [ ] Open each changed output in Microsoft Office or the configured preview
+      path and confirm the file is readable.
 - [ ] Ask Relay Agent to search the workspace for the created Office files and
       confirm the returned paths are correct.
 - [ ] Ask Relay Agent to search a large nested folder for a broad term and

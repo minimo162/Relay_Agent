@@ -119,6 +119,17 @@ test("AionUi config seed disables beginner-hostile surfaces by default", () => {
   assert.deepEqual(seed["relay.guidUx.startAction"], {
     ...AIONUI_RELAY_GUID_START_ACTION,
   });
+  assert.equal(seed["relay.taskMode.required"], true);
+  assert.deepEqual(seed["relay.taskMode.allowedModes"], ["document_search", "office_edit"]);
+  assert.equal(seed["relay.taskMode.modeByAssistantId"]["relay-workspace-search"], "document_search");
+  assert.equal(seed["relay.taskMode.modeByAssistantId"]["relay-office-edit"], "office_edit");
+  assert.equal(seed["relay.taskMode.sendWithoutMode"], "blocked");
+  assert.equal(seed["relay.taskMode.promptTemplates"].document_search.defaultArguments.maxResults, 120);
+  assert.equal(seed["relay.documentSearch.candidateFirst"], true);
+  assert.equal(seed["relay.documentSearch.candidateLimit"], 120);
+  assert.equal(seed["relay.documentSearch.displayLimit"], 30);
+  assert.equal(seed["relay.documentSearch.deferContentExtractionByDefault"], true);
+  assert.equal(seed["relay.documentSearch.continuation"], "show-more-results");
   assert.equal(seed["relay.guidUx.noStandaloneSearchStartButton"], true);
   assert.equal(seed["relay.guidUx.examplePromptStrategy"], "task-aware-recent-and-popular");
   assert.deepEqual(seed["relay.guidUx.examplePrompts"], [
@@ -265,12 +276,23 @@ test("seed bundle records provider-before-shell lifecycle contract", () => {
   );
   assert.equal(workspaceSearchPreset.assistant.nameI18n["ja-JP"], "資料を探す");
   assert.equal(workspaceSearchPreset.assistant.presetAgentType, "aionrs");
+  assert.match(workspaceSearchPreset.assistant.context, /RELAY_TASK_MODE: document_search/);
   assert.deepEqual(workspaceSearchPreset.assistant.enabledSkills, [
     "relay-document-search",
     "workspace-search",
     "find-files",
     "read-office-file",
     "summarize-with-evidence",
+  ]);
+  const officeEditPreset = seed.skills.assistantPresets.find(
+    (assistant) => assistant.id === "relay-office-edit",
+  );
+  assert.equal(officeEditPreset.assistant.nameI18n["ja-JP"], "Officeファイルを編集する");
+  assert.match(officeEditPreset.assistant.context, /RELAY_TASK_MODE: office_edit/);
+  assert.deepEqual(officeEditPreset.assistant.enabledSkills, [
+    "officecli-docx",
+    "officecli-xlsx",
+    "officecli-pptx",
   ]);
   assert.equal(
     seed.skills.assistantPresets.some((assistant) => assistant.id === "relay-grounded-summary"),
@@ -296,6 +318,9 @@ test("seed bundle records provider-before-shell lifecycle contract", () => {
   assert.deepEqual(seed.ux.guidBeginnerFlow.examplePrompts, [
     ...AIONUI_RELAY_GUID_EXAMPLE_PROMPTS,
   ]);
+  assert.deepEqual(seed.ux.taskMode.allowedModes, ["document_search", "office_edit"]);
+  assert.equal(seed.ux.taskMode.sendWithoutMode, "blocked");
+  assert.equal(seed.ux.taskMode.promptTemplates.document_search.defaultArguments.maxResults, 120);
   assert.deepEqual(seed.ux.search.states, [...AIONUI_RELAY_SEARCH_STATE_LABELS]);
   assert.deepEqual(seed.ux.search.resultCardFields, [
     ...AIONUI_RELAY_SEARCH_RESULT_CARD_FIELDS,
@@ -312,6 +337,11 @@ test("seed bundle records provider-before-shell lifecycle contract", () => {
   assert.equal(seed.ux.search.defaultSearchMode, "thorough");
   assert.equal(seed.ux.search.quickCandidateMode, "progress-only");
   assert.equal(seed.ux.search.confirmedResultRequirement, "content-or-evidence-backed");
+  assert.equal(seed.ux.search.candidateFirst, true);
+  assert.equal(seed.ux.search.candidateLimit, 120);
+  assert.equal(seed.ux.search.displayLimit, 30);
+  assert.equal(seed.ux.search.deferContentExtractionByDefault, true);
+  assert.equal(seed.ux.search.continuation, "show-more-results");
   assert.deepEqual(seed.ux.search.queryPlanning, {
     ...AIONUI_RELAY_QUERY_PLANNING,
   });
@@ -412,6 +442,16 @@ test("seed applier makes Relay the selected AionUi provider without dropping unr
   assert.deepEqual(applied["relay.guidUx.examplePrompts"], [
     ...AIONUI_RELAY_GUID_EXAMPLE_PROMPTS,
   ]);
+  assert.equal(applied["relay.taskMode.required"], true);
+  assert.deepEqual(applied["relay.taskMode.allowedModes"], ["document_search", "office_edit"]);
+  assert.equal(applied["relay.taskMode.modeByAssistantId"]["relay-workspace-search"], "document_search");
+  assert.equal(applied["relay.taskMode.modeByAssistantId"]["relay-office-edit"], "office_edit");
+  assert.equal(applied["relay.taskMode.sendWithoutMode"], "blocked");
+  assert.equal(applied["relay.documentSearch.candidateFirst"], true);
+  assert.equal(applied["relay.documentSearch.candidateLimit"], 120);
+  assert.equal(applied["relay.documentSearch.displayLimit"], 30);
+  assert.equal(applied["relay.documentSearch.deferContentExtractionByDefault"], true);
+  assert.equal(applied["relay.documentSearch.continuation"], "show-more-results");
   assert.deepEqual(applied["relay.searchUx.stateLabels"], [
     ...AIONUI_RELAY_SEARCH_STATE_LABELS,
   ]);

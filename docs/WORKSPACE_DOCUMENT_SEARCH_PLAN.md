@@ -838,8 +838,7 @@ reuse that surface instead of adding another beginner document-search page.
 
 The beginner journey is:
 
-1. Choose a curated task: `Word文書を作る`, `Excelを編集`, `PowerPointを作る`,
-   or `資料を探す`.
+1. Choose a curated task: `資料を探す` or `Officeファイルを編集する`.
 2. Select a folder or keep the recent workspace in the existing `GuidActionRow`
    workspace control.
 3. Use an example prompt or type a request in `GuidInputCard`.
@@ -2572,8 +2571,8 @@ AionUi's normal conversation/workspace shell:
   `ファイル検索`, `根拠つき回答`, and related examples. Do not depend on a
   beginner-visible generic skill picker.
 - Assistant catalog: the default picker is a curated task launcher, not the full
-  upstream AionUi gallery. It shows Word, Excel, PowerPoint, and `資料を探す`;
-  advanced presets are collapsed behind advanced/custom
+  upstream AionUi gallery. It shows `資料を探す` and
+  `Officeファイルを編集する`; advanced presets are collapsed behind advanced/custom
   assistant management.
 - Folder context: AionUi's existing workspace/folder controls show registered
   roots, pinned folders, recent searches, and compact index status. The current

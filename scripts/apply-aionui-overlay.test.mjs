@@ -847,7 +847,10 @@ test("renderer base stylesheet uses Japanese UI fonts for Relay Agent", () => {
   assert.match(once, /\.guid-config-btn,/);
   assert.match(once, /\.header-model-btn,/);
   assert.match(once, /\.agent-mode-compact-pill,/);
-  assert.match(once, /\[data-testid='btn-add-preset'\] \{/);
+  assert.match(once, /\[data-testid='btn-add-preset'\],/);
+  assert.match(once, /\[data-testid='btn-settings'\],/);
+  assert.match(once, /\[data-testid='btn-webui'\],/);
+  assert.match(once, /\[data-testid='btn-feedback'\],/);
   assert.match(once, /display: none !important;/);
 });
 
@@ -1863,6 +1866,16 @@ test("Relay seed overlay persists OfficeCLI assistant defaults into AionUi confi
   assert.match(relaySeed, /relay\.guidUx\.beginnerFlowSteps/);
   assert.match(relaySeed, /relay\.guidUx\.requiredControls/);
   assert.match(relaySeed, /relay\.guidUx\.startAction/);
+  assert.match(relaySeed, /relay\.taskMode\.required/);
+  assert.match(relaySeed, /relay\.taskMode\.allowedModes/);
+  assert.match(relaySeed, /relay\.taskMode\.modeByAssistantId/);
+  assert.match(relaySeed, /relay\.taskMode\.sendWithoutMode/);
+  assert.match(relaySeed, /relay\.taskMode\.promptTemplates/);
+  assert.match(relaySeed, /relay\.documentSearch\.candidateFirst/);
+  assert.match(relaySeed, /relay\.documentSearch\.candidateLimit/);
+  assert.match(relaySeed, /relay\.documentSearch\.displayLimit/);
+  assert.match(relaySeed, /relay\.documentSearch\.deferContentExtractionByDefault/);
+  assert.match(relaySeed, /relay\.documentSearch\.continuation/);
   assert.match(relaySeed, /relay\.guidUx\.noStandaloneSearchStartButton/);
   assert.match(relaySeed, /relay\.guidUx\.examplePrompts/);
   assert.match(relaySeed, /relay\.searchUx\.stateLabels/);
@@ -1998,6 +2011,12 @@ test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic pr
   assert.match(relayGateway, /sendbox-at-file-mentions/);
   assert.match(relayGateway, /PreviewPanel/);
   assert.match(relayGateway, /officecli-xlsx/);
+  assert.match(relayGateway, /relay-office-edit/);
+  assert.match(relayGateway, /Officeファイルを編集する/);
+  assert.match(relayGateway, /RELAY_TASK_MODE: document_search/);
+  assert.match(relayGateway, /RELAY_TASK_MODE: office_edit/);
+  assert.match(relayGateway, /relay\.taskMode\.sendWithoutMode/);
+  assert.match(relayGateway, /relay\.documentSearch\.candidateLimit/);
   assert.match(relayGateway, /RELAY_HIDDEN_ASSISTANT_PRESET_IDS/);
   assert.match(relayGateway, /relay\.assistantCatalog\.hideUnlistedBuiltinPresets/);
   assert.match(relayGateway, /資料を探す/);

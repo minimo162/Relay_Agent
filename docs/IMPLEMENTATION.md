@@ -25,15 +25,48 @@
 
 ## Milestone Log
 
+### 2026-05-13 Two-mode AionUi beginner shell
+
+Relay beginner UX is now scoped to two visible preset assistants:
+`資料を探す` and `Officeファイルを編集する`. The former carries
+`RELAY_TASK_MODE: document_search` and forces the Copilot provider gateway to
+prefer the high-level `relay_document_search` tool as the first step. The latter
+carries `RELAY_TASK_MODE: office_edit` and narrows strict tool planning to
+OfficeCLI execution/skill/question tools, with explicit missing-field and
+Excel-sheet inspection policy.
+
+The old beginner-facing `word-creator`, `excel-creator`, and `ppt-creator`
+entries are now hidden/disabled by the Relay assistant seed. The AionUi seed and
+bootstrap manifest also record `relay.taskMode.*` defaults, candidate-first
+document-search policy (`candidateLimit: 120`, `displayLimit: 30`, deferred
+content extraction), and additional hidden beginner surfaces for settings,
+WebUI, feedback/evaluation/rating, provider/model controls, permission mode,
+assistant management, skills market, and advanced developer menus.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --check apps/desktop/scripts/aionui_provider_seed.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`:
+  passed, 72 tests.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 21 tests.
+- `node --test apps/desktop/scripts/aionui_provider_seed.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs scripts/aionui-windows-validation-doc.test.mjs`:
+  passed, 20 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 Document search quick candidate latency fix
 
 Follow-up live feedback showed the high-level document search path was correct
 but too slow for the first "find related files" action. Relay now keeps first
 file-discovery tool calls lightweight: deterministic gateway calls preserve the
 exact user `query` and current `roots`, but set `intent: find_files`,
-`thoroughness: quick`, `evidence: candidate`, and a smaller candidate cap for
-plain file lookup requests. Requests that ask to read, summarize, compare, or
-confirm document contents still opt into deeper evidence collection.
+`thoroughness: quick`, `evidence: candidate`, and a bounded candidate cap for
+plain file lookup requests. The current two-mode shell keeps that first pass
+broad at 120 candidates while showing only a manageable first display batch.
+Requests that ask to read, summarize, compare, or confirm document contents
+still opt into deeper evidence collection.
 
 The executor also no longer treats `evidence: candidate` by itself as a reason
 to inspect file contents. Quick candidate searches now stay filename/path-only,
