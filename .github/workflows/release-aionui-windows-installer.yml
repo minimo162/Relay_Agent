@@ -178,6 +178,9 @@ jobs:
           if ($builderConfig -notmatch "resources/relay-tools") {
             throw "Relay overlay did not bundle Relay-managed portable tools."
           }
+          if ($builderConfig -notmatch "out/main/relay-document-search-mcp-stdio\.js") {
+            throw "Relay document-search MCP stdio bundle is not marked for asarUnpack."
+          }
 
           $gatewayFiles = @(
             "copilot_server.js",

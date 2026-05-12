@@ -25,6 +25,32 @@
 
 ## Milestone Log
 
+### 2026-05-12 AionUi packaged document-search MCP startup fix
+
+A packaged AionUi release could still miss the high-level
+`relay_document_search` tool even after the provider prompt routing fix. The
+document-search MCP bundle was built, but it was not added to
+`electron-builder.yml` `asarUnpack`; packaged sessions therefore attempted to
+start the stdio script from `app.asar` using the external bundled Node runtime,
+which cannot execute ASAR paths. When the MCP did not register, Copilot only saw
+low-level search tools and produced raw `functions.Glob` calls.
+
+The overlay now marks `out/main/relay-document-search-mcp-stdio.js` for
+`asarUnpack`, resolves the document-search MCP script path through AionUi's
+`resolveMcpScriptDir()` helper so packaged paths point at
+`app.asar.unpacked`, and patches Aionrs MCP readiness so the first user message
+waits for the specific awaited MCP server name instead of any MCP ready event.
+The release workflow overlay validation now fails if the document-search MCP
+bundle is not marked for unpacking.
+
+Verification:
+
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 21 tests.
+- `node --test scripts/aionui-release-workflow.test.mjs`: passed, 5 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AionUi document-search MCP routing fix
 
 The previous glob normalization guarded the symptom after Copilot had already

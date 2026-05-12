@@ -53,6 +53,7 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /Relay overlay did not update productName/);
   assert.match(text, /resources\/relay-gateway/);
   assert.match(text, /resources\/relay-tools/);
+  assert.match(text, /relay-document-search-mcp-stdio\\\.js/);
   assert.match(text, /TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc/);
   assert.match(text, /relay-tools\\ripgrep\\rg\.exe/);
   assert.match(text, /relay-tools\\node\\relay-node\.exe/);

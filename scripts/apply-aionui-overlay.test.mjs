@@ -119,6 +119,10 @@ function createPinnedAionUiFixture(root) {
       "publish:",
       "  owner: iOfficeAI",
       "  repo: AionUi",
+      "asarUnpack:",
+      "  - 'out/main/builtin-mcp-image-gen.js'",
+      "  - 'out/main/team-mcp-stdio.js'",
+      "  - 'out/main/team-guide-mcp-stdio.js'",
       "extraResources:",
       "  - from: public",
       "    to: .",
@@ -442,6 +446,7 @@ function createPinnedAionUiFixture(root) {
     ].join("\n"),
   );
   writeFixture(root, "scripts/build-mcp-servers.js", "async function main() {\n  await Promise.all([\n    esbuild.build({\n      ...SHARED_OPTIONS,\n      entryPoints: [path.join(ROOT, 'src/process/team/mcp/guide/teamGuideMcpStdio.ts')],\n      outfile: path.join(ROOT, 'out/main/team-guide-mcp-stdio.js'),\n    }),\n  ]);\n}\n");
+  writeFixture(root, "src/process/agent/aionrs/index.ts", "export class AionrsAgent {\n  private mcpReadyPromise: Promise<void>;\n  private mcpReadyResolve!: () => void;\n  options: { stdioMcpServers?: Array<{ name: string; awaitReady?: boolean; env: Array<{ name: string; value: string }>; command: string; args: string[] }> } = {};\n  constructor() {\n    this.mcpReadyPromise = new Promise((resolve) => {\n      this.mcpReadyResolve = resolve;\n    });\n  }\n  sendCommand(_command: unknown) {}\n  async start() {\n    const stdioMcpServers = this.options.stdioMcpServers ?? [];\n    let awaitAnyReady = false;\n    for (const server of stdioMcpServers) {\n      const envRecord: Record<string, string> = {};\n      for (const { name: k, value: v } of server.env) {\n        envRecord[k] = v;\n      }\n      this.sendCommand({ type: 'add_mcp_server', name: server.name, transport: 'stdio', command: server.command, args: server.args, env: envRecord });\n      if (server.awaitReady) awaitAnyReady = true;\n    }\n    if (awaitAnyReady) {\n      await Promise.race([this.mcpReadyPromise, new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('MCP ready timeout (30s)')), 30000))]).catch((err) => {\n        console.warn('[AionrsAgent] MCP setup warning:', err);\n      });\n    }\n  }\n  private handleEvent(event: { type: string; name?: string }) {\n    switch (event.type) {\n      case 'mcp_ready':\n        this.mcpReadyResolve();\n        break;\n    }\n  }\n}\n");
   writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nexport class AionrsManager {\n  conversation_id = 'conversation-1';\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return undefined;\n  }\n\n  async stop() {\n  }\n}\n");
 }
 
@@ -565,6 +570,10 @@ test("patchElectronBuilderContent rebrands installer metadata, protocol, update 
     "publish:",
     "  owner: iOfficeAI",
     "  repo: AionUi",
+    "asarUnpack:",
+    "  - 'out/main/builtin-mcp-image-gen.js'",
+    "  - 'out/main/team-mcp-stdio.js'",
+    "  - 'out/main/team-guide-mcp-stdio.js'",
     "extraResources:",
     "  - from: public",
     "    to: .",
@@ -584,6 +593,7 @@ test("patchElectronBuilderContent rebrands installer metadata, protocol, update 
   assert.match(patched, /^    to: relay-gateway$/m);
   assert.match(patched, /^  - from: resources\/relay-tools$/m);
   assert.match(patched, /^    to: relay-tools$/m);
+  assert.match(patched, /out\/main\/relay-document-search-mcp-stdio\.js/);
   assert.doesNotMatch(patched, /AionUi Protocol|x-scheme-handler\/aionui|owner: iOfficeAI/);
 });
 
@@ -920,6 +930,7 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
 
     assert.match(readFixture(fixtureRoot, "electron-builder.yml"), /productName: Relay Agent/);
     assert.match(readFixture(fixtureRoot, "electron-builder.yml"), /from: resources\/relay-tools/);
+    assert.match(readFixture(fixtureRoot, "electron-builder.yml"), /relay-document-search-mcp-stdio\.js/);
     assert.match(readFixture(fixtureRoot, "src/index.ts"), /startRelayGatewayBeforeShell/);
     assert.match(readFixture(fixtureRoot, "src/index.ts"), /title: 'Relay Agent'/);
     assert.match(readFixture(fixtureRoot, "src/process/utils/initStorage.ts"), /applyRelayProviderSeed/);
@@ -955,8 +966,11 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx"), /relayAdvancedSurfacesEnabled/);
 
     assert.match(readFixture(fixtureRoot, "scripts/build-mcp-servers.js"), /relay-document-search-mcp-stdio\.js/);
+    assert.match(readFixture(fixtureRoot, "src/process/agent/aionrs/index.ts"), /awaitedMcpReadyNames/);
+    assert.match(readFixture(fixtureRoot, "src/process/agent/aionrs/index.ts"), /seenMcpReadyNames/);
     const patchedAionrsManager = readFixture(fixtureRoot, "src/process/task/AionrsManager.ts");
     assert.match(patchedAionrsManager, /buildRelayDocumentSearchMcpStdioConfig/);
+    assert.match(patchedAionrsManager, /resolveMcpScriptDir/);
     assert.match(patchedAionrsManager, /awaitReady: true/);
     assert.match(patchedAionrsManager, /RELAY_BUNDLED_NODE/);
     assert.match(patchedAionrsManager, /ELECTRON_RUN_AS_NODE/);
@@ -1416,6 +1430,7 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   ].join("\n");
   const patchedManager = patchAionrsManagerContent(manager);
   assert.match(patchedManager, /import path from 'path';/);
+  assert.match(patchedManager, /resolveMcpScriptDir/);
   assert.match(patchedManager, /buildRelayDocumentSearchMcpStdioConfig\(mergedData\.workspace\)/);
   assert.ok(
     patchedManager.indexOf("const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig") >
@@ -1426,6 +1441,7 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
       patchedManager.indexOf("if (mergedData.teamMcpStdioConfig)"),
   );
   assert.match(patchedManager, /relay-document-search-mcp-stdio\.js/);
+  assert.match(patchedManager, /path\.join\(resolveMcpScriptDir\(\), 'relay-document-search-mcp-stdio\.js'\)/);
   assert.match(
     patchedManager,
     /process\.env\.RELAY_DOCUMENT_SEARCH_MCP_COMMAND \|\| process\.env\.RELAY_BUNDLED_NODE \|\| process\.execPath \|\| 'node'/,

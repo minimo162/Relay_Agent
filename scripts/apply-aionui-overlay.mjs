@@ -599,6 +599,13 @@ export function patchElectronBuilderContent(input, branding = relayBranding()) {
     }
     output = output.replace(anchor, `${anchor}  - from: resources/relay-tools\n    to: relay-tools\n`);
   }
+  if (!output.includes("out/main/relay-document-search-mcp-stdio.js") && output.includes("asarUnpack:")) {
+    const anchor = "  - 'out/main/team-guide-mcp-stdio.js'";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find electron-builder MCP asarUnpack anchor");
+    }
+    output = output.replace(anchor, `${anchor}\n  - 'out/main/relay-document-search-mcp-stdio.js'`);
+  }
   return output;
 }
 
@@ -1715,6 +1722,68 @@ export function patchAionuiBuildMcpServersContent(input) {
   );
 }
 
+export function patchAionrsAgentContent(input) {
+  if (input.includes("awaitedMcpReadyNames")) return input;
+  let output = input;
+  const readyFieldAnchor = "  private mcpReadyResolve!: () => void;";
+  if (!output.includes(readyFieldAnchor)) {
+    throw new Error("Could not find AionrsAgent MCP ready field anchor");
+  }
+  output = output.replace(
+    readyFieldAnchor,
+    [
+      readyFieldAnchor,
+      "  private awaitedMcpReadyNames = new Set<string>();",
+      "  private seenMcpReadyNames = new Set<string>();",
+    ].join("\n"),
+  );
+
+  const setupAnchor = [
+    "    const stdioMcpServers = this.options.stdioMcpServers ?? [];",
+    "    let awaitAnyReady = false;",
+  ].join("\n");
+  if (!output.includes(setupAnchor)) {
+    throw new Error("Could not find AionrsAgent MCP setup anchor");
+  }
+  output = output.replace(
+    setupAnchor,
+    [
+      "    const stdioMcpServers = this.options.stdioMcpServers ?? [];",
+      "    this.awaitedMcpReadyNames = new Set(stdioMcpServers.filter((server) => server.awaitReady).map((server) => server.name));",
+      "    this.seenMcpReadyNames = new Set();",
+      "    this.mcpReadyPromise = new Promise((resolve) => {",
+      "      this.mcpReadyResolve = resolve;",
+      "    });",
+    ].join("\n"),
+  );
+  output = output.replace("      if (server.awaitReady) awaitAnyReady = true;\n", "");
+  output = output.replace("    if (awaitAnyReady) {", "    if (this.awaitedMcpReadyNames.size > 0) {");
+
+  const readyCaseAnchor = [
+    "      case 'mcp_ready':",
+    "        this.mcpReadyResolve();",
+    "        break;",
+  ].join("\n");
+  if (!output.includes(readyCaseAnchor)) {
+    throw new Error("Could not find AionrsAgent mcp_ready case anchor");
+  }
+  output = output.replace(
+    readyCaseAnchor,
+    [
+      "      case 'mcp_ready':",
+      "        if (event.name) this.seenMcpReadyNames.add(event.name);",
+      "        if (",
+      "          this.awaitedMcpReadyNames.size === 0 ||",
+      "          [...this.awaitedMcpReadyNames].every((name) => this.seenMcpReadyNames.has(name))",
+      "        ) {",
+      "          this.mcpReadyResolve();",
+      "        }",
+      "        break;",
+    ].join("\n"),
+  );
+  return output;
+}
+
 export function patchAionrsManagerContent(input) {
   let output = input;
   if (!output.includes("import path from 'path';")) {
@@ -1723,6 +1792,14 @@ export function patchAionrsManagerContent(input) {
       throw new Error("Could not find AionrsManager import anchor");
     }
     output = output.replace(anchor, `${anchor}\nimport path from 'path';`);
+  }
+  const mcpScriptDirImport = "import { resolveMcpScriptDir } from '@process/team/mcp/tcpHelpers';";
+  if (!output.includes(mcpScriptDirImport)) {
+    const anchor = "import path from 'path';";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find AionrsManager path import anchor");
+    }
+    output = output.replace(anchor, `${anchor}\n${mcpScriptDirImport}`);
   }
 
   const injection = [
@@ -1745,7 +1822,7 @@ export function patchAionrsManagerContent(input) {
 
   const relayDocumentSearchMethod = [
     "  private buildRelayDocumentSearchMcpStdioConfig(workspace?: string): StdioMcpOption | undefined {",
-    "    const scriptPath = path.join(__dirname, 'relay-document-search-mcp-stdio.js');",
+    "    const scriptPath = path.join(resolveMcpScriptDir(), 'relay-document-search-mcp-stdio.js');",
     "    const command = process.env.RELAY_DOCUMENT_SEARCH_MCP_COMMAND || process.env.RELAY_BUNDLED_NODE || process.execPath || 'node';",
     "    const usesElectronNode = command === process.execPath;",
     "    return {",
@@ -1842,6 +1919,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
     "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx",
   );
   const buildMcpServersPath = resolve(targetRoot, "scripts/build-mcp-servers.js");
+  const aionrsAgentPath = resolve(targetRoot, "src/process/agent/aionrs/index.ts");
   const aionrsManagerPath = resolve(targetRoot, "src/process/task/AionrsManager.ts");
   for (const requiredPath of [
     indexPath,
@@ -1866,6 +1944,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
     settingsModalPath,
     webuiModalPath,
     buildMcpServersPath,
+    aionrsAgentPath,
     aionrsManagerPath,
   ]) {
     if (!existsSync(requiredPath)) {
@@ -2241,6 +2320,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");
   writeFileSync(buildMcpServersPath, patchAionuiBuildMcpServersContent(readFileSync(buildMcpServersPath, "utf8")), "utf8");
+  writeFileSync(aionrsAgentPath, patchAionrsAgentContent(readFileSync(aionrsAgentPath, "utf8")), "utf8");
   writeFileSync(aionrsManagerPath, patchAionrsManagerContent(readFileSync(aionrsManagerPath, "utf8")), "utf8");
   const aionCliCoreSearchPatch = patchAionCliCoreSearchFiles(targetRoot);
   const brandingAssets = copyBrandingAssets(targetRoot);
