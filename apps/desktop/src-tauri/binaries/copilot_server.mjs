@@ -6004,12 +6004,13 @@ function buildDeterministicDocumentSearchArgs(prompt = {}, tool = null) {
     const evidence = deterministicDocumentSearchEvidence(prompt, properties.evidence);
     if (evidence) args.evidence = evidence;
   }
+  const needsContentEvidence = documentSearchNeedsContentEvidence(prompt);
   if (hasProp("thoroughness")) {
-    const thoroughness = schemaEnumValue(properties.thoroughness, documentSearchNeedsThoroughPass(prompt) ? "thorough" : "quick");
+    const thoroughness = schemaEnumValue(properties.thoroughness, needsContentEvidence ? "thorough" : "quick");
     if (thoroughness) args.thoroughness = thoroughness;
   }
   if (hasProp("maxResults")) {
-    args.maxResults = schemaNumberValue(properties.maxResults, documentSearchNeedsThoroughPass(prompt) ? 100 : 40);
+    args.maxResults = schemaNumberValue(properties.maxResults, needsContentEvidence ? 80 : 30);
   }
   if (!Object.keys(args).length) args.query = query;
   return args;
@@ -6068,9 +6069,11 @@ function deterministicDocumentSearchEvidence(prompt = {}, schema = {}) {
   return firstSchemaEnumValue(schema, isSummary ? ["required", "candidate", "none"] : ["candidate", "required", "none"]);
 }
 
-function documentSearchNeedsThoroughPass(prompt = {}) {
+function documentSearchNeedsContentEvidence(prompt = {}) {
+  const toolIntent = prompt.toolIntent || {};
+  if (String(toolIntent.intent || "") === "local_document_summary") return true;
   const text = String(prompt.userPrompt || "");
-  return /キャッシュ\s*フロー|キャッシュフロー|連結|財務|会計|精算表|\bCFS?\b|\bBS\b|\bPL\b/iu.test(text);
+  return /要約|中身|内容|読んで|本文|根拠|エビデンス|確認して|レビュー|比較|summari[sz]e|summary|content|evidence|review|compare/iu.test(text);
 }
 
 function firstSchemaEnumValue(schema = {}, candidates = []) {

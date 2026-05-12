@@ -519,6 +519,43 @@ test("executeRelayDocumentSearch returns filename-only candidates without parsin
   }
 });
 
+test("executeRelayDocumentSearch keeps quick candidate searches out of content scan", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-quick-candidate-"));
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(resolve(workspace, "FY160-1Q_連結CFS精算表.txt"), "キャッシュフロー本文にも一致", "utf8");
+
+  const { module, cleanup } = await loadExecutorModule();
+  try {
+    const result = await module.executeRelayDocumentSearch(
+      {
+        query: "キャッシュフロー CFS 精算表",
+        roots: [workspace],
+        fileTypes: ["txt"],
+        intent: "find_files",
+        thoroughness: "quick",
+        evidence: "candidate",
+        maxResults: 10,
+      },
+      {
+        jobId: "job-quick-candidate",
+        queryId: "query-quick-candidate",
+        now: new Date("2026-05-09T00:00:00.000Z"),
+      },
+    );
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.progress.stage, "filename_candidates");
+    assert.equal(result.results[0].evidence_state, "filename_only");
+    assert.equal(result.diagnostics.fileMetadataOnly, true);
+    assert.equal(result.diagnostics.textContentScanned, 0);
+    assert.equal(result.diagnostics.contentEvidenceGenerated, 0);
+    assert.equal(result.evidencePack.coverage.contentScannedFiles, 0);
+  } finally {
+    cleanup();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("executeRelayDocumentSearch keeps unparseable Office evidence requests as explicit partial candidates", async () => {
   const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-office-candidate-"));
   const failureRegistryDir = resolve(workspace, ".relay-failures");

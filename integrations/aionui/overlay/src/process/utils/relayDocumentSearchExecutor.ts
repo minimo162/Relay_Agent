@@ -1073,7 +1073,7 @@ function fileTypeMatches(file: FileMetadata, request: RelayDocumentSearchRequest
 function shouldInspectContent(request: RelayDocumentSearchRequestV1): boolean {
   return (
     request.thoroughness === 'thorough' ||
-    request.evidence !== 'none' ||
+    request.evidence === 'required' ||
     request.intent === 'answer_with_evidence' ||
     request.intent === 'summarize_with_evidence' ||
     request.intent === 'inspect_file'

@@ -466,10 +466,10 @@ test("buildDeterministicRequiredToolCallRecord emits high-level document search 
   assert.deepEqual(JSON.parse(toolCall.function.arguments), {
     evidence: "candidate",
     intent: "find_files",
-    maxResults: 100,
+    maxResults: 30,
     query: userPrompt,
     roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
-    thoroughness: "thorough",
+    thoroughness: "quick",
   });
 });
 
@@ -1486,7 +1486,7 @@ test("createServer bypasses Copilot prose generation for required high-level doc
       intent: "find_files",
       query: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
       roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
-      thoroughness: "thorough",
+      thoroughness: "quick",
     });
   } finally {
     await new Promise((resolve) => server.close(resolve));

@@ -25,6 +25,28 @@
 
 ## Milestone Log
 
+### 2026-05-12 Document search quick candidate latency fix
+
+Follow-up live feedback showed the high-level document search path was correct
+but too slow for the first "find related files" action. Relay now keeps first
+file-discovery tool calls lightweight: deterministic gateway calls preserve the
+exact user `query` and current `roots`, but set `intent: find_files`,
+`thoroughness: quick`, `evidence: candidate`, and a smaller candidate cap for
+plain file lookup requests. Requests that ask to read, summarize, compare, or
+confirm document contents still opt into deeper evidence collection.
+
+The executor also no longer treats `evidence: candidate` by itself as a reason
+to inspect file contents. Quick candidate searches now stay filename/path-only,
+so Office/PDF/text content extraction is skipped unless the request actually
+needs evidence.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs scripts/relay-document-search-executor.test.mjs scripts/relay-document-search-query-plan.test.mjs`: passed, 104 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 Deterministic first call for Relay document search
 
 Live prompt capture confirmed `relay_document_search` was now advertised as the
