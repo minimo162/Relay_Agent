@@ -188,6 +188,13 @@ jobs:
           if ($documentSearchMcp -notmatch "import\('\./relayDocumentSearchBridge'\)" -or $documentSearchMcp -notmatch "import\('\./relayDocumentSearchSyncProducer'\)") {
             throw "Relay document-search MCP does not lazy-load search dependencies."
           }
+          $teamGuideMcp = Get-Content -LiteralPath "aionui\src\process\team\mcp\guide\teamGuideMcpStdio.ts" -Raw
+          if ($teamGuideMcp -notmatch "Relay Agent document-search fallback on team-guide MCP" -or $teamGuideMcp -notmatch "createRelayDocumentSearchTool\(server\)" -or $teamGuideMcp -notmatch "RELAY_DOCUMENT_SEARCH_TOOL_NAME") {
+            throw "Relay team-guide MCP does not advertise the document-search fallback tool."
+          }
+          if ($teamGuideMcp -notmatch "import\('@process/utils/relayDocumentSearchBridge'\)") {
+            throw "Relay team-guide MCP document-search fallback does not lazy-load the search bridge."
+          }
 
           $gatewayFiles = @(
             "copilot_server.js",

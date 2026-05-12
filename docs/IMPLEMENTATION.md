@@ -25,6 +25,30 @@
 
 ## Milestone Log
 
+### 2026-05-12 AionUi team-guide MCP document-search fallback
+
+The latest live M365 Copilot prompt still showed no `relay_document_search`
+entry in the advertised tool catalog, while `aion_create_team` and
+`aion_list_models` from the team-guide MCP were present. That narrowed the
+problem to the dedicated document-search MCP path still being able to miss
+registration in packaged sessions, even after lazy-loading the search bridge.
+
+The AionUi overlay now also registers `relay_document_search` on the already
+visible team-guide MCP. The standalone document-search MCP remains in place,
+but the team-guide MCP provides a second high-level registration path with the
+same schema and lazy bridge execution. Aionrs manager patching now passes the
+workspace, conversation id, and document-search cache/index directories into
+the team-guide MCP so the fallback does not depend on Copilot inventing roots
+from prose. Release overlay validation fails if the team-guide MCP no longer
+advertises this fallback or stops lazy-loading the search bridge.
+
+Verification:
+
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/relay-document-search-mcp.test.mjs scripts/apply-aionui-overlay.test.mjs scripts/aionui-release-workflow.test.mjs`: passed, 27 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AionUi document-search MCP startup isolation fix
 
 Live M365 Copilot prompt capture showed that `relay_document_search` was not

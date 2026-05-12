@@ -13,6 +13,7 @@ import {
   patchAionCliCoreRipGrepContent,
   patchAionCliCoreToolDefinitionsContent,
   patchAionuiBuildMcpServersContent,
+  patchTeamGuideMcpStdioContent,
   patchAboutModalContent,
   patchAgentLogoContent,
   patchAppConfigContent,
@@ -446,8 +447,37 @@ function createPinnedAionUiFixture(root) {
     ].join("\n"),
   );
   writeFixture(root, "scripts/build-mcp-servers.js", "async function main() {\n  await Promise.all([\n    esbuild.build({\n      ...SHARED_OPTIONS,\n      entryPoints: [path.join(ROOT, 'src/process/team/mcp/guide/teamGuideMcpStdio.ts')],\n      outfile: path.join(ROOT, 'out/main/team-guide-mcp-stdio.js'),\n    }),\n  ]);\n}\n");
+  writeFixture(
+    root,
+    "src/process/team/mcp/guide/teamGuideMcpStdio.ts",
+    [
+      "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+      "import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';",
+      "import { z } from 'zod';",
+      "import { getCreateTeamToolDescription } from '@process/team/prompts/teamGuidePrompt.ts';",
+      "",
+      "const AION_MCP_TOKEN = process.env.AION_MCP_TOKEN || undefined;",
+      "const AION_MCP_BACKEND = process.env.AION_MCP_BACKEND || '';",
+      "const AION_MCP_CONVERSATION_ID = process.env.AION_MCP_CONVERSATION_ID || '';",
+      "const AION_MCP_PORT = parseInt(process.env.AION_MCP_PORT || '0', 10);",
+      "",
+      "function createAionTool(server: McpServer, toolName: string, description: string, schema: any): void {",
+      "  server.tool(toolName, description, schema, async () => ({ content: [{ type: 'text' as const, text: '' }] }));",
+      "}",
+      "",
+      "const server = new McpServer({ name: 'aionui-team-guide', version: '1.0.0' }, { capabilities: { tools: {} } });",
+      "createAionTool(server, 'aion_create_team', getCreateTeamToolDescription(), { summary: z.string() });",
+      "createAionTool(server, 'aion_list_models', 'List models', { agent_type: z.string().optional() });",
+      "",
+      "// ── Main ─────────────────────────────────────────────────────────────────────",
+      "async function main(): Promise<void> {",
+      "  const transport = new StdioServerTransport();",
+      "  await server.connect(transport);",
+      "}",
+    ].join("\n"),
+  );
   writeFixture(root, "src/process/agent/aionrs/index.ts", "export class AionrsAgent {\n  private mcpReadyPromise: Promise<void>;\n  private mcpReadyResolve!: () => void;\n  options: { stdioMcpServers?: Array<{ name: string; awaitReady?: boolean; env: Array<{ name: string; value: string }>; command: string; args: string[] }> } = {};\n  constructor() {\n    this.mcpReadyPromise = new Promise((resolve) => {\n      this.mcpReadyResolve = resolve;\n    });\n  }\n  sendCommand(_command: unknown) {}\n  async start() {\n    const stdioMcpServers = this.options.stdioMcpServers ?? [];\n    let awaitAnyReady = false;\n    for (const server of stdioMcpServers) {\n      const envRecord: Record<string, string> = {};\n      for (const { name: k, value: v } of server.env) {\n        envRecord[k] = v;\n      }\n      this.sendCommand({ type: 'add_mcp_server', name: server.name, transport: 'stdio', command: server.command, args: server.args, env: envRecord });\n      if (server.awaitReady) awaitAnyReady = true;\n    }\n    if (awaitAnyReady) {\n      await Promise.race([this.mcpReadyPromise, new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('MCP ready timeout (30s)')), 30000))]).catch((err) => {\n        console.warn('[AionrsAgent] MCP setup warning:', err);\n      });\n    }\n  }\n  private handleEvent(event: { type: string; name?: string }) {\n    switch (event.type) {\n      case 'mcp_ready':\n        this.mcpReadyResolve();\n        break;\n    }\n  }\n}\n");
-  writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nexport class AionrsManager {\n  conversation_id = 'conversation-1';\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return undefined;\n  }\n\n  async stop() {\n  }\n}\n");
+  writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nexport class AionrsManager {\n  workspace = '/workspace';\n  conversation_id = 'conversation-1';\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return {\n      name: 'aionui-team-guide',\n      command: 'node',\n      args: ['team-guide-mcp-stdio.js'],\n      env: [\n        { name: 'AION_MCP_BACKEND', value: 'aionrs' },\n        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },\n      ],\n    };\n  }\n\n  async stop() {\n  }\n}\n");
 }
 
 const fixture = [
@@ -966,6 +996,14 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx"), /relayAdvancedSurfacesEnabled/);
 
     assert.match(readFixture(fixtureRoot, "scripts/build-mcp-servers.js"), /relay-document-search-mcp-stdio\.js/);
+    assert.match(
+      readFixture(fixtureRoot, "src/process/team/mcp/guide/teamGuideMcpStdio.ts"),
+      /createRelayDocumentSearchTool\(server\)/,
+    );
+    assert.match(
+      readFixture(fixtureRoot, "src/process/team/mcp/guide/teamGuideMcpStdio.ts"),
+      /Relay Agent document-search fallback on team-guide MCP/,
+    );
     assert.match(readFixture(fixtureRoot, "src/process/agent/aionrs/index.ts"), /awaitedMcpReadyNames/);
     assert.match(readFixture(fixtureRoot, "src/process/agent/aionrs/index.ts"), /seenMcpReadyNames/);
     const patchedAionrsManager = readFixture(fixtureRoot, "src/process/task/AionrsManager.ts");
@@ -1411,9 +1449,45 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedBuild, /relay-document-search-mcp-stdio\.js/);
   assert.equal(patchAionuiBuildMcpServersContent(patchedBuild), patchedBuild);
 
+  const teamGuideMcp = [
+    "import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';",
+    "import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';",
+    "import { z } from 'zod';",
+    "import { getCreateTeamToolDescription } from '@process/team/prompts/teamGuidePrompt.ts';",
+    "",
+    "const AION_MCP_TOKEN = process.env.AION_MCP_TOKEN || undefined;",
+    "const AION_MCP_BACKEND = process.env.AION_MCP_BACKEND || '';",
+    "const AION_MCP_CONVERSATION_ID = process.env.AION_MCP_CONVERSATION_ID || '';",
+    "const AION_MCP_PORT = parseInt(process.env.AION_MCP_PORT || '0', 10);",
+    "",
+    "function createAionTool(server: McpServer, toolName: string, description: string, schema: any): void {",
+    "  server.tool(toolName, description, schema, async () => ({ content: [{ type: 'text' as const, text: '' }] }));",
+    "}",
+    "",
+    "const server = new McpServer({ name: 'aionui-team-guide', version: '1.0.0' }, { capabilities: { tools: {} } });",
+    "createAionTool(server, 'aion_create_team', getCreateTeamToolDescription(), { summary: z.string() });",
+    "createAionTool(server, 'aion_list_models', 'List models', { agent_type: z.string().optional() });",
+    "",
+    "// ── Main ─────────────────────────────────────────────────────────────────────",
+    "async function main(): Promise<void> {",
+    "  const transport = new StdioServerTransport();",
+    "  await server.connect(transport);",
+    "}",
+  ].join("\n");
+  const patchedTeamGuideMcp = patchTeamGuideMcpStdioContent(teamGuideMcp);
+  assert.match(patchedTeamGuideMcp, /Relay Agent document-search fallback on team-guide MCP/);
+  assert.match(patchedTeamGuideMcp, /RELAY_DOCUMENT_SEARCH_TOOL_NAME/);
+  assert.match(patchedTeamGuideMcp, /createRelayDocumentSearchTool\(server\)/);
+  assert.match(patchedTeamGuideMcp, /@process\/utils\/relayDocumentSearchBridge/);
+  assert.match(patchedTeamGuideMcp, /relayDocumentSearchBridgeToolDefinition/);
+  assert.match(patchedTeamGuideMcp, /relay_document_search_team_guide_handler_failed/);
+  assert.match(patchedTeamGuideMcp, /process\.env\.RELAY_DOCUMENT_SEARCH_WORKSPACE \|\| process\.cwd\(\)/);
+  assert.equal(patchTeamGuideMcpStdioContent(patchedTeamGuideMcp), patchedTeamGuideMcp);
+
   const manager = [
     "import { ipcBridge } from '@/common';",
     "export class AionrsManager {",
+    "  workspace = '/workspace';",
     "  conversation_id = 'conversation-1';",
     "  async start() {",
     "    const mergedData = { workspace: '/workspace' };",
@@ -1426,7 +1500,15 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
     "    }",
     "  }",
     "  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {",
-    "    return undefined;",
+    "    return {",
+    "      name: 'aionui-team-guide',",
+    "      command: 'node',",
+    "      args: ['team-guide-mcp-stdio.js'],",
+    "      env: [",
+    "        { name: 'AION_MCP_BACKEND', value: 'aionrs' },",
+    "        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },",
+    "      ],",
+    "    };",
     "  }",
     "",
     "  async stop() {",
@@ -1461,6 +1543,7 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_TEAM_GUIDE_FALLBACK/);
   assert.equal(patchAionrsManagerContent(patchedManager), patchedManager);
 });
 

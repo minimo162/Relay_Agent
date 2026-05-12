@@ -1722,6 +1722,155 @@ export function patchAionuiBuildMcpServersContent(input) {
   );
 }
 
+export function patchTeamGuideMcpStdioContent(input) {
+  const marker = "Relay Agent document-search fallback on team-guide MCP";
+  if (input.includes(marker)) return input;
+
+  let output = input;
+  const importAnchor = "import { getCreateTeamToolDescription } from '@process/team/prompts/teamGuidePrompt.ts';";
+  if (!output.includes(importAnchor)) {
+    throw new Error("Could not find team-guide MCP import anchor");
+  }
+  output = output.replace(
+    importAnchor,
+    [
+      importAnchor,
+      "import {",
+      "  RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT,",
+      "  RELAY_DOCUMENT_SEARCH_TOOL_NAME,",
+      "} from '@process/utils/relayDocumentSearchContract';",
+    ].join("\n"),
+  );
+
+  const envAnchor = "const AION_MCP_PORT = parseInt(process.env.AION_MCP_PORT || '0', 10);";
+  if (!output.includes(envAnchor)) {
+    throw new Error("Could not find team-guide MCP environment anchor");
+  }
+  output = output.replace(
+    envAnchor,
+    [
+      envAnchor,
+      "",
+      `// ${marker}.`,
+      "const relayDocumentSearchWorkspace = process.env.RELAY_DOCUMENT_SEARCH_WORKSPACE || process.cwd();",
+      "const relayDocumentSearchConversationId = process.env.RELAY_DOCUMENT_SEARCH_CONVERSATION_ID || AION_MCP_CONVERSATION_ID || undefined;",
+      "const relayDocumentSearchMetadataCacheDir = process.env.RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR || undefined;",
+      "const relayDocumentSearchFilenameIndexDir = process.env.RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR || undefined;",
+      "const relayDocumentSearchUserMemoryDir = process.env.RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR || undefined;",
+      "const relayDocumentSearchSyncJournalDir = process.env.RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR || undefined;",
+      "const RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT = 'RelayDocumentSearchAionUiResultFlow.v1' as const;",
+    ].join("\n"),
+  );
+
+  const helperAnchor = "// ── Main ─────────────────────────────────────────────────────────────────────";
+  if (!output.includes(helperAnchor)) {
+    throw new Error("Could not find team-guide MCP main anchor");
+  }
+  const helper = [
+    "function normalizeRelayDocumentSearchRoots(roots: unknown): string[] {",
+    "  const provided = Array.isArray(roots)",
+    "    ? roots.map((root) => String(root || '').trim()).filter(Boolean)",
+    "    : [];",
+    "  if (provided.length > 0) return provided;",
+    "  return relayDocumentSearchWorkspace ? [relayDocumentSearchWorkspace] : [];",
+    "}",
+    "",
+    "function relayDocumentSearchErrorContent(error: unknown): string {",
+    "  const message = error instanceof Error ? error.message : String(error);",
+    "  return JSON.stringify(",
+    "    {",
+    "      schemaVersion: RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT,",
+    "      toolName: RELAY_DOCUMENT_SEARCH_TOOL_NAME,",
+    "      resultContract: RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT,",
+    "      status: 'failed',",
+    "      error: {",
+    "        code: 'relay_document_search_team_guide_handler_failed',",
+    "        message,",
+    "      },",
+    "    },",
+    "    null,",
+    "    2,",
+    "  );",
+    "}",
+    "",
+    "function createRelayDocumentSearchTool(server: McpServer): void {",
+    "  server.tool(",
+    "    RELAY_DOCUMENT_SEARCH_TOOL_NAME,",
+    "    `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/PDF lookup, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,",
+    "    {",
+    "      query: z.string().min(1).max(2000).describe('The user request in their own words.'),",
+    "      roots: z",
+    "        .array(z.string().min(1))",
+    "        .max(16)",
+    "        .optional()",
+    "        .describe('Workspace roots to search. Omit to use the current AionUi workspace.'),",
+    "      intent: z",
+    "        .enum(['find_files', 'answer_with_evidence', 'summarize_with_evidence', 'inspect_file', 'similar_documents'])",
+    "        .optional()",
+    "        .describe('Document workflow intent.'),",
+    "      thoroughness: z.enum(['quick', 'thorough']).optional().describe('Search thoroughness.'),",
+    "      fileTypes: z",
+    "        .array(z.enum(['any', 'txt', 'md', 'csv', 'docx', 'xlsx', 'xlsm', 'pptx', 'pdf']))",
+    "        .optional()",
+    "        .describe('Optional file-type filters.'),",
+    "      maxResults: z.number().int().min(1).max(300).optional().describe('Maximum candidate count.'),",
+    "      evidence: z.enum(['none', 'candidate', 'required']).optional().describe('Evidence requirement.'),",
+    "    },",
+    "    async (args: Record<string, unknown>) => {",
+    "      try {",
+    "        const { handleRelayDocumentSearchToolCall, relayDocumentSearchBridgeToolDefinition } = await import(",
+    "          '@process/utils/relayDocumentSearchBridge'",
+    "        );",
+    "        const execution = await handleRelayDocumentSearchToolCall(",
+    "          {",
+    "            id: `relay-document-search-${Date.now().toString(36)}`,",
+    "            name: RELAY_DOCUMENT_SEARCH_TOOL_NAME,",
+    "            parameters: {",
+    "              ...args,",
+    "              roots: normalizeRelayDocumentSearchRoots(args.roots),",
+    "            },",
+    "          },",
+    "          {",
+    "            advertisedTools: [relayDocumentSearchBridgeToolDefinition],",
+    "            aionuiConversationId: relayDocumentSearchConversationId,",
+    "            useMetadataCache: true,",
+    "            metadataCacheDir: relayDocumentSearchMetadataCacheDir,",
+    "            useFilenameIndex: true,",
+    "            filenameIndexDir: relayDocumentSearchFilenameIndexDir,",
+    "            useUserMemory: true,",
+    "            userMemoryDir: relayDocumentSearchUserMemoryDir,",
+    "            useSyncJournal: true,",
+    "            syncJournalDir: relayDocumentSearchSyncJournalDir,",
+    "            source: 'aionui-skill',",
+    "          },",
+    "        );",
+    "",
+    "        return {",
+    "          content: [{ type: 'text' as const, text: execution.aionuiContent }],",
+    "          isError: !execution.ok,",
+    "        };",
+    "      } catch (error) {",
+    "        return {",
+    "          content: [{ type: 'text' as const, text: relayDocumentSearchErrorContent(error) }],",
+    "          isError: true,",
+    "        };",
+    "      }",
+    "    },",
+    "  );",
+    "}",
+    "",
+  ].join("\n");
+  output = output.replace(helperAnchor, `${helper}${helperAnchor}`);
+
+  const mainAnchor = "async function main(): Promise<void> {";
+  if (!output.includes(mainAnchor)) {
+    throw new Error("Could not find team-guide MCP main function anchor");
+  }
+  output = output.replace(mainAnchor, `createRelayDocumentSearchTool(server);\n\n${mainAnchor}`);
+
+  return ensureTrailingNewline(output);
+}
+
 export function patchAionrsAgentContent(input) {
   if (input.includes("awaitedMcpReadyNames")) return input;
   let output = input;
@@ -1818,6 +1967,31 @@ export function patchAionrsManagerContent(input) {
       throw new Error("Could not find AionrsManager stdio MCP list anchor");
     }
     output = output.replace(anchor, `${anchor}\n${injection}`);
+  }
+
+  const teamGuideDocumentSearchEnvMarker = "{ name: 'RELAY_DOCUMENT_SEARCH_TEAM_GUIDE_FALLBACK', value: '1' }";
+  if (!output.includes(teamGuideDocumentSearchEnvMarker)) {
+    const anchor = "        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },";
+    if (!output.includes(anchor)) {
+      throw new Error("Could not find AionrsManager team-guide env anchor");
+    }
+    output = output.replace(
+      anchor,
+      [
+        anchor,
+        `        ${teamGuideDocumentSearchEnvMarker},`,
+        "        { name: 'RELAY_DOCUMENT_SEARCH_WORKSPACE', value: this.workspace || '' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_CONVERSATION_ID', value: this.conversation_id },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'metadata-cache') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'filename-index') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'user-memory') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL', value: '1' },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'sync-journal') },",
+      ].join("\n"),
+    );
   }
 
   const relayDocumentSearchMethod = [
@@ -1921,6 +2095,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   const buildMcpServersPath = resolve(targetRoot, "scripts/build-mcp-servers.js");
   const aionrsAgentPath = resolve(targetRoot, "src/process/agent/aionrs/index.ts");
   const aionrsManagerPath = resolve(targetRoot, "src/process/task/AionrsManager.ts");
+  const teamGuideMcpStdioPath = resolve(targetRoot, "src/process/team/mcp/guide/teamGuideMcpStdio.ts");
   for (const requiredPath of [
     indexPath,
     packageJsonPath,
@@ -2320,6 +2495,11 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");
   writeFileSync(webuiModalPath, patchWebuiModalContent(readFileSync(webuiModalPath, "utf8")), "utf8");
   writeFileSync(buildMcpServersPath, patchAionuiBuildMcpServersContent(readFileSync(buildMcpServersPath, "utf8")), "utf8");
+  writeFileSync(
+    teamGuideMcpStdioPath,
+    patchTeamGuideMcpStdioContent(readFileSync(teamGuideMcpStdioPath, "utf8")),
+    "utf8",
+  );
   writeFileSync(aionrsAgentPath, patchAionrsAgentContent(readFileSync(aionrsAgentPath, "utf8")), "utf8");
   writeFileSync(aionrsManagerPath, patchAionrsManagerContent(readFileSync(aionrsManagerPath, "utf8")), "utf8");
   const aionCliCoreSearchPatch = patchAionCliCoreSearchFiles(targetRoot);
