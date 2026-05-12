@@ -25,6 +25,62 @@
 
 ## Milestone Log
 
+### 2026-05-12 AionUi document-search MCP routing fix
+
+The previous glob normalization guarded the symptom after Copilot had already
+fallen back to raw `Glob`. The root issue was that the Relay document-search
+MCP could be missing or late in the AionUi session tool catalog: the injected
+MCP config used `node` from `PATH`, did not wait for tool registration, and was
+added after the team-guide MCP block. In packaged Windows installs this could
+leave the provider turn with only low-level `glob`/`grep`/`read` available.
+
+The AionUi overlay now injects `relay-document-search` immediately after the
+stdio MCP list is created, starts it with an explicit command fallback order
+(`RELAY_DOCUMENT_SEARCH_MCP_COMMAND`, then `RELAY_BUNDLED_NODE`, then
+`process.execPath`, then `node`), sets `ELECTRON_RUN_AS_NODE` when Electron is
+the fallback Node runtime, and marks the MCP server `awaitReady: true`. The
+Copilot adapter also
+narrows the first strict tool-planning prompt for local document/file discovery
+to the accepted high-level document-search tool whenever it is advertised, so
+the model is not shown low-level `glob` alternatives for the first step. If a
+low-level call such as `Glob` still appears, the existing repair path rejects it
+and retries with the high-level tool only.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 66 tests.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 21 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-12 AionUi Glob search-term normalization fix
+
+The installed `資料を探す` flow could still fall back to raw `Glob` calls when
+the high-level document-search MCP tool was not advertised to the current
+provider turn. M365 Copilot then emitted patterns such as `/キャッシュフロー*`,
+`/CF`, and `**/精算表`; AionUi treated those as exact/root-like glob patterns,
+so the search returned `No files matched the pattern` even for broad
+shared-folder document requests.
+
+The OpenAI-compatible Copilot adapter now normalizes extracted `glob` tool
+arguments before OpenCode executes them. Leading root slashes are removed and
+search-term patterns are expanded to recursive contains-style globs, e.g.
+`/CF` becomes `**/*CF*` and `**/精算表` becomes `**/*精算表*`. The AionUi overlay
+also applies the same normalization inside its patched `GlobToolInvocation`, so
+the packaged Relay-branded AionUi path has the same guard even if a model calls
+the low-level glob tool directly.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 66 tests.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 21 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 Windows CI executor display path test fix
 
 The following Windows `ci` run reached

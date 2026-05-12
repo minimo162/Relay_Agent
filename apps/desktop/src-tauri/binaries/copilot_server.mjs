@@ -5548,13 +5548,21 @@ function buildToolProtocolSystemPrompt({
 } = {}) {
   const parts = [basePrompt].filter(Boolean);
   if (!tools.length) return parts.join("\n\n");
+  const promptTools = selectToolProtocolPromptTools({
+    tools,
+    mode,
+    openAiToolChoice,
+    hasToolResultMessages,
+    toolIntent,
+  });
+  const promptToolIntent = constrainToolIntentToPromptTools(toolIntent, promptTools);
   const selectedTool =
     typeof openAiToolChoice === "object" ? String(openAiToolChoice?.function?.name || "").trim() : "";
   if (mode !== TOOL_PROTOCOL_MODES.FINAL_ANSWER) {
-    parts.push(formatStrictToolCompilerPrompt({ tools, mode, selectedTool, toolIntent }));
+    parts.push(formatStrictToolCompilerPrompt({ tools: promptTools, mode, selectedTool, toolIntent: promptToolIntent }));
     return parts.filter(Boolean).join("\n\n");
   }
-  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(tools);
+  const toolProtocolPrompt = formatOpenAiToolProtocolPrompt(promptTools);
   const modePrompt = [
     "Tool Call Emulation Layer:",
     "M365 Copilot is used only as a text planner/final-answer writer. It is not a tool executor.",
@@ -5565,8 +5573,53 @@ function buildToolProtocolSystemPrompt({
       ? "Mode: final_answer_or_continue_tools. Answer only from the provided TOOL/FUNCTION results when they are sufficient. If more environment access is needed, return tool_uses JSON instead of prose."
       : "Mode: final_answer. Answer normally only when no external tool or environment access is needed. If tool access is needed, return tool_uses JSON instead of prose.",
   );
-  parts.push(modePrompt.join("\n"), formatToolIntentPolicy(toolIntent), formatReliableToolPolicy(tools), toolProtocolPrompt);
+  parts.push(
+    modePrompt.join("\n"),
+    formatToolIntentPolicy(promptToolIntent),
+    formatReliableToolPolicy(promptTools),
+    toolProtocolPrompt,
+  );
   return parts.filter(Boolean).join("\n\n");
+}
+
+function selectToolProtocolPromptTools({
+  tools = [],
+  mode = TOOL_PROTOCOL_MODES.FINAL_ANSWER,
+  openAiToolChoice = null,
+  hasToolResultMessages = false,
+  toolIntent = null,
+} = {}) {
+  const allTools = Array.isArray(tools) ? tools : [];
+  if (!allTools.length || hasToolResultMessages || !toolProtocolModeRequiresStrict(mode)) return allTools;
+  const documentSearchTools = availableDocumentSearchTools(allTools);
+  if (!documentSearchTools.length || !isDocumentSearchIntent(toolIntent?.intent)) return allTools;
+  const selectedTool =
+    typeof openAiToolChoice === "object" ? normalizeToolName(openAiToolChoice?.function?.name || "") : "";
+  const allowedDocumentNames = new Set(documentSearchTools.map((name) => normalizeToolName(name).toLowerCase()));
+  if (selectedTool && !allowedDocumentNames.has(selectedTool.toLowerCase())) return allTools;
+  const narrowed = allTools.filter((tool) =>
+    allowedDocumentNames.has(normalizeToolName(tool?.function?.name || "").toLowerCase()),
+  );
+  return narrowed.length ? narrowed : allTools;
+}
+
+function constrainToolIntentToPromptTools(toolIntent = null, tools = []) {
+  if (!toolIntent || typeof toolIntent !== "object" || !Array.isArray(toolIntent.preferredTools)) return toolIntent;
+  const allowed = new Set(
+    tools
+      .map((tool) => normalizeToolName(tool?.function?.name || ""))
+      .filter(Boolean)
+      .map((name) => name.toLowerCase()),
+  );
+  if (!allowed.size) return toolIntent;
+  const preferredToolsList = toolIntent.preferredTools.filter((name) =>
+    allowed.has(normalizeToolName(name).toLowerCase()),
+  );
+  if (preferredToolsList.length === toolIntent.preferredTools.length) return toolIntent;
+  return {
+    ...toolIntent,
+    preferredTools: preferredToolsList,
+  };
 }
 
 function formatStrictToolCompilerPrompt({
@@ -6597,7 +6650,8 @@ function extractMalformedOpenAiToolCalls(text, allowed) {
     if (!args || typeof args !== "object" || Array.isArray(args)) continue;
     const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
     const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
-    const normalized = normalizeSkillToolArguments(name, args, allowed);
+    const normalizedArgs = normalizeToolArgumentsForResolvedName(name, match[1], args);
+    const normalized = normalizeSkillToolArguments(name, normalizedArgs, allowed);
     calls.push({
       id,
       type: "function",
@@ -6634,7 +6688,8 @@ function extractMalformedToolUses(text, allowed) {
     if (!args || typeof args !== "object" || Array.isArray(args)) continue;
     const prefix = raw.slice(Math.max(0, match.index - 240), match.index);
     const id = prefix.match(/"id"\s*:\s*"([^"]+)"/u)?.[1] || `call_${randomBytes(6).toString("hex")}`;
-    const normalized = normalizeSkillToolArguments(name, args, allowed);
+    const normalizedArgs = normalizeToolArgumentsForResolvedName(name, match[1], args);
+    const normalized = normalizeSkillToolArguments(name, normalizedArgs, allowed);
     calls.push({
       id,
       type: "function",
@@ -6907,6 +6962,9 @@ function normalizeToolArgumentsForResolvedName(name, rawName, args) {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const resolved = normalizeToolName(name).toLowerCase();
   const raw = normalizeToolName(rawName).toLowerCase();
+  if (resolved === "glob") {
+    return normalizeGlobToolArguments(args);
+  }
   if (resolved === "write") {
     const out = { ...args };
     if (out.filePath == null && out.path != null) out.filePath = out.path;
@@ -6926,6 +6984,56 @@ function normalizeToolArgumentsForResolvedName(name, rawName, args) {
     return out;
   }
   return args;
+}
+
+function normalizeGlobToolArguments(args) {
+  const out = { ...args };
+  if (typeof out.pattern === "string") {
+    out.pattern = normalizeGlobPatternForFileDiscovery(out.pattern, out.path || out.dir_path || "");
+  }
+  return out;
+}
+
+function normalizeGlobPatternForFileDiscovery(pattern, root = "") {
+  let normalized = String(pattern || "").trim().replace(/\\/gu, "/").replace(/^\.\//u, "");
+  if (!normalized) return normalized;
+  const normalizedRoot = String(root || "").trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+  if (normalizedRoot && normalized.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)) {
+    normalized = normalized.slice(normalizedRoot.length + 1);
+  }
+  if (!/^(?:[a-zA-Z]:\/|\/\/)/u.test(normalized)) {
+    normalized = normalized.replace(/^\/+/u, "");
+  }
+  if (!normalized.startsWith("//")) normalized = normalized.replace(/\/{2,}/gu, "/");
+  if (!normalized) return normalized;
+  if (normalized === "*" || normalized === "**" || normalized === "**/*") return normalized;
+  const parts = normalized.split("/");
+  const basename = parts.at(-1) || "";
+  const hasSlash = parts.length > 1;
+  const basenameHasMagic = globPatternHasMagic(basename);
+  const patternHasMagic = globPatternHasMagic(normalized);
+  const basenameLooksExactFile = globBasenameLooksExactFile(basename);
+  if (!hasSlash) {
+    if (!patternHasMagic) return basenameLooksExactFile ? `**/${normalized}` : `**/*${normalized}*`;
+    return normalized.startsWith("*") ? `**/${normalized}` : `**/*${normalized}`;
+  }
+  if (normalized.startsWith("**/") && !basenameHasMagic && !basenameLooksExactFile) {
+    const prefix = parts.slice(0, -1).join("/") || "**";
+    return `${prefix}/*${basename}*`;
+  }
+  if (normalized.startsWith("**/") && basenameHasMagic && !basename.startsWith("*") && !basename.startsWith("?")) {
+    const prefix = parts.slice(0, -1).join("/") || "**";
+    return `${prefix}/*${basename}`;
+  }
+  return normalized;
+}
+
+function globPatternHasMagic(pattern) {
+  return /[*?[\]{}]/u.test(String(pattern || ""));
+}
+
+function globBasenameLooksExactFile(basename) {
+  return /\.[^./*?[\]{}]{1,12}$/u.test(String(basename || ""));
 }
 
 function dedupeOpenAiToolCalls(calls) {

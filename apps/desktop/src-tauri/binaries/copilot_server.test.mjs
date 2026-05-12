@@ -301,6 +301,10 @@ test("parseOpenAiRequest prefers high-level document search when advertised", ()
   assert.match(parsed.systemPrompt, /call the high-level document search tool first/);
   assert.match(parsed.systemPrompt, /Do not decompose the first step into glob\/grep\/read/);
   assert.match(parsed.systemPrompt, /Document finding pipeline/);
+  assert.match(parsed.systemPrompt, /Preferred first tools: relay_document_search\./);
+  assert.match(parsed.systemPrompt, /Available tools: relay_document_search/);
+  assert.doesNotMatch(parsed.systemPrompt, /Available tools: relay_document_search,\s*glob/);
+  assert.doesNotMatch(parsed.systemPrompt, /"name":"glob"/);
 });
 
 test("parseOpenAiRequest accepts document-search aliases only with Relay contract metadata", () => {
@@ -382,6 +386,8 @@ test("tool repair rejects low-level first calls when document search is advertis
     },
   };
 
+  assert.equal(shouldAttemptOpenAiToolRepair(lowLevelRecord, parsed), true);
+  lowLevelRecord.body.choices[0].message.tool_calls[0].function.name = "Glob";
   assert.equal(shouldAttemptOpenAiToolRepair(lowLevelRecord, parsed), true);
   assert.equal(shouldAttemptOpenAiToolRepair(highLevelRecord, parsed), false);
 });
@@ -782,6 +788,44 @@ test("extractOpenAiToolCallsFromText converts OpenAI-compatible tool_uses", () =
   assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), { pattern: "**/*.rs" });
 });
 
+test("extractOpenAiToolCallsFromText normalizes search-term glob patterns", () => {
+  const extracted = extractOpenAiToolCallsFromText(
+    JSON.stringify({
+      tool_uses: [
+        {
+          recipient_name: "functions.Glob",
+          parameters: {
+            path: "H:/shr1/05_経理部/03_連結財務G/160連結",
+            pattern: "/キャッシュフロー*",
+          },
+        },
+        {
+          recipient_name: "functions.Glob",
+          parameters: {
+            path: "H:/shr1/05_経理部/03_連結財務G/160連結",
+            pattern: "/CF",
+          },
+        },
+        {
+          recipient_name: "functions.Glob",
+          parameters: {
+            path: "H:/shr1/05_経理部/03_連結財務G/160連結",
+            pattern: "**/精算表",
+          },
+        },
+      ],
+    }),
+    [{ type: "function", function: { name: "glob" } }],
+  );
+
+  assert.equal(extracted.toolCalls.length, 3);
+  assert.deepEqual(
+    extracted.toolCalls.map((call) => JSON.parse(call.function.arguments).pattern),
+    ["**/*キャッシュフロー*", "**/*CF*", "**/*精算表*"],
+  );
+  assert.ok(extracted.toolCalls.every((call) => call.function.name === "glob"));
+});
+
 test("extractOpenAiToolCallsFromText maps write_file aliases to the advertised write tool", () => {
   const extracted = extractOpenAiToolCallsFromText(
     '```relay_tool\n{"name":"write_file","relay_tool_call":true,"input":{"path":"C:/Users/m242054/Downloads/tetris.html","content":"<!doctype html><html></html>"}}\n```',
@@ -1104,7 +1148,7 @@ test("buildOpenAiCompletionBody suppresses Copilot prose around extracted tool c
   assert.equal(body.choices[0].message.tool_calls[0].id, "call_1");
   assert.equal(body.choices[0].message.tool_calls[0].function.name, "glob");
   assert.deepEqual(JSON.parse(body.choices[0].message.tool_calls[0].function.arguments), {
-    pattern: "**/CF.{xlsx,xlsm,pdf,docx}",
+    pattern: "**/*CF.{xlsx,xlsm,pdf,docx}",
     path: "H:/shr1/05_経理部/03_連結財務G",
   });
 });

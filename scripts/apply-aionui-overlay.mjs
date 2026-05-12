@@ -631,7 +631,41 @@ export function patchAionCliCoreGlobContent(input) {
     "}",
     "",
     "function relayNormalizeGlobPattern(pattern) {",
-    "    return String(pattern || '').replace(/\\\\/g, '/').replace(/^\\.\\//, '');",
+    "    let normalized = String(pattern || '').trim().replace(/\\\\/g, '/').replace(/^\\.\\//, '');",
+    "    if (!normalized) return normalized;",
+    "    if (!/^(?:[a-zA-Z]:\\/|\\/\\/)/u.test(normalized)) {",
+    "        normalized = normalized.replace(/^\\/+/, '');",
+    "    }",
+    "    if (!normalized.startsWith('//')) normalized = normalized.replace(/\\/{2,}/g, '/');",
+    "    if (!normalized) return normalized;",
+    "    if (normalized === '*' || normalized === '**' || normalized === '**/*') return normalized;",
+    "    const parts = normalized.split('/');",
+    "    const basename = parts.at(-1) || '';",
+    "    const hasSlash = parts.length > 1;",
+    "    const basenameHasMagic = relayGlobPatternHasMagic(basename);",
+    "    const patternHasMagic = relayGlobPatternHasMagic(normalized);",
+    "    const basenameLooksExactFile = relayGlobBasenameLooksExactFile(basename);",
+    "    if (!hasSlash) {",
+    "        if (!patternHasMagic) return basenameLooksExactFile ? `**/${normalized}` : `**/*${normalized}*`;",
+    "        return normalized.startsWith('*') ? `**/${normalized}` : `**/*${normalized}`;",
+    "    }",
+    "    if (normalized.startsWith('**/') && !basenameHasMagic && !basenameLooksExactFile) {",
+    "        const prefix = parts.slice(0, -1).join('/') || '**';",
+    "        return `${prefix}/*${basename}*`;",
+    "    }",
+    "    if (normalized.startsWith('**/') && basenameHasMagic && !basename.startsWith('*') && !basename.startsWith('?')) {",
+    "        const prefix = parts.slice(0, -1).join('/') || '**';",
+    "        return `${prefix}/*${basename}`;",
+    "    }",
+    "    return normalized;",
+    "}",
+    "",
+    "function relayGlobPatternHasMagic(pattern) {",
+    "    return /[*?[\\]{}]/u.test(String(pattern || ''));",
+    "}",
+    "",
+    "function relayGlobBasenameLooksExactFile(basename) {",
+    "    return /\\.[^./*?[\\]{}]{1,12}$/u.test(String(basename || ''));",
     "}",
     "",
     "function relayIsBroadGlobPattern(pattern) {",
@@ -1695,19 +1729,55 @@ export function patchAionrsManagerContent(input) {
     "      const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig(mergedData.workspace);",
     "      if (relayDocumentSearch) stdioMcpServers.push(relayDocumentSearch);",
   ].join("\n");
+  const legacyAnchor = [
+    "      const teamGuide = await this.buildTeamGuideMcpStdioConfig();",
+    "      if (teamGuide) stdioMcpServers.push(teamGuide);",
+    "    }",
+  ].join("\n");
+  output = output.replace(`${legacyAnchor}\n${injection}`, legacyAnchor);
   if (!output.includes(injection)) {
-    const anchor = [
-      "      const teamGuide = await this.buildTeamGuideMcpStdioConfig();",
-      "      if (teamGuide) stdioMcpServers.push(teamGuide);",
-      "    }",
-    ].join("\n");
+    const anchor = "    const stdioMcpServers: StdioMcpOption[] = [];";
     if (!output.includes(anchor)) {
-      throw new Error("Could not find AionrsManager team-guide MCP injection anchor");
+      throw new Error("Could not find AionrsManager stdio MCP list anchor");
     }
     output = output.replace(anchor, `${anchor}\n${injection}`);
   }
 
-  if (!output.includes("private buildRelayDocumentSearchMcpStdioConfig")) {
+  const relayDocumentSearchMethod = [
+    "  private buildRelayDocumentSearchMcpStdioConfig(workspace?: string): StdioMcpOption | undefined {",
+    "    const scriptPath = path.join(__dirname, 'relay-document-search-mcp-stdio.js');",
+    "    const command = process.env.RELAY_DOCUMENT_SEARCH_MCP_COMMAND || process.env.RELAY_BUNDLED_NODE || process.execPath || 'node';",
+    "    const usesElectronNode = command === process.execPath;",
+    "    return {",
+    "      name: 'relay-document-search',",
+    "      command,",
+    "      args: [scriptPath],",
+    "      awaitReady: true,",
+    "      env: [",
+    "        { name: 'ELECTRON_RUN_AS_NODE', value: usesElectronNode ? '1' : (process.env.ELECTRON_RUN_AS_NODE || '') },",
+    "        { name: 'RELAY_BUNDLED_NODE', value: process.env.RELAY_BUNDLED_NODE || '' },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_WORKSPACE', value: workspace || '' },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_CONVERSATION_ID', value: this.conversation_id },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE', value: '1' },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'metadata-cache') },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX', value: '1' },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'filename-index') },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY', value: '1' },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'user-memory') },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL', value: '1' },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'sync-journal') },",
+    "      ],",
+    "    };",
+    "  }",
+  ].join("\n");
+  if (output.includes("private buildRelayDocumentSearchMcpStdioConfig")) {
+    const methodPattern =
+      /  private buildRelayDocumentSearchMcpStdioConfig\(workspace\?: string\): StdioMcpOption \| undefined \{[\s\S]*?\n  \}\n\n  async stop\(\) \{/;
+    if (!methodPattern.test(output)) {
+      throw new Error("Could not replace AionrsManager Relay document-search MCP method");
+    }
+    output = output.replace(methodPattern, `${relayDocumentSearchMethod}\n\n  async stop() {`);
+  } else {
     const anchor = [
       "  }",
       "",
@@ -1721,26 +1791,7 @@ export function patchAionrsManagerContent(input) {
       [
         "  }",
         "",
-        "  private buildRelayDocumentSearchMcpStdioConfig(workspace?: string): StdioMcpOption | undefined {",
-        "    const scriptPath = path.join(__dirname, 'relay-document-search-mcp-stdio.js');",
-        "    return {",
-        "      name: 'relay-document-search',",
-        "      command: 'node',",
-        "      args: [scriptPath],",
-        "      env: [",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_WORKSPACE', value: workspace || '' },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_CONVERSATION_ID', value: this.conversation_id },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE', value: '1' },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'metadata-cache') },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX', value: '1' },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'filename-index') },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY', value: '1' },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'user-memory') },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL', value: '1' },",
-        "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'sync-journal') },",
-        "      ],",
-        "    };",
-        "  }",
+        relayDocumentSearchMethod,
         "",
         "  async stop() {",
       ].join("\n"),

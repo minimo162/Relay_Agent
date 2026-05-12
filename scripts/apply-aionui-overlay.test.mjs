@@ -684,6 +684,9 @@ test("AionCLI core search patches prefer ripgrep and cap broad shared-folder res
   assert.match(patchedGlob, /showing \$\{sortedAbsolutePaths\.length\} representative result/);
   assert.match(patchedGlob, /per branch group/);
   assert.match(patchedGlob, /fallback to JS glob/);
+  assert.match(patchedGlob, /normalized = normalized\.replace\(\//);
+  assert.ok(patchedGlob.includes("return basenameLooksExactFile ? `**/${normalized}` : `**/*${normalized}*`;"));
+  assert.ok(patchedGlob.includes("return `${prefix}/*${basename}*`;"));
 
   const ripGrepFixture = [
     "import { DEFAULT_TOTAL_MAX_MATCHES } from './constants.js';",
@@ -952,7 +955,11 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx"), /relayAdvancedSurfacesEnabled/);
 
     assert.match(readFixture(fixtureRoot, "scripts/build-mcp-servers.js"), /relay-document-search-mcp-stdio\.js/);
-    assert.match(readFixture(fixtureRoot, "src/process/task/AionrsManager.ts"), /buildRelayDocumentSearchMcpStdioConfig/);
+    const patchedAionrsManager = readFixture(fixtureRoot, "src/process/task/AionrsManager.ts");
+    assert.match(patchedAionrsManager, /buildRelayDocumentSearchMcpStdioConfig/);
+    assert.match(patchedAionrsManager, /awaitReady: true/);
+    assert.match(patchedAionrsManager, /RELAY_BUNDLED_NODE/);
+    assert.match(patchedAionrsManager, /ELECTRON_RUN_AS_NODE/);
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-gateway/copilot_server.mjs")));
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/ripgrep/rg.exe")));
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/node/relay-node.exe")));
@@ -1410,7 +1417,22 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   const patchedManager = patchAionrsManagerContent(manager);
   assert.match(patchedManager, /import path from 'path';/);
   assert.match(patchedManager, /buildRelayDocumentSearchMcpStdioConfig\(mergedData\.workspace\)/);
+  assert.ok(
+    patchedManager.indexOf("const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig") >
+      patchedManager.indexOf("const stdioMcpServers: StdioMcpOption[] = [];"),
+  );
+  assert.ok(
+    patchedManager.indexOf("const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig") <
+      patchedManager.indexOf("if (mergedData.teamMcpStdioConfig)"),
+  );
   assert.match(patchedManager, /relay-document-search-mcp-stdio\.js/);
+  assert.match(
+    patchedManager,
+    /process\.env\.RELAY_DOCUMENT_SEARCH_MCP_COMMAND \|\| process\.env\.RELAY_BUNDLED_NODE \|\| process\.execPath \|\| 'node'/,
+  );
+  assert.match(patchedManager, /awaitReady: true/);
+  assert.match(patchedManager, /ELECTRON_RUN_AS_NODE/);
+  assert.match(patchedManager, /RELAY_BUNDLED_NODE/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_CONVERSATION_ID/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_METADATA_CACHE/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR/);
