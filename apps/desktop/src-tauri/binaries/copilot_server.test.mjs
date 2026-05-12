@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildDeterministicRequiredToolCallRecord,
   buildToolResultFailureRecord,
   buildOpenAiCompletionBody,
   classifyToolIntent,
@@ -406,6 +407,69 @@ test("extractOpenAiToolCallsFromText maps canonical document search calls to MCP
     query: "キャッシュフロー計算書に関係するファイルを探して",
     roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
     intent: "find_files",
+  });
+});
+
+test("buildDeterministicRequiredToolCallRecord emits high-level document search before Copilot", () => {
+  const userPrompt = "このフォルダからキャッシュフロー計算書に関係するファイルを探して";
+  const parsed = parseOpenAiRequest({
+    model: "m365-copilot",
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You are an AI assistant that can use tools to help with tasks.",
+          "Working directory: H:\\shr1\\05_経理部\\03_連結財務G\\160連結",
+        ].join("\n"),
+      },
+      { role: "user", content: userPrompt },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "relay_document_search",
+          description: "Find local workspace documents through Relay Agent.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              evidence: { enum: ["none", "candidate", "required"], type: "string" },
+              intent: {
+                enum: [
+                  "find_files",
+                  "answer_with_evidence",
+                  "summarize_with_evidence",
+                  "inspect_file",
+                  "similar_documents",
+                ],
+                type: "string",
+              },
+              maxResults: { maximum: 300, minimum: 1, type: "integer" },
+              query: { type: "string" },
+              roots: { type: "array", items: { type: "string" } },
+              thoroughness: { enum: ["quick", "thorough"], type: "string" },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    ],
+  });
+
+  const record = buildDeterministicRequiredToolCallRecord(parsed);
+
+  assert.equal(record.status, 200);
+  assert.equal(record.body.choices[0].finish_reason, "tool_calls");
+  const [toolCall] = record.body.choices[0].message.tool_calls;
+  assert.equal(toolCall.function.name, "relay_document_search");
+  assert.deepEqual(JSON.parse(toolCall.function.arguments), {
+    evidence: "candidate",
+    intent: "find_files",
+    maxResults: 100,
+    query: userPrompt,
+    roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+    thoroughness: "thorough",
   });
 });
 
@@ -1350,6 +1414,80 @@ test("createServer repairs explicit OpenAI-compatible tool requests once", async
     assert.equal(body.choices[0].message.tool_calls[0].function.name, "read");
     assert.equal(prompts[0].toolProtocolMode, "tool_planning");
     assert.equal(prompts[0].requiresStrictToolCalls, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer bypasses Copilot prose generation for required high-level document search", async () => {
+  const prompts = [];
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: true };
+    },
+    async startOrJoinDescribe(prompt) {
+      prompts.push(prompt);
+      throw new Error("Copilot should not be called for deterministic document search tool planning");
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "m365-copilot",
+        messages: [
+          {
+            role: "system",
+            content: "Working directory: H:\\shr1\\05_経理部\\03_連結財務G\\160連結",
+          },
+          {
+            role: "user",
+            content: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+          },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "relay_document_search",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  evidence: { enum: ["none", "candidate", "required"], type: "string" },
+                  intent: { enum: ["find_files", "answer_with_evidence", "summarize_with_evidence"], type: "string" },
+                  query: { type: "string" },
+                  roots: { type: "array", items: { type: "string" } },
+                  thoroughness: { enum: ["quick", "thorough"], type: "string" },
+                },
+                required: ["query"],
+              },
+            },
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(prompts.length, 0);
+    assert.equal(body.choices[0].finish_reason, "tool_calls");
+    assert.equal(body.choices[0].message.tool_calls[0].function.name, "relay_document_search");
+    assert.deepEqual(JSON.parse(body.choices[0].message.tool_calls[0].function.arguments), {
+      evidence: "candidate",
+      intent: "find_files",
+      query: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+      roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+      thoroughness: "thorough",
+    });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

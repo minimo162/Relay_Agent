@@ -25,6 +25,30 @@
 
 ## Milestone Log
 
+### 2026-05-12 Deterministic first call for Relay document search
+
+Live prompt capture confirmed `relay_document_search` was now advertised as the
+only available tool, but M365 Copilot still ignored the strict JSON compiler
+instruction and answered with normal Microsoft 365 / SharePoint search prose.
+The provider gateway now short-circuits document-search tool-planning requests
+before contacting Copilot: when a strict tool call is required, no tool result
+messages are present, the intent is local document/file discovery, and an
+accepted Relay document-search tool is advertised, Relay emits the OpenAI
+`tool_calls` response itself. The generated arguments preserve the user query,
+derive the current workspace root from the `Working directory:` system line or
+an explicit local path, select `find_files`, and request candidate evidence.
+
+This keeps Copilot available for final answers and non-document tool planning,
+but removes prompt-compliance risk from the first high-level document-search
+call.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 70 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AionUi team-guide MCP document-search fallback
 
 The latest live M365 Copilot prompt still showed no `relay_document_search`

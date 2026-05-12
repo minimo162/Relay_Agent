@@ -5891,6 +5891,8 @@ async function startOpenAiCompletionWithToolRepair(session, prompt) {
   if (prompt.toolResultFailure) {
     return buildToolResultFailureRecord(prompt);
   }
+  const deterministicRecord = buildDeterministicRequiredToolCallRecord(prompt);
+  if (deterministicRecord) return deterministicRecord;
   prompt.relayActiveRequestId = prompt.relayRequestId;
   const record = await session.startOrJoinDescribe(prompt);
   if (!shouldAttemptOpenAiToolRepair(record, prompt)) return record;
@@ -5933,6 +5935,169 @@ async function startOpenAiCompletionWithToolRepair(session, prompt) {
       },
     ),
   };
+}
+
+function buildDeterministicRequiredToolCallRecord(prompt = {}) {
+  if (prompt.hasToolResultMessages === true) return null;
+  if (prompt.openAiToolRepairAttempt === true) return null;
+  if (prompt.requiresStrictToolCalls !== true) return null;
+  const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
+  if (!isDocumentSearchIntent(toolIntent?.intent)) return null;
+  const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
+  const documentSearchTools = availableDocumentSearchTools(tools);
+  if (!documentSearchTools.length) return null;
+  const toolName = selectDeterministicDocumentSearchToolName(toolIntent, documentSearchTools);
+  if (!toolName) return null;
+  const tool = tools.find(
+    (candidate) => normalizeToolName(candidate?.function?.name || "").toLowerCase() === toolName.toLowerCase(),
+  );
+  const args = buildDeterministicDocumentSearchArgs(prompt, tool);
+  const body = buildOpenAiCompletionBody(
+    JSON.stringify({
+      tool_uses: [
+        {
+          recipient_name: `functions.${toolName}`,
+          parameters: args,
+        },
+      ],
+    }),
+    prompt,
+  );
+  if (!recordHasOpenAiToolCalls({ body })) return null;
+  return { status: 200, body };
+}
+
+function selectDeterministicDocumentSearchToolName(toolIntent = {}, documentSearchTools = []) {
+  const available = new Set(documentSearchTools.map((name) => normalizeToolName(name)).filter(Boolean));
+  for (const preferred of toolIntent.preferredTools || []) {
+    const resolved = resolveAllowedToolName(preferred, available);
+    if (resolved) return resolved;
+  }
+  return documentSearchTools[0] || "";
+}
+
+function buildDeterministicDocumentSearchArgs(prompt = {}, tool = null) {
+  const parameters = tool?.function?.parameters && typeof tool.function.parameters === "object"
+    ? tool.function.parameters
+    : {};
+  const properties = parameters.properties && typeof parameters.properties === "object"
+    ? parameters.properties
+    : {};
+  const hasProperties = Object.keys(properties).length > 0;
+  const hasProp = (name) => !hasProperties || Object.prototype.hasOwnProperty.call(properties, name);
+  const args = {};
+  const query = String(prompt.userPrompt || "").trim();
+  const root = deterministicDocumentSearchRoot(prompt);
+  if (hasProp("query")) args.query = query;
+  if (root && hasProp("roots")) args.roots = [root];
+  if (root && hasProp("path")) args.path = root;
+  if (hasProp("objective")) args.objective = query;
+  if (hasProp("intent")) {
+    const intent = deterministicDocumentSearchIntent(prompt, properties.intent);
+    if (intent) args.intent = intent;
+  }
+  if (hasProp("mode")) {
+    const mode = deterministicDocumentSearchMode(prompt, properties.mode);
+    if (mode) args.mode = mode;
+  }
+  if (hasProp("evidence")) {
+    const evidence = deterministicDocumentSearchEvidence(prompt, properties.evidence);
+    if (evidence) args.evidence = evidence;
+  }
+  if (hasProp("thoroughness")) {
+    const thoroughness = schemaEnumValue(properties.thoroughness, documentSearchNeedsThoroughPass(prompt) ? "thorough" : "quick");
+    if (thoroughness) args.thoroughness = thoroughness;
+  }
+  if (hasProp("maxResults")) {
+    args.maxResults = schemaNumberValue(properties.maxResults, documentSearchNeedsThoroughPass(prompt) ? 100 : 40);
+  }
+  if (!Object.keys(args).length) args.query = query;
+  return args;
+}
+
+function deterministicDocumentSearchRoot(prompt = {}) {
+  const explicit = extractFirstLocalPathFromText(prompt.userPrompt || "");
+  if (explicit) return normalizeLocalPathForTool(explicit);
+  const fromSystem = extractWorkingDirectoryFromText(prompt.systemPromptBase || prompt.systemPrompt || "");
+  return fromSystem ? normalizeLocalPathForTool(fromSystem) : "";
+}
+
+function extractWorkingDirectoryFromText(text = "") {
+  const match = String(text || "").match(/^\s*Working directory:\s*(.+?)\s*$/imu);
+  return match ? match[1] : "";
+}
+
+function extractFirstLocalPathFromText(text = "") {
+  const raw = String(text || "");
+  const quoted = raw.match(/["'“”]([A-Za-z]:[\\/][^"'“”\r\n]+|\\\\[^"'“”\r\n]+)["'“”]/u);
+  if (quoted?.[1]) return quoted[1];
+  const local = raw.match(/([A-Za-z]:[\\/][^\s"'“”]+(?:[\\/][^\s"'“”]+)*|\\\\[^\s"'“”]+(?:[\\/][^\s"'“”]+)+)/u);
+  return local?.[1] || "";
+}
+
+function normalizeLocalPathForTool(pathValue = "") {
+  return String(pathValue || "")
+    .trim()
+    .replace(/^["'“”]+|["'“”]+$/gu, "")
+    .replace(/[。．。、,，;；:：]+$/gu, "")
+    .replace(/\\/gu, "/")
+    .replace(/\/+$/u, "");
+}
+
+function deterministicDocumentSearchIntent(prompt = {}, schema = {}) {
+  const toolIntent = prompt.toolIntent || {};
+  const isSummary = String(toolIntent.intent || "") === "local_document_summary" || /要約|summari[sz]e|summary/iu.test(prompt.userPrompt || "");
+  const isAnswer = /教えて|確認|調べて|answer|explain/iu.test(prompt.userPrompt || "");
+  const candidates = isSummary
+    ? ["summarize_with_evidence", "answer_with_evidence", "find_files"]
+    : isAnswer
+      ? ["answer_with_evidence", "find_files"]
+      : ["find_files", "answer_with_evidence"];
+  return firstSchemaEnumValue(schema, candidates);
+}
+
+function deterministicDocumentSearchMode(prompt = {}, schema = {}) {
+  const toolIntent = prompt.toolIntent || {};
+  const isSummary = String(toolIntent.intent || "") === "local_document_summary" || /要約|summari[sz]e|summary/iu.test(prompt.userPrompt || "");
+  return firstSchemaEnumValue(schema, isSummary ? ["summarize", "summary", "answer", "search"] : ["search", "find_files", "find"]);
+}
+
+function deterministicDocumentSearchEvidence(prompt = {}, schema = {}) {
+  const toolIntent = prompt.toolIntent || {};
+  const isSummary = String(toolIntent.intent || "") === "local_document_summary" || /要約|summari[sz]e|summary/iu.test(prompt.userPrompt || "");
+  return firstSchemaEnumValue(schema, isSummary ? ["required", "candidate", "none"] : ["candidate", "required", "none"]);
+}
+
+function documentSearchNeedsThoroughPass(prompt = {}) {
+  const text = String(prompt.userPrompt || "");
+  return /キャッシュ\s*フロー|キャッシュフロー|連結|財務|会計|精算表|\bCFS?\b|\bBS\b|\bPL\b/iu.test(text);
+}
+
+function firstSchemaEnumValue(schema = {}, candidates = []) {
+  for (const candidate of candidates) {
+    const value = schemaEnumValue(schema, candidate);
+    if (value) return value;
+  }
+  return "";
+}
+
+function schemaEnumValue(schema = {}, candidate = "") {
+  const value = String(candidate || "");
+  if (!value) return "";
+  const values = Array.isArray(schema?.enum) ? schema.enum.map((item) => String(item)) : [];
+  if (!values.length) return value;
+  const exact = values.find((item) => item === value);
+  if (exact) return exact;
+  return values.find((item) => item.toLowerCase() === value.toLowerCase()) || "";
+}
+
+function schemaNumberValue(schema = {}, desired) {
+  const minimum = Number.isFinite(schema?.minimum) ? Number(schema.minimum) : undefined;
+  const maximum = Number.isFinite(schema?.maximum) ? Number(schema.maximum) : undefined;
+  let value = Number.isFinite(desired) ? Number(desired) : 40;
+  if (minimum !== undefined && value < minimum) value = minimum;
+  if (maximum !== undefined && value > maximum) value = maximum;
+  return Math.trunc(value);
 }
 
 function buildToolResultFailureRecord(prompt = {}) {
@@ -7282,6 +7447,7 @@ if (isDirectEntry) {
 }
 
 export {
+  buildDeterministicRequiredToolCallRecord,
   buildToolResultFailureRecord,
   buildOpenAiCompletionBody,
   classifyToolIntent,
