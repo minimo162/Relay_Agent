@@ -195,6 +195,10 @@ jobs:
               throw "Relay Copilot gateway resource was not copied into AionUi resources: $gatewayFile"
             }
           }
+          $copilotGateway = Get-Content -LiteralPath "aionui\resources\relay-gateway\copilot_server.mjs" -Raw
+          if ($copilotGateway -notmatch "isMcpQualifiedRelayDocumentSearchToolName") {
+            throw "Relay Copilot gateway does not recognize MCP-qualified document-search tool names."
+          }
           $ripgrepPath = "aionui\resources\relay-tools\ripgrep\rg.exe"
           if (-not (Test-Path -LiteralPath $ripgrepPath)) {
             throw "Bundled ripgrep was not copied into AionUi resources."

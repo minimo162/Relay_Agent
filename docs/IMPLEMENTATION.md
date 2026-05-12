@@ -25,6 +25,32 @@
 
 ## Milestone Log
 
+### 2026-05-12 AionUi MCP-qualified document-search tool routing fix
+
+The packaged MCP startup fix was not sufficient when Aionrs advertised MCP
+tools under MCP-qualified names such as
+`mcp__relay-document-search__relay_document_search`. The Copilot provider
+gateway only recognized the exact `relay_document_search` name or contract
+annotated aliases, so a valid MCP-provided high-level search tool could be
+present in the tool catalog while Relay still treated the turn as low-level
+file discovery. In that state Copilot was shown `Glob` as an allowed first
+tool and could return raw `functions.Glob` JSON.
+
+The gateway now recognizes MCP-qualified Relay document-search tool names as
+high-level document search, narrows strict document-search planning prompts to
+that advertised MCP tool, and maps canonical `relay_document_search` calls
+back to the actual MCP-qualified tool name when needed. The release workflow
+also validates that the copied provider gateway contains this MCP-qualified
+routing support before building the installer.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 68 tests.
+- `node --test scripts/aionui-release-workflow.test.mjs`: passed, 5 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AionUi packaged document-search MCP startup fix
 
 A packaged AionUi release could still miss the high-level

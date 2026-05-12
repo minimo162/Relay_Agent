@@ -64,6 +64,7 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /RELAY_SHARED_SEARCH_PER_BRANCH_LIMIT/);
   assert.match(text, /RELAY_SHARED_SEARCH_NAMES_ONLY_MAX_MATCHES/);
   assert.match(text, /copilot_server\.js/);
+  assert.match(text, /isMcpQualifiedRelayDocumentSearchToolName/);
   assert.match(text, /copilot_dom_poll\.mjs/);
   assert.match(text, /copilot_send_timing\.mjs/);
   assert.match(text, /copilot_wait_dom_response\.mjs/);

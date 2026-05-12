@@ -341,6 +341,74 @@ test("parseOpenAiRequest accepts document-search aliases only with Relay contrac
   assert.doesNotMatch(uncontractedAlias.systemPrompt, /call the high-level document search tool first \(workspace-search\)/);
 });
 
+test("parseOpenAiRequest recognizes MCP-qualified Relay document search tools", () => {
+  const highLevelName = "mcp__relay-document-search__relay_document_search";
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "user",
+        content: "H:/shr1/05_経理部/03_連結財務G/160連結 からキャッシュフロー計算書に関係するファイルを探して",
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: highLevelName,
+          description: "Relay document search MCP tool",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              roots: { type: "array", items: { type: "string" } },
+              intent: { type: "string" },
+            },
+          },
+        },
+      },
+      { type: "function", function: { name: "Glob", parameters: { type: "object" } } },
+      { type: "function", function: { name: "Read", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.equal(parsed.requiresStrictToolCalls, true);
+  assert.equal(parsed.toolIntent.intent, "local_file_discovery");
+  assert.equal(parsed.toolIntent.preferredTools[0], highLevelName);
+  assert.match(parsed.systemPrompt, new RegExp(`high-level document search tool first \\(${highLevelName}\\)`));
+  assert.match(parsed.systemPrompt, new RegExp(`Available tools: ${highLevelName}`));
+  assert.doesNotMatch(parsed.systemPrompt, /Available tools: .*Glob/);
+  assert.doesNotMatch(parsed.systemPrompt, /"name":"Glob"/);
+});
+
+test("extractOpenAiToolCallsFromText maps canonical document search calls to MCP-qualified tool", () => {
+  const highLevelName = "mcp__relay-document-search__relay_document_search";
+  const extracted = extractOpenAiToolCallsFromText(
+    JSON.stringify({
+      tool_uses: [
+        {
+          recipient_name: "functions.document_search",
+          parameters: {
+            query: "キャッシュフロー計算書に関係するファイルを探して",
+            roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+            intent: "find_files",
+          },
+        },
+      ],
+    }),
+    [{ type: "function", function: { name: highLevelName } }],
+  );
+
+  assert.equal(extracted.displayText, "");
+  assert.equal(extracted.toolCalls.length, 1);
+  assert.equal(extracted.toolCalls[0].function.name, highLevelName);
+  assert.deepEqual(JSON.parse(extracted.toolCalls[0].function.arguments), {
+    query: "キャッシュフロー計算書に関係するファイルを探して",
+    roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+    intent: "find_files",
+  });
+});
+
 test("tool repair rejects low-level first calls when document search is advertised", () => {
   const parsed = parseOpenAiRequest({
     messages: [{ role: "user", content: "このフォルダから必要な資料を探して" }],

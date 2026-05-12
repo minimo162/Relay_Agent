@@ -5427,7 +5427,7 @@ function preferredDocumentSearchTools(toolsOrAvailable = [], fallbackCandidates 
 
 function availableDocumentSearchTools(toolsOrAvailable = []) {
   if (toolsOrAvailable instanceof Set) {
-    return toolsOrAvailable.has(RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME) ? [RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME] : [];
+    return firstAllowedRelayDocumentSearchToolNames(toolsOrAvailable);
   }
   if (!Array.isArray(toolsOrAvailable)) return [];
   const out = [];
@@ -5445,6 +5445,7 @@ function isAcceptedRelayDocumentSearchTool(tool) {
   const alias = resolveRelayDocumentSearchAlias(name);
   if (!alias) return false;
   if (alias === RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME) return true;
+  if (isMcpQualifiedRelayDocumentSearchToolName(name)) return true;
   return (
     String(tool?.requestContract || tool?.function?.requestContract || "") === RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT ||
     String(tool?.resultContract || tool?.function?.resultContract || "") === RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT
@@ -5458,7 +5459,31 @@ function resolveRelayDocumentSearchAlias(name) {
     if (alias.toLowerCase() === normalized) return alias;
     if (alias.toLowerCase().replace(/[-\s]+/gu, "_") === familyKey) return alias;
   }
+  if (isMcpQualifiedRelayDocumentSearchToolName(name)) return RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME;
   return "";
+}
+
+function isMcpQualifiedRelayDocumentSearchToolName(name) {
+  const normalized = normalizeToolName(name).toLowerCase();
+  if (!normalized) return false;
+  const familyKey = normalized.replace(/[-\s]+/gu, "_");
+  if (!familyKey.includes("relay_document_search")) return false;
+  return (
+    familyKey.startsWith("mcp__") ||
+    familyKey.startsWith("mcp_") ||
+    familyKey.includes("__relay_document_search__") ||
+    familyKey.endsWith("__relay_document_search") ||
+    familyKey.includes("relay_document_search__relay_document_search")
+  );
+}
+
+function firstAllowedRelayDocumentSearchToolNames(allowed) {
+  if (!allowed?.size) return [];
+  const out = [];
+  for (const allowedName of allowed) {
+    if (resolveRelayDocumentSearchAlias(allowedName)) out.push(allowedName);
+  }
+  return out;
 }
 
 function isDocumentSearchIntent(intent = "") {
@@ -6937,6 +6962,10 @@ function resolveAllowedToolName(name, allowed) {
       const normalizedAllowed = normalizeToolName(allowedName);
       if (normalizedAllowed.toLowerCase() === aliasLower) return allowedName;
     }
+  }
+  if (resolveRelayDocumentSearchAlias(normalized) || (alias && resolveRelayDocumentSearchAlias(alias))) {
+    const [documentSearchToolName] = firstAllowedRelayDocumentSearchToolNames(allowed);
+    if (documentSearchToolName) return documentSearchToolName;
   }
   return "";
 }
