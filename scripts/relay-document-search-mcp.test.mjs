@@ -34,6 +34,11 @@ test("Relay document search MCP stdio entry is syntax-valid and tool-bound", () 
   assert.match(source, /handleRelayDocumentSearchToolCall/);
   assert.match(source, /execution\.aionuiContent/);
   assert.match(source, /startRelayDocumentSearchSyncProducerFromEnvironment/);
+  assert.doesNotMatch(source, /from ['"]\.\/relayDocumentSearchBridge['"]/);
+  assert.doesNotMatch(source, /from ['"]\.\/relayDocumentSearchSyncProducer['"]/);
+  assert.match(source, /import\(['"]\.\/relayDocumentSearchBridge['"]\)/);
+  assert.match(source, /import\(['"]\.\/relayDocumentSearchSyncProducer['"]\)/);
+  assert.match(source, /relay_document_search_mcp_handler_failed/);
   assert.match(source, /RELAY_DOCUMENT_SEARCH_WORKSPACE/);
   assert.match(source, /RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR/);
   assert.match(source, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR/);

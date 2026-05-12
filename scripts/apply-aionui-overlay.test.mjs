@@ -1379,6 +1379,11 @@ test("Relay document search contract is copied into the AionUi overlay", () => {
   assert.match(mcp, /RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT/);
   assert.match(mcp, /execution\.aionuiContent/);
   assert.match(mcp, /relayDocumentSearchBridgeToolDefinition/);
+  assert.doesNotMatch(mcp, /from ['"]\.\/relayDocumentSearchBridge['"]/);
+  assert.doesNotMatch(mcp, /from ['"]\.\/relayDocumentSearchSyncProducer['"]/);
+  assert.match(mcp, /import\(['"]\.\/relayDocumentSearchBridge['"]\)/);
+  assert.match(mcp, /import\(['"]\.\/relayDocumentSearchSyncProducer['"]\)/);
+  assert.match(mcp, /relay_document_search_mcp_handler_failed/);
   assert.match(mcp, /RELAY_DOCUMENT_SEARCH_WORKSPACE/);
   assert.match(mcp, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR/);
   assert.match(mcp, /RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR/);

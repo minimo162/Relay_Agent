@@ -181,6 +181,13 @@ jobs:
           if ($builderConfig -notmatch "out/main/relay-document-search-mcp-stdio\.js") {
             throw "Relay document-search MCP stdio bundle is not marked for asarUnpack."
           }
+          $documentSearchMcp = Get-Content -LiteralPath "aionui\src\process\utils\relayDocumentSearchMcpStdio.ts" -Raw
+          if ($documentSearchMcp -match "from './relayDocumentSearchBridge'" -or $documentSearchMcp -match "from './relayDocumentSearchSyncProducer'") {
+            throw "Relay document-search MCP statically imports search dependencies before tool registration."
+          }
+          if ($documentSearchMcp -notmatch "import\('\./relayDocumentSearchBridge'\)" -or $documentSearchMcp -notmatch "import\('\./relayDocumentSearchSyncProducer'\)") {
+            throw "Relay document-search MCP does not lazy-load search dependencies."
+          }
 
           $gatewayFiles = @(
             "copilot_server.js",

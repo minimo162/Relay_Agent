@@ -15,12 +15,6 @@ import {
   RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT,
   RELAY_DOCUMENT_SEARCH_TOOL_NAME,
 } from './relayDocumentSearchContract';
-import {
-  handleRelayDocumentSearchToolCall,
-  RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT,
-  relayDocumentSearchBridgeToolDefinition,
-} from './relayDocumentSearchBridge';
-import { startRelayDocumentSearchSyncProducerFromEnvironment } from './relayDocumentSearchSyncProducer';
 
 const relayWorkspaceRoot = process.env.RELAY_DOCUMENT_SEARCH_WORKSPACE || '';
 const relayConversationId = process.env.RELAY_DOCUMENT_SEARCH_CONVERSATION_ID || undefined;
@@ -30,9 +24,59 @@ const relayUserMemoryDir = process.env.RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR || 
 const relaySyncJournalDir = process.env.RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR || undefined;
 const relaySyncProducerRequested = process.env.RELAY_DOCUMENT_SEARCH_SYNC_PRODUCER === '1';
 
+const RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT = 'RelayDocumentSearchAionUiResultFlow.v1' as const;
+
+type RelayDocumentSearchBridgeModule = typeof import('./relayDocumentSearchBridge');
+type RelayDocumentSearchSyncProducerModule = typeof import('./relayDocumentSearchSyncProducer');
+type RelayDocumentSearchSyncProducer = Awaited<
+  ReturnType<RelayDocumentSearchSyncProducerModule['startRelayDocumentSearchSyncProducerFromEnvironment']>
+>;
+
 function normalizeRoots(roots: string[] | undefined): string[] {
   if (roots && roots.length > 0) return roots;
   return relayWorkspaceRoot ? [relayWorkspaceRoot] : [];
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function handlerFailureContent(error: unknown): string {
+  const message = messageFromError(error);
+  return JSON.stringify(
+    {
+      schemaVersion: RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT,
+      toolName: RELAY_DOCUMENT_SEARCH_TOOL_NAME,
+      resultContract: RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT,
+      status: 'failed',
+      error: {
+        code: 'relay_document_search_mcp_handler_failed',
+        message,
+      },
+    },
+    null,
+    2,
+  );
+}
+
+async function loadBridgeModule(): Promise<RelayDocumentSearchBridgeModule> {
+  return import('./relayDocumentSearchBridge');
+}
+
+async function startSyncProducerInBackground(): Promise<RelayDocumentSearchSyncProducer | undefined> {
+  if (!relaySyncProducerRequested) return undefined;
+  try {
+    const { startRelayDocumentSearchSyncProducerFromEnvironment } = await import('./relayDocumentSearchSyncProducer');
+    return await startRelayDocumentSearchSyncProducerFromEnvironment({
+      roots: normalizeRoots(undefined),
+      syncJournalDir: relaySyncJournalDir,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `[relay-document-search-mcp-stdio] Sync producer disabled after startup: ${messageFromError(error)}\n`,
+    );
+    return undefined;
+  }
 }
 
 const server = new McpServer(
@@ -70,44 +114,47 @@ server.tool(
     evidence: z.enum(['none', 'candidate', 'required']).optional().describe('Evidence requirement.'),
   },
   async (args) => {
-    const execution = await handleRelayDocumentSearchToolCall(
-      {
-        id: `relay-document-search-${Date.now().toString(36)}`,
-        name: RELAY_DOCUMENT_SEARCH_TOOL_NAME,
-        parameters: {
-          ...args,
-          roots: normalizeRoots(args.roots),
+    try {
+      const { handleRelayDocumentSearchToolCall, relayDocumentSearchBridgeToolDefinition } = await loadBridgeModule();
+      const execution = await handleRelayDocumentSearchToolCall(
+        {
+          id: `relay-document-search-${Date.now().toString(36)}`,
+          name: RELAY_DOCUMENT_SEARCH_TOOL_NAME,
+          parameters: {
+            ...args,
+            roots: normalizeRoots(args.roots),
+          },
         },
-      },
-      {
-        advertisedTools: [relayDocumentSearchBridgeToolDefinition],
-        aionuiConversationId: relayConversationId,
-        useMetadataCache: true,
-        metadataCacheDir: relayMetadataCacheDir,
-        useFilenameIndex: true,
-        filenameIndexDir: relayFilenameIndexDir,
-        useUserMemory: true,
-        userMemoryDir: relayUserMemoryDir,
-        useSyncJournal: true,
-        syncJournalDir: relaySyncJournalDir,
-        source: 'aionui-skill',
-      },
-    );
+        {
+          advertisedTools: [relayDocumentSearchBridgeToolDefinition],
+          aionuiConversationId: relayConversationId,
+          useMetadataCache: true,
+          metadataCacheDir: relayMetadataCacheDir,
+          useFilenameIndex: true,
+          filenameIndexDir: relayFilenameIndexDir,
+          useUserMemory: true,
+          userMemoryDir: relayUserMemoryDir,
+          useSyncJournal: true,
+          syncJournalDir: relaySyncJournalDir,
+          source: 'aionui-skill',
+        },
+      );
 
-    return {
-      content: [{ type: 'text' as const, text: execution.aionuiContent }],
-      isError: !execution.ok,
-    };
+      return {
+        content: [{ type: 'text' as const, text: execution.aionuiContent }],
+        isError: !execution.ok,
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: handlerFailureContent(error) }],
+        isError: true,
+      };
+    }
   },
 );
 
 async function main(): Promise<void> {
-  const syncProducer = relaySyncProducerRequested
-    ? await startRelayDocumentSearchSyncProducerFromEnvironment({
-      roots: normalizeRoots(undefined),
-      syncJournalDir: relaySyncJournalDir,
-    })
-    : undefined;
+  let syncProducer: RelayDocumentSearchSyncProducer | undefined;
   const stopSyncProducer = () => {
     void syncProducer?.stop();
   };
@@ -116,6 +163,10 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  void startSyncProducerInBackground().then((producer) => {
+    syncProducer = producer;
+  });
 }
 
 main().catch((error: unknown) => {

@@ -25,6 +25,31 @@
 
 ## Milestone Log
 
+### 2026-05-12 AionUi document-search MCP startup isolation fix
+
+Live M365 Copilot prompt capture showed that `relay_document_search` was not
+advertised to the model at all. The tool catalog contained only low-level file
+tools (`Glob`, `Grep`, `Read`, etc.) plus team tools, so the provider gateway
+could not prefer or repair to the high-level document-search tool. The likely
+startup failure path was the document-search MCP stdio entry importing the
+bridge, executor, and sync producer before registering its MCP tool; any
+packaged-runtime dependency failure in that graph made the MCP disappear from
+the catalog.
+
+The MCP stdio entry now registers the `relay_document_search` tool with only
+lightweight contract imports at startup. The bridge/executor is loaded lazily
+when the tool is called, and the sync producer starts after MCP transport
+connection as a background task. If lazy execution fails, the MCP returns a
+structured handler error instead of failing to advertise the tool. Overlay and
+release workflow tests now fail if the MCP reintroduces static bridge or sync
+producer imports before tool registration.
+
+Verification:
+
+- `node --test scripts/relay-document-search-mcp.test.mjs scripts/apply-aionui-overlay.test.mjs scripts/aionui-release-workflow.test.mjs apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed, 95 tests.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-12 AionUi MCP-qualified document-search tool routing fix
 
 The packaged MCP startup fix was not sufficient when Aionrs advertised MCP
