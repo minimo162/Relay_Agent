@@ -92,9 +92,12 @@ test("filename index ranks CJK and accounting filename/path matches without cont
     );
 
     assert.equal(index.schemaVersion, "RelayDocumentSearchFilenameIndex.v1");
+    assert.equal(index.indexVersion, 2);
     assert.equal(index.normalizerVersion, "relay-query-normalizer-v1");
     assert.equal(index.stats.fileCount, 3);
     assert.ok(index.stats.termCount >= 3);
+    assert.ok(index.stats.postingCount >= index.stats.termCount);
+    assert.ok(index.invertedIndex.cfs.includes("file-FY160-1Q_連結CFS精算表.xlsx"));
 
     const matches = module.searchRelayDocumentSearchFilenameIndex(
       index,
@@ -105,6 +108,33 @@ test("filename index ranks CJK and accounting filename/path matches without cont
     assert.ok(matches[0].score > matches[1].score);
     assert.ok(matches[0].reasons.some((reason) => reason.startsWith("filename:")));
     assert.ok(matches.every((match) => match.displayPath.endsWith(".xlsx")));
+  } finally {
+    cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("filename index uses inverted postings for partial Latin and CJK narrowing", async () => {
+  const root = resolve(mkdtempSync(resolve(tmpdir(), "relay-document-search-filename-index-inverted-")));
+  const { module, cleanup } = await loadFilenameIndexModule();
+  try {
+    const index = module.buildRelayDocumentSearchFilenameIndex(
+      root,
+      [
+        file(root, "作業/Cashflow_Workpaper.xlsx", "Cashflow_Workpaper.xlsx", "xlsx"),
+        file(root, "作業/連結キャッシュフロー計算書.xlsx", "連結キャッシュフロー計算書.xlsx", "xlsx"),
+        file(root, "作業/Presentation.pptx", "Presentation.pptx", "pptx"),
+      ],
+      { now: new Date("2026-05-09T00:00:00.000Z") },
+    );
+
+    const latin = module.searchRelayDocumentSearchFilenameIndex(index, ["cash"], { maxResults: 10 });
+    assert.equal(latin.length, 1);
+    assert.equal(latin[0].displayPath, "作業/Cashflow_Workpaper.xlsx");
+
+    const cjk = module.searchRelayDocumentSearchFilenameIndex(index, ["キャッシュフロー"], { maxResults: 10 });
+    assert.equal(cjk.length, 1);
+    assert.equal(cjk[0].displayPath, "作業/連結キャッシュフロー計算書.xlsx");
   } finally {
     cleanup();
     rmSync(root, { recursive: true, force: true });

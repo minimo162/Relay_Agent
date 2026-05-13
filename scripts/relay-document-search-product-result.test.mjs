@@ -94,8 +94,10 @@ test("product result contract builds preview/open actions independent of Copilot
     assert.equal(result.score_breakdown.rankingVersion, "relay-deterministic-ranker-v1");
     assert.equal(result.score_breakdown.deterministic, true);
     assert.equal(result.score_breakdown.components.content.score, 10);
+    assert.equal(result.score_breakdown.components.rrf.applied, false);
     assert.equal(result.score_breakdown.totals.finalScore, 12);
     assert.deepEqual(result.score_breakdown.tieBreakers, [
+      "rrf_score",
       "score",
       "content_evidence",
       "pin_history",

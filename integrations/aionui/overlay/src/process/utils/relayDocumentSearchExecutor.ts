@@ -277,6 +277,7 @@ type RankedCandidate = {
   indexDbScoreCapLoss: number;
   recencyScore: number;
   userMemoryBoost: number;
+  rrfScore: number;
   warningPenalty: number;
   rankingWarnings: string[];
   filenameIndexMatch?: RelayDocumentSearchFilenameIndexMatch;
@@ -988,7 +989,30 @@ function modifiedTimeMs(file: FileMetadata): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate): number {
+function withRrfHybridScores(candidates: RankedCandidate[]): RankedCandidate[] {
+  const scores = new Map<string, number>();
+  const addSource = (items: RankedCandidate[]) => {
+    const ranked = items
+      .filter((candidate) => candidate.baseScore > 0)
+      .sort(compareRankedCandidatesWithoutRrf);
+    ranked.forEach((candidate, index) => {
+      const current = scores.get(candidate.file.fileId) ?? 0;
+      scores.set(candidate.file.fileId, current + (1 / (60 + index + 1)));
+    });
+  };
+  addSource(candidates.filter((candidate) => candidate.filenameScore + candidate.pathScore + candidate.termScore > 0));
+  addSource(candidates.filter((candidate) => candidate.indexDbScore > 0));
+  addSource(candidates.filter((candidate) => candidate.contentScore > 0));
+  addSource(candidates.filter((candidate) => candidate.recencyScore > 0));
+  addSource(candidates.filter((candidate) => candidate.userMemoryBoost > 0));
+  addSource(candidates.filter((candidate) => candidate.folderRoleScore > 0));
+  return candidates.map((candidate) => ({
+    ...candidate,
+    rrfScore: Number((scores.get(candidate.file.fileId) ?? 0).toFixed(6)),
+  }));
+}
+
+function compareRankedCandidatesWithoutRrf(left: RankedCandidate, right: RankedCandidate): number {
   const leftContent = left.contentEvidence ? 1 : 0;
   const rightContent = right.contentEvidence ? 1 : 0;
   return (
@@ -1000,6 +1024,13 @@ function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate):
     modifiedTimeMs(right.file) - modifiedTimeMs(left.file) ||
     left.file.displayPath.localeCompare(right.file.displayPath) ||
     left.file.fileId.localeCompare(right.file.fileId)
+  );
+}
+
+function compareRankedCandidates(left: RankedCandidate, right: RankedCandidate): number {
+  return (
+    right.rrfScore - left.rrfScore ||
+    compareRankedCandidatesWithoutRrf(left, right)
   );
 }
 
@@ -1073,6 +1104,7 @@ function scoreBreakdownForCandidate(
   const folderRoleReasonCount = candidate.reasons.filter((reason) => reason.startsWith('folder_role:')).length;
   const explanationCodes = [...candidate.reasons, ...candidate.rankingWarnings.map((warning) => `warning:${warning}`)];
   const tieBreakers = [
+    'rrf_score',
     'score',
     'content_evidence',
     'pin_history',
@@ -1102,6 +1134,7 @@ function scoreBreakdownForCandidate(
     content: candidate.contentScore,
     table_cell: tableCellScore,
     recency: candidate.recencyScore,
+    rrf_score: candidate.rrfScore,
     grouping: 0,
     hybrid_merge: candidate.baseScore,
     base_score: candidate.baseScore,
@@ -1130,6 +1163,12 @@ function scoreBreakdownForCandidate(
       recency: scoreComponent(candidate.recencyScore, candidate.recencyScore > 0, 'modified_time_preference', {
         details: { modifiedTimePresent: Boolean(candidate.file.modifiedTime) },
       }),
+      rrf: scoreComponent(candidate.rrfScore, candidate.rrfScore > 0, 'reciprocal_rank_fusion', {
+        details: {
+          sources: ['filename_path', 'sqlite_fts', 'derived_content', 'recency', 'pin_history', 'folder_role'],
+          k: 60,
+        },
+      }),
       pin_history: scoreComponent(candidate.userMemoryBoost, candidate.userMemoryBoost > 0, 'pinned_or_recent_user_signal'),
       grouping: scoreComponent(0, Boolean(group), group ? 'variant_group_representative' : 'not_grouped', {
         count: group?.collapsedCount ?? 0,
@@ -1154,6 +1193,7 @@ function scoreBreakdownForCandidate(
           sqliteFtsScore: candidate.indexDbScore,
           recencyScore: candidate.recencyScore,
           pinHistoryScore: candidate.userMemoryBoost,
+          rrfScore: candidate.rrfScore,
         },
       }),
     },
@@ -1197,6 +1237,7 @@ function rankingScoreBreakdownSummary(
           : 0,
       ),
       recency: sum(returned, (candidate) => candidate.recencyScore),
+      rrf: sum(returned, (candidate) => candidate.rrfScore),
       pin_history: sum(returned, (candidate) => candidate.userMemoryBoost),
       grouping: 0,
       warning_penalty: -sum(returned, (candidate) => candidate.warningPenalty),
@@ -1204,7 +1245,7 @@ function rankingScoreBreakdownSummary(
     },
     warningPenaltyTotal: sum(candidates, (candidate) => candidate.warningPenalty),
     groupingCollapsedCandidateCount: collapsedCandidateCount,
-    hybridMergeMode: activePath === 'sqlite_fts_primary' ? 'sqlite_fts_primary' : 'filename_content_hybrid',
+    hybridMergeMode: activePath === 'sqlite_fts_primary' ? 'sqlite_fts_primary_rrf' : 'filename_content_rrf',
   };
 }
 
@@ -2766,6 +2807,7 @@ async function writeIndexDbDerivedSearchStore(
 
 async function searchIndexDbFts(
   terms: string[],
+  roots: string[],
   options: RelayDocumentSearchExecutorOptions,
   indexDb: IndexDbState,
 ): Promise<IndexDbSearchProbe> {
@@ -2780,6 +2822,7 @@ async function searchIndexDbFts(
       sqliteModule: options.sqliteModule,
       now: options.now,
       maxRows: indexDbSearchMaxRowsForOptions(options),
+      roots,
     });
     indexDb.dbPath = result.dbPath ?? indexDb.dbPath;
     updateIndexDbMigrationState(indexDb, result);
@@ -2831,6 +2874,10 @@ function indexDbRowScore(row: RelayDocumentSearchIndexDbSearchRow): number {
   let score = row.entry_kind === 'table_cell' ? 3 : 2;
   if (indexDbRowHasTitleBoost(row)) score += 1;
   if (indexDbRowHasLocationBoost(row)) score += 1;
+  if (row.fts_snippet?.includes('[[HL]]')) score += 1;
+  if (typeof row.bm25_score === 'number' && Number.isFinite(row.bm25_score)) {
+    score += Math.max(0, Math.min(2, 1 / (1 + Math.abs(row.bm25_score))));
+  }
   return score;
 }
 
@@ -2924,7 +2971,7 @@ function anchorForIndexDbRow(
     source_index: 'sqlite_fts_index',
     sqlite_fts_entry_id: row.entry_id,
     sqlite_fts_span_id: row.span_id,
-    snippet: String(row.anchor?.snippet ?? row.preview_text ?? lineSnippet(row.text)),
+    snippet: String(row.anchor?.snippet ?? row.fts_snippet ?? row.preview_text ?? lineSnippet(row.text)),
     matchedTerms,
     source_metadata_version: row.source_metadata_version,
     parsed_document_uid: row.parsed_document_uid,
@@ -3511,7 +3558,7 @@ export async function executeRelayDocumentSearch(
       indexDb,
       contentIndexCommit,
     );
-    indexDbSearchProbe = await searchIndexDbFts(terms, options, indexDb);
+    indexDbSearchProbe = await searchIndexDbFts(terms, roots, options, indexDb);
     promoteIndexDbEvidence(filteredFiles, contentEvidence.byFileId, indexDbSearchProbe, terms, indexDb);
     refreshIndexDbCutoverReadiness(indexDb);
     refreshIndexDbPrimaryPathGate(indexDb, indexDbPrimaryModeForOptions(options));
@@ -3544,7 +3591,7 @@ export async function executeRelayDocumentSearch(
   const candidateComparator = indexDb.primaryPathGate.activePath === 'sqlite_fts_primary'
     ? compareRankedCandidatesWithIndexDbPrimary
     : compareRankedCandidates;
-  const rankedAll = filteredFiles
+  const rankedCandidates = filteredFiles
     .map((file) => {
       const indexedMatch = filenameIndex.matches.get(file.fileId);
       const filenameScore = indexedMatch
@@ -3597,14 +3644,15 @@ export async function executeRelayDocumentSearch(
         indexDbScoreCapLoss,
         recencyScore,
         userMemoryBoost: memoryScore.score,
+        rrfScore: 0,
         warningPenalty: penalty,
         rankingWarnings,
         filenameIndexMatch: indexedMatch,
         contentEvidence: evidence,
       };
     })
-    .filter((candidate) => candidate.baseScore > 0 || terms.length === 0)
-    .sort(candidateComparator);
+    .filter((candidate) => candidate.baseScore > 0 || terms.length === 0);
+  const rankedAll = withRrfHybridScores(rankedCandidates).sort(candidateComparator);
   userMemory.diagnostics.boostedFileCount = rankedAll.filter((candidate) => candidate.userMemoryBoost > 0).length;
   const groupedRanked = groupRelayDocumentSearchCandidates(rankedAll);
   const diversity = diversifyRankedCandidates(groupedRanked.candidates, maxResults);

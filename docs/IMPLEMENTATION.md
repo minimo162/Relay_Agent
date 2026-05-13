@@ -25,6 +25,36 @@
 
 ## Milestone Log
 
+### 2026-05-13 Docufinder-style filename/FTS/RRF search acceleration
+
+Implemented the next Docufinder-inspired acceleration and precision slice for
+`relay_document_search`. The filename/path index is now versioned as
+`RelayDocumentSearchFilenameIndex.v2` and stores a term-to-file posting map in
+addition to normalized entries. Search uses CJK 2/3-grams and Latin prefixes to
+narrow candidate entries before scoring, preserving partial Japanese and
+English filename lookup while avoiding a full cached-entry scan on warm
+queries.
+
+SQLite FTS probing now requests BM25-ordered rows with FTS snippets and applies
+root filters through `file_metadata`, so indexed content evidence stays scoped
+to the selected workspace roots. The executor consumes those snippets for
+preview anchors and adds a small deterministic Reciprocal Rank Fusion layer
+over filename/path, SQLite FTS, parsed-content, recency, folder-role, and
+pin/history signals. Final confidence scores remain compatible with existing
+result contracts, while the ordering and score breakdown expose `rrf_score`
+and an `rrf` component for support diagnostics.
+
+Verification:
+
+- `node --test scripts/relay-document-search-filename-index.test.mjs`: passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-product-result.test.mjs`: passed.
+- `node --test scripts/relay-document-search-display.test.mjs scripts/relay-document-search-bridge.test.mjs scripts/relay-document-search-query-trace.test.mjs scripts/relay-document-search-index-report.test.mjs scripts/apply-aionui-overlay.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-13 Deterministic variable search budgets
 
 Implemented the large-folder search-budget slice for

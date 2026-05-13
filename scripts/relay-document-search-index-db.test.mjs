@@ -574,6 +574,31 @@ test("index DB reports FTS result-limit truncation without returning raw DB rows
   }
 });
 
+test("index DB FTS can constrain content search to selected roots", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "relay-document-search-index-db-root-filter-"));
+  const fake = createFakeSqliteModule();
+  const { module, cleanup } = await loadIndexDbModule();
+  try {
+    const selectedRoot = resolve(root, "workspace");
+    const result = await module.searchRelayDocumentSearchIndexDbFts(["キャッシュフロー"], {
+      indexDbPath: resolve(root, "document-search.sqlite"),
+      sqliteModule: fake.sqliteModule,
+      maxRows: 5,
+      roots: [selectedRoot],
+    });
+
+    assert.equal(result.status, "ready");
+    const allCalls = fake.calls.filter(
+      (call) => call.kind === "all" && /JOIN file_metadata/.test(call.sql) && /LIKE \? ESCAPE/.test(call.sql),
+    );
+    assert.equal(allCalls.length, 2);
+    assert.deepEqual(allCalls[0].params, ['"キャッシュフロー"', selectedRoot, `${selectedRoot}/%`, 5]);
+  } finally {
+    cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("index DB invalidates content rows for selected failed files without deleting metadata", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "relay-document-search-index-db-file-invalidate-"));
   const sqlStatements = [];

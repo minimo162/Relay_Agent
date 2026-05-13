@@ -2282,6 +2282,8 @@ test("executeRelayDocumentSearch builds a filename/path index from metadata for 
     assert.equal(first.diagnostics.filenameIndex.mode, "persistent");
     assert.equal(first.diagnostics.filenameIndex.inMemoryFileCount, 1);
     assert.ok(first.diagnostics.filenameIndex.inMemoryTermCount >= 1);
+    assert.equal(first.results[0].score_breakdown.components.rrf.applied, true);
+    assert.ok(first.results[0].score_breakdown.rrf_score > 0);
     assert.deepEqual(first.diagnostics.filenameIndex.readHits, []);
     assert.deepEqual(first.diagnostics.filenameIndex.readMisses, [resolve(workspace)]);
     assert.deepEqual(first.diagnostics.filenameIndex.writes, [resolve(workspace)]);

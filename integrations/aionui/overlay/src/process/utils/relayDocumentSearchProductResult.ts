@@ -269,6 +269,7 @@ export function normalizeRelayDocumentSearchScoreBreakdown(
   const contentScore = numberFromBreakdown(value, 'content');
   const tableCellScore = numberFromBreakdown(value, 'table_cell');
   const recencyScore = numberFromBreakdown(value, 'recency');
+  const rrfScore = numberFromBreakdown(value, 'rrf_score');
   const pinHistoryScore = numberFromBreakdown(value, 'memory') || numberFromBreakdown(value, 'pin_history');
   const groupingScore = numberFromBreakdown(value, 'grouping');
   const warningPenalty = numberFromBreakdown(value, 'warning_penalty');
@@ -307,6 +308,9 @@ export function normalizeRelayDocumentSearchScoreBreakdown(
     recency: scoreComponent(value, 'recency', recencyScore, 'modified_time_tie_breaker', {
       applied: recencyScore > 0,
     }),
+    rrf: scoreComponent(value, 'rrf', rrfScore, 'reciprocal_rank_fusion', {
+      applied: rrfScore > 0,
+    }),
     pin_history: scoreComponent(value, 'pin_history', pinHistoryScore, 'pinned_or_recent_user_signal'),
     grouping: scoreComponent(value, 'grouping', groupingScore, 'variant_grouping', {
       applied: Boolean(recordFromBreakdown(recordFromBreakdown(value, 'components') ?? {}, 'grouping')?.applied) ||
@@ -330,7 +334,7 @@ export function normalizeRelayDocumentSearchScoreBreakdown(
     totals,
     tieBreakers: asStringArray(value.tieBreakers).length
       ? asStringArray(value.tieBreakers)
-      : ['score', 'content_evidence', 'pin_history', 'base_score', 'warning_penalty', 'modified_time', 'display_path', 'file_id'],
+      : ['rrf_score', 'score', 'content_evidence', 'pin_history', 'base_score', 'warning_penalty', 'modified_time', 'display_path', 'file_id'],
     explanationCodes: asStringArray(value.explanationCodes),
   };
 }

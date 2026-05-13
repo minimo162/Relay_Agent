@@ -81,6 +81,13 @@ failure:
   latest / historical / balanced / explicit-period folder budget, guarantees
   at least some coverage across sibling period folders when possible, and
   surfaces the resulting `検索配分` to users;
+- filename/path search now uses a Docufinder-style inverted posting index with
+  CJK n-grams and Latin prefixes, so warm searches narrow candidate sets before
+  scoring rather than rescanning every cached path;
+- SQLite FTS probing now asks the local index for BM25-ordered snippets inside
+  the selected roots, and ranking uses deterministic reciprocal-rank fusion
+  across filename/path, SQLite FTS, parsed content, recency, folder role, and
+  user memory signals;
 - SQLite/FTS primary-path promotion behind the existing readiness gate, with
   user-local ParsedDocument, derived-content, filename, metadata, job, failure,
   and index-coordinator stores enabled from the AionUi document-search route by

@@ -112,6 +112,9 @@ export type RelayDocumentSearchIndexDbSearchRow = {
   entry_id: string;
   entry_kind: 'text' | 'table_cell';
   text: string;
+  rank?: number;
+  bm25_score?: number;
+  fts_snippet?: string;
   span_id?: string;
   preview_text?: string;
   title?: string;
@@ -1044,6 +1047,31 @@ function ftsQuery(terms: string[]): string {
     .join(' OR ');
 }
 
+function escapeLikePattern(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+function rootFilterSql(
+  alias: string,
+  fileIdExpression: string,
+  roots: string[] | undefined,
+): { joinSql: string; whereSql: string; params: string[] } {
+  const normalizedRoots = [...new Set((roots ?? []).map((root) => resolve(root)).filter(Boolean))];
+  if (!normalizedRoots.length) return { joinSql: '', whereSql: '', params: [] };
+  const clauses: string[] = [];
+  const params: string[] = [];
+  for (const root of normalizedRoots) {
+    const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+    clauses.push(`(${alias}.path = ? OR ${alias}.path LIKE ? ESCAPE '\\')`);
+    params.push(root, `${escapeLikePattern(rootPrefix)}%`);
+  }
+  return {
+    joinSql: `JOIN file_metadata ${alias} ON ${alias}.file_id = ${fileIdExpression}`,
+    whereSql: `AND (${clauses.join(' OR ')})`,
+    params,
+  };
+}
+
 function boundedSearchMaxRows(value: number | undefined): number {
   return Math.max(1, Math.min(value ?? 20, 100));
 }
@@ -1058,6 +1086,9 @@ function parseSearchRows(rows: unknown[], kind: 'text' | 'table_cell'): RelayDoc
         entry_kind: kind,
         text: String(row.text ?? ''),
       };
+      if (typeof row.rank === 'number' && Number.isFinite(row.rank)) parsed.rank = row.rank;
+      if (typeof row.bm25_score === 'number' && Number.isFinite(row.bm25_score)) parsed.bm25_score = row.bm25_score;
+      if (typeof row.fts_snippet === 'string') parsed.fts_snippet = row.fts_snippet;
       if (typeof row.span_id === 'string') parsed.span_id = row.span_id;
       if (typeof row.preview_text === 'string') parsed.preview_text = row.preview_text;
       if (typeof row.title === 'string') parsed.title = row.title;
@@ -1085,7 +1116,7 @@ function parseAnchorJson(value: unknown): Record<string, unknown> | undefined {
 
 export async function searchRelayDocumentSearchIndexDbFts(
   terms: string[],
-  options: RelayDocumentSearchIndexDbOptions & { maxRows?: number } = {},
+  options: RelayDocumentSearchIndexDbOptions & { maxRows?: number; roots?: string[] } = {},
 ): Promise<RelayDocumentSearchIndexDbSearchResult> {
   const query = ftsQuery(terms);
   const maxRows = boundedSearchMaxRows(options.maxRows);
@@ -1130,11 +1161,15 @@ export async function searchRelayDocumentSearchIndexDbFts(
       };
     }
     const prepare = requirePrepare(db);
+    const contentRootFilter = rootFilterSql('content_file_metadata', 'content_nodes_fts.file_id', options.roots);
+    const tableRootFilter = rootFilterSql('table_file_metadata', 'table_cells_fts.file_id', options.roots);
     const textRows = prepare(`
       SELECT
         content_nodes_fts.file_id,
         content_nodes_fts.node_id AS entry_id,
         content_nodes_fts.text,
+        bm25(content_nodes_fts) AS bm25_score,
+        snippet(content_nodes_fts, 2, '[[HL]]', '[[/HL]]', '...', 48) AS fts_snippet,
         preview_spans.span_id,
         preview_spans.preview_text,
         preview_spans.title,
@@ -1144,17 +1179,22 @@ export async function searchRelayDocumentSearchIndexDbFts(
         preview_spans.parser_version,
         preview_spans.anchor_json
       FROM content_nodes_fts
+      ${contentRootFilter.joinSql}
       LEFT JOIN preview_spans
         ON preview_spans.file_id = content_nodes_fts.file_id
         AND preview_spans.entry_id = content_nodes_fts.node_id
       WHERE content_nodes_fts MATCH ?
+      ${contentRootFilter.whereSql}
+      ORDER BY bm25_score ASC, content_nodes_fts.file_id ASC, content_nodes_fts.node_id ASC
       LIMIT ?
-    `).all?.(query, maxRows) ?? [];
+    `).all?.(query, ...contentRootFilter.params, maxRows) ?? [];
     const tableRows = prepare(`
       SELECT
         table_cells_fts.file_id,
         table_cells_fts.table_id AS entry_id,
         table_cells_fts.text,
+        bm25(table_cells_fts) AS bm25_score,
+        snippet(table_cells_fts, 3, '[[HL]]', '[[/HL]]', '...', 48) AS fts_snippet,
         preview_spans.span_id,
         preview_spans.preview_text,
         preview_spans.title,
@@ -1164,12 +1204,15 @@ export async function searchRelayDocumentSearchIndexDbFts(
         preview_spans.parser_version,
         preview_spans.anchor_json
       FROM table_cells_fts
+      ${tableRootFilter.joinSql}
       LEFT JOIN preview_spans
         ON preview_spans.file_id = table_cells_fts.file_id
         AND preview_spans.entry_id = table_cells_fts.table_id
       WHERE table_cells_fts MATCH ?
+      ${tableRootFilter.whereSql}
+      ORDER BY bm25_score ASC, table_cells_fts.file_id ASC, table_cells_fts.table_id ASC
       LIMIT ?
-    `).all?.(query, maxRows) ?? [];
+    `).all?.(query, ...tableRootFilter.params, maxRows) ?? [];
     const rows = [
       ...parseSearchRows(textRows, 'text'),
       ...parseSearchRows(tableRows, 'table_cell'),
