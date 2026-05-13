@@ -269,6 +269,7 @@ type RankedCandidate = {
   filenameScore: number;
   pathScore: number;
   termScore: number;
+  folderRoleScore: number;
   contentScore: number;
   indexDbScore: number;
   indexDbUncappedScore: number;
@@ -834,12 +835,33 @@ function recencyScoreForCandidate(
 function candidateBucketForFolderRoles(
   folderRoles: RelayDocumentSearchFolderRoleReport,
 ): RelayDocumentSearchCandidateBucket {
-  const roles = new Set([folderRoles.primaryRole, ...folderRoles.roles].filter(Boolean));
-  if (roles.has('backup')) return 'backup_or_archive';
-  if (roles.has('filing') || roles.has('output')) return 'disclosure_output';
-  if (roles.has('audit') || roles.has('review')) return 'review_or_audit';
+  const roles = new Set([
+    folderRoles.primaryRole,
+    ...folderRoles.roles.map((role) => role.role),
+  ].filter(Boolean));
   if (roles.has('source') || roles.has('work')) return 'direct_source_workpaper';
+  if (roles.has('backup')) return 'backup_or_archive';
+  if (roles.has('audit') || roles.has('review')) return 'review_or_audit';
+  if (roles.has('filing') || roles.has('output')) return 'disclosure_output';
   return 'uncategorized';
+}
+
+function folderRoleScoreForCandidate(file: FileMetadata): { score: number; reasons: string[] } {
+  const bucket = candidateBucketForFolderRoles(classifyRelayDocumentSearchFolderRoles(file.displayPath));
+  switch (bucket) {
+    case 'direct_source_workpaper':
+      return { score: 4, reasons: ['folder_role:direct_source_workpaper'] };
+    case 'supporting_evidence':
+      return { score: 1, reasons: ['folder_role:supporting_evidence'] };
+    case 'review_or_audit':
+      return { score: -2, reasons: ['folder_role:review_or_audit'] };
+    case 'disclosure_output':
+      return { score: -3, reasons: ['folder_role:disclosure_output'] };
+    case 'backup_or_archive':
+      return { score: -5, reasons: ['folder_role:backup_or_archive'] };
+    default:
+      return { score: 0, reasons: [] };
+  }
 }
 
 function summarizeCandidateBuckets(
@@ -1005,6 +1027,7 @@ function scoreBreakdownForCandidate(
   const filenameReasonCount = candidate.reasons.filter((reason) => reason.startsWith('filename:')).length;
   const pathReasonCount = candidate.reasons.filter((reason) => reason.startsWith('path:')).length;
   const termReasonCount = candidate.reasons.filter((reason) => reason.startsWith('term:')).length;
+  const folderRoleReasonCount = candidate.reasons.filter((reason) => reason.startsWith('folder_role:')).length;
   const explanationCodes = [...candidate.reasons, ...candidate.rankingWarnings.map((warning) => `warning:${warning}`)];
   const tieBreakers = [
     'score',
@@ -1027,6 +1050,7 @@ function scoreBreakdownForCandidate(
     filename_score: candidate.filenameScore,
     path_score: candidate.pathScore,
     term_score: candidate.termScore,
+    folder_role: candidate.folderRoleScore,
     sqlite_fts: candidate.indexDbScore,
     sqlite_fts_uncapped: candidate.indexDbUncappedScore,
     sqlite_fts_cap_loss: candidate.indexDbScoreCapLoss,
@@ -1049,6 +1073,9 @@ function scoreBreakdownForCandidate(
       }),
       keyword: scoreComponent(candidate.termScore, candidate.termScore > 0, 'normalized_keyword_match', {
         count: termReasonCount,
+      }),
+      folder_role: scoreComponent(candidate.folderRoleScore, candidate.folderRoleScore !== 0, 'folder_role_preference', {
+        count: folderRoleReasonCount,
       }),
       sqlite_fts: scoreComponent(candidate.indexDbScore, candidate.indexDbScore > 0, 'sqlite_fts_match', {
         rawScore: candidate.indexDbUncappedScore,
@@ -1079,6 +1106,7 @@ function scoreBreakdownForCandidate(
         details: {
           activePath,
           filenamePathKeywordScore: candidate.filenameScore + candidate.pathScore + candidate.termScore,
+          folderRoleScore: candidate.folderRoleScore,
           contentScore: candidate.contentScore,
           sqliteFtsScore: candidate.indexDbScore,
           recencyScore: candidate.recencyScore,
@@ -1117,6 +1145,7 @@ function rankingScoreBreakdownSummary(
       filename: sum(returned, (candidate) => candidate.filenameScore),
       path: sum(returned, (candidate) => candidate.pathScore),
       keyword: sum(returned, (candidate) => candidate.termScore),
+      folder_role: sum(returned, (candidate) => candidate.folderRoleScore),
       sqlite_fts: sum(returned, (candidate) => candidate.indexDbScore),
       content: sum(returned, (candidate) => candidate.contentScore),
       table_cell: sum(returned, (candidate) =>
@@ -3127,6 +3156,7 @@ export async function executeRelayDocumentSearch(
       const filenameComponent = scoreFromReasons(filenameScore.reasons, 'filename:', 5);
       const pathComponent = scoreFromReasons(filenameScore.reasons, 'path:', 2);
       const termComponent = scoreFromReasons(filenameScore.reasons, 'term:', 1);
+      const folderRoleScore = folderRoleScoreForCandidate(file);
       const contentComponent = evidence?.source === 'sqlite_fts' ? 0 : evidence?.score ?? 0;
       const indexDbComponent = evidence?.source === 'sqlite_fts'
         ? evidence.score
@@ -3144,17 +3174,24 @@ export async function executeRelayDocumentSearch(
           ? indexDbSearchProbe.scoreCapLossByFileId.get(file.fileId) ?? 0
           : 0;
       const recencyScore = recencyScoreForCandidate(file, relayQueryPlan.recencyPreference, options.now ?? new Date());
-      const baseScore = filenameScore.score + memoryScore.score + contentComponent + indexDbComponent + recencyScore;
+      const baseScore =
+        filenameScore.score +
+        folderRoleScore.score +
+        memoryScore.score +
+        contentComponent +
+        indexDbComponent +
+        recencyScore;
       const rankingWarnings = rankingWarningsForCandidate(file, request, Boolean(evidence));
       const penalty = warningPenalty(rankingWarnings, request);
       return {
         file,
         score: Math.max(0, baseScore - penalty),
         baseScore,
-        reasons: [...filenameScore.reasons, ...memoryScore.reasons],
+        reasons: [...filenameScore.reasons, ...folderRoleScore.reasons, ...memoryScore.reasons],
         filenameScore: filenameComponent,
         pathScore: pathComponent,
         termScore: termComponent,
+        folderRoleScore: folderRoleScore.score,
         contentScore: contentComponent,
         indexDbScore: indexDbComponent,
         indexDbUncappedScore,

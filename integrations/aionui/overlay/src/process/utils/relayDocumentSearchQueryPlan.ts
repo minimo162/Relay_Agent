@@ -22,11 +22,13 @@ export type RelayDocumentSearchQueryPlanV1 = {
   roots: string[];
   normalizedTerms: string[];
   synonymExpansions: Array<{ source: string; terms: string[] }>;
+  copilotHintSummary?: string;
   periodHints: string[];
   fileTypeHints: string[];
   rejectedTokens: Array<{ token: string; reason: string }>;
   ignoredIntentTerms: string[];
   excludedTerms: string[];
+  demoteTerms: string[];
   recencyPreference: 'neutral' | 'prefer_recent' | 'prefer_older';
   confirmationPolicy: 'candidate_ok' | 'content_required';
 };
@@ -297,12 +299,31 @@ export function buildRelayDocumentSearchQueryPlan(
     }
     synonymExpansions.push({ source: synonym.source, terms: [...new Set(normalizedTerms)] });
   }
+  const copilotHintTerms = new Set<string>();
+  if (request.queryPlanHints) {
+    for (const term of request.queryPlanHints.expandedTerms) {
+      addTerm(terms, term);
+      addTerm(copilotHintTerms, term);
+    }
+    for (const term of request.queryPlanHints.supportTerms) {
+      addTerm(terms, term);
+      addTerm(copilotHintTerms, term);
+    }
+    if (copilotHintTerms.size > 0) {
+      synonymExpansions.push({ source: 'copilot_query_plan', terms: [...copilotHintTerms] });
+    }
+  }
 
   const periods = periodHints(request.query);
   for (const hint of periods) addTerm(terms, hint);
-  const hints = fileTypeHints(request.query, request);
+  const hints = new Set(fileTypeHints(request.query, request));
+  for (const hint of request.queryPlanHints?.fileTypeHints ?? []) {
+    if (hint !== 'any') hints.add(hint);
+  }
   const policy = confirmationPolicy(request);
   const mode = modeForRequest(request, policy);
+  const demotions = new Set<string>();
+  for (const term of request.queryPlanHints?.demoteTerms ?? []) addTerm(demotions, term);
   return {
     schemaVersion: RELAY_DOCUMENT_SEARCH_QUERY_PLAN_CONTRACT,
     normalizerVersion: RELAY_DOCUMENT_SEARCH_QUERY_NORMALIZER_VERSION,
@@ -313,11 +334,13 @@ export function buildRelayDocumentSearchQueryPlan(
     roots,
     normalizedTerms: [...terms],
     synonymExpansions,
+    ...(request.queryPlanHints?.summary ? { copilotHintSummary: request.queryPlanHints.summary } : {}),
     periodHints: periods,
-    fileTypeHints: hints,
+    fileTypeHints: [...hints],
     rejectedTokens,
     ignoredIntentTerms,
     excludedTerms: excludedTerms(request.query),
+    demoteTerms: [...demotions],
     recencyPreference: recencyPreference(request.query),
     confirmationPolicy: policy,
   };

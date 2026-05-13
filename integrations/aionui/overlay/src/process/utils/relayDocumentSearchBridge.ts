@@ -32,6 +32,8 @@ import {
 
 export const RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT =
   'RelayDocumentSearchAionUiResultFlow.v1' as const;
+export const RELAY_DOCUMENT_SEARCH_RESULT_SUMMARY_CONTRACT =
+  'RelayDocumentSearchResultSummary.v1' as const;
 
 export type RelayDocumentSearchBridgeOptions = RelayDocumentSearchJobRunOptions & {
   advertisedTools?: unknown[];
@@ -46,15 +48,17 @@ export type RelayDocumentSearchAionUiResultFlowV1 = {
   toolName: typeof RELAY_DOCUMENT_SEARCH_TOOL_NAME;
   toolCallId?: string;
   resultContract: typeof RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT;
+  resultSummaryContract: typeof RELAY_DOCUMENT_SEARCH_RESULT_SUMMARY_CONTRACT;
   displayContract: typeof RELAY_DOCUMENT_SEARCH_DISPLAY_CONTRACT;
   resultFlowContract: typeof RELAY_DOCUMENT_SEARCH_RESULT_FLOW_CONTRACT;
   presentation: {
     rendererOwner: 'AionUi';
     structuredResultCardsPrimary: true;
     copilotProseSecondary: true;
+    rawResultOmitted: true;
   };
-  result: RelayDocumentSearchResultV1;
-  display: RelayDocumentSearchDisplayV1;
+  resultSummary: Record<string, unknown>;
+  display: Record<string, unknown>;
 };
 
 export type RelayDocumentSearchBridgeExecution = {
@@ -177,6 +181,7 @@ export const relayDocumentSearchBridgeToolDefinition = {
   handlerExport: 'handleRelayDocumentSearchToolCall',
   displayAdapterExport: 'relayDocumentSearchResultToDisplayModel',
   aionuiResultFlowExport: 'relayDocumentSearchExecutionToAionUiResultFlow',
+  resultSummaryContract: RELAY_DOCUMENT_SEARCH_RESULT_SUMMARY_CONTRACT,
   resultFlowPolicy: {
     rendererOwner: 'AionUi',
     structuredResultCardsPrimary: true,
@@ -313,15 +318,136 @@ export function relayDocumentSearchExecutionToAionUiResultFlow(
     toolName: RELAY_DOCUMENT_SEARCH_TOOL_NAME,
     toolCallId: input.toolCallId,
     resultContract: RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT,
+    resultSummaryContract: RELAY_DOCUMENT_SEARCH_RESULT_SUMMARY_CONTRACT,
     displayContract: RELAY_DOCUMENT_SEARCH_DISPLAY_CONTRACT,
     resultFlowContract: RELAY_DOCUMENT_SEARCH_RESULT_FLOW_CONTRACT,
     presentation: {
       rendererOwner: 'AionUi',
       structuredResultCardsPrimary: true,
       copilotProseSecondary: true,
+      rawResultOmitted: true,
     },
-    result: input.result,
-    display: input.display,
+    resultSummary: compactResultSummaryForToolOutput(input.result),
+    display: compactDisplayForToolOutput(input.display),
+  };
+}
+
+function compactStringArray(values: unknown, limit = 12): string[] {
+  if (!Array.isArray(values)) return [];
+  return values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).slice(0, limit);
+}
+
+function compactCardsForToolOutput(cards: RelayDocumentSearchDisplayV1['cards']): Array<Record<string, unknown>> {
+  return cards.map((card) => ({
+    resultId: card.resultId,
+    position: card.position,
+    selected: card.selected,
+    title: card.title,
+    path: card.path,
+    matchLabel: card.matchLabel,
+    evidenceLabel: card.evidenceLabel,
+    sourceLabels: card.sourceLabels,
+    rankingLabel: card.rankingLabel,
+    previewLabel: card.previewLabel,
+    openLabel: card.openLabel,
+    warningLabels: card.warningLabels,
+    folderRoleLabel: card.folderRoleLabel,
+    groupLabel: card.groupLabel,
+    collapsedGroupCount: card.collapsedGroupCount,
+    actions: card.actions.filter((action) =>
+      ['preview', 'open-file', 'copy-path', 'refine-search', 'use-as-evidence'].includes(action),
+    ),
+  }));
+}
+
+function compactDetailSectionsForToolOutput(
+  sections: RelayDocumentSearchDisplayV1['detailSections'],
+): Array<Record<string, unknown>> {
+  const allowedTitles = new Set(['回答', '回答下書き', '確認が必要な点', '索引状態']);
+  return sections
+    .filter((section) => !section.supportOnly && allowedTitles.has(section.title))
+    .slice(0, 4)
+    .map((section) => ({
+      level: section.level,
+      title: section.title,
+      items: section.items.slice(0, 8).map((item) => item.length > 280 ? `${item.slice(0, 277)}...` : item),
+      initiallyCollapsed: section.initiallyCollapsed,
+    }));
+}
+
+function compactDisplayForToolOutput(display: RelayDocumentSearchDisplayV1): Record<string, unknown> {
+  return {
+    schemaVersion: display.schemaVersion,
+    sourceSchemaVersion: display.sourceSchemaVersion,
+    resultFlow: display.resultFlow,
+    status: display.status,
+    statusLabel: display.statusLabel,
+    summary: display.summary,
+    answerSummary: display.answerSummary,
+    answerSourceLabel: display.answerSourceLabel,
+    localDraftSummary: display.localDraftSummary,
+    indexStatus: {
+      state: display.indexStatus.state,
+      label: display.indexStatus.label,
+      activePathLabel: display.indexStatus.activePathLabel,
+      message: display.indexStatus.message,
+      reasons: display.indexStatus.reasons,
+    },
+    partialResultExplanations: display.partialResultExplanations,
+    cards: compactCardsForToolOutput(display.cards),
+    hasMore: display.hasMore,
+    coverageLabel: display.coverageLabel,
+    emptyStateGuidance: display.emptyStateGuidance,
+    refineActions: display.refineActions,
+    totalResults: display.totalResults,
+    shownResults: display.shownResults,
+    nextOffset: display.nextOffset,
+    continuationAction: display.continuationAction,
+    detailSections: compactDetailSectionsForToolOutput(display.detailSections),
+    supportDetailsAvailable: display.supportDetailsAvailable,
+  };
+}
+
+function compactResultSummaryForToolOutput(result: RelayDocumentSearchResultV1): Record<string, unknown> {
+  const queryPlan = result.queryPlan && typeof result.queryPlan === 'object' && !Array.isArray(result.queryPlan)
+    ? result.queryPlan as Record<string, unknown>
+    : {};
+  const diagnostics = result.diagnostics && typeof result.diagnostics === 'object' && !Array.isArray(result.diagnostics)
+    ? result.diagnostics as Record<string, unknown>
+    : {};
+  return {
+    schemaVersion: RELAY_DOCUMENT_SEARCH_RESULT_SUMMARY_CONTRACT,
+    sourceSchemaVersion: result.schemaVersion,
+    status: result.status,
+    progress: result.progress,
+    job: result.job,
+    correlation: result.correlation,
+    queryPlan: {
+      mode: queryPlan.mode,
+      searchModeReason: queryPlan.searchModeReason,
+      contentStrategy: queryPlan.contentStrategy,
+      query: queryPlan.query,
+      roots: queryPlan.roots,
+      normalizedTerms: compactStringArray(queryPlan.normalizedTerms, 20),
+      copilotHintSummary: queryPlan.copilotHintSummary,
+      fileTypes: queryPlan.fileTypes,
+      fileTypeHints: queryPlan.fileTypeHints,
+      demoteTerms: compactStringArray(queryPlan.demoteTerms, 12),
+      evidence: queryPlan.evidence,
+      confirmationPolicy: queryPlan.confirmationPolicy,
+    },
+    coverage: result.coverage,
+    candidateBuckets: diagnostics.candidateBuckets,
+    totalResults: result.results.length,
+    returnedDisplayResults: Math.min(result.results.length, 20),
+    resultFieldsOmitted: [
+      'readerCapabilities',
+      'score_breakdown',
+      'file_metadata',
+      'action_models',
+      'diagnostics.queryTrace',
+      'evidencePack',
+    ],
   };
 }
 

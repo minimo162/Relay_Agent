@@ -467,6 +467,12 @@ function scoreBreakdownLabels(candidate: Record<string, unknown>): string[] {
     numberFromRecord(scoreBreakdown, 'term_score') > 0
       ? `キーワード +${numberFromRecord(scoreBreakdown, 'term_score')}`
       : undefined,
+    numberFromRecord(scoreBreakdown, 'folder_role') > 0
+      ? `作業フォルダ +${numberFromRecord(scoreBreakdown, 'folder_role')}`
+      : undefined,
+    numberFromRecord(scoreBreakdown, 'folder_role') < 0
+      ? `保管/監査フォルダ ${numberFromRecord(scoreBreakdown, 'folder_role')}`
+      : undefined,
     numberFromRecord(scoreBreakdown, 'sqlite_fts') > 0
       ? `SQLite FTS +${numberFromRecord(scoreBreakdown, 'sqlite_fts')}`
       : undefined,

@@ -343,6 +343,7 @@ test("Relay document search bridge exposes a contract-bound tool definition", as
     assert.equal(definition.function.name, "relay_document_search");
     assert.equal(definition.requestContract, "RelayDocumentSearchRequest.v1");
     assert.equal(definition.resultContract, "RelayDocumentSearchResult.v1");
+    assert.equal(definition.resultSummaryContract, "RelayDocumentSearchResultSummary.v1");
     assert.equal(definition.displayContract, "RelayDocumentSearchDisplay.v1");
     assert.equal(definition.resultFlowContract, "RelayDocumentSearchResultFlow.v1");
     assert.equal(definition.aionuiResultFlowContract, "RelayDocumentSearchAionUiResultFlow.v1");
@@ -410,13 +411,18 @@ test("Relay document search bridge executes exact OpenAI tool calls", async () =
     assert.equal(execution.display.resultFlow.structuredResultCardsPrimary, true);
     assert.equal(execution.display.resultFlow.copilotProseSecondary, true);
     assert.equal(execution.aionuiResultFlow.schemaVersion, "RelayDocumentSearchAionUiResultFlow.v1");
-    assert.equal(execution.aionuiResultFlow.result.schemaVersion, "RelayDocumentSearchResult.v1");
+    assert.equal(execution.aionuiResultFlow.resultSummary.schemaVersion, "RelayDocumentSearchResultSummary.v1");
+    assert.equal(execution.aionuiResultFlow.resultSummary.sourceSchemaVersion, "RelayDocumentSearchResult.v1");
     assert.equal(execution.aionuiResultFlow.display.schemaVersion, "RelayDocumentSearchDisplay.v1");
     assert.equal(execution.aionuiResultFlow.presentation.structuredResultCardsPrimary, true);
     assert.equal(execution.aionuiResultFlow.presentation.copilotProseSecondary, true);
+    assert.equal(execution.aionuiResultFlow.presentation.rawResultOmitted, true);
+    assert.equal(execution.aionuiResultFlow.result, undefined);
     assert.match(execution.content, /FY160-1Q_連結CFS精算表\.xlsx/);
     assert.match(execution.aionuiContent, /RelayDocumentSearchAionUiResultFlow\.v1/);
     assert.match(execution.aionuiContent, /RelayDocumentSearchDisplay\.v1/);
+    assert.doesNotMatch(execution.aionuiContent, /"readerCapabilities"\s*:/);
+    assert.doesNotMatch(execution.aionuiContent, /"score_breakdown"\s*:/);
 
     const toolMessage = module.relayDocumentSearchExecutionToOpenAiToolMessage(execution);
     assert.deepEqual(toolMessage, {

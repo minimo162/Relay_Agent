@@ -256,6 +256,7 @@ var TOOL_PROTOCOL_MODES = Object.freeze({
 });
 var RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT = "RelayDocumentSearchRequest.v1";
 var RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT = "RelayDocumentSearchResult.v1";
+var RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT = "RelayDocumentSearchCopilotQueryPlan.v1";
 var RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME = "relay_document_search";
 var RELAY_DOCUMENT_SEARCH_APPROVED_ALIASES = Object.freeze([
   "relay_document_search",
@@ -5964,6 +5965,9 @@ function formatOpenAiToolProtocolPrompt(tools) {
 
 function formatPromptForCopilot(params = {}) {
   const userPrompt = String(params.userPrompt || "");
+  if (params.relayDocumentSearchQueryPlanCompiler === true) {
+    return formatRelayDocumentSearchQueryPlanPrompt(params);
+  }
   if (params.requiresStrictToolCalls === true) {
     return [
       params.systemPrompt || "",
@@ -5971,6 +5975,9 @@ function formatPromptForCopilot(params = {}) {
       JSON.stringify(userPrompt),
       "Compile the USER REQUEST DATA into the required JSON object now.",
     ].filter(Boolean).join("\n\n");
+  }
+  if (params.hasToolResultMessages === true && isRelayDocumentSearchToolResultTranscript(userPrompt)) {
+    return formatRelayDocumentSearchResultSummaryPrompt(params);
   }
   if (params.hasToolResultMessages === true) {
     return [
@@ -5993,14 +6000,103 @@ function formatPromptForCopilot(params = {}) {
   return params.systemPrompt ? `${params.systemPrompt}\n\n${userPrompt}` : userPrompt;
 }
 
+function formatRelayDocumentSearchQueryPlanPrompt(params = {}) {
+  const userPrompt = String(params.userPrompt || "");
+  const root = deterministicDocumentSearchRoot(params);
+  const tool = params.relayDocumentSearchTargetTool || null;
+  const toolName = String(params.relayDocumentSearchTargetToolName || tool?.function?.name || RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME);
+  const parameters = tool?.function?.parameters && typeof tool.function.parameters === "object"
+    ? tool.function.parameters
+    : { type: "object" };
+  return [
+    "RELAY DOCUMENT SEARCH QUERY PLAN COMPILER",
+    "Mode: document_search_query_plan. This is not a chat-answer task.",
+    "Your only job is to fill a JSON query-plan object for Relay Agent's document search tool.",
+    "Do not call tools. Do not use Microsoft 365 search, SharePoint search, browsing, plugins, memory, or file lookup.",
+    "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
+    "Use this schema exactly:",
+    JSON.stringify({
+      schemaVersion: RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT,
+      rawQuery: userPrompt,
+      intent: "find_files",
+      evidence: "candidate",
+      thoroughness: "quick",
+      expandedTerms: ["term or synonym"],
+      supportTerms: ["supporting workflow term"],
+      demoteTerms: ["output/review/backup term to avoid overranking"],
+      fileTypeHints: ["any"],
+      summary: "short reason for the expansion",
+    }),
+    "Rules:",
+    `- schemaVersion must be ${RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT}.`,
+    "- rawQuery must equal the USER REQUEST DATA exactly.",
+    "- intent must be one of find_files, answer_with_evidence, summarize_with_evidence, inspect_file, similar_documents.",
+    "- evidence must be one of none, candidate, required.",
+    "- thoroughness must be quick for search-only candidate discovery and thorough only when the user asks for contents, review, confirmation, comparison, or summary.",
+    "- expandedTerms should include direct synonyms, abbreviations, and Japanese/English variants from the user's business meaning.",
+    "- supportTerms may include related workpaper terms that improve recall without narrowing the root.",
+    "- demoteTerms should include terms such as ファイリング, XSA, 開示, 監査, backup only when those are likely outputs/review copies rather than source workpapers.",
+    "- fileTypeHints may include any, txt, md, csv, docx, xlsx, xlsm, pptx, pdf. Use any unless the user explicitly narrows file type or the task clearly needs Office/PDF content.",
+    "- Do not include roots, path, toolName, recipient_name, tool_calls, tool_uses, pattern, command, or any field not shown in the schema.",
+    "Finance/CFS hint: for キャッシュフロー計算書, include terms such as キャッシュフロー, CFS, CF, 連結CF, 連結CFS, and source/workpaper terms such as 精算表, 合算, ADJ, 連結決算 when appropriate.",
+    root ? `Relay-selected root context (do not rewrite it): ${root}` : "Relay-selected root context: none.",
+    `Target tool: ${toolName}`,
+    `Target tool schema: ${JSON.stringify(parameters)}`,
+    "USER REQUEST DATA:",
+    JSON.stringify(userPrompt),
+    "Return the query-plan JSON object now.",
+  ].join("\n");
+}
+
+function isRelayDocumentSearchToolResultTranscript(text = "") {
+  return /RelayDocumentSearchAionUiResultFlow\.v1|RelayDocumentSearchResultSummary\.v1|RelayDocumentSearchResult\.v1|relay_document_search/iu.test(
+    String(text || ""),
+  );
+}
+
+function formatRelayDocumentSearchResultSummaryPrompt(params = {}) {
+  return [
+    params.systemPrompt || "",
+    "RELAY DOCUMENT SEARCH RESULT SUMMARY WRITER",
+    "The OpenCode executor has already produced Relay document-search results in TRANSCRIPT DATA.",
+    "Write the final user-facing answer from those tool results only. Do not call Microsoft 365 search, SharePoint search, browsing, plugins, memory, or file lookup.",
+    "Do not invent file paths, file contents, document status, latest/official status, or evidence that is not in TRANSCRIPT DATA.",
+    "If the result says filename_only, ファイル名候補, or 中身はまだ確認していません, label the files as candidates and say the content is not confirmed.",
+    "If the result is partial, truncated, or says only some files were scanned, state the visible coverage limit and do not claim the list is exhaustive.",
+    "For finance/CFS searches, separate direct source/workpaper candidates, supporting files, review/audit copies, disclosure/output files, and backups when those labels are available.",
+    "Do not call a file 必須, 中核, 正本, latest, or final unless the tool result explicitly proves it.",
+    "Keep the answer concise and actionable in the user's language.",
+    "TRANSCRIPT DATA:",
+    JSON.stringify(String(params.userPrompt || "")),
+    "Return the final answer now.",
+  ].filter(Boolean).join("\n\n");
+}
+
 async function startOpenAiCompletionWithToolRepair(session, prompt) {
   if (prompt.toolResultFailure) {
     return buildToolResultFailureRecord(prompt);
   }
+  const documentSearchPlanRecord = await buildCopilotDocumentSearchToolCallRecord(session, prompt);
+  if (documentSearchPlanRecord) return documentSearchPlanRecord;
   const deterministicRecord = buildDeterministicRequiredToolCallRecord(prompt);
   if (deterministicRecord) return deterministicRecord;
   prompt.relayActiveRequestId = prompt.relayRequestId;
   const record = await session.startOrJoinDescribe(prompt);
+  const documentSearchSummaryValidation = validateRelayDocumentSearchSummaryRecord(record, prompt);
+  if (!documentSearchSummaryValidation.ok) {
+    return {
+      status: 502,
+      body: openAiErrorBody(
+        "M365 Copilot returned a document-search summary that violates Relay's evidence rules.",
+        "invalid_response_format",
+        "relay_document_search_summary_validation_failed",
+        {
+          errors: documentSearchSummaryValidation.errors,
+          response_excerpt: openAiMessageContent(record).slice(0, 500),
+        },
+      ),
+    };
+  }
   if (!shouldAttemptOpenAiToolRepair(record, prompt)) return record;
 
   const invalidText = openAiMessageContent(record);
@@ -6043,10 +6139,296 @@ async function startOpenAiCompletionWithToolRepair(session, prompt) {
   };
 }
 
+function documentSearchQueryPlanTarget(prompt = {}) {
+  if (prompt.hasToolResultMessages === true) return null;
+  if (prompt.openAiToolRepairAttempt === true) return null;
+  if (prompt.relayDocumentSearchQueryPlanCompiler === true) return null;
+  if (prompt.requiresStrictToolCalls !== true) return null;
+  const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
+  if (!isDocumentSearchIntent(toolIntent?.intent)) return null;
+  const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
+  const documentSearchTools = availableDocumentSearchTools(tools);
+  if (!documentSearchTools.length) return null;
+  const toolName = selectDeterministicDocumentSearchToolName(toolIntent, documentSearchTools);
+  if (!toolName) return null;
+  const tool = tools.find(
+    (candidate) => normalizeToolName(candidate?.function?.name || "").toLowerCase() === toolName.toLowerCase(),
+  );
+  if (!tool) return null;
+  return { toolIntent, toolName, tool };
+}
+
+async function buildCopilotDocumentSearchToolCallRecord(session, prompt = {}) {
+  const target = documentSearchQueryPlanTarget(prompt);
+  if (!target) return null;
+  const queryPlanPrompt = buildRelayDocumentSearchQueryPlanCompilerPrompt(prompt, target);
+  prompt.relayActiveRequestId = queryPlanPrompt.relayRequestId;
+  const record = await session.startOrJoinDescribe(queryPlanPrompt);
+  if (record.status !== 200) return record;
+  const validation = validateRelayDocumentSearchCopilotQueryPlanText(openAiMessageContent(record), prompt);
+  if (!validation.ok) {
+    return {
+      status: 502,
+      body: openAiErrorBody(
+        "M365 Copilot did not return a valid Relay document-search query plan.",
+        "invalid_response_format",
+        "relay_document_search_query_plan_validation_failed",
+        {
+          errors: validation.errors,
+          response_excerpt: openAiMessageContent(record).slice(0, 500),
+        },
+      ),
+    };
+  }
+  return buildDocumentSearchToolCallRecordFromQueryPlan(prompt, target.tool, target.toolName, validation.value);
+}
+
+function buildRelayDocumentSearchQueryPlanCompilerPrompt(prompt = {}, target = {}) {
+  return {
+    ...prompt,
+    tools: Array.isArray(prompt.tools) ? prompt.tools : [],
+    requiresStrictToolCalls: false,
+    relayDocumentSearchQueryPlanCompiler: true,
+    relayDocumentSearchTargetToolName: target.toolName || "",
+    relayDocumentSearchTargetTool: target.tool || null,
+    toolProtocolMode: "document_search_query_plan",
+    openAiToolChoice: "none",
+    relayRequestId: `${prompt.relayRequestId || openAiCompatRequestId({})}:document-search-query-plan1`,
+    relayRequestChain: String(prompt.relayRequestChain || prompt.relayRequestId || "").trim() || prompt.relayRequestId,
+    relayRequestAttempt: Number.isFinite(prompt.relayRequestAttempt) ? prompt.relayRequestAttempt + 1 : 2,
+    relayStageLabel: "document_search_query_plan1",
+    relayNewChat: false,
+    relayForceFreshChat: false,
+  };
+}
+
+function buildDocumentSearchToolCallRecordFromQueryPlan(prompt = {}, tool = null, toolName = "", queryPlan = {}) {
+  const selectedToolName = normalizeToolName(toolName || tool?.function?.name || RELAY_DOCUMENT_SEARCH_EXACT_TOOL_NAME);
+  const args = buildDocumentSearchArgsFromCopilotPlan(prompt, tool, queryPlan);
+  const body = buildOpenAiCompletionBody(
+    JSON.stringify({
+      tool_uses: [
+        {
+          recipient_name: `functions.${selectedToolName}`,
+          parameters: args,
+        },
+      ],
+    }),
+    prompt,
+  );
+  if (!recordHasOpenAiToolCalls({ body })) {
+    return {
+      status: 502,
+      body: openAiErrorBody(
+        "Relay could not compile the validated document-search query plan into a tool call.",
+        "invalid_response_format",
+        "relay_document_search_query_plan_compile_failed",
+      ),
+    };
+  }
+  return { status: 200, body };
+}
+
+function buildDocumentSearchArgsFromCopilotPlan(prompt = {}, tool = null, queryPlan = {}) {
+  const parameters = tool?.function?.parameters && typeof tool.function.parameters === "object"
+    ? tool.function.parameters
+    : {};
+  const properties = parameters.properties && typeof parameters.properties === "object"
+    ? parameters.properties
+    : {};
+  const hasProperties = Object.keys(properties).length > 0;
+  const hasProp = (name) => !hasProperties || Object.prototype.hasOwnProperty.call(properties, name);
+  const args = buildDeterministicDocumentSearchArgs(prompt, tool);
+  const intent = schemaEnumValue(properties.intent || {}, queryPlan.intent);
+  const evidence = schemaEnumValue(properties.evidence || {}, queryPlan.evidence);
+  const thoroughness = schemaEnumValue(properties.thoroughness || {}, queryPlan.thoroughness);
+  if (intent && hasProp("intent")) args.intent = intent;
+  if (evidence && hasProp("evidence")) args.evidence = evidence;
+  if (thoroughness && hasProp("thoroughness")) args.thoroughness = thoroughness;
+  if (hasProp("fileTypes") && Array.isArray(queryPlan.fileTypeHints) && queryPlan.fileTypeHints.length) {
+    args.fileTypes = [...new Set(queryPlan.fileTypeHints)];
+  }
+  if (hasProp("queryPlanHints")) {
+    args.queryPlanHints = {
+      schemaVersion: RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT,
+      rawQuery: queryPlan.rawQuery,
+      intent: queryPlan.intent,
+      evidence: queryPlan.evidence,
+      thoroughness: queryPlan.thoroughness,
+      expandedTerms: queryPlan.expandedTerms,
+      supportTerms: queryPlan.supportTerms,
+      demoteTerms: queryPlan.demoteTerms,
+      fileTypeHints: queryPlan.fileTypeHints,
+      summary: queryPlan.summary,
+    };
+  }
+  return args;
+}
+
+function validateRelayDocumentSearchCopilotQueryPlanText(text = "", prompt = {}) {
+  const raw = String(text || "").trim();
+  if (!raw) return { ok: false, errors: ["query plan response is empty"] };
+  if (!raw.startsWith("{") || !raw.endsWith("}")) {
+    return { ok: false, errors: ["query plan response must be exactly one JSON object with no prose or markdown"] };
+  }
+  const parsed = parseJsonCandidate(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, errors: ["query plan response must be valid JSON object"] };
+  }
+  return validateRelayDocumentSearchCopilotQueryPlan(parsed, prompt);
+}
+
+function validateRelayDocumentSearchCopilotQueryPlan(value = {}, prompt = {}) {
+  const errors = [];
+  const allowedFields = new Set([
+    "schemaVersion",
+    "rawQuery",
+    "intent",
+    "evidence",
+    "thoroughness",
+    "expandedTerms",
+    "supportTerms",
+    "demoteTerms",
+    "fileTypeHints",
+    "summary",
+  ]);
+  for (const field of Object.keys(value || {})) {
+    if (!allowedFields.has(field)) errors.push(`Unknown query plan field: ${field}`);
+  }
+  if (value.schemaVersion !== RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT) {
+    errors.push(`schemaVersion must be ${RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT}`);
+  }
+  const expectedRawQuery = String(prompt.userPrompt || "");
+  const rawQuery = typeof value.rawQuery === "string" ? value.rawQuery : "";
+  if (!rawQuery) errors.push("rawQuery is required");
+  if (rawQuery !== expectedRawQuery) errors.push("rawQuery must exactly match the original user request");
+  if (rawQuery.length > 2000) errors.push("rawQuery must be 2000 characters or less");
+  const intent = validateQueryPlanEnum(value.intent, [
+    "find_files",
+    "answer_with_evidence",
+    "summarize_with_evidence",
+    "inspect_file",
+    "similar_documents",
+  ], "find_files", "intent", errors);
+  const evidence = validateQueryPlanEnum(value.evidence, ["none", "candidate", "required"], "candidate", "evidence", errors);
+  const thoroughness = validateQueryPlanEnum(value.thoroughness, ["quick", "thorough"], "quick", "thoroughness", errors);
+  const expandedTerms = validateQueryPlanStringArray(value.expandedTerms, "expandedTerms", errors, 40);
+  const supportTerms = validateQueryPlanStringArray(value.supportTerms, "supportTerms", errors, 40);
+  const demoteTerms = validateQueryPlanStringArray(value.demoteTerms, "demoteTerms", errors, 40);
+  const fileTypeHints = validateQueryPlanEnumArray(
+    value.fileTypeHints,
+    ["any", "txt", "md", "csv", "docx", "xlsx", "xlsm", "pptx", "pdf"],
+    "fileTypeHints",
+    errors,
+    10,
+  );
+  const summary = typeof value.summary === "string" ? value.summary.trim().slice(0, 280) : "";
+  if (value.summary !== undefined && typeof value.summary !== "string") errors.push("summary must be a string");
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    errors: [],
+    value: {
+      schemaVersion: RELAY_DOCUMENT_SEARCH_COPILOT_QUERY_PLAN_CONTRACT,
+      rawQuery,
+      intent,
+      evidence,
+      thoroughness,
+      expandedTerms,
+      supportTerms,
+      demoteTerms,
+      fileTypeHints: fileTypeHints.length ? fileTypeHints : ["any"],
+      summary,
+    },
+  };
+}
+
+function validateQueryPlanEnum(value, allowed, fallback, field, errors) {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    errors.push(`${field} must be one of: ${allowed.join(", ")}`);
+    return fallback;
+  }
+  return value;
+}
+
+function validateQueryPlanStringArray(value, field, errors, maxItems) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be an array of strings`);
+    return [];
+  }
+  if (value.length > maxItems) errors.push(`${field} may contain at most ${maxItems} entries`);
+  const out = [];
+  for (const item of value.slice(0, maxItems)) {
+    if (typeof item !== "string" || !item.trim()) {
+      errors.push(`${field} entries must be non-empty strings`);
+      continue;
+    }
+    const normalized = item.trim();
+    if (normalized.length > 80) {
+      errors.push(`${field} entries must be 80 characters or less`);
+      continue;
+    }
+    if (/[\u0000-\u001f\u007f]/u.test(normalized)) {
+      errors.push(`${field} entries must not contain control characters`);
+      continue;
+    }
+    out.push(normalized);
+  }
+  return [...new Set(out)];
+}
+
+function validateQueryPlanEnumArray(value, allowed, field, errors, maxItems) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be an array`);
+    return [];
+  }
+  if (value.length > maxItems) errors.push(`${field} may contain at most ${maxItems} entries`);
+  const out = [];
+  for (const item of value.slice(0, maxItems)) {
+    if (typeof item !== "string" || !allowed.includes(item)) {
+      errors.push(`${field} entries must be one of: ${allowed.join(", ")}`);
+      continue;
+    }
+    out.push(item);
+  }
+  return [...new Set(out)];
+}
+
+function validateRelayDocumentSearchSummaryRecord(record, prompt = {}) {
+  if (!prompt.hasToolResultMessages || !isRelayDocumentSearchToolResultTranscript(prompt.userPrompt || "")) {
+    return { ok: true, errors: [] };
+  }
+  if (!record || record.status !== 200) return { ok: true, errors: [] };
+  if (recordHasOpenAiToolCalls(record)) return { ok: true, errors: [] };
+  const answer = openAiMessageContent(record);
+  const transcript = String(prompt.userPrompt || "");
+  const errors = [];
+  const candidateOnly =
+    /filename_only|ファイル名候補|中身はまだ確認していません|content is not confirmed|content_unconfirmed/iu.test(transcript);
+  const partial =
+    /"status"\s*:\s*"partial"|"truncated"\s*:\s*true|partial_filename_candidates|途中まで|未完了/iu.test(transcript);
+  if (candidateOnly) {
+    if (/中身(?:を)?確認しました|内容(?:を)?確認しました|本文(?:を)?確認しました|確認済み|本文に基づ|内容に基づ/iu.test(answer)) {
+      errors.push("filename-only results must not be described as content-confirmed");
+    }
+    if (/(?:必須|中核|正本|最新|latest|final)/iu.test(answer) && !/(?:候補|未確認|断定できない|まだ確認していません)/iu.test(answer)) {
+      errors.push("filename-only results must not be labeled as required/core/final/latest without an explicit caveat");
+    }
+  }
+  if (partial && /(?:すべて|全て|網羅|完全|exhaustive|complete)/iu.test(answer) && !/(?:途中|一部|未完了|範囲|partial|limited)/iu.test(answer)) {
+    errors.push("partial document-search results must not be presented as exhaustive");
+  }
+  return errors.length ? { ok: false, errors } : { ok: true, errors: [] };
+}
+
 function buildDeterministicRequiredToolCallRecord(prompt = {}) {
   if (prompt.hasToolResultMessages === true) return null;
   if (prompt.openAiToolRepairAttempt === true) return null;
   if (prompt.requiresStrictToolCalls !== true) return null;
+  if (documentSearchQueryPlanTarget(prompt)) return null;
   const toolIntent = prompt.toolIntent || classifyToolIntent(prompt);
   if (!isDocumentSearchIntent(toolIntent?.intent)) return null;
   const tools = Array.isArray(prompt.tools) ? prompt.tools : [];
@@ -7563,7 +7945,9 @@ if (isDirectEntry) {
 }
 
 export {
+  buildDocumentSearchToolCallRecordFromQueryPlan,
   buildDeterministicRequiredToolCallRecord,
+  buildRelayDocumentSearchQueryPlanCompilerPrompt,
   buildToolResultFailureRecord,
   buildOpenAiCompletionBody,
   classifyToolIntent,
@@ -7573,5 +7957,7 @@ export {
   main,
   parseOpenAiRequest,
   shouldAttemptOpenAiToolRepair,
+  validateRelayDocumentSearchCopilotQueryPlan,
+  validateRelayDocumentSearchSummaryRecord,
   writeOpenAiChatCompletionStream,
 };

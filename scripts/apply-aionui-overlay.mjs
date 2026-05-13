@@ -1796,7 +1796,7 @@ export function patchTeamGuideMcpStdioContent(input) {
     "function createRelayDocumentSearchTool(server: McpServer): void {",
     "  server.tool(",
     "    RELAY_DOCUMENT_SEARCH_TOOL_NAME,",
-    "    `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/text lookup, PDF filename discovery, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,",
+    "    `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/text lookup, PDF filename discovery, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with a compact result summary, structured result cards, continuation, selection, and secondary Copilot prose metadata. The full raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT} stays inside Relay diagnostics instead of being returned to chat.`,",
     "    {",
     "      query: z.string().min(1).max(2000).describe('The user request in their own words.'),",
     "      roots: z",
@@ -1872,64 +1872,148 @@ export function patchTeamGuideMcpStdioContent(input) {
 }
 
 export function patchAionrsAgentContent(input) {
-  if (input.includes("awaitedMcpReadyNames")) return input;
   let output = input;
-  const readyFieldAnchor = "  private mcpReadyResolve!: () => void;";
-  if (!output.includes(readyFieldAnchor)) {
-    throw new Error("Could not find AionrsAgent MCP ready field anchor");
+
+  output = output.replace(
+    "import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';",
+    "import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';",
+  );
+  if (!output.includes("import { homedir } from 'node:os';") && output.includes("from 'node:fs';")) {
+    output = output.replace("import { join } from 'node:path';", "import { homedir } from 'node:os';\nimport { join } from 'node:path';");
+  }
+
+  const runtimeHelperAnchor = "const AIONRS_PROJECT_CONFIG = '.aionrs.toml';";
+  if (output.includes(runtimeHelperAnchor) && !output.includes("RELAY_AIONRS_RUNTIME_ROOT_ENV")) {
+    output = output.replace(
+      runtimeHelperAnchor,
+      [
+        runtimeHelperAnchor,
+        "const RELAY_AIONRS_RUNTIME_ROOT_ENV = 'RELAY_AIONRS_RUNTIME_ROOT';",
+        "",
+        "function relayAionrsRuntimeRoot(): string {",
+        "  const configured = process.env[RELAY_AIONRS_RUNTIME_ROOT_ENV]?.trim();",
+        "  if (configured) return configured;",
+        "  return join(process.env.LOCALAPPDATA || process.env.APPDATA || homedir(), 'Relay Agent', 'aionrs');",
+        "}",
+        "",
+        "function relaySafePathSegment(value: string | undefined, fallback: string): string {",
+        "  const normalized = (value || fallback).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 96);",
+        "  return normalized || fallback;",
+        "}",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("awaitedMcpReadyNames")) {
+    const readyFieldAnchor = "  private mcpReadyResolve!: () => void;";
+    if (!output.includes(readyFieldAnchor)) {
+      throw new Error("Could not find AionrsAgent MCP ready field anchor");
+    }
+    output = output.replace(
+      readyFieldAnchor,
+      [
+        readyFieldAnchor,
+        "  private awaitedMcpReadyNames = new Set<string>();",
+        "  private seenMcpReadyNames = new Set<string>();",
+      ].join("\n"),
+    );
+  }
+
+  const spawnConfigAnchor = [
+    "    const { args, env, projectConfig } = buildSpawnConfig(this.options.model, {",
+    "      workspace: this.options.workspace,",
+    "      maxTokens: this.options.maxTokens,",
+    "      maxTurns: this.options.maxTurns,",
+    "      autoApprove: this.options.yoloMode,",
+    "      sessionId: this.options.sessionId,",
+    "      resume: this.options.resume,",
+    "    });",
+  ].join("\n");
+  if (output.includes(spawnConfigAnchor) && !output.includes("const relayRuntimeWorkspace = this.relayRuntimeWorkspace();")) {
+    output = output.replace(
+      spawnConfigAnchor,
+      [
+        spawnConfigAnchor,
+        "",
+        "    const relayRuntimeWorkspace = this.relayRuntimeWorkspace();",
+        "    if (this.options.workspace && !args.includes('--cwd')) {",
+        "      args.push('--cwd', this.options.workspace);",
+        "    }",
+      ].join("\n"),
+    );
   }
   output = output.replace(
-    readyFieldAnchor,
-    [
-      readyFieldAnchor,
-      "  private awaitedMcpReadyNames = new Set<string>();",
-      "  private seenMcpReadyNames = new Set<string>();",
-    ].join("\n"),
+    "      this.writeProjectConfig(projectConfig);",
+    "      this.writeProjectConfig(projectConfig, relayRuntimeWorkspace);",
+  );
+  output = output.replace("      cwd: this.options.workspace,", "      cwd: relayRuntimeWorkspace,");
+
+  if (!output.includes("private relayRuntimeWorkspace(): string")) {
+    const writeConfigAnchor = "  private writeProjectConfig(content: string): void {";
+    if (output.includes(writeConfigAnchor)) {
+      output = output.replace(
+        writeConfigAnchor,
+        [
+          "  private relayRuntimeWorkspace(): string {",
+          "    const sessionSegment = relaySafePathSegment(this.options.sessionId || this.options.resume, 'session');",
+          "    const runtimeWorkspace = join(relayAionrsRuntimeRoot(), 'sessions', sessionSegment);",
+          "    mkdirSync(runtimeWorkspace, { recursive: true });",
+          "    return runtimeWorkspace;",
+          "  }",
+          "",
+          "  private writeProjectConfig(content: string, configDir = this.options.workspace): void {",
+        ].join("\n"),
+      );
+    }
+  } else {
+    output = output.replace("  private writeProjectConfig(content: string): void {", "  private writeProjectConfig(content: string, configDir = this.options.workspace): void {");
+  }
+  output = output.replace(
+    "    const configPath = join(this.options.workspace, AIONRS_PROJECT_CONFIG);",
+    "    const configPath = join(configDir, AIONRS_PROJECT_CONFIG);",
   );
 
   const setupAnchor = [
     "    const stdioMcpServers = this.options.stdioMcpServers ?? [];",
     "    let awaitAnyReady = false;",
   ].join("\n");
-  if (!output.includes(setupAnchor)) {
-    throw new Error("Could not find AionrsAgent MCP setup anchor");
+  if (output.includes(setupAnchor)) {
+    output = output.replace(
+      setupAnchor,
+      [
+        "    const stdioMcpServers = this.options.stdioMcpServers ?? [];",
+        "    this.awaitedMcpReadyNames = new Set(stdioMcpServers.filter((server) => server.awaitReady).map((server) => server.name));",
+        "    this.seenMcpReadyNames = new Set();",
+        "    this.mcpReadyPromise = new Promise((resolve) => {",
+        "      this.mcpReadyResolve = resolve;",
+        "    });",
+      ].join("\n"),
+    );
+    output = output.replace("      if (server.awaitReady) awaitAnyReady = true;\n", "");
+    output = output.replace("    if (awaitAnyReady) {", "    if (this.awaitedMcpReadyNames.size > 0) {");
   }
-  output = output.replace(
-    setupAnchor,
-    [
-      "    const stdioMcpServers = this.options.stdioMcpServers ?? [];",
-      "    this.awaitedMcpReadyNames = new Set(stdioMcpServers.filter((server) => server.awaitReady).map((server) => server.name));",
-      "    this.seenMcpReadyNames = new Set();",
-      "    this.mcpReadyPromise = new Promise((resolve) => {",
-      "      this.mcpReadyResolve = resolve;",
-      "    });",
-    ].join("\n"),
-  );
-  output = output.replace("      if (server.awaitReady) awaitAnyReady = true;\n", "");
-  output = output.replace("    if (awaitAnyReady) {", "    if (this.awaitedMcpReadyNames.size > 0) {");
 
   const readyCaseAnchor = [
     "      case 'mcp_ready':",
     "        this.mcpReadyResolve();",
     "        break;",
   ].join("\n");
-  if (!output.includes(readyCaseAnchor)) {
-    throw new Error("Could not find AionrsAgent mcp_ready case anchor");
+  if (output.includes(readyCaseAnchor)) {
+    output = output.replace(
+      readyCaseAnchor,
+      [
+        "      case 'mcp_ready':",
+        "        if (event.name) this.seenMcpReadyNames.add(event.name);",
+        "        if (",
+        "          this.awaitedMcpReadyNames.size === 0 ||",
+        "          [...this.awaitedMcpReadyNames].every((name) => this.seenMcpReadyNames.has(name))",
+        "        ) {",
+        "          this.mcpReadyResolve();",
+        "        }",
+        "        break;",
+      ].join("\n"),
+    );
   }
-  output = output.replace(
-    readyCaseAnchor,
-    [
-      "      case 'mcp_ready':",
-      "        if (event.name) this.seenMcpReadyNames.add(event.name);",
-      "        if (",
-      "          this.awaitedMcpReadyNames.size === 0 ||",
-      "          [...this.awaitedMcpReadyNames].every((name) => this.seenMcpReadyNames.has(name))",
-      "        ) {",
-      "          this.mcpReadyResolve();",
-      "        }",
-      "        break;",
-    ].join("\n"),
-  );
   return output;
 }
 

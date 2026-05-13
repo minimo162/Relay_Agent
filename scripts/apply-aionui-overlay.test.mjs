@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   applyAionuiOverlay,
   isCliEntrypoint,
+  patchAionrsAgentContent,
   patchAionrsManagerContent,
   patchAionCliCoreGlobContent,
   patchAionCliCoreRipGrepContent,
@@ -1398,6 +1399,7 @@ test("Relay document search contract is copied into the AionUi overlay", () => {
   assert.match(bridge, /relayDocumentSearchBridgeToolDefinition/);
   assert.match(bridge, /runRelayDocumentSearchJob/);
   assert.match(bridge, /RelayDocumentSearchAionUiResultFlow\.v1/);
+  assert.match(bridge, /RelayDocumentSearchResultSummary\.v1/);
   assert.match(bridge, /relayDocumentSearchExecutionToAionUiResultFlow/);
   assert.match(bridge, /aionuiContent/);
   assert.match(bridge, /untrusted_tool_alias/);
@@ -1412,6 +1414,7 @@ test("Relay document search contract is copied into the AionUi overlay", () => {
   assert.match(display, /ファイル名・パスに一致/);
   assert.match(mcp, /new McpServer/);
   assert.match(mcp, /RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT/);
+  assert.match(mcp, /compact result summary/);
   assert.match(mcp, /execution\.aionuiContent/);
   assert.match(mcp, /relayDocumentSearchBridgeToolDefinition/);
   assert.doesNotMatch(mcp, /from ['"]\.\/relayDocumentSearchBridge['"]/);
@@ -1542,6 +1545,73 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_TEAM_GUIDE_FALLBACK/);
   assert.equal(patchAionrsManagerContent(patchedManager), patchedManager);
+});
+
+test("AionrsAgent overlay keeps aionrs runtime files out of the selected workspace", () => {
+  const source = [
+    "import { spawn, type ChildProcess } from 'node:child_process';",
+    "import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';",
+    "import { join } from 'node:path';",
+    "const AIONRS_PROJECT_CONFIG = '.aionrs.toml';",
+    "export class AionrsAgent {",
+    "  private mcpReadyPromise: Promise<void>;",
+    "  private mcpReadyResolve!: () => void;",
+    "  private options: any;",
+    "  private childProcess: ChildProcess | null = null;",
+    "  private configBackup?: { path: string; content: string | null };",
+    "  async start(): Promise<void> {",
+    "    const binaryPath = 'aionrs';",
+    "    const { args, env, projectConfig } = buildSpawnConfig(this.options.model, {",
+    "      workspace: this.options.workspace,",
+    "      maxTokens: this.options.maxTokens,",
+    "      maxTurns: this.options.maxTurns,",
+    "      autoApprove: this.options.yoloMode,",
+    "      sessionId: this.options.sessionId,",
+    "      resume: this.options.resume,",
+    "    });",
+    "    if (projectConfig) {",
+    "      this.writeProjectConfig(projectConfig);",
+    "    }",
+    "    this.childProcess = spawn(binaryPath, args, {",
+    "      env: getEnhancedEnv(env),",
+    "      stdio: ['pipe', 'pipe', 'pipe'],",
+    "      cwd: this.options.workspace,",
+    "    });",
+    "    const stdioMcpServers = this.options.stdioMcpServers ?? [];",
+    "    let awaitAnyReady = false;",
+    "    for (const server of stdioMcpServers) {",
+    "      if (server.awaitReady) awaitAnyReady = true;",
+    "    }",
+    "    if (awaitAnyReady) {",
+    "    }",
+    "  }",
+    "  private handleEvent(event: { type: string; name?: string }) {",
+    "    switch (event.type) {",
+    "      case 'mcp_ready':",
+    "        this.mcpReadyResolve();",
+    "        break;",
+    "    }",
+    "  }",
+    "  private writeProjectConfig(content: string): void {",
+    "    const configPath = join(this.options.workspace, AIONRS_PROJECT_CONFIG);",
+    "    const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;",
+    "    this.configBackup = { path: configPath, content: existing };",
+    "    writeFileSync(configPath, content, 'utf-8');",
+    "  }",
+    "}",
+  ].join("\n");
+
+  const patched = patchAionrsAgentContent(source);
+  assert.match(patched, /RELAY_AIONRS_RUNTIME_ROOT/);
+  assert.match(patched, /relayAionrsRuntimeRoot/);
+  assert.match(patched, /const relayRuntimeWorkspace = this\.relayRuntimeWorkspace\(\);/);
+  assert.match(patched, /args\.push\('--cwd', this\.options\.workspace\);/);
+  assert.match(patched, /this\.writeProjectConfig\(projectConfig, relayRuntimeWorkspace\);/);
+  assert.match(patched, /cwd: relayRuntimeWorkspace,/);
+  assert.match(patched, /private relayRuntimeWorkspace\(\): string/);
+  assert.match(patched, /join\(configDir, AIONRS_PROJECT_CONFIG\)/);
+  assert.doesNotMatch(patched, /join\(this\.options\.workspace, AIONRS_PROJECT_CONFIG\)/);
+  assert.equal(patchAionrsAgentContent(patched), patched);
 });
 
 test("About, update, locale, and visible logo references use Relay Agent branding", () => {

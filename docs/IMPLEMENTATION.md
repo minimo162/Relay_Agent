@@ -25,6 +25,70 @@
 
 ## Milestone Log
 
+### 2026-05-13 Copilot-planned document search prompts
+
+Replaced the document-search first step that directly assembled
+`relay_document_search` arguments with a dedicated M365 Copilot query-plan
+compiler prompt. Copilot now fills only a bounded
+`RelayDocumentSearchCopilotQueryPlan.v1` object (`rawQuery`, intent/evidence
+mode, thoroughness, expanded/support/demote terms, and file type hints). Relay
+validates that plan, preserves the selected workspace root itself, and converts
+the validated plan into the high-level tool call. Validation failures now stop
+as `relay_document_search_query_plan_validation_failed` instead of silently
+falling back to a deterministic or low-level search.
+
+Added `queryPlanHints` to the `relay_document_search` contract and MCP schema
+so the validated Copilot expansion can flow into the deterministic Relay query
+normalizer without letting Copilot control roots, commands, glob patterns, or
+tool names. The executor merges hint terms into normalized search terms and
+keeps demote terms as ranking/context hints rather than exclusion filters.
+
+The post-search answer path now uses a dedicated document-search result summary
+prompt for `RelayDocumentSearchAionUiResultFlow.v1` tool results, and a local
+validator rejects obvious overclaims such as calling filename-only partial
+results content-confirmed, exhaustive, latest, final, core, or required without
+an explicit caveat.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed.
+- `node --test scripts/relay-document-search-contract.test.mjs scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-mcp.test.mjs scripts/relay-document-search-bridge.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs scripts/relay-document-search-executor.test.mjs scripts/relay-document-search-display.test.mjs scripts/relay-document-search-product-result.test.mjs scripts/relay-document-search-folder-roles.test.mjs`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-13 Compact document-search tool output and user-local AionUi runtime
+
+Adjusted the AionUi-facing document-search tool result after a live CFS search
+showed multi-megabyte raw result JSON leaking into the Copilot transcript. The
+MCP tool now returns a compact `RelayDocumentSearchAionUiResultFlow.v1` payload
+with `RelayDocumentSearchResultSummary.v1` plus bounded result cards and
+user-facing details. The full raw `RelayDocumentSearchResult.v1` remains in the
+Relay bridge execution/tool-message path for diagnostics and internal handling,
+but it is no longer returned through `execution.aionuiContent` to chat.
+
+Refined finance-folder ranking so direct workpaper/source folders such as
+`連結決算`, `精算表`, `合算`, and `ADJ` are classified and boosted ahead of
+filing, audit, output, and backup folders when filename scores otherwise tie.
+The display now surfaces this adjustment as a folder-role score label.
+
+The AionUi overlay now starts `aionrs` from a user-local runtime directory under
+`Relay Agent/aionrs` and passes the selected workspace via `--cwd`. Its
+temporary `.aionrs.toml` project config is written in the user-local runtime
+session directory instead of the selected/shared search folder. The runtime
+root can be overridden with `RELAY_AIONRS_RUNTIME_ROOT`.
+
+Verification:
+
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs scripts/relay-document-search-mcp.test.mjs scripts/apply-aionui-overlay.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs scripts/relay-document-search-display.test.mjs scripts/relay-document-search-product-result.test.mjs scripts/relay-document-search-folder-roles.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-13 Lean AionUi installer payload and Relay version ownership
 
 Scoped the AionUi Windows installer to the two currently supported beginner

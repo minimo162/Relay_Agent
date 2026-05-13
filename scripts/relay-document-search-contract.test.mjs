@@ -57,7 +57,9 @@ test("Relay document search contract exports stable high-level tool metadata", a
   assert.deepEqual(Object.values(contract.RELAY_DOCUMENT_SEARCH_PROMPT_TEMPLATES), [
     "relay_document_search_tool_prompt.v1",
     "relay_document_search_repair_prompt.v1",
+    "relay_document_search_query_plan_prompt.v1",
     "relay_query_suggestion_prompt.v1",
+    "relay_document_search_result_summary_prompt.v1",
     "relay_answer_polish_prompt.v1",
     "relay_polish_repair_prompt.v1",
   ]);
@@ -79,9 +81,14 @@ test("Relay document search OpenAI schema exposes only model-owned request field
     "fileTypes",
     "maxResults",
     "evidence",
+    "queryPlanHints",
   ]);
   assert.equal(schema.function.parameters.properties.maxResults.maximum, 300);
   assert.equal(schema.function.parameters.properties.roots.maxItems, 16);
+  assert.equal(
+    schema.function.parameters.properties.queryPlanHints.properties.schemaVersion.enum[0],
+    "RelayDocumentSearchCopilotQueryPlan.v1",
+  );
 });
 
 test("Relay document search request validator rejects Relay-controlled fields", async () => {
@@ -94,21 +101,48 @@ test("Relay document search request validator rejects Relay-controlled fields", 
     fileTypes: [".xlsx", "pdf"],
     maxResults: 80,
     evidence: "required",
+    queryPlanHints: {
+      schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+      rawQuery: "160連結 キャッシュフロー",
+      intent: "answer_with_evidence",
+      evidence: "required",
+      thoroughness: "thorough",
+      expandedTerms: ["キャッシュフロー", "CFS"],
+      supportTerms: ["精算表"],
+      demoteTerms: ["ファイリング"],
+      fileTypeHints: ["xlsx"],
+      summary: "CFS候補を広く拾う。",
+    },
   });
 
   assert.equal(valid.ok, true);
   assert.equal(valid.value.schemaVersion, "RelayDocumentSearchRequest.v1");
   assert.deepEqual(valid.value.fileTypes, ["xlsx", "pdf"]);
+  assert.deepEqual(valid.value.queryPlanHints.expandedTerms, ["キャッシュフロー", "CFS"]);
 
   const invalid = contract.validateRelayDocumentSearchRequest({
     query: "cash flow",
     job_id: "copilot-must-not-set-this",
     parserVersion: "parser-v999",
+    queryPlanHints: {
+      schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+      rawQuery: "different",
+      intent: "find_files",
+      evidence: "candidate",
+      thoroughness: "quick",
+      roots: ["H:/not/allowed"],
+      expandedTerms: ["cash flow"],
+      supportTerms: [],
+      demoteTerms: [],
+      fileTypeHints: ["any"],
+    },
   });
 
   assert.equal(invalid.ok, false);
   assert.match(invalid.errors.join("\n"), /job_id is Relay-controlled/);
   assert.match(invalid.errors.join("\n"), /parserVersion is Relay-controlled/);
+  assert.match(invalid.errors.join("\n"), /Unknown queryPlanHints field: roots/);
+  assert.match(invalid.errors.join("\n"), /queryPlanHints.rawQuery must match query exactly/);
 });
 
 test("Relay document search alias policy requires matching contract metadata for aliases", async () => {

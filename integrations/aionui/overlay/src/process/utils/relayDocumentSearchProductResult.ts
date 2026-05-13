@@ -262,6 +262,7 @@ export function normalizeRelayDocumentSearchScoreBreakdown(
   const filenameScore = numberFromBreakdown(value, 'filename_score');
   const pathScore = numberFromBreakdown(value, 'path_score');
   const termScore = numberFromBreakdown(value, 'term_score');
+  const folderRoleScore = numberFromBreakdown(value, 'folder_role');
   const sqliteFtsScore = numberFromBreakdown(value, 'sqlite_fts');
   const sqliteFtsUncappedScore = numberFromBreakdown(value, 'sqlite_fts_uncapped') || sqliteFtsScore;
   const sqliteFtsCapLoss = numberFromBreakdown(value, 'sqlite_fts_cap_loss');
@@ -272,7 +273,7 @@ export function normalizeRelayDocumentSearchScoreBreakdown(
   const groupingScore = numberFromBreakdown(value, 'grouping');
   const warningPenalty = numberFromBreakdown(value, 'warning_penalty');
   const baseScore = numberFromBreakdown(value, 'base_score') ||
-    filenameScore + pathScore + termScore + sqliteFtsScore + contentScore + tableCellScore + recencyScore + pinHistoryScore + groupingScore;
+    filenameScore + pathScore + termScore + folderRoleScore + sqliteFtsScore + contentScore + tableCellScore + recencyScore + pinHistoryScore + groupingScore;
   const finalScore = numberFromBreakdown(value, 'final_score') || Math.max(0, baseScore - warningPenalty);
   const hybridMergeScore = numberFromBreakdown(value, 'hybrid_merge') || baseScore;
   const existingTotals = recordFromBreakdown(value, 'totals');
@@ -295,6 +296,7 @@ export function normalizeRelayDocumentSearchScoreBreakdown(
     keyword: scoreComponent(value, 'keyword', termScore, 'normalized_keyword_match', {
       count: numberFromBreakdown(value, 'term'),
     }),
+    folder_role: scoreComponent(value, 'folder_role', folderRoleScore, 'folder_role_preference'),
     sqlite_fts: scoreComponent(value, 'sqlite_fts', sqliteFtsScore, 'sqlite_fts_match', {
       rawScore: sqliteFtsUncappedScore,
       cappedScore: sqliteFtsScore,

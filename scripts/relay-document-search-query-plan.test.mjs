@@ -165,3 +165,47 @@ test("Relay document search query plan keeps quick searches candidate-only", asy
     cleanup();
   }
 });
+
+test("Relay document search query plan merges validated Copilot hint terms without excluding demoted outputs", async () => {
+  const { module, cleanup } = await loadQueryPlanModule();
+  try {
+    const plan = module.buildRelayDocumentSearchQueryPlan(
+      {
+        schemaVersion: "RelayDocumentSearchRequest.v1",
+        query: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+        roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+        intent: "find_files",
+        thoroughness: "quick",
+        fileTypes: ["any"],
+        maxResults: 80,
+        evidence: "candidate",
+        queryPlanHints: {
+          schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+          rawQuery: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+          intent: "find_files",
+          evidence: "candidate",
+          thoroughness: "quick",
+          expandedTerms: ["連結CF", "連結CFS"],
+          supportTerms: ["精算表", "合算", "ADJ"],
+          demoteTerms: ["ファイリング", "XSA", "監査"],
+          fileTypeHints: ["xlsx", "xlsm"],
+          summary: "CFS作業ファイルを広く拾う。",
+        },
+      },
+      ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+    );
+
+    assert.ok(plan.normalizedTerms.includes("連結cf"));
+    assert.ok(plan.normalizedTerms.includes("adj"));
+    assert.deepEqual(plan.synonymExpansions.at(-1), {
+      source: "copilot_query_plan",
+      terms: ["連結cf", "連結cfs", "精算表", "合算", "adj"],
+    });
+    assert.deepEqual(plan.demoteTerms, ["ファイリング", "xsa", "監査"]);
+    assert.equal(plan.excludedTerms.includes("ファイリング"), false);
+    assert.deepEqual(plan.fileTypeHints, ["xlsx", "xlsm"]);
+    assert.equal(plan.copilotHintSummary, "CFS作業ファイルを広く拾う。");
+  } finally {
+    cleanup();
+  }
+});

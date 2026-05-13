@@ -24,7 +24,9 @@ export const RELAY_DOCUMENT_SEARCH_APPROVED_ALIASES = [
 export const RELAY_DOCUMENT_SEARCH_PROMPT_TEMPLATES = {
   tool: 'relay_document_search_tool_prompt.v1',
   toolRepair: 'relay_document_search_repair_prompt.v1',
+  queryPlan: 'relay_document_search_query_plan_prompt.v1',
   querySuggestion: 'relay_query_suggestion_prompt.v1',
+  resultSummary: 'relay_document_search_result_summary_prompt.v1',
   answerPolish: 'relay_answer_polish_prompt.v1',
   polishRepair: 'relay_polish_repair_prompt.v1',
 } as const;
@@ -37,6 +39,7 @@ export const RELAY_DOCUMENT_SEARCH_MODEL_FIELDS = [
   'fileTypes',
   'maxResults',
   'evidence',
+  'queryPlanHints',
 ] as const;
 
 const RELAY_CONTROLLED_FIELDS = new Set([
@@ -79,6 +82,19 @@ export type RelayDocumentSearchFileType =
   | 'pptx'
   | 'pdf';
 
+export type RelayDocumentSearchCopilotQueryPlanHintsV1 = {
+  schemaVersion: 'RelayDocumentSearchCopilotQueryPlan.v1';
+  rawQuery: string;
+  intent: RelayDocumentSearchIntent;
+  evidence: RelayDocumentSearchEvidenceMode;
+  thoroughness: RelayDocumentSearchThoroughness;
+  expandedTerms: string[];
+  supportTerms: string[];
+  demoteTerms: string[];
+  fileTypeHints: RelayDocumentSearchFileType[];
+  summary?: string;
+};
+
 export type RelayDocumentSearchRequestV1 = {
   schemaVersion: typeof RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT;
   query: string;
@@ -88,6 +104,7 @@ export type RelayDocumentSearchRequestV1 = {
   fileTypes: RelayDocumentSearchFileType[];
   maxResults: number;
   evidence: RelayDocumentSearchEvidenceMode;
+  queryPlanHints?: RelayDocumentSearchCopilotQueryPlanHintsV1;
 };
 
 export type RelayDocumentSearchResultV1 = {
@@ -247,6 +264,128 @@ function normalizeMaxResults(value: unknown, errors: string[]): number {
   return value;
 }
 
+function normalizeQueryPlanEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T,
+  field: string,
+  errors: string[],
+): T {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || !allowed.includes(value as T)) {
+    errors.push(`queryPlanHints.${field} must be one of: ${allowed.join(', ')}`);
+    return fallback;
+  }
+  return value as T;
+}
+
+function normalizeQueryPlanTerms(value: unknown, field: string, errors: string[], maxItems = 40): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push(`queryPlanHints.${field} must be an array of strings`);
+    return [];
+  }
+  if (value.length > maxItems) errors.push(`queryPlanHints.${field} may contain at most ${maxItems} entries`);
+  const out = new Set<string>();
+  for (const item of value.slice(0, maxItems)) {
+    if (typeof item !== 'string' || !item.trim()) {
+      errors.push(`queryPlanHints.${field} entries must be non-empty strings`);
+      continue;
+    }
+    const trimmed = item.trim();
+    if (trimmed.length > 80) {
+      errors.push(`queryPlanHints.${field} entries must be 80 characters or less`);
+      continue;
+    }
+    if (hasControlCharacters(trimmed)) {
+      errors.push(`queryPlanHints.${field} entries must not contain control characters`);
+      continue;
+    }
+    out.add(trimmed);
+  }
+  return [...out];
+}
+
+function normalizeQueryPlanFileTypes(value: unknown, errors: string[]): RelayDocumentSearchFileType[] {
+  if (value === undefined) return ['any'];
+  if (!Array.isArray(value)) {
+    errors.push('queryPlanHints.fileTypeHints must be an array');
+    return ['any'];
+  }
+  const normalized = new Set<RelayDocumentSearchFileType>();
+  for (const item of value.slice(0, 10)) {
+    if (typeof item !== 'string') {
+      errors.push('queryPlanHints.fileTypeHints entries must be strings');
+      continue;
+    }
+    const fileType = item.trim().toLowerCase().replace(/^\./u, '') as RelayDocumentSearchFileType;
+    if (!FILE_TYPES.includes(fileType)) {
+      errors.push(`Unsupported queryPlanHints file type: ${item}`);
+      continue;
+    }
+    normalized.add(fileType);
+  }
+  return normalized.size > 0 ? [...normalized] : ['any'];
+}
+
+function normalizeQueryPlanHints(
+  value: unknown,
+  query: string,
+  errors: string[],
+): RelayDocumentSearchCopilotQueryPlanHintsV1 | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    errors.push('queryPlanHints must be an object');
+    return undefined;
+  }
+  const allowedFields = new Set([
+    'schemaVersion',
+    'rawQuery',
+    'intent',
+    'evidence',
+    'thoroughness',
+    'expandedTerms',
+    'supportTerms',
+    'demoteTerms',
+    'fileTypeHints',
+    'summary',
+  ]);
+  for (const field of Object.keys(value)) {
+    if (!allowedFields.has(field)) errors.push(`Unknown queryPlanHints field: ${field}`);
+  }
+  if (value.schemaVersion !== 'RelayDocumentSearchCopilotQueryPlan.v1') {
+    errors.push('queryPlanHints.schemaVersion must be RelayDocumentSearchCopilotQueryPlan.v1');
+  }
+  const rawQuery = typeof value.rawQuery === 'string' ? value.rawQuery : '';
+  if (!rawQuery) errors.push('queryPlanHints.rawQuery is required');
+  if (rawQuery !== query) errors.push('queryPlanHints.rawQuery must match query exactly');
+  if (rawQuery.length > 2000) errors.push('queryPlanHints.rawQuery must be 2000 characters or less');
+  if (hasControlCharacters(rawQuery)) errors.push('queryPlanHints.rawQuery must not contain control characters');
+  const intent = normalizeQueryPlanEnum(value.intent, INTENTS, 'find_files', 'intent', errors);
+  const evidence = normalizeQueryPlanEnum(value.evidence, EVIDENCE_MODES, 'candidate', 'evidence', errors);
+  const thoroughness = normalizeQueryPlanEnum(value.thoroughness, THOROUGHNESS, 'quick', 'thoroughness', errors);
+  const expandedTerms = normalizeQueryPlanTerms(value.expandedTerms, 'expandedTerms', errors);
+  const supportTerms = normalizeQueryPlanTerms(value.supportTerms, 'supportTerms', errors);
+  const demoteTerms = normalizeQueryPlanTerms(value.demoteTerms, 'demoteTerms', errors);
+  const fileTypeHints = normalizeQueryPlanFileTypes(value.fileTypeHints, errors);
+  const summary = typeof value.summary === 'string' ? value.summary.trim().slice(0, 280) : undefined;
+  if (value.summary !== undefined && typeof value.summary !== 'string') {
+    errors.push('queryPlanHints.summary must be a string');
+  }
+  return {
+    schemaVersion: 'RelayDocumentSearchCopilotQueryPlan.v1',
+    rawQuery,
+    intent,
+    evidence,
+    thoroughness,
+    expandedTerms,
+    supportTerms,
+    demoteTerms,
+    fileTypeHints,
+    ...(summary ? { summary } : {}),
+  };
+}
+
 export function validateRelayDocumentSearchRequest(input: unknown): RelayValidationResult<RelayDocumentSearchRequestV1> {
   const errors: string[] = [];
   if (!isRecord(input)) {
@@ -275,6 +414,7 @@ export function validateRelayDocumentSearchRequest(input: unknown): RelayValidat
   const evidence = normalizeEnum(input.evidence, EVIDENCE_MODES, 'candidate', 'evidence', errors);
   const fileTypes = normalizeFileTypes(input.fileTypes, errors);
   const maxResults = normalizeMaxResults(input.maxResults, errors);
+  const queryPlanHints = normalizeQueryPlanHints(input.queryPlanHints, query, errors);
 
   if (errors.length > 0) {
     return {
@@ -295,6 +435,7 @@ export function validateRelayDocumentSearchRequest(input: unknown): RelayValidat
       fileTypes,
       maxResults,
       evidence,
+      ...(queryPlanHints ? { queryPlanHints } : {}),
     },
   };
 }
@@ -457,6 +598,70 @@ export const relayDocumentSearchOpenAiToolSchema = {
           type: 'string',
           enum: EVIDENCE_MODES,
           default: 'candidate',
+        },
+        queryPlanHints: {
+          type: 'object',
+          additionalProperties: false,
+          description:
+            'Optional Copilot-filled RelayDocumentSearchCopilotQueryPlan.v1 hints. Relay validates this and still owns execution.',
+          required: [
+            'schemaVersion',
+            'rawQuery',
+            'intent',
+            'evidence',
+            'thoroughness',
+            'expandedTerms',
+            'supportTerms',
+            'demoteTerms',
+            'fileTypeHints',
+          ],
+          properties: {
+            schemaVersion: {
+              type: 'string',
+              enum: ['RelayDocumentSearchCopilotQueryPlan.v1'],
+            },
+            rawQuery: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 2000,
+            },
+            intent: {
+              type: 'string',
+              enum: INTENTS,
+            },
+            evidence: {
+              type: 'string',
+              enum: EVIDENCE_MODES,
+            },
+            thoroughness: {
+              type: 'string',
+              enum: THOROUGHNESS,
+            },
+            expandedTerms: {
+              type: 'array',
+              maxItems: 40,
+              items: { type: 'string', minLength: 1, maxLength: 80 },
+            },
+            supportTerms: {
+              type: 'array',
+              maxItems: 40,
+              items: { type: 'string', minLength: 1, maxLength: 80 },
+            },
+            demoteTerms: {
+              type: 'array',
+              maxItems: 40,
+              items: { type: 'string', minLength: 1, maxLength: 80 },
+            },
+            fileTypeHints: {
+              type: 'array',
+              maxItems: 10,
+              items: { type: 'string', enum: FILE_TYPES },
+            },
+            summary: {
+              type: 'string',
+              maxLength: 280,
+            },
+          },
         },
       },
     },

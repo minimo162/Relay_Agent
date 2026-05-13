@@ -7,7 +7,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildDocumentSearchToolCallRecordFromQueryPlan,
   buildDeterministicRequiredToolCallRecord,
+  buildRelayDocumentSearchQueryPlanCompilerPrompt,
   buildToolResultFailureRecord,
   buildOpenAiCompletionBody,
   classifyToolIntent,
@@ -17,6 +19,8 @@ import {
   parseOpenAiRequest,
   shouldAttemptOpenAiToolRepair,
   shouldStartNewChatForRequest,
+  validateRelayDocumentSearchCopilotQueryPlan,
+  validateRelayDocumentSearchSummaryRecord,
 } from "./copilot_server.mjs";
 
 function collectSseContentDeltas(text) {
@@ -410,7 +414,7 @@ test("extractOpenAiToolCallsFromText maps canonical document search calls to MCP
   });
 });
 
-test("buildDeterministicRequiredToolCallRecord emits high-level document search before Copilot", () => {
+test("document search uses a dedicated Copilot query-plan before emitting the high-level tool call", () => {
   const userPrompt = "このフォルダからキャッシュフロー計算書に関係するファイルを探して";
   const parsed = parseOpenAiRequest({
     model: "m365-copilot",
@@ -446,7 +450,9 @@ test("buildDeterministicRequiredToolCallRecord emits high-level document search 
                 type: "string",
               },
               maxResults: { maximum: 300, minimum: 1, type: "integer" },
+              fileTypes: { type: "array", items: { enum: ["any", "xlsx"], type: "string" } },
               query: { type: "string" },
+              queryPlanHints: { type: "object" },
               roots: { type: "array", items: { type: "string" } },
               thoroughness: { enum: ["quick", "thorough"], type: "string" },
             },
@@ -457,7 +463,42 @@ test("buildDeterministicRequiredToolCallRecord emits high-level document search 
     ],
   });
 
-  const record = buildDeterministicRequiredToolCallRecord(parsed);
+  assert.equal(buildDeterministicRequiredToolCallRecord(parsed), null);
+
+  const compilerPrompt = buildRelayDocumentSearchQueryPlanCompilerPrompt(parsed, {
+    toolName: "relay_document_search",
+    tool: parsed.tools[0],
+  });
+  assert.equal(compilerPrompt.relayDocumentSearchQueryPlanCompiler, true);
+  assert.equal(compilerPrompt.toolProtocolMode, "document_search_query_plan");
+  assert.equal(compilerPrompt.openAiToolChoice, "none");
+  const formatted = formatPromptForCopilot(compilerPrompt);
+  assert.match(formatted, /RELAY DOCUMENT SEARCH QUERY PLAN COMPILER/);
+  assert.match(formatted, /RelayDocumentSearchCopilotQueryPlan\.v1/);
+  assert.match(formatted, /rawQuery must equal the USER REQUEST DATA exactly/);
+  assert.match(formatted, /Do not include roots, path, toolName/);
+
+  const queryPlan = {
+    schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+    rawQuery: userPrompt,
+    intent: "find_files",
+    evidence: "candidate",
+    thoroughness: "quick",
+    expandedTerms: ["キャッシュフロー", "CFS", "連結CF"],
+    supportTerms: ["精算表", "合算", "ADJ"],
+    demoteTerms: ["ファイリング", "XSA", "監査"],
+    fileTypeHints: ["any"],
+    summary: "CFSの作成・精算表候補を広く拾う。",
+  };
+  const validation = validateRelayDocumentSearchCopilotQueryPlan(queryPlan, parsed);
+  assert.equal(validation.ok, true);
+
+  const record = buildDocumentSearchToolCallRecordFromQueryPlan(
+    parsed,
+    parsed.tools[0],
+    "relay_document_search",
+    validation.value,
+  );
 
   assert.equal(record.status, 200);
   assert.equal(record.body.choices[0].finish_reason, "tool_calls");
@@ -467,10 +508,39 @@ test("buildDeterministicRequiredToolCallRecord emits high-level document search 
     evidence: "candidate",
     intent: "find_files",
     maxResults: 120,
+    fileTypes: ["any"],
     query: userPrompt,
+    queryPlanHints: queryPlan,
     roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
     thoroughness: "quick",
   });
+});
+
+test("document search query-plan validation rejects schema drift instead of falling back", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [{ role: "user", content: "このフォルダから資料を探して" }],
+    tools: [{ type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } }],
+  });
+
+  const validation = validateRelayDocumentSearchCopilotQueryPlan(
+    {
+      schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+      rawQuery: "違う依頼",
+      intent: "find_files",
+      evidence: "candidate",
+      thoroughness: "quick",
+      roots: ["H:/should/not/be/here"],
+      expandedTerms: ["資料"],
+      supportTerms: [],
+      demoteTerms: [],
+      fileTypeHints: ["any"],
+    },
+    parsed,
+  );
+
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join("\n"), /rawQuery must exactly match/);
+  assert.match(validation.errors.join("\n"), /Unknown query plan field: roots/);
 });
 
 test("parseOpenAiRequest honors Relay selected document search mode markers", () => {
@@ -884,6 +954,75 @@ test("formatPromptForCopilot wraps tool results as evidence review transcript da
   assert.match(prompt, /return only tool_uses JSON for the next OpenCode executor call/);
   assert.match(prompt, /Do not invent file paths, command output, edits, test results, or document contents/);
   assert.doesNotMatch(prompt, /\n\nUSER:\nRead README\.\s*$/);
+});
+
+test("formatPromptForCopilot uses the dedicated document-search result summary prompt", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "このフォルダからCFSを探して" },
+      {
+        role: "tool",
+        content: JSON.stringify({
+          schemaVersion: "RelayDocumentSearchAionUiResultFlow.v1",
+          resultSummary: {
+            schemaVersion: "RelayDocumentSearchResultSummary.v1",
+            status: "partial",
+            coverage: { truncated: true },
+          },
+          display: {
+            cards: [{ title: "FY160-4Q_連結CFS精算表.xlsx", warningLabels: ["中身はまだ確認していません"] }],
+          },
+        }),
+        tool_call_id: "call_relay_document_search",
+      },
+    ],
+    tools: [{ type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } }],
+  });
+  const prompt = formatPromptForCopilot(parsed);
+
+  assert.match(prompt, /RELAY DOCUMENT SEARCH RESULT SUMMARY WRITER/);
+  assert.match(prompt, /filename_only, ファイル名候補, or 中身はまだ確認していません/);
+  assert.match(prompt, /partial, truncated/);
+  assert.match(prompt, /direct source\/workpaper candidates/);
+  assert.doesNotMatch(prompt, /RELAY AGENT TOOL RESULT REVIEWER/);
+});
+
+test("document-search summary validation rejects overclaims on filename-only partial results", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      { role: "user", content: "CFSを探して" },
+      {
+        role: "tool",
+        content: JSON.stringify({
+          schemaVersion: "RelayDocumentSearchAionUiResultFlow.v1",
+          resultSummary: { status: "partial", coverage: { truncated: true } },
+          display: { cards: [{ title: "CFS.xlsx", warningLabels: ["中身はまだ確認していません"] }] },
+        }),
+        tool_call_id: "call_relay_document_search",
+      },
+    ],
+    tools: [{ type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } }],
+  });
+
+  const invalid = validateRelayDocumentSearchSummaryRecord(
+    {
+      status: 200,
+      body: buildOpenAiCompletionBody("すべて網羅しました。このファイルが正本で中身を確認しました。", parsed),
+    },
+    parsed,
+  );
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.errors.join("\n"), /content-confirmed/);
+  assert.match(invalid.errors.join("\n"), /exhaustive/);
+
+  const valid = validateRelayDocumentSearchSummaryRecord(
+    {
+      status: 200,
+      body: buildOpenAiCompletionBody("途中までのファイル名候補です。中身はまだ確認していません。", parsed),
+    },
+    parsed,
+  );
+  assert.equal(valid.ok, true);
 });
 
 test("formatPromptForCopilot asks for more tools when local file results are skewed", () => {
@@ -1471,7 +1610,7 @@ test("createServer repairs explicit OpenAI-compatible tool requests once", async
   }
 });
 
-test("createServer bypasses Copilot prose generation for required high-level document search", async () => {
+test("createServer asks Copilot for a validated document-search query plan before calling the tool", async () => {
   const prompts = [];
   const server = createServer({
     async inspectStatus() {
@@ -1479,7 +1618,24 @@ test("createServer bypasses Copilot prose generation for required high-level doc
     },
     async startOrJoinDescribe(prompt) {
       prompts.push(prompt);
-      throw new Error("Copilot should not be called for deterministic document search tool planning");
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody(
+          JSON.stringify({
+            schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+            rawQuery: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+            intent: "find_files",
+            evidence: "candidate",
+            thoroughness: "quick",
+            expandedTerms: ["キャッシュフロー", "CFS", "連結CF"],
+            supportTerms: ["精算表", "合算", "ADJ"],
+            demoteTerms: ["ファイリング", "XSA", "監査"],
+            fileTypeHints: ["any"],
+            summary: "CFS候補を広く検索する。",
+          }),
+          prompt,
+        ),
+      };
     },
     abortRequest() {
       return false;
@@ -1517,7 +1673,9 @@ test("createServer bypasses Copilot prose generation for required high-level doc
                 properties: {
                   evidence: { enum: ["none", "candidate", "required"], type: "string" },
                   intent: { enum: ["find_files", "answer_with_evidence", "summarize_with_evidence"], type: "string" },
+                  maxResults: { maximum: 300, minimum: 1, type: "integer" },
                   query: { type: "string" },
+                  queryPlanHints: { type: "object" },
                   roots: { type: "array", items: { type: "string" } },
                   thoroughness: { enum: ["quick", "thorough"], type: "string" },
                 },
@@ -1530,16 +1688,86 @@ test("createServer bypasses Copilot prose generation for required high-level doc
     });
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(prompts.length, 0);
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0].relayDocumentSearchQueryPlanCompiler, true);
+    assert.equal(prompts[0].toolProtocolMode, "document_search_query_plan");
     assert.equal(body.choices[0].finish_reason, "tool_calls");
     assert.equal(body.choices[0].message.tool_calls[0].function.name, "relay_document_search");
     assert.deepEqual(JSON.parse(body.choices[0].message.tool_calls[0].function.arguments), {
       evidence: "candidate",
       intent: "find_files",
+      maxResults: 120,
       query: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+      queryPlanHints: {
+        schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+        rawQuery: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+        intent: "find_files",
+        evidence: "candidate",
+        thoroughness: "quick",
+        expandedTerms: ["キャッシュフロー", "CFS", "連結CF"],
+        supportTerms: ["精算表", "合算", "ADJ"],
+        demoteTerms: ["ファイリング", "XSA", "監査"],
+        fileTypeHints: ["any"],
+        summary: "CFS候補を広く検索する。",
+      },
       roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
       thoroughness: "quick",
     });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("createServer fails document search when Copilot query-plan validation fails", async () => {
+  const prompts = [];
+  const server = createServer({
+    async inspectStatus() {
+      return { connected: true };
+    },
+    async startOrJoinDescribe(prompt) {
+      prompts.push(prompt);
+      return {
+        status: 200,
+        body: buildOpenAiCompletionBody(
+          JSON.stringify({
+            schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+            rawQuery: "違う依頼",
+            intent: "find_files",
+            evidence: "candidate",
+            thoroughness: "quick",
+            expandedTerms: ["CFS"],
+            supportTerms: [],
+            demoteTerms: [],
+            fileTypeHints: ["any"],
+          }),
+          prompt,
+        ),
+      };
+    },
+    abortRequest() {
+      return false;
+    },
+    getRequestProgress() {
+      return null;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "m365-copilot",
+        messages: [{ role: "user", content: "このフォルダからキャッシュフロー計算書に関係するファイルを探して" }],
+        tools: [{ type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } }],
+      }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(prompts.length, 1);
+    assert.equal(body.error.code, "relay_document_search_query_plan_validation_failed");
+    assert.match(body.error.errors.join("\n"), /rawQuery must exactly match/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

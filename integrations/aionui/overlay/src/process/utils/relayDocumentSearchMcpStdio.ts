@@ -93,7 +93,7 @@ const server = new McpServer(
 
 server.tool(
   RELAY_DOCUMENT_SEARCH_TOOL_NAME,
-  `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/text lookup, PDF filename discovery, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,
+  `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/text lookup, PDF filename discovery, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with a compact result summary, structured result cards, continuation, selection, and secondary Copilot prose metadata. The full raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT} stays inside Relay diagnostics instead of being returned to chat.`,
   {
     query: z.string().min(1).max(2000).describe('The user request in their own words.'),
     roots: z
@@ -112,6 +112,21 @@ server.tool(
       .describe('Optional file-type filters.'),
     maxResults: z.number().int().min(1).max(300).optional().describe('Maximum candidate count.'),
     evidence: z.enum(['none', 'candidate', 'required']).optional().describe('Evidence requirement.'),
+    queryPlanHints: z
+      .object({
+        schemaVersion: z.literal('RelayDocumentSearchCopilotQueryPlan.v1'),
+        rawQuery: z.string().min(1).max(2000),
+        intent: z.enum(['find_files', 'answer_with_evidence', 'summarize_with_evidence', 'inspect_file', 'similar_documents']),
+        evidence: z.enum(['none', 'candidate', 'required']),
+        thoroughness: z.enum(['quick', 'thorough']),
+        expandedTerms: z.array(z.string().min(1).max(80)).max(40),
+        supportTerms: z.array(z.string().min(1).max(80)).max(40),
+        demoteTerms: z.array(z.string().min(1).max(80)).max(40),
+        fileTypeHints: z.array(z.enum(['any', 'txt', 'md', 'csv', 'docx', 'xlsx', 'xlsm', 'pptx', 'pdf'])).max(10),
+        summary: z.string().max(280).optional(),
+      })
+      .optional()
+      .describe('Validated Copilot query-plan hints generated from the natural-language request.'),
   },
   async (args) => {
     try {

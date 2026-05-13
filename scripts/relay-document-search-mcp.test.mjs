@@ -31,6 +31,8 @@ test("Relay document search MCP stdio entry is syntax-valid and tool-bound", () 
   assert.match(source, /new McpServer/);
   assert.match(source, /RELAY_DOCUMENT_SEARCH_TOOL_NAME/);
   assert.match(source, /RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT/);
+  assert.match(source, /compact result summary/);
+  assert.match(source, /stays inside Relay diagnostics/);
   assert.match(source, /handleRelayDocumentSearchToolCall/);
   assert.match(source, /execution\.aionuiContent/);
   assert.match(source, /startRelayDocumentSearchSyncProducerFromEnvironment/);
@@ -49,4 +51,6 @@ test("Relay document search MCP stdio entry is syntax-valid and tool-bound", () 
   assert.match(source, /useFilenameIndex: true/);
   assert.match(source, /useUserMemory: true/);
   assert.match(source, /useSyncJournal: true/);
+  assert.match(source, /queryPlanHints/);
+  assert.match(source, /RelayDocumentSearchCopilotQueryPlan\.v1/);
 });
