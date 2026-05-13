@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -28,6 +28,10 @@ function readJson(path) {
 
 function relayBranding() {
   return readJson(manifestPath).branding;
+}
+
+function relayAgentVersion() {
+  return readJson(resolve(repoRoot, "apps/desktop/package.json")).version;
 }
 
 function ensureTrailingNewline(text) {
@@ -122,6 +126,7 @@ export function patchInitStorageContent(input) {
 export function patchPackageJsonContent(input, branding = relayBranding()) {
   const packageJson = JSON.parse(input);
   packageJson.name = branding.packageName;
+  packageJson.version = relayAgentVersion();
   packageJson.description = "Relay Agent desktop shell for Microsoft 365 Copilot and Office workflows.";
   packageJson.author = {
     name: branding.supportName,
@@ -1585,31 +1590,14 @@ function copyRelayToolResources(targetRoot, sources = {}) {
       `Bundled ripgrep was not found: ${ripgrepSourcePath}. Run TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-msvc node apps/desktop/scripts/fetch-bundled-ripgrep.mjs before applying the AionUi overlay.`,
     );
   }
-  const nodeSourcePath =
-    sources.nodeSourcePath ??
-    resolve(repoRoot, "apps/desktop/src-tauri/binaries/relay-node-x86_64-pc-windows-msvc.exe");
-  if (!existsSync(nodeSourcePath)) {
-    throw new Error(
-      `Bundled Node was not found: ${nodeSourcePath}. Run TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-msvc node apps/desktop/scripts/fetch-bundled-node.mjs before applying the AionUi overlay.`,
-    );
-  }
-  const liteparseSourceDir =
-    sources.liteparseSourceDir ?? resolve(repoRoot, "apps/desktop/src-tauri/liteparse-runner");
-  if (!existsSync(resolve(liteparseSourceDir, "parse.mjs")) || !existsSync(resolve(liteparseSourceDir, "node_modules"))) {
-    throw new Error(
-      `LiteParse runner was not prepared: ${liteparseSourceDir}. Run npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner before applying the AionUi overlay.`,
-    );
-  }
 
-  const ripgrepDir = resolve(targetRoot, "resources/relay-tools/ripgrep");
-  const nodeDir = resolve(targetRoot, "resources/relay-tools/node");
-  const liteparseDir = resolve(targetRoot, "resources/relay-tools/liteparse-runner");
+  const relayToolsDir = resolve(targetRoot, "resources/relay-tools");
+  const ripgrepDir = resolve(relayToolsDir, "ripgrep");
   mkdirSync(ripgrepDir, { recursive: true });
-  mkdirSync(nodeDir, { recursive: true });
+  rmSync(resolve(relayToolsDir, "node"), { recursive: true, force: true });
+  rmSync(resolve(relayToolsDir, "liteparse-runner"), { recursive: true, force: true });
   copyFileSync(ripgrepSourcePath, resolve(ripgrepDir, "rg.exe"));
-  copyFileSync(nodeSourcePath, resolve(nodeDir, "relay-node.exe"));
-  cpSync(liteparseSourceDir, liteparseDir, { recursive: true });
-  return resolve(targetRoot, "resources/relay-tools");
+  return relayToolsDir;
 }
 
 export function relayDocumentSearchSkillContent() {
@@ -1617,7 +1605,7 @@ export function relayDocumentSearchSkillContent() {
     [
       "---",
       "name: relay-document-search",
-      'description: "Use this skill for beginner-facing document search, local file discovery, Office/PDF reading, and evidence-backed summaries in Relay Agent."',
+      'description: "Use this skill for beginner-facing document search, local file discovery, Office/text reading, PDF filename discovery, and evidence-backed summaries in Relay Agent."',
       "---",
       "",
       "# Relay Document Search Skill",
@@ -1808,7 +1796,7 @@ export function patchTeamGuideMcpStdioContent(input) {
     "function createRelayDocumentSearchTool(server: McpServer): void {",
     "  server.tool(",
     "    RELAY_DOCUMENT_SEARCH_TOOL_NAME,",
-    "    `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/PDF lookup, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,",
+    "    `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/text lookup, PDF filename discovery, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,",
     "    {",
     "      query: z.string().min(1).max(2000).describe('The user request in their own words.'),",
     "      roots: z",
@@ -1998,6 +1986,7 @@ export function patchAionrsManagerContent(input) {
         "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'metadata-cache') },",
         "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX', value: '1' },",
         "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'filename-index') },",
+        "        { name: 'RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'index-db', 'document-search.sqlite') },",
         "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY', value: '1' },",
         "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'user-memory') },",
         "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL', value: '1' },",
@@ -2009,7 +1998,7 @@ export function patchAionrsManagerContent(input) {
   const relayDocumentSearchMethod = [
     "  private buildRelayDocumentSearchMcpStdioConfig(workspace?: string): StdioMcpOption | undefined {",
     "    const scriptPath = path.join(resolveMcpScriptDir(), 'relay-document-search-mcp-stdio.js');",
-    "    const command = process.env.RELAY_DOCUMENT_SEARCH_MCP_COMMAND || process.env.RELAY_BUNDLED_NODE || process.execPath || 'node';",
+    "    const command = process.env.RELAY_DOCUMENT_SEARCH_MCP_COMMAND || process.execPath || 'node';",
     "    const usesElectronNode = command === process.execPath;",
     "    return {",
     "      name: 'relay-document-search',",
@@ -2018,13 +2007,13 @@ export function patchAionrsManagerContent(input) {
     "      awaitReady: true,",
     "      env: [",
     "        { name: 'ELECTRON_RUN_AS_NODE', value: usesElectronNode ? '1' : (process.env.ELECTRON_RUN_AS_NODE || '') },",
-    "        { name: 'RELAY_BUNDLED_NODE', value: process.env.RELAY_BUNDLED_NODE || '' },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_WORKSPACE', value: workspace || '' },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_CONVERSATION_ID', value: this.conversation_id },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE', value: '1' },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'metadata-cache') },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX', value: '1' },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'filename-index') },",
+    "        { name: 'RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'index-db', 'document-search.sqlite') },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY', value: '1' },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR', value: path.join(process.env.LOCALAPPDATA || process.env.APPDATA || process.env.HOME || process.cwd(), 'Relay Agent', 'document-search', 'user-memory') },",
     "        { name: 'RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL', value: '1' },",

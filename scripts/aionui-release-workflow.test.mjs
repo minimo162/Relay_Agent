@@ -37,20 +37,19 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   const text = workflow();
   const installIndex = text.indexOf("bun install --frozen-lockfile");
   const ripgrepIndex = text.indexOf("node apps/desktop/scripts/fetch-bundled-ripgrep.mjs");
-  const nodeIndex = text.indexOf("node apps/desktop/scripts/fetch-bundled-node.mjs");
-  const liteparseIndex = text.indexOf("npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner");
   const overlayIndex = text.indexOf("node scripts/apply-aionui-overlay.mjs --aionui-dir aionui");
   const validateIndex = text.indexOf("name: Validate Relay overlay");
   const buildIndex = text.indexOf("bun run build-win:x64");
 
   assert.ok(installIndex > 0, "workflow should install pinned upstream dependencies");
   assert.ok(ripgrepIndex > installIndex, "workflow should fetch bundled ripgrep after frozen install");
-  assert.ok(nodeIndex > ripgrepIndex, "workflow should fetch bundled Node after bundled ripgrep");
-  assert.ok(liteparseIndex > nodeIndex, "workflow should prepare LiteParse after bundled Node");
-  assert.ok(overlayIndex > liteparseIndex, "workflow should apply Relay overlay after PDF search resources are ready");
+  assert.equal(text.includes("fetch-bundled-node.mjs"), false, "lean installer should not fetch standalone Node");
+  assert.equal(text.includes("npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner"), false, "lean installer should not prepare LiteParse");
+  assert.ok(overlayIndex > ripgrepIndex, "workflow should apply Relay overlay after search resources are ready");
   assert.ok(validateIndex > overlayIndex, "workflow should validate overlay after applying it");
   assert.ok(buildIndex > validateIndex, "workflow should build after overlay validation");
   assert.match(text, /Relay overlay did not update productName/);
+  assert.match(text, /Relay overlay did not update package version to Relay Agent version/);
   assert.match(text, /resources\/relay-gateway/);
   assert.match(text, /resources\/relay-tools/);
   assert.match(text, /relay-document-search-mcp-stdio\\\.js/);
@@ -64,8 +63,8 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /@process\/utils\/relayDocumentSearchBridge/);
   assert.match(text, /TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc/);
   assert.match(text, /relay-tools\\ripgrep\\rg\.exe/);
-  assert.match(text, /relay-tools\\node\\relay-node\.exe/);
-  assert.match(text, /relay-tools\\liteparse-runner\\parse\.mjs/);
+  assert.match(text, /Standalone Node should not be bundled/);
+  assert.match(text, /LiteParse runner should not be bundled/);
   assert.match(text, /Relay Agent shared-folder search override/);
   assert.match(text, /Relay Agent shared-folder grep override/);
   assert.match(text, /performRelayRipgrepFileListing/);
@@ -107,6 +106,8 @@ test("AionUi release workflow validates artifact manifest gate before publishing
   assert.match(text, /ConvertTo-Json -Depth 20/);
   assert.match(text, /RELEASE_MANIFEST_PATH: \$\{\{ steps\.release_manifest\.outputs\.path \}\}/);
   assert.match(text, /Release manifest: \$env:RELEASE_MANIFEST_NAME/);
+  assert.match(text, /relayAgentVersion/);
+  assert.match(text, /RELAY_AGENT_VERSION: \$\{\{ steps\.release_manifest\.outputs\.relay_agent_version \}\}/);
 });
 
 test("AionUi release workflow publishes signed or clearly marked prerelease assets", () => {
@@ -120,6 +121,7 @@ test("AionUi release workflow publishes signed or clearly marked prerelease asse
   assert.match(text, /\$assets = @\(\$env:INSTALLER_PATH, \$env:RELEASE_MANIFEST_PATH\)/);
   assert.match(text, /RELEASE_MANIFEST_NAME: \$\{\{ steps\.release_manifest\.outputs\.name \}\}/);
   assert.match(text, /RELAY_OVERLAY_VERSION: \$\{\{ steps\.release_manifest\.outputs\.overlay_version \}\}/);
+  assert.match(text, /Relay Agent version: \$env:RELAY_AGENT_VERSION/);
   assert.match(text, /gh release upload \$env:RELEASE_TAG @assets --clobber/);
   assert.match(text, /gh @args/);
   assert.match(text, /Manifest schema: \\`\$\{\{ steps\.release_manifest\.outputs\.schema \}\}\\`/);

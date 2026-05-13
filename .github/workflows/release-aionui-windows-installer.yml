@@ -143,14 +143,6 @@ jobs:
           TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
         run: node apps/desktop/scripts/fetch-bundled-ripgrep.mjs
 
-      - name: Fetch bundled Node for Relay PDF search
-        env:
-          TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
-        run: node apps/desktop/scripts/fetch-bundled-node.mjs
-
-      - name: Prepare LiteParse runner for Relay PDF search
-        run: npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner
-
       - name: Apply Relay overlay
         run: node scripts/apply-aionui-overlay.mjs --aionui-dir aionui
 
@@ -163,6 +155,10 @@ jobs:
           }
           if ($package.productName -ne "Relay Agent") {
             throw "Relay overlay did not update productName; got '$($package.productName)'."
+          }
+          $relayPackage = Get-Content -LiteralPath "apps\desktop\package.json" -Raw | ConvertFrom-Json
+          if ($package.version -ne $relayPackage.version) {
+            throw "Relay overlay did not update package version to Relay Agent version '$($relayPackage.version)'; got '$($package.version)'."
           }
 
           $builderConfig = Get-Content -LiteralPath "aionui\electron-builder.yml" -Raw
@@ -218,14 +214,11 @@ jobs:
             throw "Bundled ripgrep was not copied into AionUi resources."
           }
           & $ripgrepPath --version
-          $relayNodePath = "aionui\resources\relay-tools\node\relay-node.exe"
-          if (-not (Test-Path -LiteralPath $relayNodePath)) {
-            throw "Bundled Node was not copied into AionUi resources."
+          if (Test-Path -LiteralPath "aionui\resources\relay-tools\node\relay-node.exe") {
+            throw "Standalone Node should not be bundled in the lean Relay Agent installer."
           }
-          & $relayNodePath --version
-          $liteparseRunnerPath = "aionui\resources\relay-tools\liteparse-runner\parse.mjs"
-          if (-not (Test-Path -LiteralPath $liteparseRunnerPath)) {
-            throw "LiteParse runner was not copied into AionUi resources."
+          if (Test-Path -LiteralPath "aionui\resources\relay-tools\liteparse-runner\parse.mjs") {
+            throw "LiteParse runner should not be bundled in the lean Relay Agent installer."
           }
           $aionCliGlobPath = "aionui\node_modules\@office-ai\aioncli-core\dist\src\tools\glob.js"
           $aionCliRipGrepPath = "aionui\node_modules\@office-ai\aioncli-core\dist\src\tools\ripGrep.js"
@@ -499,8 +492,10 @@ jobs:
           }
 
           $package = Get-Content -LiteralPath "aionui\package.json" -Raw | ConvertFrom-Json
+          $relayPackage = Get-Content -LiteralPath "apps\desktop\package.json" -Raw | ConvertFrom-Json
           Assert-Equal $package.name $relayManifest.branding.packageName "Relay overlay package name is not reflected in AionUi."
           Assert-Equal $package.productName $relayManifest.branding.productName "Relay overlay productName is not reflected in AionUi."
+          Assert-Equal $package.version $relayPackage.version "Relay overlay package version does not match Relay Agent."
 
           $builderConfig = Get-Content -LiteralPath "aionui\electron-builder.yml" -Raw
           if ($builderConfig -notmatch "(?m)^productName:\s+Relay Agent$" -or $builderConfig -notmatch "(?m)^executableName:\s+Relay Agent$") {
@@ -534,6 +529,7 @@ jobs:
             release = [ordered]@{
               tag = $env:RELEASE_TAG
               name = $env:RELEASE_NAME
+              relayAgentVersion = $relayPackage.version
               prerelease = $isPrerelease
               workflow = $releaseSpec.workflow
               runId = $env:GITHUB_RUN_ID
@@ -594,6 +590,7 @@ jobs:
           "name=$($releaseSpec.manifestAssetName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "schema=$($releaseSpec.schema)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "overlay_version=$($releaseSpec.overlayVersion)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "relay_agent_version=$($relayPackage.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Publish installer to GitHub Releases
         shell: pwsh
@@ -610,11 +607,13 @@ jobs:
           RELEASE_MANIFEST_NAME: ${{ steps.release_manifest.outputs.name }}
           RELEASE_MANIFEST_SCHEMA: ${{ steps.release_manifest.outputs.schema }}
           RELAY_OVERLAY_VERSION: ${{ steps.release_manifest.outputs.overlay_version }}
+          RELAY_AGENT_VERSION: ${{ steps.release_manifest.outputs.relay_agent_version }}
         run: |
           $assets = @($env:INSTALLER_PATH, $env:RELEASE_MANIFEST_PATH)
           $releaseNotes = @"
           Relay-branded AionUi Windows NSIS installer for Relay Agent.
 
+          - Relay Agent version: $env:RELAY_AGENT_VERSION
           - AionUi baseline: $env:AIONUI_TAG / $env:AIONUI_COMMIT
           - Overlay version: $env:RELAY_OVERLAY_VERSION
           - Overlay contents: Relay provider seed, Relay branding, relay-agent protocol, Relay icons

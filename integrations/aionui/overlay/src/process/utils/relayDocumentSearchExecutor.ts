@@ -83,6 +83,7 @@ import {
 } from './relayDocumentSearchDerivedContentIndex';
 import {
   RELAY_DOCUMENT_SEARCH_INDEX_DB_CONTRACT,
+  relayDocumentSearchIndexDbPathForOptions,
   searchRelayDocumentSearchIndexDbFts,
   writeRelayDocumentSearchIndexDbDerivedSearchStore,
   writeRelayDocumentSearchIndexDbMetadata,
@@ -1877,7 +1878,7 @@ function indexDbStateForOptions(options: RelayDocumentSearchExecutorOptions): In
     enabled,
     contract: RELAY_DOCUMENT_SEARCH_INDEX_DB_CONTRACT,
     backend: enabled ? 'sqlite_fts' : 'disabled',
-    dbPath: enabled ? options.indexDbPath : undefined,
+    dbPath: enabled ? relayDocumentSearchIndexDbPathForOptions(options) : undefined,
     requiredMigrations: [],
     appliedMigrations: [],
     existingMigrations: [],

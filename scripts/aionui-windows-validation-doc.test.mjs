@@ -13,7 +13,8 @@ test("AionUi Windows validation checklist covers install, provider, tools, and O
   assert.match(validationDoc, /Relay\.Agent-AionUi-release-manifest\.json/);
   assert.match(validationDoc, /RelayAionUiReleaseArtifactManifest\.v1/);
   assert.match(validationDoc, /relay-aionui-overlay-v1/);
-  assert.match(validationDoc, /bundled\s+ripgrep\/Node\/LiteParse payloads/);
+  assert.match(validationDoc, /bundled ripgrep payload/);
+  assert.match(validationDoc, /standalone Node\/LiteParse are not bundled/);
   assert.match(validationDoc, /Get-AuthenticodeSignature/);
   assert.match(validationDoc, /Defender/);
   assert.match(validationDoc, /Relay Agent \/ M365 Copilot/);

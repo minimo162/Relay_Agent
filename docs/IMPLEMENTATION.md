@@ -25,6 +25,56 @@
 
 ## Milestone Log
 
+### 2026-05-13 Lean AionUi installer payload and Relay version ownership
+
+Scoped the AionUi Windows installer to the two currently supported beginner
+functions: document/file search and Office file editing. The Relay overlay now
+copies only the ripgrep search binary under `resources/relay-tools`; standalone
+Node and the LiteParse runner are not bundled. The gateway treats PDF text
+extraction as an optional explicitly configured reader, so PDF files remain
+filename/path candidates in the lean installer instead of causing startup
+attention states. Beginner prompt examples were updated to avoid advertising
+PDF evidence summaries while the PDF text reader is not part of the installer.
+
+The overlay now overwrites AionUi `package.json.version` with
+`apps/desktop/package.json`'s Relay Agent version, and the release workflow
+validates that version before publishing. The release artifact manifest records
+`relayAgentVersion`, and required bundled payloads now list only ripgrep.
+
+Verification:
+
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `node --test apps/desktop/scripts/aionui_relay_manifest.test.mjs apps/desktop/scripts/aionui_provider_seed.test.mjs scripts/aionui-release-workflow.test.mjs scripts/aionui-windows-validation-doc.test.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs scripts/relay-parsed-document-ir.test.mjs`: passed.
+- `git diff --check`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-13 Shared-folder-safe document-search index path
+
+Moved the optional SQLite/FTS document-search index DB default out of the
+workspace/current directory and into the user-local Relay Agent data area:
+`Relay Agent/document-search/index-db/document-search.sqlite` under
+`LOCALAPPDATA`, `APPDATA`, or the OS home directory. This prevents broad
+searches against shared folders from leaving `.relay-document-search` files in
+the searched folder. The AionUi MCP launch overlay and gateway shared-search
+defaults also now pass `RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH` to the same
+user-local location.
+
+Existing `.relay-document-search` leftovers in shared folders are not deleted
+automatically; Relay only prevents new default index files from being written
+there.
+
+Verification:
+
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-13 Docufinder-inspired document-search planning slice
 
 Improved `relay_document_search` without changing the two-mode AionUi product

@@ -46,7 +46,7 @@ export const AIONUI_RELAY_TASK_MODE_PROMPT_TEMPLATES = Object.freeze({
       maxResults: 120,
     },
     responsePolicy:
-      "Return candidate files quickly first. Defer Office/PDF content extraction until evidence, summary, inspection, or a selected file requires it.",
+      "Return candidate files quickly first. Defer Office/text content extraction until evidence, summary, inspection, or a selected file requires it. Treat PDFs as filename/path candidates unless an optional PDF text reader is explicitly configured.",
   },
   office_edit: {
     selectedModeMarker: "RELAY_TASK_MODE: office_edit",
@@ -97,13 +97,13 @@ export const AIONUI_RELAY_TASK_ASSISTANTS = Object.freeze([
           "Find files related to cash flow statement preparation in this folder",
           "Find related files first, then summarize only confirmed evidence",
           "Find the latest report in this workspace",
-          "Summarize this PDF with evidence",
+          "Find report files and group the likely source and output candidates",
         ],
         "ja-JP": [
           "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
           "関係するファイルを探してから、確認済みの根拠だけで要約して",
           "このフォルダの最新の報告書を探して",
-          "このPDFを根拠つきで要約して",
+          "報告書ファイルを探して、元資料候補と出力候補に分けて",
         ],
       },
     },
@@ -259,7 +259,7 @@ export const AIONUI_RELAY_GUID_START_ACTION = Object.freeze({
 });
 export const AIONUI_RELAY_GUID_EXAMPLE_PROMPTS = Object.freeze([
   "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
-  "このPDFを根拠つきで要約して",
+  "報告書ファイルを探して、元資料候補と出力候補に分けて",
   "このExcelファイルの指定セルを編集して",
   "このフォルダの最新の報告書を探して",
   "この資料を開いて要点と根拠ページをまとめて",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -205,6 +205,55 @@ function derivedSearchStore() {
     },
   };
 }
+
+test("index DB default path uses a user-local cache outside the workspace cwd", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-index-db-workspace-"));
+  const appData = mkdtempSync(resolve(tmpdir(), "relay-document-search-index-db-appdata-"));
+  const fake = createFakeSqliteModule();
+  const { module, cleanup } = await loadIndexDbModule();
+  const oldLocalAppData = process.env.LOCALAPPDATA;
+  const oldAppData = process.env.APPDATA;
+  const oldIndexDbPath = process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH;
+  const oldCwd = process.cwd();
+  try {
+    process.env.LOCALAPPDATA = appData;
+    delete process.env.APPDATA;
+    delete process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH;
+    process.chdir(workspace);
+
+    const expectedPath = resolve(appData, "Relay Agent", "document-search", "index-db", "document-search.sqlite");
+    assert.equal(module.relayDocumentSearchIndexDbPathForOptions(), expectedPath);
+
+    const report = await module.initializeRelayDocumentSearchIndexDb({
+      sqliteModule: fake.sqliteModule,
+      now: new Date("2026-05-13T00:00:00.000Z"),
+    });
+
+    assert.equal(report.dbPath, expectedPath);
+    assert.deepEqual(fake.openedPaths, [expectedPath]);
+    assert.equal(existsSync(resolve(workspace, ".relay-document-search")), false);
+  } finally {
+    process.chdir(oldCwd);
+    if (oldLocalAppData === undefined) {
+      delete process.env.LOCALAPPDATA;
+    } else {
+      process.env.LOCALAPPDATA = oldLocalAppData;
+    }
+    if (oldAppData === undefined) {
+      delete process.env.APPDATA;
+    } else {
+      process.env.APPDATA = oldAppData;
+    }
+    if (oldIndexDbPath === undefined) {
+      delete process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH;
+    } else {
+      process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH = oldIndexDbPath;
+    }
+    cleanup();
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(appData, { recursive: true, force: true });
+  }
+});
 
 test("index DB reports schema revision and records preview-span migrations", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "relay-document-search-index-db-migration-"));

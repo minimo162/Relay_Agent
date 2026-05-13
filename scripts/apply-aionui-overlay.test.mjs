@@ -54,6 +54,7 @@ const branding = {
 };
 
 const relayManifest = JSON.parse(readFileSync("apps/desktop/src-tauri/bootstrap/aionui-relay.json", "utf8"));
+const relayDesktopPackage = JSON.parse(readFileSync("apps/desktop/package.json", "utf8"));
 
 function writeFixture(root, relativePath, content) {
   const target = join(root, relativePath);
@@ -66,16 +67,9 @@ function readFixture(root, relativePath) {
 }
 
 function createRelayToolFixtureSources(root) {
-  const liteparseSourceDir = join(root, "liteparse-runner");
-  mkdirSync(join(liteparseSourceDir, "node_modules"), { recursive: true });
   writeFileSync(join(root, "rg.exe"), "relay-rg-fixture", "utf8");
-  writeFileSync(join(root, "relay-node.exe"), "relay-node-fixture", "utf8");
-  writeFileSync(join(liteparseSourceDir, "parse.mjs"), "export const fixture = true;\n", "utf8");
-  writeFileSync(join(liteparseSourceDir, "node_modules/.keep"), "", "utf8");
   return {
     ripgrepSourcePath: join(root, "rg.exe"),
-    nodeSourcePath: join(root, "relay-node.exe"),
-    liteparseSourceDir,
   };
 }
 
@@ -528,6 +522,7 @@ test("patchPackageJsonContent rebrands the AionUi package metadata", () => {
   );
 
   assert.equal(patched.name, "relay-agent-aionui");
+  assert.equal(patched.version, relayDesktopPackage.version);
   assert.equal(patched.productName, "Relay Agent");
   assert.equal(patched.author.name, "Relay Agent");
   assert.equal(patched.author.email, undefined);
@@ -957,7 +952,7 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     const packageJson = JSON.parse(readFixture(fixtureRoot, "package.json"));
     assert.equal(packageJson.name, relayManifest.branding.packageName);
     assert.equal(packageJson.productName, relayManifest.branding.productName);
-    assert.equal(packageJson.version, relayManifest.upstreams.aionUi.version);
+    assert.equal(packageJson.version, relayDesktopPackage.version);
     assert.equal(packageJson.relayFixturePinnedTag, relayManifest.upstreams.aionUi.tag);
     assert.equal(packageJson.relayFixturePinnedCommit, relayManifest.upstreams.aionUi.commit);
 
@@ -1013,12 +1008,11 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(patchedAionrsManager, /buildRelayDocumentSearchMcpStdioConfig/);
     assert.match(patchedAionrsManager, /resolveMcpScriptDir/);
     assert.match(patchedAionrsManager, /awaitReady: true/);
-    assert.match(patchedAionrsManager, /RELAY_BUNDLED_NODE/);
     assert.match(patchedAionrsManager, /ELECTRON_RUN_AS_NODE/);
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-gateway/copilot_server.mjs")));
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/ripgrep/rg.exe")));
-    assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/node/relay-node.exe")));
-    assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/liteparse-runner/parse.mjs")));
+    assert.equal(existsSync(join(fixtureRoot, "resources/relay-tools/node/relay-node.exe")), false);
+    assert.equal(existsSync(join(fixtureRoot, "resources/relay-tools/liteparse-runner/parse.mjs")), false);
     assert.equal(result.relayToolsResourcesDir, join(fixtureRoot, "resources/relay-tools"));
     assert.equal(result.relayDocumentSearchSkillDir, join(fixtureRoot, "src/process/resources/skills/relay-document-search"));
   } finally {
@@ -1248,8 +1242,8 @@ test("Relay document search contract is copied into the AionUi overlay", () => {
   assert.match(overlayScript, /relayDocumentSearchMcpTarget/);
   assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL/);
   assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR/);
-  assert.match(overlayScript, /relay-node-x86_64-pc-windows-msvc\.exe/);
-  assert.match(overlayScript, /liteparse-runner/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH/);
+  assert.doesNotMatch(overlayScript, /relay-node-x86_64-pc-windows-msvc\.exe/);
   assert.match(contract, /RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT/);
   assert.match(contract, /relayDocumentSearchOpenAiToolSchema/);
   assert.match(contract, /validateRelayDocumentSearchRequest/);
@@ -1534,16 +1528,16 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedManager, /path\.join\(resolveMcpScriptDir\(\), 'relay-document-search-mcp-stdio\.js'\)/);
   assert.match(
     patchedManager,
-    /process\.env\.RELAY_DOCUMENT_SEARCH_MCP_COMMAND \|\| process\.env\.RELAY_BUNDLED_NODE \|\| process\.execPath \|\| 'node'/,
+    /process\.env\.RELAY_DOCUMENT_SEARCH_MCP_COMMAND \|\| process\.execPath \|\| 'node'/,
   );
   assert.match(patchedManager, /awaitReady: true/);
   assert.match(patchedManager, /ELECTRON_RUN_AS_NODE/);
-  assert.match(patchedManager, /RELAY_BUNDLED_NODE/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_CONVERSATION_ID/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_METADATA_CACHE/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_TEAM_GUIDE_FALLBACK/);

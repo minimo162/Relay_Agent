@@ -1,4 +1,5 @@
-import { dirname, resolve, sep } from 'path';
+import { homedir } from 'os';
+import { dirname, join, resolve, sep } from 'path';
 import { mkdir } from 'fs/promises';
 
 import type { RelayDocumentSearchCachedFileMetadata } from './relayDocumentSearchMetadataCache';
@@ -9,6 +10,7 @@ import type {
 
 export const RELAY_DOCUMENT_SEARCH_INDEX_DB_CONTRACT = 'RelayDocumentSearchIndexDb.v1' as const;
 export const RELAY_DOCUMENT_SEARCH_INDEX_DB_SCHEMA_REVISION = 2 as const;
+const RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH_ENV = 'RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH';
 
 export type RelayDocumentSearchIndexDbStatus = 'ready' | 'unavailable' | 'failed' | 'read_only';
 
@@ -300,8 +302,16 @@ const INDEX_DB_BEST_EFFORT_MIGRATIONS = [
 export const RELAY_DOCUMENT_SEARCH_INDEX_DB_REQUIRED_MIGRATIONS =
   INDEX_DB_BEST_EFFORT_MIGRATIONS.map((migration) => migration.id);
 
-function defaultIndexDbPath(): string {
-  return resolve(process.cwd(), '.relay-document-search', 'document-search.sqlite');
+function defaultIndexDbDir(): string {
+  const base = process.env.LOCALAPPDATA || process.env.APPDATA || homedir();
+  return join(base, 'Relay Agent', 'document-search', 'index-db');
+}
+
+export function relayDocumentSearchIndexDbPathForOptions(
+  options: RelayDocumentSearchIndexDbOptions = {},
+): string {
+  const configured = options.indexDbPath || process.env[RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH_ENV];
+  return resolve(configured && configured.trim() ? configured : join(defaultIndexDbDir(), 'document-search.sqlite'));
 }
 
 async function loadSqliteModule(): Promise<RelayDocumentSearchSqliteModule | undefined> {
@@ -438,7 +448,7 @@ function fileInvalidationPredicateSql(targets: RelayDocumentSearchIndexDbFileInv
 export async function inspectRelayDocumentSearchIndexDbStagingState(
   options: RelayDocumentSearchIndexDbOptions = {},
 ): Promise<RelayDocumentSearchIndexDbStagingState> {
-  const dbPath = resolve(options.indexDbPath ?? defaultIndexDbPath());
+  const dbPath = relayDocumentSearchIndexDbPathForOptions(options);
   const sqliteModule = options.sqliteModule ?? await loadSqliteModule();
   if (!sqliteModule) {
     return {
@@ -531,7 +541,7 @@ async function openReadyIndexDb(
 export async function initializeRelayDocumentSearchIndexDb(
   options: RelayDocumentSearchIndexDbOptions = {},
 ): Promise<RelayDocumentSearchIndexDbSchemaReport> {
-  const dbPath = resolve(options.indexDbPath ?? defaultIndexDbPath());
+  const dbPath = relayDocumentSearchIndexDbPathForOptions(options);
   const sqliteModule = options.sqliteModule ?? await loadSqliteModule();
   let migrationResult: { appliedMigrations: string[]; existingMigrations: string[] } = {
     appliedMigrations: [],

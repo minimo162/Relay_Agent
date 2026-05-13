@@ -93,7 +93,7 @@ const server = new McpServer(
 
 server.tool(
   RELAY_DOCUMENT_SEARCH_TOOL_NAME,
-  `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/PDF lookup, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,
+  `Find local workspace documents through Relay Agent. Use this as the first tool for document search, folder search, local file discovery, Office/text lookup, PDF filename discovery, and evidence-backed summaries. Returns ${RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT} with raw ${RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT}, structured result cards, continuation, selection, and secondary Copilot prose metadata.`,
   {
     query: z.string().min(1).max(2000).describe('The user request in their own words.'),
     roots: z

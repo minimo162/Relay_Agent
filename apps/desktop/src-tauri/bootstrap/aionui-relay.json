@@ -264,7 +264,7 @@
     "examplePromptStrategy": "task-aware-recent-and-popular",
     "examplePrompts": [
       "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
-      "このPDFを根拠つきで要約して",
+      "報告書ファイルを探して、元資料候補と出力候補に分けて",
       "このExcelファイルの指定セルを編集して",
       "このフォルダの最新の報告書を探して",
       "この資料を開いて要点と根拠ページをまとめて"
@@ -430,7 +430,7 @@
           "thoroughness": "quick",
           "maxResults": 120
         },
-        "responsePolicy": "Return candidate files quickly first. Defer Office/PDF content extraction until evidence, summary, inspection, or a selected file requires it."
+        "responsePolicy": "Return candidate files quickly first. Defer Office/text content extraction until evidence, summary, inspection, or a selected file requires it. Treat PDFs as filename/path candidates unless an optional PDF text reader is explicitly configured."
       },
       "office_edit": {
         "selectedModeMarker": "RELAY_TASK_MODE: office_edit",
@@ -516,16 +516,6 @@
         "id": "ripgrep",
         "installedPath": "resources/relay-tools/ripgrep/rg.exe",
         "requiredFor": "workspace-file-search"
-      },
-      {
-        "id": "relay-node",
-        "installedPath": "resources/relay-tools/node/relay-node.exe",
-        "requiredFor": "pdf-search-liteparse"
-      },
-      {
-        "id": "liteparse-runner",
-        "installedPath": "resources/relay-tools/liteparse-runner/parse.mjs",
-        "requiredFor": "pdf-search-liteparse"
       }
     ],
     "requiredOverlayAssertions": [
@@ -534,7 +524,7 @@
       "relay-provider-seed",
       "workspace-search-result-flow",
       "beginner-surface-curation",
-      "portable-tool-bundle"
+      "portable-search-tool-bundle"
     ],
     "requiredReleaseMetadata": [
       "releaseTag",
@@ -545,6 +535,7 @@
       "authenticodeStatus",
       "aionUiTag",
       "aionUiCommit",
+      "relayAgentVersion",
       "officeCliVersion",
       "overlayVersion",
       "bundledPayloads",

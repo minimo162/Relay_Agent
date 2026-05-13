@@ -16,11 +16,11 @@ available.
 
 | Gate | Task | Evidence to collect | Acceptance condition | Bundle location |
 | --- | --- | --- | --- | --- |
-| Release workflow artifact | `AION02` | GitHub Actions run URL, installer asset name, release tag, workflow inputs, signing mode, SHA256, overlay/upstream pins, `aionui-relay.json`, bundled Node/LiteParse manifest facts | Workflow proves the Relay-branded AionUi installer artifact and manifest metadata before any prerelease is accepted | `release-workflow/` |
+| Release workflow artifact | `AION02` | GitHub Actions run URL, installer asset name, release tag, workflow inputs, signing mode, SHA256, Relay Agent version, overlay/upstream pins, `aionui-relay.json`, bundled ripgrep manifest facts | Workflow proves the Relay-branded AionUi installer artifact and manifest metadata before any prerelease is accepted | `release-workflow/` |
 | Clean Windows bootstrap handoff | `B12` / `AION04` | `live_windows_openwork_opencode_bootstrap_smoke` JSON, OpenCode/OpenWork versions, SHA256 values, provider endpoint/model, explicit installer/browser handoff notes, M365 text/read-tool transcript evidence | Clean Windows run proves the remaining B12 installer/browser handoff without claiming Linux-only readiness is enough | `b12-bootstrap/` |
 | Installed first launch | `AION05` | Installer run notes, first-launch screenshots, app name/title/protocol/icon checks, provider-ready or sign-in-required state, default model evidence | The first visible product surface is Relay-branded AionUi, not OpenCode Web/OpenWork, and no API-key/backend setup is required | `installed-first-run/` |
 | Provider seed and M365 recovery | `AION05` | Provider settings screenshot or redacted config export, local provider health output, M365 sign-in/recovery notes, model id `relay-agent/m365-copilot` | Relay provider is selected by default and sign-in recovery needs no terminal steps | `provider/` |
-| User-local runtime tools | `AION05` | `officecli --version`, `rg --version`, bundled Node path, LiteParse runner path, cache paths, no-admin install notes | OfficeCLI, ripgrep, bundled Node, and LiteParse are available to AionUi child processes from user-local or installed resources | `runtime-tools/` |
+| User-local runtime tools | `AION05` | `officecli --version`, `rg --version`, cache paths, no-admin install notes, confirmation that standalone Node/LiteParse are not bundled | OfficeCLI and ripgrep are available to AionUi child processes from user-local or installed resources; PDF text extraction remains optional and not part of the lean installer | `runtime-tools/` |
 | Beginner AionUi surface | `AION05` | `/guid` screenshots, curated assistant list, hidden advanced/provider/platform surfaces, advanced flag state | Beginners see only `資料を探す` and `Officeファイルを編集する` without setup/platform management surfaces | `beginner-surface/` |
 | Office workflows | `AION05` | OfficeCLI command/result logs, edited `.docx`/`.xlsx`/`.pptx` filenames, Office/preview readability notes, sanitized logs | Office edits run through OfficeCLI-backed tools and do not rely on M365 built-in editing | `office-workflows/` |
 | Workspace Document Search UX | `AION06` | Search prompts, selected root, result-card screenshots, preview/open/copy/refine/show-more evidence, partial/no-result/permission states, local draft/Copilot polish state | Search uses structured result cards and local evidence state; filename-only candidates are not presented as confirmed findings | `workspace-search/` |
@@ -78,8 +78,8 @@ Get-FileHash ".\Relay.Agent-*-win-x64*.exe" -Algorithm SHA256
 - [ ] Confirm the release manifest records schema
       `RelayAionUiReleaseArtifactManifest.v1`, overlay version
       `relay-aionui-overlay-v1`, the installer asset name/SHA256, signing
-      mode, AionUi tag/commit, OfficeCLI version, and the bundled
-      ripgrep/Node/LiteParse payloads:
+      mode, Relay Agent version, AionUi tag/commit, OfficeCLI version, and
+      the bundled ripgrep payload:
 
 ```powershell
 $manifest = Get-Content ".\Relay.Agent-AionUi-release-manifest.json" -Raw | ConvertFrom-Json
@@ -87,6 +87,7 @@ $manifest.schema
 $manifest.installer.assetName
 $manifest.installer.sha256
 $manifest.signing.mode
+$manifest.release.relayAgentVersion
 $manifest.upstreams.aionUi.tag
 $manifest.upstreams.aionUi.commit
 $manifest.upstreams.officeCli.version

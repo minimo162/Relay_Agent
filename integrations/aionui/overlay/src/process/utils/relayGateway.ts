@@ -70,7 +70,7 @@ const RELAY_TASK_MODE_PROMPT_TEMPLATES = {
       maxResults: 120,
     },
     responsePolicy:
-      'Return candidate files quickly first. Defer Office/PDF content extraction until evidence, summary, inspection, or a selected file requires it.',
+      'Return candidate files quickly first. Defer Office/text content extraction until evidence, summary, inspection, or a selected file requires it. Treat PDFs as filename/path candidates unless an optional PDF text reader is explicitly configured.',
   },
   office_edit: {
     selectedModeMarker: 'RELAY_TASK_MODE: office_edit',
@@ -121,13 +121,13 @@ const RELAY_TASK_ASSISTANTS = [
           'Find files related to cash flow statement preparation in this folder',
           'Find related files first, then summarize only confirmed evidence',
           'Find the latest report in this workspace',
-          'Summarize this PDF with evidence',
+          'Find report files and group the likely source and output candidates',
         ],
         'ja-JP': [
           'このフォルダからキャッシュフロー計算書に関係するファイルを探して',
           '関係するファイルを探してから、確認済みの根拠だけで要約して',
           'このフォルダの最新の報告書を探して',
-          'このPDFを根拠つきで要約して',
+          '報告書ファイルを探して、元資料候補と出力候補に分けて',
         ],
       },
     },
@@ -382,7 +382,7 @@ const RELAY_GUID_START_ACTION = {
 };
 const RELAY_GUID_EXAMPLE_PROMPTS = [
   'このフォルダからキャッシュフロー計算書に関係するファイルを探して',
-  'このPDFを根拠つきで要約して',
+  '報告書ファイルを探して、元資料候補と出力候補に分けて',
   'このExcelファイルの指定セルを編集して',
   'このフォルダの最新の報告書を探して',
   'この資料を開いて要点と根拠ページをまとめて',
@@ -497,6 +497,12 @@ const RELAY_BEGINNER_HIDDEN_SURFACES = [
   'preset-agent-backend-switcher',
   'assistant-edit-drawer-entrypoint',
 ];
+
+function relayDocumentSearchUserDataPath(...parts: string[]): string {
+  const base = process.env.LOCALAPPDATA || process.env.APPDATA || homedir();
+  return join(base, 'Relay Agent', 'document-search', ...parts);
+}
+
 const RELAY_SHARED_SEARCH_DEFAULTS = {
   RELAY_SHARED_SEARCH_INTERNAL_FILE_LIMIT: '5000',
   RELAY_SHARED_SEARCH_MAX_RETURNED_FILES: '300',
@@ -505,6 +511,7 @@ const RELAY_SHARED_SEARCH_DEFAULTS = {
   RELAY_SHARED_SEARCH_BRANCH_DEPTH: '3',
   RELAY_SHARED_SEARCH_NAMES_ONLY_MAX_MATCHES: '500',
   RELAY_SHARED_SEARCH_MAX_MATCHES_PER_FILE: '1',
+  RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH: relayDocumentSearchUserDataPath('index-db', 'document-search.sqlite'),
 };
 const GATEWAY_FILES = [
   'copilot_server.js',
@@ -748,6 +755,14 @@ function preparePdfReader(): PdfReaderStatus {
   }
   const explicitNode = process.env[RELAY_BUNDLED_NODE_ENV]?.trim();
   const explicitRunner = process.env[RELAY_LITEPARSE_RUNNER_ROOT_ENV]?.trim();
+  const requested = process.env.RELAY_ENABLE_PDF_TEXT_READER === '1' || Boolean(explicitNode || explicitRunner);
+  if (!requested) {
+    return {
+      state: 'skipped',
+      reason: 'optional_not_bundled',
+      message: 'PDF text extraction is not bundled in the lean installer; PDF files remain filename/path candidates.',
+    };
+  }
   if (explicitNode && explicitRunner && existsSync(explicitNode) && existsSync(join(explicitRunner, 'parse.mjs'))) {
     registerPdfReader(resolve(explicitNode), resolve(explicitRunner));
     return {
@@ -1490,7 +1505,7 @@ export async function startRelayGatewayBeforeShell(): Promise<RelayGatewayStartu
   }
 
   try {
-    writeStatus({ state: 'starting', message: 'Preparing LiteParse PDF reader for document search.', gatewayDir, ripgrep, sharedSearch });
+    writeStatus({ state: 'starting', message: 'Checking optional PDF text reader for document search.', gatewayDir, ripgrep, sharedSearch });
     pdfReader = preparePdfReader();
     appendGatewayLog(
       `[RelayGateway] PDF reader ${pdfReader.state}: node=${pdfReader.nodePath ?? 'none'} runner=${pdfReader.runnerRoot ?? 'none'}${pdfReader.reason ? ` (${pdfReader.reason})` : ''}\n`,

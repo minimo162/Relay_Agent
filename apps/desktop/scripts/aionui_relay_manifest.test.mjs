@@ -301,7 +301,7 @@ test("AionUi Relay manifest defines the GuidPage beginner search flow", () => {
     examplePromptStrategy: "task-aware-recent-and-popular",
     examplePrompts: [
       "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
-      "このPDFを根拠つきで要約して",
+      "報告書ファイルを探して、元資料候補と出力候補に分けて",
       "このExcelファイルの指定セルを編集して",
       "このフォルダの最新の報告書を探して",
       "この資料を開いて要点と根拠ページをまとめて",
@@ -492,16 +492,6 @@ test("AionUi Relay manifest defines release artifact gate metadata", () => {
         installedPath: "resources/relay-tools/ripgrep/rg.exe",
         requiredFor: "workspace-file-search",
       },
-      {
-        id: "relay-node",
-        installedPath: "resources/relay-tools/node/relay-node.exe",
-        requiredFor: "pdf-search-liteparse",
-      },
-      {
-        id: "liteparse-runner",
-        installedPath: "resources/relay-tools/liteparse-runner/parse.mjs",
-        requiredFor: "pdf-search-liteparse",
-      },
     ],
     requiredOverlayAssertions: [
       "relay-branding",
@@ -509,7 +499,7 @@ test("AionUi Relay manifest defines release artifact gate metadata", () => {
       "relay-provider-seed",
       "workspace-search-result-flow",
       "beginner-surface-curation",
-      "portable-tool-bundle",
+      "portable-search-tool-bundle",
     ],
     requiredReleaseMetadata: [
       "releaseTag",
@@ -520,6 +510,7 @@ test("AionUi Relay manifest defines release artifact gate metadata", () => {
       "authenticodeStatus",
       "aionUiTag",
       "aionUiCommit",
+      "relayAgentVersion",
       "officeCliVersion",
       "overlayVersion",
       "bundledPayloads",
