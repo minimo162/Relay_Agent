@@ -13,7 +13,7 @@ export type RelayDocumentSearchLocalDraftCitation = {
 };
 
 export type RelayDocumentSearchLocalDraftSection = {
-  kind: 'confirmed_evidence' | 'candidate_files' | 'caveats' | 'next_steps';
+  kind: 'confirmed_evidence' | 'candidate_map' | 'candidate_files' | 'caveats' | 'next_steps';
   title: string;
   items: Array<{
     text: string;
@@ -112,6 +112,56 @@ function candidateLabel(candidate: unknown): string {
   return asString(record.display_name, asString(record.display_path, asString(record.path, '候補ファイル')));
 }
 
+function candidateBucket(candidate: unknown): string {
+  const record = isRecord(candidate) ? candidate : {};
+  return asString(record.candidate_bucket, 'uncategorized');
+}
+
+function candidateBucketLabel(bucket: string): string {
+  switch (bucket) {
+    case 'direct_source_workpaper':
+      return '作業用・元資料候補';
+    case 'supporting_evidence':
+      return '補助根拠候補';
+    case 'disclosure_output':
+      return '開示・出力候補';
+    case 'review_or_audit':
+      return '確認・監査候補';
+    case 'backup_or_archive':
+      return 'バックアップ・履歴候補';
+    default:
+      return '未分類候補';
+  }
+}
+
+function candidateBucketOrder(bucket: string): number {
+  switch (bucket) {
+    case 'direct_source_workpaper':
+      return 0;
+    case 'supporting_evidence':
+      return 1;
+    case 'disclosure_output':
+      return 2;
+    case 'review_or_audit':
+      return 3;
+    case 'backup_or_archive':
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function candidateBucketCounts(evidencePack: RelayDocumentSearchEvidencePackV1): Array<{ bucket: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const candidate of evidencePack.candidate_files) {
+    const bucket = candidateBucket(candidate);
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([bucket, count]) => ({ bucket, count }))
+    .sort((left, right) => candidateBucketOrder(left.bucket) - candidateBucketOrder(right.bucket));
+}
+
 function warningCopy(code: string): string {
   switch (code) {
     case 'candidate_only':
@@ -156,6 +206,11 @@ function buildCitations(evidencePack: RelayDocumentSearchEvidencePackV1): RelayD
 function summaryFor(input: RelayDocumentSearchLocalDraftInput): string {
   const evidenceCount = input.evidencePack.evidence.length;
   const candidateCount = input.evidencePack.candidate_files.length;
+  const bucketCounts = candidateBucketCounts(input.evidencePack);
+  const sourceCount = bucketCounts.find((item) => item.bucket === 'direct_source_workpaper')?.count ?? 0;
+  const outputLikeCount = bucketCounts
+    .filter((item) => ['disclosure_output', 'review_or_audit', 'backup_or_archive'].includes(item.bucket))
+    .reduce((sum, item) => sum + item.count, 0);
   if (evidenceCount > 0 && input.quality.answerPolicy === 'evidence_confirmed') {
     return `中身を確認できた根拠が${evidenceCount}件あります。候補ファイルは${candidateCount}件です。`;
   }
@@ -163,6 +218,9 @@ function summaryFor(input: RelayDocumentSearchLocalDraftInput): string {
     return `中身を確認できた根拠が${evidenceCount}件ありますが、検索範囲は一部未完了です。`;
   }
   if (candidateCount > 0) {
+    if (sourceCount > 0 || outputLikeCount > 0) {
+      return `ファイル名・パスの候補が${candidateCount}件あります。作業用・元資料候補は${sourceCount}件、出力・監査・バックアップ系候補は${outputLikeCount}件です。中身の根拠はまだ確認できていません。`;
+    }
     return `ファイル名・パスの候補が${candidateCount}件あります。中身の根拠はまだ確認できていません。`;
   }
   return '条件に合う候補は見つかりませんでした。検索語やフォルダを変えて再検索できます。';
@@ -196,9 +254,21 @@ function candidateSection(evidencePack: RelayDocumentSearchEvidencePackV1): Rela
     kind: 'candidate_files',
     title: '候補ファイル',
     items: evidencePack.candidate_files.slice(0, 5).map((candidate) => ({
-      text: `${candidateLabel(candidate)} - ${asString(candidate.evidence_state) || 'candidate'}`,
+      text: `${candidateLabel(candidate)} - ${candidateBucketLabel(candidateBucket(candidate))} - ${asString(candidate.evidence_state) || 'candidate'}`,
       result_id: isRecord(candidate) ? asString(candidate.result_id) : undefined,
       file_id: isRecord(candidate) ? asString(candidate.file_id) : undefined,
+    })),
+  };
+}
+
+function candidateMapSection(evidencePack: RelayDocumentSearchEvidencePackV1): RelayDocumentSearchLocalDraftSection | undefined {
+  const counts = candidateBucketCounts(evidencePack);
+  if (!counts.length) return undefined;
+  return {
+    kind: 'candidate_map',
+    title: '候補の分類',
+    items: counts.map(({ bucket, count }) => ({
+      text: `${candidateBucketLabel(bucket)}: ${count}件`,
     })),
   };
 }
@@ -210,7 +280,12 @@ function uniqueWarnings(input: RelayDocumentSearchLocalDraftInput): string[] {
 }
 
 function caveatsFor(input: RelayDocumentSearchLocalDraftInput): string[] {
-  return uniqueWarnings(input).map(warningCopy);
+  const caveats = uniqueWarnings(input).map(warningCopy);
+  const counts = candidateBucketCounts(input.evidencePack);
+  if (counts.some((item) => ['disclosure_output', 'review_or_audit', 'backup_or_archive'].includes(item.bucket))) {
+    caveats.push('開示・監査・バックアップ系の候補は、作業元ではなく照合・保管候補として扱います。');
+  }
+  return [...new Set(caveats)];
 }
 
 function nextActionsFor(input: RelayDocumentSearchLocalDraftInput): string[] {
@@ -218,6 +293,10 @@ function nextActionsFor(input: RelayDocumentSearchLocalDraftInput): string[] {
     return ['根拠カードをプレビューで確認する', '必要ならこの根拠を使って回答文を整える'];
   }
   if (input.evidencePack.candidate_files.length > 0) {
+    const counts = candidateBucketCounts(input.evidencePack);
+    if (counts.some((item) => item.bucket === 'direct_source_workpaper')) {
+      return ['作業用・元資料候補をプレビューで確認する', '必要なら中身確認ありで再検索する', '出力・監査候補は照合用として扱う'];
+    }
     return ['候補ファイルを開いて中身を確認する', '検索語を広げるか、対象フォルダを変えて再検索する'];
   }
   return ['検索語を広げる', '別のフォルダを選ぶ', '拡張子フィルターを外す'];
@@ -232,6 +311,7 @@ export function buildRelayDocumentSearchLocalDraft(
   const nextActions = nextActionsFor(input);
   const sections = [
     confirmedEvidenceSection(input.evidencePack, citations),
+    candidateMapSection(input.evidencePack),
     candidateSection(input.evidencePack),
     caveats.length
       ? {

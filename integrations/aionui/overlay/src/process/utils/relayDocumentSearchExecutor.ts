@@ -97,6 +97,7 @@ import {
   RELAY_DOCUMENT_SEARCH_QUERY_NORMALIZER_VERSION,
   buildRelayDocumentSearchQueryPlan,
   normalizeRelaySearchText,
+  type RelayDocumentSearchQueryPlanV1,
 } from './relayDocumentSearchQueryPlan';
 import { buildRelayDocumentSearchIndexReport } from './relayDocumentSearchIndexReport';
 import {
@@ -310,6 +311,47 @@ type DiversityResult = {
   deferredCandidateCount: number;
 };
 
+type ScanBudgetStrategy =
+  | 'latest_first'
+  | 'historical_examples'
+  | 'balanced'
+  | 'explicit_period'
+  | 'single_root_fallback';
+
+type ScanBudgetFolderRole = 'explicit' | 'latest' | 'recent' | 'historical' | 'other';
+
+type ScanBudgetFolderReport = {
+  path: string;
+  displayPath: string;
+  role: ScanBudgetFolderRole;
+  periodKey?: number;
+  modifiedTime?: string;
+  weight: number;
+  minimumGuaranteedFiles: number;
+  allocatedFiles: number;
+  scannedFiles: number;
+  skippedFiles: number;
+  truncated: boolean;
+};
+
+type ScanBudgetReport = {
+  schemaVersion: 'RelayDocumentSearchScanBudget.v1';
+  root: string;
+  strategy: ScanBudgetStrategy;
+  timeScopeIntent: RelayDocumentSearchQueryPlanV1['timeScopeIntent'];
+  timeScopeReason: string;
+  maxScanFiles: number;
+  rootFileBudget: number;
+  rootFilesScanned: number;
+  rootFilesSkipped: number;
+  rootFilesTruncated: boolean;
+  folderCount: number;
+  minimumGuaranteePerFolder: number;
+  budgetedFolderCount: number;
+  budgetTruncatedFolderCount: number;
+  folders: ScanBudgetFolderReport[];
+};
+
 function contentEvidenceHasTableAnchor(contentEvidence: ContentEvidence | undefined): boolean {
   if (!contentEvidence) return false;
   return contentEvidence.anchors.some((anchor) =>
@@ -434,6 +476,7 @@ type WalkState = {
   deadlineMs?: number;
   signal?: AbortSignal;
   onProgress?: RelayDocumentSearchExecutorOptions['onProgress'];
+  budgetReports: ScanBudgetReport[];
 };
 
 type MetadataCacheState = {
@@ -1715,9 +1758,363 @@ async function collectContentEvidence(
   return { byFileId, scannedFiles, skippedFiles };
 }
 
-async function walkRoot(root: string, state: WalkState, maxScanFiles: number, checkedAt: string): Promise<FileMetadata[]> {
+function periodKeyFromPathSegment(value: string): number | undefined {
+  const normalized = value.normalize('NFKC').toLowerCase();
+  const patterns = [
+    /\bfy\s*(\d{2,4})(?:\s*[-_ ]?\s*([1-4])\s*q)?\b/u,
+    /\b(\d{2,4})\s*期(?:\s*[-_ ]?\s*([1-4])\s*q)?/u,
+    /\b(\d{2,4})\s*[-_ ]\s*([1-4])\s*q\b/u,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+    const year = Number(match[1]);
+    const quarter = match[2] ? Number(match[2]) : 0;
+    if (!Number.isFinite(year)) continue;
+    return year * 10 + (Number.isFinite(quarter) ? quarter : 0);
+  }
+  return undefined;
+}
+
+function explicitPeriodKeys(queryPlan: RelayDocumentSearchQueryPlanV1): Set<number> {
+  return new Set(
+    queryPlan.periodHints
+      .map(periodKeyFromPathSegment)
+      .filter((key): key is number => typeof key === 'number' && Number.isFinite(key)),
+  );
+}
+
+function scanBudgetStrategy(queryPlan: RelayDocumentSearchQueryPlanV1): ScanBudgetStrategy {
+  if (queryPlan.timeScopeIntent === 'explicit_period') return 'explicit_period';
+  if (queryPlan.timeScopeIntent === 'latest_first') return 'latest_first';
+  if (queryPlan.timeScopeIntent === 'historical_examples') return 'historical_examples';
+  return 'balanced';
+}
+
+function folderRoleForBudget(
+  periodKey: number | undefined,
+  newestPeriodKey: number | undefined,
+  explicitKeys: Set<number>,
+  strategy: ScanBudgetStrategy,
+): ScanBudgetFolderRole {
+  if (periodKey !== undefined && explicitKeys.has(periodKey)) return 'explicit';
+  if (periodKey === undefined || newestPeriodKey === undefined) return 'other';
+  if (periodKey === newestPeriodKey) return 'latest';
+  if (newestPeriodKey - periodKey <= 20) return 'recent';
+  if (strategy === 'historical_examples') return 'historical';
+  return 'historical';
+}
+
+function folderWeightForBudget(role: ScanBudgetFolderRole, strategy: ScanBudgetStrategy): number {
+  if (strategy === 'explicit_period') {
+    if (role === 'explicit') return 12;
+    if (role === 'recent') return 3;
+    if (role === 'latest') return 4;
+    if (role === 'historical') return 1;
+    return 1;
+  }
+  if (strategy === 'latest_first') {
+    if (role === 'latest') return 10;
+    if (role === 'recent') return 4;
+    if (role === 'historical') return 1;
+    return 1;
+  }
+  if (strategy === 'historical_examples') {
+    if (role === 'historical') return 5;
+    if (role === 'recent') return 4;
+    if (role === 'latest') return 3;
+    if (role === 'explicit') return 6;
+    return 1;
+  }
+  if (role === 'latest') return 5;
+  if (role === 'recent') return 3;
+  if (role === 'historical') return 1.5;
+  if (role === 'explicit') return 8;
+  return 1;
+}
+
+function minimumGuaranteeRatio(strategy: ScanBudgetStrategy): number {
+  switch (strategy) {
+    case 'historical_examples':
+      return 0.35;
+    case 'balanced':
+      return 0.25;
+    case 'explicit_period':
+      return 0.12;
+    case 'latest_first':
+      return 0.15;
+    default:
+      return 0.2;
+  }
+}
+
+async function buildScanBudgetReport(
+  root: string,
+  directoryEntries: Array<{ name: string; path: string }>,
+  rootFileCount: number,
+  maxScanFiles: number,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
+): Promise<ScanBudgetReport | undefined> {
+  if (!directoryEntries.length) return undefined;
+  const normalizedRoot = resolve(root);
+  const strategy = scanBudgetStrategy(queryPlan);
+  const explicitKeys = explicitPeriodKeys(queryPlan);
+  const folderFacts = await Promise.all(directoryEntries.map(async (entry) => {
+    const periodKey = periodKeyFromPathSegment(entry.name);
+    let modifiedTime: string | undefined;
+    try {
+      modifiedTime = (await stat(entry.path)).mtime.toISOString();
+    } catch {
+      modifiedTime = undefined;
+    }
+    return {
+      entry,
+      periodKey,
+      modifiedTime,
+    };
+  }));
+  const newestPeriodKey = folderFacts
+    .map((fact) => fact.periodKey)
+    .filter((key): key is number => typeof key === 'number' && Number.isFinite(key))
+    .reduce<number | undefined>((max, key) => max === undefined ? key : Math.max(max, key), undefined);
+  const rootFileBudget = rootFileCount > 0
+    ? Math.min(maxScanFiles, 100, Math.max(10, Math.floor(maxScanFiles * 0.02)))
+    : 0;
+  const folderBudget = Math.max(0, maxScanFiles - rootFileBudget);
+  const minPool = Math.floor(folderBudget * minimumGuaranteeRatio(strategy));
+  const minimumGuaranteePerFolder = directoryEntries.length > 0 && folderBudget > 0
+    ? Math.max(1, Math.min(150, Math.floor(minPool / directoryEntries.length)))
+    : 0;
+  const baseTotal = Math.min(folderBudget, minimumGuaranteePerFolder * directoryEntries.length);
+  const remaining = Math.max(0, folderBudget - baseTotal);
+  const folders = folderFacts.map((fact): ScanBudgetFolderReport => {
+    const role = folderRoleForBudget(fact.periodKey, newestPeriodKey, explicitKeys, strategy);
+    return {
+      path: fact.entry.path,
+      displayPath: rootRelativePath(normalizedRoot, fact.entry.path),
+      role,
+      periodKey: fact.periodKey,
+      modifiedTime: fact.modifiedTime,
+      weight: folderWeightForBudget(role, strategy),
+      minimumGuaranteedFiles: minimumGuaranteePerFolder,
+      allocatedFiles: minimumGuaranteePerFolder,
+      scannedFiles: 0,
+      skippedFiles: 0,
+      truncated: false,
+    };
+  });
+  const weightTotal = folders.reduce((sum, folder) => sum + folder.weight, 0);
+  let allocated = folders.reduce((sum, folder) => sum + folder.allocatedFiles, 0);
+  for (const folder of folders) {
+    if (remaining <= 0 || weightTotal <= 0) continue;
+    const extra = Math.floor((remaining * folder.weight) / weightTotal);
+    folder.allocatedFiles += extra;
+    allocated += extra;
+  }
+  let leftover = Math.max(0, folderBudget - allocated);
+  const priority = [...folders].sort((left, right) =>
+    right.weight - left.weight ||
+    (right.periodKey ?? 0) - (left.periodKey ?? 0) ||
+    left.displayPath.localeCompare(right.displayPath),
+  );
+  for (const folder of priority) {
+    if (leftover <= 0) break;
+    folder.allocatedFiles += 1;
+    leftover -= 1;
+  }
+  folders.sort((left, right) =>
+    right.weight - left.weight ||
+    (right.periodKey ?? 0) - (left.periodKey ?? 0) ||
+    left.displayPath.localeCompare(right.displayPath),
+  );
+  return {
+    schemaVersion: 'RelayDocumentSearchScanBudget.v1',
+    root: normalizedRoot,
+    strategy,
+    timeScopeIntent: queryPlan.timeScopeIntent,
+    timeScopeReason: queryPlan.timeScopeReason,
+    maxScanFiles,
+    rootFileBudget,
+    rootFilesScanned: 0,
+    rootFilesSkipped: 0,
+    rootFilesTruncated: false,
+    folderCount: folders.length,
+    minimumGuaranteePerFolder,
+    budgetedFolderCount: folders.filter((folder) => folder.allocatedFiles > 0).length,
+    budgetTruncatedFolderCount: 0,
+    folders,
+  };
+}
+
+async function fileMetadataForPath(
+  normalizedRoot: string,
+  fullPath: string,
+  checkedAt: string,
+): Promise<FileMetadata> {
+  const info = await stat(fullPath);
+  const displayPath = rootRelativePath(normalizedRoot, fullPath);
+  return {
+    fileId: stableId(`${normalizedRoot}:${displayPath}`),
+    root: normalizedRoot,
+    path: fullPath,
+    displayPath,
+    name: basename(fullPath),
+    extension: extname(fullPath).replace(/^\./u, '').toLowerCase(),
+    size: info.size,
+    modifiedTime: info.mtime.toISOString(),
+    sourceMetadataVersion: sourceMetadataVersion(fullPath, info.size, info.mtimeMs),
+    accessSnapshots: {
+      metadata: {
+        action: 'metadata',
+        state: 'ok',
+        checkedAt,
+      },
+    },
+  };
+}
+
+async function walkDirectoryWithBudget(
+  normalizedRoot: string,
+  folder: ScanBudgetFolderReport,
+  state: WalkState,
+  maxScanFiles: number,
+  checkedAt: string,
+): Promise<FileMetadata[]> {
+  const out: FileMetadata[] = [];
+  if (folder.allocatedFiles <= 0) {
+    folder.truncated = true;
+    return out;
+  }
+  const stack = [folder.path];
+  while (stack.length) {
+    if (shouldStop(state)) break;
+    if (state.scannedFiles >= maxScanFiles) {
+      state.truncated = true;
+      folder.truncated = true;
+      break;
+    }
+    if (folder.scannedFiles >= folder.allocatedFiles) {
+      folder.truncated = true;
+      break;
+    }
+    const dir = stack.pop() as string;
+    let entries;
+    try {
+      entries = (await readdir(dir, { withFileTypes: true })).sort((left, right) =>
+        left.name.localeCompare(right.name),
+      );
+    } catch {
+      state.inaccessiblePaths.push(dir);
+      state.skippedFiles += 1;
+      folder.skippedFiles += 1;
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (shouldStop(state)) break;
+      const fullPath = join(dir, entry.name);
+      if (!isInsideRoot(normalizedRoot, fullPath)) {
+        state.skippedFiles += 1;
+        folder.skippedFiles += 1;
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!SKIPPED_DIRS.has(entry.name)) stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        state.skippedFiles += 1;
+        folder.skippedFiles += 1;
+        continue;
+      }
+      if (state.scannedFiles >= maxScanFiles) {
+        state.truncated = true;
+        folder.truncated = true;
+        break;
+      }
+      if (folder.scannedFiles >= folder.allocatedFiles) {
+        folder.truncated = true;
+        break;
+      }
+      try {
+        const metadata = await fileMetadataForPath(normalizedRoot, fullPath, checkedAt);
+        if (shouldStop(state)) break;
+        state.scannedFiles += 1;
+        folder.scannedFiles += 1;
+        if (state.scannedFiles % 250 === 0) emitProgress(state, 'metadata_scan', 40);
+        out.push(metadata);
+      } catch {
+        state.inaccessiblePaths.push(fullPath);
+        state.skippedFiles += 1;
+        folder.skippedFiles += 1;
+      }
+    }
+  }
+  return out;
+}
+
+async function walkRoot(
+  root: string,
+  state: WalkState,
+  maxScanFiles: number,
+  checkedAt: string,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
+): Promise<FileMetadata[]> {
   const normalizedRoot = resolve(root);
   const out: FileMetadata[] = [];
+  let rootEntries;
+  try {
+    rootEntries = (await readdir(normalizedRoot, { withFileTypes: true })).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+  } catch {
+    state.inaccessiblePaths.push(normalizedRoot);
+    state.skippedFiles += 1;
+    return out;
+  }
+  const rootFiles = rootEntries.filter((entry) => entry.isFile());
+  const rootDirs = rootEntries
+    .filter((entry) => entry.isDirectory() && !SKIPPED_DIRS.has(entry.name))
+    .map((entry) => ({ name: entry.name, path: join(normalizedRoot, entry.name) }));
+  const budgetReport = await buildScanBudgetReport(normalizedRoot, rootDirs, rootFiles.length, maxScanFiles, queryPlan);
+  if (budgetReport) {
+    for (const entry of rootFiles) {
+      if (shouldStop(state) || state.scannedFiles >= maxScanFiles) {
+        state.truncated = true;
+        budgetReport.rootFilesTruncated = true;
+        break;
+      }
+      if (budgetReport.rootFilesScanned >= budgetReport.rootFileBudget) {
+        budgetReport.rootFilesTruncated = true;
+        break;
+      }
+      try {
+        const metadata = await fileMetadataForPath(normalizedRoot, join(normalizedRoot, entry.name), checkedAt);
+        state.scannedFiles += 1;
+        budgetReport.rootFilesScanned += 1;
+        out.push(metadata);
+      } catch {
+        state.inaccessiblePaths.push(join(normalizedRoot, entry.name));
+        state.skippedFiles += 1;
+        budgetReport.rootFilesSkipped += 1;
+      }
+    }
+    for (const folder of budgetReport.folders) {
+      if (shouldStop(state) || state.scannedFiles >= maxScanFiles) {
+        state.truncated = true;
+        folder.truncated = true;
+        break;
+      }
+      out.push(...await walkDirectoryWithBudget(normalizedRoot, folder, state, maxScanFiles, checkedAt));
+    }
+    budgetReport.budgetTruncatedFolderCount = budgetReport.folders.filter((folder) => folder.truncated).length;
+    if (budgetReport.rootFilesTruncated || budgetReport.budgetTruncatedFolderCount > 0) {
+      state.truncated = true;
+    }
+    state.budgetReports.push(budgetReport);
+    return out;
+  }
+
   const stack = [normalizedRoot];
 
   while (stack.length) {
@@ -2675,6 +3072,7 @@ async function filesForRoot(
   root: string,
   state: WalkState,
   maxScanFiles: number,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
   options: RelayDocumentSearchExecutorOptions,
   cacheState: MetadataCacheState,
   freshnessReports: RelayDocumentSearchFreshnessReport[],
@@ -2704,7 +3102,7 @@ async function filesForRoot(
   }
 
   const inaccessibleBefore = state.inaccessiblePaths.length;
-  const files = await walkRoot(root, state, maxScanFiles, (options.now ?? new Date()).toISOString());
+  const files = await walkRoot(root, state, maxScanFiles, (options.now ?? new Date()).toISOString(), queryPlan);
   if (previousCacheForFreshness) {
     freshnessReports.push(buildRelayDocumentSearchFreshnessReport({
       root: resolve(root),
@@ -2966,6 +3364,7 @@ export async function executeRelayDocumentSearch(
     deadlineMs: options.timeoutMs !== undefined ? Date.now() + Math.max(0, options.timeoutMs) : undefined,
     signal: options.signal,
     onProgress: options.onProgress,
+    budgetReports: [],
   };
   const syncJournal = syncJournalDiagnosticsForOptions(options);
   await recordSyncJournalEvent(syncJournal, {
@@ -3052,7 +3451,7 @@ export async function executeRelayDocumentSearch(
       const scannedBefore = state.scannedFiles;
       const skippedBefore = state.skippedFiles;
       const inaccessibleBefore = state.inaccessiblePaths.length;
-      const rootFiles = await filesForRoot(root, state, maxScanFiles, options, metadataCache, freshnessReports);
+      const rootFiles = await filesForRoot(root, state, maxScanFiles, relayQueryPlan, options, metadataCache, freshnessReports);
       files.push(...rootFiles);
       syncJournalEvents.push({
         kind: 'metadata_scan_completed',
@@ -3604,6 +4003,17 @@ export async function executeRelayDocumentSearch(
       redactedEvidenceCount: evidenceRedaction.redactedEvidenceCount,
     },
   });
+  const searchBudget = {
+    schemaVersion: 'RelayDocumentSearchScanBudgetSummary.v1',
+    deterministic: true,
+    budgetedRootCount: state.budgetReports.length,
+    truncatedFolderCount: state.budgetReports.reduce(
+      (sum, report) => sum + report.budgetTruncatedFolderCount,
+      0,
+    ),
+    strategies: [...new Set(state.budgetReports.map((report) => report.strategy))],
+    reports: state.budgetReports,
+  };
   const indexReport = buildRelayDocumentSearchIndexReport({
     generatedAt: now,
     status,
@@ -3753,6 +4163,8 @@ export async function executeRelayDocumentSearch(
       contentIndexCommitCommittedCount: contentIndexCommit.committedCount,
       contentIndexCommitStaleFallbackCount: contentIndexCommit.staleFallbackCount,
       contentIndexCommitFailedCount: contentIndexCommit.failedCount,
+      searchBudgetStrategies: searchBudget.strategies.join(','),
+      searchBudgetTruncatedFolderCount: searchBudget.truncatedFolderCount,
     },
   });
   const finalSyncJournal = await recordSyncJournalEvents(syncJournal, syncJournalEvents, options);
@@ -3851,6 +4263,7 @@ export async function executeRelayDocumentSearch(
         uniqueDirectoryCount: diversity.uniqueDirectoryCount,
         deferredCandidateCount: diversity.deferredCandidateCount,
       },
+      searchBudget,
       resultGrouping: groupedRanked.diagnostics,
       folderRoles: {
         schemaVersion: 'RelayDocumentSearchFolderRoles.v1',

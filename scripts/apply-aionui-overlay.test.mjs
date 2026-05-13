@@ -1243,7 +1243,18 @@ test("Relay document search contract is copied into the AionUi overlay", () => {
   assert.match(overlayScript, /relayDocumentSearchMcpTarget/);
   assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL/);
   assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_INDEX_DB/);
   assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_INDEX_DB_PRIMARY_MODE/);
+  assert.match(overlayScript, /RELAY_PARSED_DOCUMENT_CACHE/);
+  assert.match(overlayScript, /RELAY_PARSED_DOCUMENT_CACHE_DIR/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_DERIVED_CONTENT_INDEX_CACHE/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_DERIVED_CONTENT_INDEX_DIR/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_INDEX_COORDINATOR/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_INDEX_COORDINATOR_DIR/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_FAILURE_REGISTRY_DIR/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_JOB_STORE/);
+  assert.match(overlayScript, /RELAY_DOCUMENT_SEARCH_JOB_STORE_DIR/);
   assert.doesNotMatch(overlayScript, /relay-node-x86_64-pc-windows-msvc\.exe/);
   assert.match(contract, /RELAY_DOCUMENT_SEARCH_REQUEST_CONTRACT/);
   assert.match(contract, /relayDocumentSearchOpenAiToolSchema/);
@@ -1482,6 +1493,13 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedTeamGuideMcp, /relayDocumentSearchBridgeToolDefinition/);
   assert.match(patchedTeamGuideMcp, /relay_document_search_team_guide_handler_failed/);
   assert.match(patchedTeamGuideMcp, /process\.env\.RELAY_DOCUMENT_SEARCH_WORKSPACE \|\| process\.cwd\(\)/);
+  assert.match(patchedTeamGuideMcp, /queryPlanHints/);
+  assert.match(patchedTeamGuideMcp, /RelayDocumentSearchCopilotQueryPlan\.v1/);
+  assert.match(patchedTeamGuideMcp, /useIndexDb: true/);
+  assert.match(patchedTeamGuideMcp, /indexDbPrimaryMode: 'primary'/);
+  assert.match(patchedTeamGuideMcp, /useParsedDocumentCache: true/);
+  assert.match(patchedTeamGuideMcp, /useDerivedContentIndexCache: true/);
+  assert.match(patchedTeamGuideMcp, /useIndexCoordinator: true/);
   assert.equal(patchTeamGuideMcpStdioContent(patchedTeamGuideMcp), patchedTeamGuideMcp);
 
   const manager = [
@@ -1540,7 +1558,18 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_INDEX_DB/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_INDEX_DB_PRIMARY_MODE/);
+  assert.match(patchedManager, /RELAY_PARSED_DOCUMENT_CACHE/);
+  assert.match(patchedManager, /RELAY_PARSED_DOCUMENT_CACHE_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_DERIVED_CONTENT_INDEX_CACHE/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_DERIVED_CONTENT_INDEX_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_INDEX_COORDINATOR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_INDEX_COORDINATOR_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_FAILURE_REGISTRY_DIR/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_JOB_STORE/);
+  assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_JOB_STORE_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_TEAM_GUIDE_FALLBACK/);

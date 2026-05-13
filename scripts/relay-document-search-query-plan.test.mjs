@@ -67,6 +67,8 @@ test("Relay document search query plan normalizes accounting terms and period hi
     assert.equal(plan.mode, "answer");
     assert.equal(plan.contentStrategy, "answer_required");
     assert.equal(plan.confirmationPolicy, "content_required");
+    assert.equal(plan.timeScopeIntent, "explicit_period");
+    assert.equal(plan.timeScopeReason, "period_hint_detected");
     assert.ok(plan.normalizedTerms.includes("キャッシュフロー"));
     assert.ok(plan.normalizedTerms.includes("cfs"));
     assert.ok(plan.normalizedTerms.includes("精算表"));
@@ -99,6 +101,7 @@ test("Relay document search query plan extracts finance terms from unspaced Japa
     assert.equal(plan.mode, "filename");
     assert.equal(plan.contentStrategy, "candidate_first");
     assert.equal(plan.recencyPreference, "neutral");
+    assert.equal(plan.timeScopeIntent, "balanced");
     assert.ok(plan.normalizedTerms.includes("キャッシュフロー計算書"));
     assert.ok(plan.normalizedTerms.includes("キャッシュフロー"));
     assert.ok(plan.ignoredIntentTerms.some((term) => term.startsWith("folder_reference:")));
@@ -129,6 +132,7 @@ test("Relay document search query plan captures exclusion and recency hints", as
 
     assert.equal(plan.mode, "hybrid");
     assert.equal(plan.recencyPreference, "prefer_recent");
+    assert.equal(plan.timeScopeIntent, "latest_first");
     assert.ok(plan.excludedTerms.includes("バックアップ"));
     assert.ok(plan.excludedTerms.includes("backup"));
     assert.ok(plan.normalizedTerms.includes("連結"));
@@ -189,6 +193,7 @@ test("Relay document search query plan merges validated Copilot hint terms witho
           supportTerms: ["精算表", "合算", "ADJ"],
           demoteTerms: ["ファイリング", "XSA", "監査"],
           fileTypeHints: ["xlsx", "xlsm"],
+          timeScopeIntent: "historical_examples",
           summary: "CFS作業ファイルを広く拾う。",
         },
       },
@@ -204,6 +209,8 @@ test("Relay document search query plan merges validated Copilot hint terms witho
     assert.deepEqual(plan.demoteTerms, ["ファイリング", "xsa", "監査"]);
     assert.equal(plan.excludedTerms.includes("ファイリング"), false);
     assert.deepEqual(plan.fileTypeHints, ["xlsx", "xlsm"]);
+    assert.equal(plan.timeScopeIntent, "historical_examples");
+    assert.equal(plan.timeScopeReason, "validated_copilot_time_scope_hint");
     assert.equal(plan.copilotHintSummary, "CFS作業ファイルを広く拾う。");
   } finally {
     cleanup();

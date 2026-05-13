@@ -89,6 +89,13 @@ test("Relay document search OpenAI schema exposes only model-owned request field
     schema.function.parameters.properties.queryPlanHints.properties.schemaVersion.enum[0],
     "RelayDocumentSearchCopilotQueryPlan.v1",
   );
+  assert.deepEqual(schema.function.parameters.properties.queryPlanHints.properties.timeScopeIntent.enum, [
+    "latest_first",
+    "historical_examples",
+    "balanced",
+    "explicit_period",
+    "unknown",
+  ]);
 });
 
 test("Relay document search request validator rejects Relay-controlled fields", async () => {
@@ -111,6 +118,7 @@ test("Relay document search request validator rejects Relay-controlled fields", 
       supportTerms: ["精算表"],
       demoteTerms: ["ファイリング"],
       fileTypeHints: ["xlsx"],
+      timeScopeIntent: "latest_first",
       summary: "CFS候補を広く拾う。",
     },
   });
@@ -119,6 +127,7 @@ test("Relay document search request validator rejects Relay-controlled fields", 
   assert.equal(valid.value.schemaVersion, "RelayDocumentSearchRequest.v1");
   assert.deepEqual(valid.value.fileTypes, ["xlsx", "pdf"]);
   assert.deepEqual(valid.value.queryPlanHints.expandedTerms, ["キャッシュフロー", "CFS"]);
+  assert.equal(valid.value.queryPlanHints.timeScopeIntent, "latest_first");
 
   const invalid = contract.validateRelayDocumentSearchRequest({
     query: "cash flow",

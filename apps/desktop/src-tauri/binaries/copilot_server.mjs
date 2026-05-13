@@ -6025,6 +6025,7 @@ function formatRelayDocumentSearchQueryPlanPrompt(params = {}) {
       supportTerms: ["supporting workflow term"],
       demoteTerms: ["output/review/backup term to avoid overranking"],
       fileTypeHints: ["any"],
+      timeScopeIntent: "balanced",
       summary: "short reason for the expansion",
     }),
     "Rules:",
@@ -6037,6 +6038,7 @@ function formatRelayDocumentSearchQueryPlanPrompt(params = {}) {
     "- supportTerms may include related workpaper terms that improve recall without narrowing the root.",
     "- demoteTerms should include terms such as ファイリング, XSA, 開示, 監査, backup only when those are likely outputs/review copies rather than source workpapers.",
     "- fileTypeHints may include any, txt, md, csv, docx, xlsx, xlsm, pptx, pdf. Use any unless the user explicitly narrows file type or the task clearly needs Office/PDF content.",
+    "- timeScopeIntent may be latest_first, historical_examples, balanced, explicit_period, or unknown. Use latest_first for 最新/直近/current, historical_examples for 過去/事例/参考, explicit_period when a period is named, otherwise balanced.",
     "- Do not include roots, path, toolName, recipient_name, tool_calls, tool_uses, pattern, command, or any field not shown in the schema.",
     "Finance/CFS hint: for キャッシュフロー計算書, include terms such as キャッシュフロー, CFS, CF, 連結CF, 連結CFS, and source/workpaper terms such as 精算表, 合算, ADJ, 連結決算 when appropriate.",
     root ? `Relay-selected root context (do not rewrite it): ${root}` : "Relay-selected root context: none.",
@@ -6259,6 +6261,7 @@ function buildDocumentSearchArgsFromCopilotPlan(prompt = {}, tool = null, queryP
       supportTerms: queryPlan.supportTerms,
       demoteTerms: queryPlan.demoteTerms,
       fileTypeHints: queryPlan.fileTypeHints,
+      timeScopeIntent: queryPlan.timeScopeIntent,
       summary: queryPlan.summary,
     };
   }
@@ -6290,6 +6293,7 @@ function validateRelayDocumentSearchCopilotQueryPlan(value = {}, prompt = {}) {
     "supportTerms",
     "demoteTerms",
     "fileTypeHints",
+    "timeScopeIntent",
     "summary",
   ]);
   for (const field of Object.keys(value || {})) {
@@ -6322,6 +6326,13 @@ function validateRelayDocumentSearchCopilotQueryPlan(value = {}, prompt = {}) {
     errors,
     10,
   );
+  const timeScopeIntent = validateQueryPlanEnum(
+    value.timeScopeIntent,
+    ["latest_first", "historical_examples", "balanced", "explicit_period", "unknown"],
+    "unknown",
+    "timeScopeIntent",
+    errors,
+  );
   const summary = typeof value.summary === "string" ? value.summary.trim().slice(0, 280) : "";
   if (value.summary !== undefined && typeof value.summary !== "string") errors.push("summary must be a string");
   if (errors.length) return { ok: false, errors };
@@ -6338,6 +6349,7 @@ function validateRelayDocumentSearchCopilotQueryPlan(value = {}, prompt = {}) {
       supportTerms,
       demoteTerms,
       fileTypeHints: fileTypeHints.length ? fileTypeHints : ["any"],
+      timeScopeIntent,
       summary,
     },
   };

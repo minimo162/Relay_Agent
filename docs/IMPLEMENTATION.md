@@ -25,6 +25,88 @@
 
 ## Milestone Log
 
+### 2026-05-13 Deterministic variable search budgets
+
+Implemented the large-folder search-budget slice for
+`relay_document_search`. Copilot can now add a validated, optional
+`timeScopeIntent` hint (`latest_first`, `historical_examples`, `balanced`,
+`explicit_period`, or `unknown`) inside
+`RelayDocumentSearchCopilotQueryPlan.v1`, but Relay still owns execution. The
+query normalizer derives a deterministic final time-scope intent from explicit
+periods, validated Copilot hints, recency words, and historical-example words.
+
+The executor now builds a per-root `RelayDocumentSearchScanBudget.v1` report
+for broad roots with many direct child folders. It gives every visible child
+folder a minimum scan guarantee, then deterministically weights the remaining
+budget toward the selected strategy: latest/current requests emphasize newer
+FY/期 folders, historical/example requests preserve more older-folder budget,
+explicit-period requests favor the named period, and neutral requests stay
+balanced. Search results expose the plan in diagnostics and a beginner-facing
+`検索配分` detail section so partial searches can explain which folders were
+sampled, how much budget they received, and which folders remain incomplete.
+
+Verification:
+
+- `node --test scripts/relay-document-search-contract.test.mjs scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-display.test.mjs scripts/relay-document-search-executor.test.mjs apps/desktop/src-tauri/binaries/copilot_server.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `node --test scripts/relay-document-search-mcp.test.mjs scripts/apply-aionui-overlay.test.mjs scripts/relay-document-search-bridge.test.mjs scripts/relay-document-search-evidence-pack.test.mjs scripts/relay-document-search-local-draft.test.mjs`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-13 Docufinder-inspired search intelligence pack
+
+Implemented the next document-search strengthening slice on top of the
+Docufinder-style local index defaults. Search results now carry Relay's
+business-role buckets (`direct_source_workpaper`, `supporting_evidence`,
+`disclosure_output`, `review_or_audit`, `backup_or_archive`) from executor
+results into the Evidence Pack, local draft, compact AionUi tool output, and
+display cards. Candidate-only answers therefore summarize source/workpaper
+candidates separately from output, audit, and backup candidates instead of
+giving Copilot a flat list of filenames to reinterpret.
+
+The display adapter also adds beginner-facing `候補の分類` and
+`版違い・類似候補` detail sections. The version-family view is metadata-only:
+it identifies visible copy/date/final/draft/監査/link variants without treating
+any candidate as the official, latest, or required file unless content evidence
+later supports that claim.
+
+Verification:
+
+- `node --test scripts/relay-document-search-display.test.mjs scripts/relay-document-search-local-draft.test.mjs scripts/relay-document-search-executor.test.mjs`: passed.
+- `node --test scripts/relay-document-search-bridge.test.mjs scripts/relay-document-search-evidence-pack.test.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-05-13 Docufinder-strengthened local search defaults
+
+Moved the AionUi document-search path from prompt-safe tool routing toward a
+Docufinder-style local search substrate. The Relay document-search MCP and the
+team-guide fallback now run with user-local SQLite/FTS enabled by default,
+primary-mode gating set to `primary`, and bounded FTS probing. ParsedDocument
+cache, derived-content-index cache, index coordinator, failure registry, and
+job store are also enabled on the user-local `Relay Agent/document-search`
+paths so shared search folders stay clean while repeated searches can reuse
+local search artifacts.
+
+The team-guide fallback tool schema now accepts validated `queryPlanHints`, so
+Copilot-generated term expansion is preserved even when the standalone
+document-search MCP is not the advertised path. Result details now expose a
+beginner-facing `検索モード` section that distinguishes filename, hybrid,
+evidence, and answer search modes plus candidate-first/content-required
+strategy, keeping AI prose secondary to structured result state.
+
+Verification:
+
+- `node --test scripts/relay-document-search-mcp.test.mjs scripts/apply-aionui-overlay.test.mjs scripts/relay-document-search-display.test.mjs`: passed.
+- `node --test scripts/relay-document-search-contract.test.mjs scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-bridge.test.mjs scripts/relay-document-search-executor.test.mjs scripts/relay-document-search-index-db.test.mjs`: passed.
+- `node --check scripts/apply-aionui-overlay.mjs`: passed.
+- `pnpm typecheck`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-13 Copilot-planned document search prompts
 
 Replaced the document-search first step that directly assembled

@@ -723,6 +723,60 @@ test("executeRelayDocumentSearch diversifies broad filename candidates across di
   }
 });
 
+test("executeRelayDocumentSearch allocates deterministic scan budget across period folders", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-period-budget-"));
+  for (let fiscalYear = 150; fiscalYear <= 160; fiscalYear += 1) {
+    const yearDir = resolve(workspace, `FY${fiscalYear}`);
+    mkdirSync(yearDir, { recursive: true });
+    for (let index = 1; index <= 20; index += 1) {
+      writeFileSync(
+        resolve(yearDir, `FY${fiscalYear}_連結CFS精算表_${String(index).padStart(2, "0")}.xlsx`),
+        "candidate",
+        "utf8",
+      );
+    }
+  }
+
+  const { module, cleanup } = await loadExecutorModule();
+  try {
+    const result = await module.executeRelayDocumentSearch(
+      {
+        query: "最新の連結CFS精算表を探して",
+        roots: [workspace],
+        fileTypes: ["xlsx"],
+        maxResults: 50,
+      },
+      {
+        jobId: "job-period-budget",
+        queryId: "query-period-budget",
+        maxScanFiles: 80,
+        now: new Date("2026-05-09T00:00:00.000Z"),
+      },
+    );
+
+    assert.equal(result.status, "partial");
+    assert.equal(result.queryPlan.timeScopeIntent, "latest_first");
+    assert.equal(result.diagnostics.searchBudget.schemaVersion, "RelayDocumentSearchScanBudgetSummary.v1");
+    assert.equal(result.diagnostics.searchBudget.deterministic, true);
+    const report = result.diagnostics.searchBudget.reports[0];
+    assert.equal(report.strategy, "latest_first");
+    assert.equal(report.folderCount, 11);
+    assert.ok(report.minimumGuaranteePerFolder >= 1);
+    const latest = report.folders.find((folder) => folder.displayPath === "FY160");
+    const historical = report.folders.find((folder) => folder.displayPath === "FY150");
+    assert.ok(latest);
+    assert.ok(historical);
+    assert.equal(latest.role, "latest");
+    assert.equal(historical.role, "historical");
+    assert.ok(latest.allocatedFiles > historical.allocatedFiles);
+    assert.equal(report.folders.every((folder) => folder.scannedFiles >= 1), true);
+    assert.ok(report.budgetTruncatedFolderCount > 0);
+  } finally {
+    cleanup();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("executeRelayDocumentSearch groups backup and copy variants under one representative", async () => {
   const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-grouped-results-"));
   const workDir = resolve(workspace, "160期-1Q", "作業");
@@ -2492,6 +2546,8 @@ test("executeRelayDocumentSearch applies query-plan exclusions, recency boost, a
     );
     assert.equal(result.results[0].path, currentWorkpaper);
     assert.equal(result.results[0].candidate_bucket, "direct_source_workpaper");
+    assert.equal(result.evidencePack.candidate_files[0].candidate_bucket, "direct_source_workpaper");
+    assert.equal(result.localDraft.sections.some((section) => section.kind === "candidate_map"), true);
     assert.equal(result.results[0].score_breakdown.recency > 0, true);
     assert.equal(result.diagnostics.candidateBuckets.direct_source_workpaper >= 1, true);
     assert.equal(result.diagnostics.queryFiltering.excludedByQueryPlanCount, 1);

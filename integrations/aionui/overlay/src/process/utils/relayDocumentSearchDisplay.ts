@@ -45,6 +45,7 @@ export type RelayDocumentSearchDisplayCard = {
   warningLabels: string[];
   groupLabel?: string;
   folderRoleLabel?: string;
+  candidateBucketLabel?: string;
   collapsedGroupCount?: number;
   actions: string[];
   actionModels: Array<Record<string, unknown>>;
@@ -613,6 +614,42 @@ function folderRoleLabel(role: string): string | undefined {
   }
 }
 
+function candidateBucketLabel(bucket: string): string | undefined {
+  switch (bucket) {
+    case 'direct_source_workpaper':
+      return '作業用・元資料候補';
+    case 'supporting_evidence':
+      return '補助根拠候補';
+    case 'disclosure_output':
+      return '開示・出力候補';
+    case 'review_or_audit':
+      return '確認・監査候補';
+    case 'backup_or_archive':
+      return 'バックアップ・履歴候補';
+    case 'uncategorized':
+      return '未分類候補';
+    default:
+      return undefined;
+  }
+}
+
+function candidateBucketSortKey(bucket: string): number {
+  switch (bucket) {
+    case 'direct_source_workpaper':
+      return 0;
+    case 'supporting_evidence':
+      return 1;
+    case 'disclosure_output':
+      return 2;
+    case 'review_or_audit':
+      return 3;
+    case 'backup_or_archive':
+      return 4;
+    default:
+      return 5;
+  }
+}
+
 function coverageLabel(result: RelayDocumentSearchResultV1): string {
   const scannedFiles = typeof result.progress.scannedFiles === 'number' ? result.progress.scannedFiles : 0;
   const skippedFiles = typeof result.progress.skippedFiles === 'number' ? result.progress.skippedFiles : 0;
@@ -670,6 +707,7 @@ function cardFromResult(
     warningLabels: asStringArray(candidate.warnings).map(warningLabel),
     groupLabel: collapsedGroupCount > 0 ? `${collapsedGroupCount}件の類似候補をまとめています` : undefined,
     folderRoleLabel: folderRoleLabel(asString(candidate.folder_role)),
+    candidateBucketLabel: candidateBucketLabel(asString(candidate.candidate_bucket)),
     collapsedGroupCount: collapsedGroupCount > 0 ? collapsedGroupCount : undefined,
     actions: asStringArray(candidate.actions),
     actionModels: Array.isArray(candidate.action_models)
@@ -720,6 +758,74 @@ function anchorIsStructured(anchor: Record<string, unknown>): boolean {
       anchor.paragraph ||
       anchor.paragraphIndex,
   );
+}
+
+function candidateBucketDetailItems(candidates: Record<string, unknown>[]): string[] {
+  const buckets = new Map<string, { count: number; examples: string[] }>();
+  for (const candidate of candidates) {
+    const bucket = asString(candidate.candidate_bucket, 'uncategorized');
+    const current = buckets.get(bucket) ?? { count: 0, examples: [] };
+    current.count += 1;
+    const title = asString(candidate.display_name, asString(candidate.path));
+    if (title && current.examples.length < 3) current.examples.push(title);
+    buckets.set(bucket, current);
+  }
+  return [...buckets.entries()]
+    .sort(([left], [right]) => candidateBucketSortKey(left) - candidateBucketSortKey(right))
+    .map(([bucket, value]) => {
+      const label = candidateBucketLabel(bucket) ?? bucket;
+      const examples = value.examples.length ? `（例: ${value.examples.join(' / ')}）` : '';
+      return `${label}: ${value.count}件${examples}`;
+    });
+}
+
+function stripKnownExtension(value: string): string {
+  return value.replace(/\.(?:xlsx|xlsm|xls|docx|doc|pptx|ppt|pdf|csv|txt|md|lnk)$/iu, '');
+}
+
+function candidateFamilyKey(candidate: Record<string, unknown>): string {
+  const title = stripKnownExtension(asString(candidate.display_name, asString(candidate.path)));
+  return title
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\b20\d{2}[-_.]?\d{2}[-_.]?\d{2}\b/gu, ' ')
+    .replace(/\b\d{6,8}\b/gu, ' ')
+    .replace(/[（(]\s*(?:\d+|監査|リンク|確|final\d*|draft\d*|copy|コピー)\s*[）)]/giu, ' ')
+    .replace(/(?:修正履歴|コピー|複製|backup|bak|old|archive|final\d*|draft\d*|リンク|監査|確)/giu, ' ')
+    .replace(/[\\/_\-・.()[\]{}【】（）→]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function modifiedTimeMs(candidate: Record<string, unknown>): number {
+  const parsed = Date.parse(asString(candidate.modified_time));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function candidateFamilyDetailItems(candidates: Record<string, unknown>[]): string[] {
+  const families = new Map<string, Record<string, unknown>[]>();
+  for (const candidate of candidates) {
+    const key = candidateFamilyKey(candidate);
+    if (!key) continue;
+    const current = families.get(key) ?? [];
+    current.push(candidate);
+    families.set(key, current);
+  }
+  return [...families.entries()]
+    .filter(([, members]) => members.length > 1)
+    .sort(([, left], [, right]) => right.length - left.length)
+    .slice(0, 8)
+    .map(([key, members]) => {
+      const sorted = [...members].sort((left, right) =>
+        modifiedTimeMs(right) - modifiedTimeMs(left) ||
+        asString(left.display_path, asString(left.path)).localeCompare(asString(right.display_path, asString(right.path))),
+      );
+      const top = asString(sorted[0].display_name, asString(sorted[0].path, key));
+      const examples = sorted.slice(0, 3)
+        .map((candidate) => asString(candidate.display_name, asString(candidate.path)))
+        .filter(Boolean);
+      return `${top}: ${members.length}件の版違い・類似候補（表示範囲内、例: ${examples.join(' / ')}）`;
+    });
 }
 
 function queryTraceSupportItems(result: RelayDocumentSearchResultV1): string[] {
@@ -1059,6 +1165,138 @@ function copilotStateSupportItems(result: RelayDocumentSearchResultV1): string[]
   ]);
 }
 
+function searchModeLabel(mode: string | undefined): string | undefined {
+  switch (mode) {
+    case 'filename':
+      return 'ファイル名';
+    case 'keyword':
+      return '本文キーワード';
+    case 'hybrid':
+      return 'ハイブリッド';
+    case 'evidence':
+      return '根拠確認';
+    case 'answer':
+      return '回答用';
+    default:
+      return mode;
+  }
+}
+
+function contentStrategyLabel(strategy: string | undefined): string | undefined {
+  switch (strategy) {
+    case 'candidate_first':
+      return '候補優先';
+    case 'content_required':
+      return '本文確認';
+    case 'answer_required':
+      return '回答根拠';
+    default:
+      return strategy;
+  }
+}
+
+function searchModeDetailItems(result: RelayDocumentSearchResultV1): string[] {
+  const queryPlan = asRecord(result.queryPlan);
+  if (!queryPlan) return [];
+  const terms = asStringArray(queryPlan.normalizedTerms).slice(0, 12);
+  const fileTypes = asStringArray(queryPlan.fileTypeHints).slice(0, 8);
+  return compactUnique([
+    searchModeLabel(asString(queryPlan.mode))
+      ? `検索モード: ${searchModeLabel(asString(queryPlan.mode))}`
+      : undefined,
+    contentStrategyLabel(asString(queryPlan.contentStrategy))
+      ? `確認方法: ${contentStrategyLabel(asString(queryPlan.contentStrategy))}`
+      : undefined,
+    asString(queryPlan.searchModeReason) ? `理由: ${asString(queryPlan.searchModeReason)}` : undefined,
+    asString(queryPlan.confirmationPolicy) ? `根拠ポリシー: ${asString(queryPlan.confirmationPolicy)}` : undefined,
+    terms.length ? `検索語: ${terms.join(', ')}` : undefined,
+    fileTypes.length ? `ファイル種別ヒント: ${fileTypes.join(', ')}` : undefined,
+    asString(queryPlan.copilotHintSummary) ? `Copilot展開: ${asString(queryPlan.copilotHintSummary)}` : undefined,
+  ]);
+}
+
+function scanBudgetStrategyLabel(strategy: string): string {
+  switch (strategy) {
+    case 'latest_first':
+      return '新しい期を厚めに確認';
+    case 'historical_examples':
+      return '過去事例も厚めに確認';
+    case 'explicit_period':
+      return '指定された期を優先';
+    case 'balanced':
+      return '各期をバランス確認';
+    case 'single_root_fallback':
+      return '単一フォルダを順次確認';
+    default:
+      return strategy || '検索配分を確認中';
+  }
+}
+
+function scanBudgetFolderRoleLabel(role: string): string {
+  switch (role) {
+    case 'explicit':
+      return '指定期';
+    case 'latest':
+      return '最新期';
+    case 'recent':
+      return '近近期';
+    case 'historical':
+      return '過去期';
+    default:
+      return 'その他';
+  }
+}
+
+function searchBudgetDetailItems(result: RelayDocumentSearchResultV1): string[] {
+  const diagnostics = asRecord(result.diagnostics);
+  const searchBudget = asRecord(diagnostics?.searchBudget);
+  const reports = Array.isArray(searchBudget?.reports) ? searchBudget.reports : [];
+  const reportRecords = reports
+    .map((report) => asRecord(report))
+    .filter((report): report is Record<string, unknown> => Boolean(report));
+  if (!reportRecords.length) return [];
+
+  const items: string[] = [];
+  for (const report of reportRecords.slice(0, 3)) {
+    const strategy = asString(report.strategy);
+    const timeScopeReason = asString(report.timeScopeReason);
+    const maxScanFiles = countLabel(report.maxScanFiles);
+    const folderCount = countLabel(report.folderCount);
+    const minimumGuarantee = countLabel(report.minimumGuaranteePerFolder);
+    const truncatedFolderCount = countLabel(report.budgetTruncatedFolderCount);
+    items.push(
+      compactUnique([
+        `配分: ${scanBudgetStrategyLabel(strategy)}`,
+        timeScopeReason ? `理由: ${timeScopeReason}` : undefined,
+        maxScanFiles ? `上限: ${maxScanFiles}件` : undefined,
+        folderCount ? `対象フォルダ: ${folderCount}件` : undefined,
+        minimumGuarantee ? `最低保証: ${minimumGuarantee}件/フォルダ` : undefined,
+        truncatedFolderCount ? `未完了フォルダ: ${truncatedFolderCount}件` : undefined,
+      ]).join('、'),
+    );
+
+    const folders = Array.isArray(report.folders) ? report.folders : [];
+    for (const folder of folders
+      .map((item) => asRecord(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+      .slice(0, 12)) {
+      const displayPath = asString(folder.displayPath, asString(folder.path, 'フォルダ'));
+      const allocated = countLabel(folder.allocatedFiles) ?? '0';
+      const scanned = countLabel(folder.scannedFiles) ?? '0';
+      const skipped = countLabel(folder.skippedFiles);
+      const role = scanBudgetFolderRoleLabel(asString(folder.role));
+      const truncated = Boolean(folder.truncated);
+      items.push(compactUnique([
+        `${displayPath}: ${scanned}/${allocated}件確認`,
+        role,
+        skipped && skipped !== '0' ? `${skipped}件スキップ` : undefined,
+        truncated ? '未完了' : undefined,
+      ]).join('、'));
+    }
+  }
+  return compactUnique(items);
+}
+
 function buildDetailSections(result: RelayDocumentSearchResultV1): RelayDocumentSearchDisplayDetailSection[] {
   const candidates = result.results.filter((candidate): candidate is Record<string, unknown> =>
     Boolean(candidate) && typeof candidate === 'object' && !Array.isArray(candidate),
@@ -1090,6 +1328,8 @@ function buildDetailSections(result: RelayDocumentSearchResultV1): RelayDocument
     const labels = sourceLabels(candidate);
     return labels.length ? `${title}: ${labels.join(' / ')}` : undefined;
   }));
+  const candidateBucketItems = candidateBucketDetailItems(candidates);
+  const candidateFamilyItems = candidateFamilyDetailItems(candidates);
   const scoreItems = compactUnique(candidates.map((candidate) => {
     const title = asString(candidate.display_name, asString(candidate.path, '候補'));
     const labels = scoreBreakdownLabels(candidate);
@@ -1113,6 +1353,8 @@ function buildDetailSections(result: RelayDocumentSearchResultV1): RelayDocument
   const polishItems = polishValidationSupportItems(result);
   const copilotStateItems = copilotStateSupportItems(result);
   const supportItems = queryTraceSupportItems(result);
+  const searchModeItems = searchModeDetailItems(result);
+  const searchBudgetItems = searchBudgetDetailItems(result);
   const indexStatus = indexStatusDisplay(result);
   const indexStatusItems = compactUnique([
     `状態: ${indexStatus.label}`,
@@ -1136,6 +1378,38 @@ function buildDetailSections(result: RelayDocumentSearchResultV1): RelayDocument
           level: 'details' as const,
           title: '回答下書き',
           items: localDraftItems,
+          initiallyCollapsed: true,
+        }
+      : undefined,
+    searchModeItems.length
+      ? {
+          level: 'details' as const,
+          title: '検索モード',
+          items: searchModeItems,
+          initiallyCollapsed: false,
+        }
+      : undefined,
+    searchBudgetItems.length
+      ? {
+          level: 'details' as const,
+          title: '検索配分',
+          items: searchBudgetItems,
+          initiallyCollapsed: false,
+        }
+      : undefined,
+    candidateBucketItems.length
+      ? {
+          level: 'details' as const,
+          title: '候補の分類',
+          items: candidateBucketItems,
+          initiallyCollapsed: false,
+        }
+      : undefined,
+    candidateFamilyItems.length
+      ? {
+          level: 'details' as const,
+          title: '版違い・類似候補',
+          items: candidateFamilyItems,
           initiallyCollapsed: true,
         }
       : undefined,

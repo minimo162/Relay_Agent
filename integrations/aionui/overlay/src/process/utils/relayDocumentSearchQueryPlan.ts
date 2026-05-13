@@ -7,7 +7,10 @@
  * parsing documents.
  */
 
-import type { RelayDocumentSearchRequestV1 } from './relayDocumentSearchContract';
+import type {
+  RelayDocumentSearchRequestV1,
+  RelayDocumentSearchTimeScopeIntent,
+} from './relayDocumentSearchContract';
 
 export const RELAY_DOCUMENT_SEARCH_QUERY_PLAN_CONTRACT = 'RelayDocumentSearchQueryPlan.v1' as const;
 export const RELAY_DOCUMENT_SEARCH_QUERY_NORMALIZER_VERSION = 'relay-query-normalizer-v1' as const;
@@ -30,6 +33,8 @@ export type RelayDocumentSearchQueryPlanV1 = {
   excludedTerms: string[];
   demoteTerms: string[];
   recencyPreference: 'neutral' | 'prefer_recent' | 'prefer_older';
+  timeScopeIntent: RelayDocumentSearchTimeScopeIntent;
+  timeScopeReason: string;
   confirmationPolicy: 'candidate_ok' | 'content_required';
 };
 
@@ -248,6 +253,27 @@ function recencyPreference(query: string): RelayDocumentSearchQueryPlanV1['recen
   return 'neutral';
 }
 
+function timeScopeIntent(
+  request: RelayDocumentSearchRequestV1,
+  periods: string[],
+  recency: RelayDocumentSearchQueryPlanV1['recencyPreference'],
+): { intent: RelayDocumentSearchTimeScopeIntent; reason: string } {
+  if (periods.length > 0) {
+    return { intent: 'explicit_period', reason: 'period_hint_detected' };
+  }
+  const hinted = request.queryPlanHints?.timeScopeIntent;
+  if (hinted && hinted !== 'unknown') {
+    return { intent: hinted, reason: 'validated_copilot_time_scope_hint' };
+  }
+  if (/前例|事例|過去|以前|昨年|前年|前期|過年度|参考|類似|同じ処理|同様|prior|past|historical|example|reference/iu.test(request.query)) {
+    return { intent: 'historical_examples', reason: 'historical_example_terms_detected' };
+  }
+  if (recency === 'prefer_recent' || /今期|当期|今回|最新|最新版|直近|新しい|最近|current|latest|newest|recent/iu.test(request.query)) {
+    return { intent: 'latest_first', reason: 'recency_terms_detected' };
+  }
+  return { intent: 'balanced', reason: 'default_balanced_time_scope' };
+}
+
 function modeForRequest(
   request: RelayDocumentSearchRequestV1,
   policy: RelayDocumentSearchQueryPlanV1['confirmationPolicy'],
@@ -322,6 +348,8 @@ export function buildRelayDocumentSearchQueryPlan(
   }
   const policy = confirmationPolicy(request);
   const mode = modeForRequest(request, policy);
+  const recency = recencyPreference(request.query);
+  const timeScope = timeScopeIntent(request, periods, recency);
   const demotions = new Set<string>();
   for (const term of request.queryPlanHints?.demoteTerms ?? []) addTerm(demotions, term);
   return {
@@ -341,7 +369,9 @@ export function buildRelayDocumentSearchQueryPlan(
     ignoredIntentTerms,
     excludedTerms: excludedTerms(request.query),
     demoteTerms: [...demotions],
-    recencyPreference: recencyPreference(request.query),
+    recencyPreference: recency,
+    timeScopeIntent: timeScope.intent,
+    timeScopeReason: timeScope.reason,
     confirmationPolicy: policy,
   };
 }

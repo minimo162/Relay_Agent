@@ -488,6 +488,7 @@ test("document search uses a dedicated Copilot query-plan before emitting the hi
     supportTerms: ["精算表", "合算", "ADJ"],
     demoteTerms: ["ファイリング", "XSA", "監査"],
     fileTypeHints: ["any"],
+    timeScopeIntent: "balanced",
     summary: "CFSの作成・精算表候補を広く拾う。",
   };
   const validation = validateRelayDocumentSearchCopilotQueryPlan(queryPlan, parsed);
@@ -1631,6 +1632,7 @@ test("createServer asks Copilot for a validated document-search query plan befor
             supportTerms: ["精算表", "合算", "ADJ"],
             demoteTerms: ["ファイリング", "XSA", "監査"],
             fileTypeHints: ["any"],
+            timeScopeIntent: "balanced",
             summary: "CFS候補を広く検索する。",
           }),
           prompt,
@@ -1708,6 +1710,7 @@ test("createServer asks Copilot for a validated document-search query plan befor
         supportTerms: ["精算表", "合算", "ADJ"],
         demoteTerms: ["ファイリング", "XSA", "監査"],
         fileTypeHints: ["any"],
+        timeScopeIntent: "balanced",
         summary: "CFS候補を広く検索する。",
       },
       roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],

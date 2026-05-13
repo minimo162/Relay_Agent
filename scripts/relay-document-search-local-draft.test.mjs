@@ -87,6 +87,8 @@ function evidencePack(overrides = {}) {
         score: 10,
         score_breakdown: {},
         source_indexes: [],
+        candidate_bucket: "direct_source_workpaper",
+        folder_role: "work",
         warnings: [],
         anchor_count: 1,
       },
@@ -146,6 +148,11 @@ test("Local draft builds citation-bound Japanese answer material from Evidence P
     assert.equal(draft.citation_policy, "evidence_pack_ids_required");
     assert.equal(draft.can_replace_with_copilot_polish, true);
     assert.match(draft.summary, /中身を確認できた根拠が1件/);
+    assert.equal(draft.sections.some((section) => section.kind === "candidate_map"), true);
+    assert.match(
+      draft.sections.find((section) => section.kind === "candidate_map").items[0].text,
+      /作業用・元資料候補: 1件/,
+    );
     assert.equal(draft.citations[0].citation_id, "E1");
     assert.equal(draft.citations[0].anchor_summary, "CFS!A1");
     assert.match(
@@ -181,8 +188,9 @@ test("Local draft keeps candidate-only results out of Copilot replacement flow",
     assert.equal(draft.citation_policy, "candidate_language_only");
     assert.equal(draft.can_replace_with_copilot_polish, false);
     assert.equal(draft.citations.length, 0);
-    assert.match(draft.summary, /ファイル名・パスの候補/);
+    assert.match(draft.summary, /作業用・元資料候補は1件/);
     assert.ok(draft.caveats.some((item) => item.includes("中身の根拠はまだありません")));
+    assert.ok(draft.next_actions.some((item) => item.includes("作業用・元資料候補")));
     assert.deepEqual(module.validateRelayDocumentSearchLocalDraft(draft), { ok: true, errors: [] });
   } finally {
     cleanup();

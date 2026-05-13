@@ -72,7 +72,19 @@ failure:
 - recency scoring when the user asks for latest/current files;
 - result buckets that separate source/workpapers, supporting evidence,
   disclosure/output files, backups/archives, and review/audit material;
-- optional SQLite/FTS primary-path promotion behind the existing readiness gate.
+- Evidence Pack and result cards now carry those buckets into the answer path,
+  so Copilot sees a candidate map instead of only a flat file list;
+- displayed results identify visible version/copy families without collapsing
+  them into unverified "latest" or "official" claims;
+- large-folder searches now use deterministic variable scan budgets: Copilot
+  may provide a validated time-scope hint, but Relay allocates the actual
+  latest / historical / balanced / explicit-period folder budget, guarantees
+  at least some coverage across sibling period folders when possible, and
+  surfaces the resulting `検索配分` to users;
+- SQLite/FTS primary-path promotion behind the existing readiness gate, with
+  user-local ParsedDocument, derived-content, filename, metadata, job, failure,
+  and index-coordinator stores enabled from the AionUi document-search route by
+  default.
 
 The remaining release risk is not code structure but live installed behavior:
 AION06 must still validate representative Windows shared-folder searches,

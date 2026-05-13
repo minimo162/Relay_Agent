@@ -67,7 +67,17 @@ test("Relay document search display adapter creates beginner-safe cards", async 
         progress: { stage: "partial_filename_candidates", percent: 100, scannedFiles: 125, skippedFiles: 2 },
         job: { jobId: "job-1", lifecycle: "partial", cancellable: false },
         correlation: { relayJobId: "job-1" },
-        queryPlan: {},
+        queryPlan: {
+          mode: "hybrid",
+          contentStrategy: "candidate_first",
+          searchModeReason: "thorough_find_files_uses_filename_plus_bounded_content",
+          timeScopeIntent: "latest_first",
+          timeScopeReason: "validated_copilot_time_scope_hint",
+          normalizedTerms: ["キャッシュフロー", "cfs", "連結cf"],
+          fileTypeHints: ["xlsx"],
+          confirmationPolicy: "candidate_ok",
+          copilotHintSummary: "CFS関連語を展開",
+        },
         coverage: { truncated: true },
         results: [
           {
@@ -103,6 +113,7 @@ test("Relay document search display adapter creates beginner-safe cards", async 
             ],
             anchors: [{ sheet: "Sheet1", cell: "A1" }],
             folder_role: "work",
+            candidate_bucket: "direct_source_workpaper",
             preview_action: { kind: "preview", enabled: true },
             open_action: { kind: "open_file", enabled: true },
             action_models: [
@@ -126,8 +137,8 @@ test("Relay document search display adapter creates beginner-safe cards", async 
             product_result_contract: "RelayDocumentSearchProductResult.v1",
             result_id: "result-2",
             file_id: "file-2",
-            display_name: "XSA_連結CF.xlsx",
-            path: "H:/shr1/160連結/XSA_連結CF.xlsx",
+            display_name: "FY160-1Q_連結CFS精算表(20260421).xlsx",
+            path: "H:/shr1/160連結/ファイリング/FY160-1Q_連結CFS精算表(20260421).xlsx",
             match_mode: "filename",
             evidence_state: "filename_only",
             index_state: "metadata_indexed",
@@ -141,6 +152,8 @@ test("Relay document search display adapter creates beginner-safe cards", async 
               { kind: "filename_index", label: "ファイル名索引", state: "used", score: 8 },
             ],
             anchors: [],
+            folder_role: "filing",
+            candidate_bucket: "disclosure_output",
             warnings: ["filename_only"],
             actions: ["preview"],
             action_models: [{ kind: "preview", label: "プレビュー", enabled: true }],
@@ -331,6 +344,57 @@ test("Relay document search display adapter creates beginner-safe cards", async 
               canOnlyPolishValidatedDraft: true,
             },
           },
+          searchBudget: {
+            schemaVersion: "RelayDocumentSearchScanBudgetSummary.v1",
+            deterministic: true,
+            budgetedRootCount: 1,
+            truncatedFolderCount: 1,
+            strategies: ["latest_first"],
+            reports: [
+              {
+                schemaVersion: "RelayDocumentSearchScanBudget.v1",
+                root: "H:/shr1/160連結",
+                strategy: "latest_first",
+                timeScopeIntent: "latest_first",
+                timeScopeReason: "validated_copilot_time_scope_hint",
+                maxScanFiles: 80,
+                rootFileBudget: 0,
+                rootFilesScanned: 0,
+                rootFilesSkipped: 0,
+                rootFilesTruncated: false,
+                folderCount: 2,
+                minimumGuaranteePerFolder: 1,
+                budgetedFolderCount: 2,
+                budgetTruncatedFolderCount: 1,
+                folders: [
+                  {
+                    path: "H:/shr1/160連結/FY160",
+                    displayPath: "FY160",
+                    role: "latest",
+                    periodKey: 1600,
+                    weight: 10,
+                    minimumGuaranteedFiles: 1,
+                    allocatedFiles: 60,
+                    scannedFiles: 60,
+                    skippedFiles: 0,
+                    truncated: true,
+                  },
+                  {
+                    path: "H:/shr1/160連結/FY150",
+                    displayPath: "FY150",
+                    role: "historical",
+                    periodKey: 1500,
+                    weight: 1,
+                    minimumGuaranteedFiles: 1,
+                    allocatedFiles: 20,
+                    scannedFiles: 8,
+                    skippedFiles: 0,
+                    truncated: false,
+                  },
+                ],
+              },
+            ],
+          },
           queryTrace: {
             schemaVersion: "RelayDocumentSearchQueryTrace.v1",
             traceId: "trace-job-1",
@@ -470,6 +534,7 @@ test("Relay document search display adapter creates beginner-safe cards", async 
     assert.equal(display.cards[0].previewLabel, "プレビュー準備中");
     assert.equal(display.cards[0].openLabel, "開けます");
     assert.equal(display.cards[0].folderRoleLabel, "作業フォルダ");
+    assert.equal(display.cards[0].candidateBucketLabel, "作業用・元資料候補");
     assert.equal(display.cards[0].actionModels.length, 2);
     assert.equal(display.cards[0].groupLabel, "2件の類似候補をまとめています");
     assert.equal(display.cards[0].collapsedGroupCount, 2);
@@ -519,6 +584,10 @@ test("Relay document search display adapter creates beginner-safe cards", async 
     assert.equal(display.detailSections.some((section) => section.title === "回答"), true);
     assert.equal(display.detailSections.some((section) => section.title === "根拠の場所"), true);
     assert.equal(display.detailSections.some((section) => section.title === "回答下書き"), true);
+    assert.equal(display.detailSections.some((section) => section.title === "検索モード"), true);
+    assert.equal(display.detailSections.some((section) => section.title === "検索配分"), true);
+    assert.equal(display.detailSections.some((section) => section.title === "候補の分類"), true);
+    assert.equal(display.detailSections.some((section) => section.title === "版違い・類似候補"), true);
     assert.equal(display.detailSections.some((section) => section.title === "構造・表の情報"), true);
     assert.equal(display.detailSections.some((section) => section.title === "検索経路"), true);
     assert.equal(display.detailSections.some((section) => section.title === "関連度内訳"), true);
@@ -529,6 +598,40 @@ test("Relay document search display adapter creates beginner-safe cards", async 
     assert.equal(display.detailSections.some((section) => section.title === "サポート用の実行記録" && section.supportOnly), true);
     assert.equal(
       display.detailSections.flatMap((section) => section.items).some((item) => item.includes("Sheet1!A1")),
+      true,
+    );
+    assert.equal(
+      display.detailSections.flatMap((section) => section.items).some((item) => item.includes("検索モード: ハイブリッド")),
+      true,
+    );
+    assert.equal(
+      display.detailSections.flatMap((section) => section.items).some((item) =>
+        item.includes("配分: 新しい期を厚めに確認")
+      ),
+      true,
+    );
+    assert.equal(
+      display.detailSections.flatMap((section) => section.items).some((item) =>
+        item.includes("FY160: 60/60件確認")
+      ),
+      true,
+    );
+    assert.equal(
+      display.detailSections.flatMap((section) => section.items).some((item) =>
+        item.includes("作業用・元資料候補: 1件")
+      ),
+      true,
+    );
+    assert.equal(
+      display.detailSections.flatMap((section) => section.items).some((item) =>
+        item.includes("開示・出力候補: 1件")
+      ),
+      true,
+    );
+    assert.equal(
+      display.detailSections.flatMap((section) => section.items).some((item) =>
+        item.includes("2件の版違い・類似候補")
+      ),
       true,
     );
     assert.equal(

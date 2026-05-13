@@ -352,6 +352,7 @@ function compactCardsForToolOutput(cards: RelayDocumentSearchDisplayV1['cards'])
     openLabel: card.openLabel,
     warningLabels: card.warningLabels,
     folderRoleLabel: card.folderRoleLabel,
+    candidateBucketLabel: card.candidateBucketLabel,
     groupLabel: card.groupLabel,
     collapsedGroupCount: card.collapsedGroupCount,
     actions: card.actions.filter((action) =>
@@ -363,10 +364,19 @@ function compactCardsForToolOutput(cards: RelayDocumentSearchDisplayV1['cards'])
 function compactDetailSectionsForToolOutput(
   sections: RelayDocumentSearchDisplayV1['detailSections'],
 ): Array<Record<string, unknown>> {
-  const allowedTitles = new Set(['回答', '回答下書き', '確認が必要な点', '索引状態']);
+  const allowedTitles = new Set([
+    '回答',
+    '回答下書き',
+    '検索モード',
+    '検索配分',
+    '候補の分類',
+    '版違い・類似候補',
+    '確認が必要な点',
+    '索引状態',
+  ]);
   return sections
     .filter((section) => !section.supportOnly && allowedTitles.has(section.title))
-    .slice(0, 4)
+    .slice(0, 6)
     .map((section) => ({
       level: section.level,
       title: section.title,

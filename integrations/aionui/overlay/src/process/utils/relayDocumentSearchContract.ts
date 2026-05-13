@@ -71,6 +71,12 @@ export type RelayDocumentSearchIntent =
 export type RelayDocumentSearchThoroughness = 'quick' | 'thorough';
 export type RelayDocumentSearchEvidenceMode = 'none' | 'candidate' | 'required';
 export type RelayDocumentSearchStatus = 'ok' | 'partial' | 'needs_input' | 'failed';
+export type RelayDocumentSearchTimeScopeIntent =
+  | 'latest_first'
+  | 'historical_examples'
+  | 'balanced'
+  | 'explicit_period'
+  | 'unknown';
 export type RelayDocumentSearchFileType =
   | 'any'
   | 'txt'
@@ -92,6 +98,7 @@ export type RelayDocumentSearchCopilotQueryPlanHintsV1 = {
   supportTerms: string[];
   demoteTerms: string[];
   fileTypeHints: RelayDocumentSearchFileType[];
+  timeScopeIntent?: RelayDocumentSearchTimeScopeIntent;
   summary?: string;
 };
 
@@ -175,6 +182,13 @@ const FILE_TYPES: readonly RelayDocumentSearchFileType[] = [
   'pdf',
 ];
 const STATUSES: readonly RelayDocumentSearchStatus[] = ['ok', 'partial', 'needs_input', 'failed'];
+const TIME_SCOPE_INTENTS: readonly RelayDocumentSearchTimeScopeIntent[] = [
+  'latest_first',
+  'historical_examples',
+  'balanced',
+  'explicit_period',
+  'unknown',
+];
 const PRODUCT_RESULT_REQUIRED_STRING_FIELDS = [
   'product_result_contract',
   'result_id',
@@ -348,6 +362,7 @@ function normalizeQueryPlanHints(
     'supportTerms',
     'demoteTerms',
     'fileTypeHints',
+    'timeScopeIntent',
     'summary',
   ]);
   for (const field of Object.keys(value)) {
@@ -368,6 +383,9 @@ function normalizeQueryPlanHints(
   const supportTerms = normalizeQueryPlanTerms(value.supportTerms, 'supportTerms', errors);
   const demoteTerms = normalizeQueryPlanTerms(value.demoteTerms, 'demoteTerms', errors);
   const fileTypeHints = normalizeQueryPlanFileTypes(value.fileTypeHints, errors);
+  const timeScopeIntent = value.timeScopeIntent === undefined
+    ? undefined
+    : normalizeQueryPlanEnum(value.timeScopeIntent, TIME_SCOPE_INTENTS, 'unknown', 'timeScopeIntent', errors);
   const summary = typeof value.summary === 'string' ? value.summary.trim().slice(0, 280) : undefined;
   if (value.summary !== undefined && typeof value.summary !== 'string') {
     errors.push('queryPlanHints.summary must be a string');
@@ -382,6 +400,7 @@ function normalizeQueryPlanHints(
     supportTerms,
     demoteTerms,
     fileTypeHints,
+    ...(timeScopeIntent ? { timeScopeIntent } : {}),
     ...(summary ? { summary } : {}),
   };
 }
@@ -656,6 +675,12 @@ export const relayDocumentSearchOpenAiToolSchema = {
               type: 'array',
               maxItems: 10,
               items: { type: 'string', enum: FILE_TYPES },
+            },
+            timeScopeIntent: {
+              type: 'string',
+              enum: TIME_SCOPE_INTENTS,
+              description:
+                'Optional Copilot interpretation of the user time-scope intent. Relay validates this and still owns folder-budget allocation.',
             },
             summary: {
               type: 'string',

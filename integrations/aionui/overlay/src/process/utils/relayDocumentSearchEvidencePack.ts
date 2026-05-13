@@ -37,6 +37,10 @@ export type RelayDocumentSearchEvidencePackCandidate = {
   score: number;
   score_breakdown: Record<string, unknown>;
   source_indexes: unknown[];
+  candidate_bucket?: string;
+  folder_role?: string;
+  folder_roles?: Record<string, unknown>;
+  result_group?: Record<string, unknown>;
   warnings: string[];
   anchor_count: number;
 };
@@ -151,6 +155,8 @@ function resultByFileId(results: Array<Record<string, unknown>>): Map<string, Re
 }
 
 function candidateFromResult(result: Record<string, unknown>): RelayDocumentSearchEvidencePackCandidate {
+  const folderRoles = isRecord(result.folder_roles) ? result.folder_roles : undefined;
+  const resultGroup = isRecord(result.result_group) ? result.result_group : undefined;
   return {
     result_id: asString(result.result_id),
     file_id: asString(result.file_id),
@@ -165,6 +171,10 @@ function candidateFromResult(result: Record<string, unknown>): RelayDocumentSear
     score: asNumber(result.score),
     score_breakdown: isRecord(result.score_breakdown) ? result.score_breakdown : {},
     source_indexes: Array.isArray(result.source_indexes) ? result.source_indexes : [],
+    candidate_bucket: asString(result.candidate_bucket) || undefined,
+    folder_role: asString(result.folder_role) || undefined,
+    folder_roles: folderRoles,
+    result_group: resultGroup,
     warnings: asStringArray(result.warnings),
     anchor_count: Array.isArray(result.anchors) ? result.anchors.length : 0,
   };

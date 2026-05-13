@@ -20,8 +20,14 @@ const relayWorkspaceRoot = process.env.RELAY_DOCUMENT_SEARCH_WORKSPACE || '';
 const relayConversationId = process.env.RELAY_DOCUMENT_SEARCH_CONVERSATION_ID || undefined;
 const relayMetadataCacheDir = process.env.RELAY_DOCUMENT_SEARCH_METADATA_CACHE_DIR || undefined;
 const relayFilenameIndexDir = process.env.RELAY_DOCUMENT_SEARCH_FILENAME_INDEX_DIR || undefined;
+const relayIndexDbPath = process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PATH || undefined;
+const relayParsedDocumentCacheDir = process.env.RELAY_PARSED_DOCUMENT_CACHE_DIR || undefined;
+const relayDerivedContentIndexDir = process.env.RELAY_DOCUMENT_SEARCH_DERIVED_CONTENT_INDEX_DIR || undefined;
+const relayIndexCoordinatorDir = process.env.RELAY_DOCUMENT_SEARCH_INDEX_COORDINATOR_DIR || undefined;
 const relayUserMemoryDir = process.env.RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR || undefined;
 const relaySyncJournalDir = process.env.RELAY_DOCUMENT_SEARCH_SYNC_JOURNAL_DIR || undefined;
+const relayFailureRegistryDir = process.env.RELAY_DOCUMENT_SEARCH_FAILURE_REGISTRY_DIR || undefined;
+const relayJobStoreDir = process.env.RELAY_DOCUMENT_SEARCH_JOB_STORE_DIR || undefined;
 const relaySyncProducerRequested = process.env.RELAY_DOCUMENT_SEARCH_SYNC_PRODUCER === '1';
 
 const RELAY_DOCUMENT_SEARCH_AIONUI_RESULT_FLOW_CONTRACT = 'RelayDocumentSearchAionUiResultFlow.v1' as const;
@@ -123,6 +129,9 @@ server.tool(
         supportTerms: z.array(z.string().min(1).max(80)).max(40),
         demoteTerms: z.array(z.string().min(1).max(80)).max(40),
         fileTypeHints: z.array(z.enum(['any', 'txt', 'md', 'csv', 'docx', 'xlsx', 'xlsm', 'pptx', 'pdf'])).max(10),
+        timeScopeIntent: z
+          .enum(['latest_first', 'historical_examples', 'balanced', 'explicit_period', 'unknown'])
+          .optional(),
         summary: z.string().max(280).optional(),
       })
       .optional()
@@ -147,6 +156,19 @@ server.tool(
           metadataCacheDir: relayMetadataCacheDir,
           useFilenameIndex: true,
           filenameIndexDir: relayFilenameIndexDir,
+          useIndexDb: true,
+          indexDbPath: relayIndexDbPath,
+          indexDbPrimaryMode: 'primary',
+          useParsedDocumentCache: true,
+          parsedDocumentCacheDir: relayParsedDocumentCacheDir,
+          useDerivedContentIndexCache: true,
+          derivedContentIndexDir: relayDerivedContentIndexDir,
+          useIndexCoordinator: true,
+          indexCoordinatorDir: relayIndexCoordinatorDir,
+          useFailureRegistry: true,
+          failureRegistryDir: relayFailureRegistryDir,
+          useJobStore: true,
+          jobStoreDir: relayJobStoreDir,
           useUserMemory: true,
           userMemoryDir: relayUserMemoryDir,
           useSyncJournal: true,
