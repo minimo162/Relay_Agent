@@ -56,6 +56,29 @@ Additional rules:
   provider gateway, Copilot CDP transport, tool-call normalization, diagnostics,
   AionUi provider seeding, and user-local OfficeCLI bootstrap.
 
+## Active Docufinder-Inspired Search Slice
+
+Status: implemented in the Relay bridge as of 2026-05-13, with installed
+Windows shared-folder acceptance still covered by AION06.
+
+This slice keeps Relay's product position as an AionUi/Copilot bridge, not a
+standalone document-search app. The local `relay_document_search` tool now
+absorbs the parts of Docufinder that directly reduce Copilot tool-planning
+failure:
+
+- deterministic query planning for broad document lookup modes;
+- Japanese finance term normalization before low-level search;
+- metadata-first candidate discovery with explicit exclusion terms;
+- recency scoring when the user asks for latest/current files;
+- result buckets that separate source/workpapers, supporting evidence,
+  disclosure/output files, backups/archives, and review/audit material;
+- optional SQLite/FTS primary-path promotion behind the existing readiness gate.
+
+The remaining release risk is not code structure but live installed behavior:
+AION06 must still validate representative Windows shared-folder searches,
+preview/open/copy/refine actions, partial/no-result/permission states, and
+support export on a clean installed Relay-branded AionUi shell.
+
 ## Strategic Reset: AionUi-First Relay Agent
 
 The active architecture direction is now an AionUi-first rebuild, not another

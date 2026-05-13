@@ -64,7 +64,8 @@ test("Relay document search query plan normalizes accounting terms and period hi
 
     assert.equal(plan.schemaVersion, "RelayDocumentSearchQueryPlan.v1");
     assert.equal(plan.normalizerVersion, "relay-query-normalizer-v1");
-    assert.equal(plan.mode, "evidence");
+    assert.equal(plan.mode, "answer");
+    assert.equal(plan.contentStrategy, "answer_required");
     assert.equal(plan.confirmationPolicy, "content_required");
     assert.ok(plan.normalizedTerms.includes("キャッシュフロー"));
     assert.ok(plan.normalizedTerms.includes("cfs"));
@@ -73,6 +74,67 @@ test("Relay document search query plan normalizes accounting terms and period hi
     assert.ok(plan.periodHints.includes("FY160-1Q"));
     assert.deepEqual(plan.fileTypeHints, ["xlsx"]);
     assert.deepEqual(plan.synonymExpansions.map((item) => item.source), ["cash_flow", "adjustment"]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Relay document search query plan extracts finance terms from unspaced Japanese requests", async () => {
+  const { module, cleanup } = await loadQueryPlanModule();
+  try {
+    const plan = module.buildRelayDocumentSearchQueryPlan(
+      {
+        schemaVersion: "RelayDocumentSearchRequest.v1",
+        query: "このフォルダからキャッシュフロー計算書に関係するファイルを探して",
+        roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+        intent: "find_files",
+        thoroughness: "quick",
+        fileTypes: ["any"],
+        maxResults: 80,
+        evidence: "candidate",
+      },
+      ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+    );
+
+    assert.equal(plan.mode, "filename");
+    assert.equal(plan.contentStrategy, "candidate_first");
+    assert.equal(plan.recencyPreference, "neutral");
+    assert.ok(plan.normalizedTerms.includes("キャッシュフロー計算書"));
+    assert.ok(plan.normalizedTerms.includes("キャッシュフロー"));
+    assert.ok(plan.ignoredIntentTerms.some((term) => term.startsWith("folder_reference:")));
+    assert.ok(plan.ignoredIntentTerms.some((term) => term.startsWith("search_instruction:")));
+    assert.equal(plan.normalizedTerms.includes("このフォルダ"), false);
+    assert.equal(plan.normalizedTerms.includes("ファイル"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Relay document search query plan captures exclusion and recency hints", async () => {
+  const { module, cleanup } = await loadQueryPlanModule();
+  try {
+    const plan = module.buildRelayDocumentSearchQueryPlan(
+      {
+        schemaVersion: "RelayDocumentSearchRequest.v1",
+        query: "最新の連結CFS精算表を探して。バックアップ除外。",
+        roots: ["C:/work"],
+        intent: "find_files",
+        thoroughness: "thorough",
+        fileTypes: ["xlsx"],
+        maxResults: 20,
+        evidence: "candidate",
+      },
+      ["C:/work"],
+    );
+
+    assert.equal(plan.mode, "hybrid");
+    assert.equal(plan.recencyPreference, "prefer_recent");
+    assert.ok(plan.excludedTerms.includes("バックアップ"));
+    assert.ok(plan.excludedTerms.includes("backup"));
+    assert.ok(plan.normalizedTerms.includes("連結"));
+    assert.ok(plan.normalizedTerms.includes("cfs"));
+    assert.ok(plan.normalizedTerms.includes("精算表"));
+    assert.equal(plan.normalizedTerms.includes("バックアップ除外"), false);
   } finally {
     cleanup();
   }

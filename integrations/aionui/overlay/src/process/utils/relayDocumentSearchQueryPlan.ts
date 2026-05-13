@@ -15,7 +15,9 @@ export const RELAY_DOCUMENT_SEARCH_QUERY_NORMALIZER_VERSION = 'relay-query-norma
 export type RelayDocumentSearchQueryPlanV1 = {
   schemaVersion: typeof RELAY_DOCUMENT_SEARCH_QUERY_PLAN_CONTRACT;
   normalizerVersion: typeof RELAY_DOCUMENT_SEARCH_QUERY_NORMALIZER_VERSION;
-  mode: 'filename' | 'hybrid' | 'evidence';
+  mode: 'filename' | 'keyword' | 'hybrid' | 'evidence' | 'answer';
+  searchModeReason: string;
+  contentStrategy: 'candidate_first' | 'content_required' | 'answer_required';
   query: string;
   roots: string[];
   normalizedTerms: string[];
@@ -23,6 +25,9 @@ export type RelayDocumentSearchQueryPlanV1 = {
   periodHints: string[];
   fileTypeHints: string[];
   rejectedTokens: Array<{ token: string; reason: string }>;
+  ignoredIntentTerms: string[];
+  excludedTerms: string[];
+  recencyPreference: 'neutral' | 'prefer_recent' | 'prefer_older';
   confirmationPolicy: 'candidate_ok' | 'content_required';
 };
 
@@ -65,6 +70,55 @@ const FILE_TYPE_HINTS: Array<{ pattern: RegExp; type: string }> = [
   { pattern: /\.txt\b|テキスト|text/iu, type: 'txt' },
 ];
 
+const INTENT_WORD_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /このフォルダ|当フォルダ|対象フォルダ|指定フォルダ|フォルダ|folder/giu, label: 'folder_reference' },
+  { pattern: /配下|以下|直下|中から|から/giu, label: 'scope_instruction' },
+  { pattern: /ファイル|資料|文書|ドキュメント|document|file/giu, label: 'document_noun' },
+  { pattern: /探して|探す|検索して|検索|見つけて|見つける|抽出して|抽出|列挙して|一覧|関係する|関連する|関係ありそうな|関連しそうな/giu, label: 'search_instruction' },
+  { pattern: /ください|下さい|お願い|して|する|ほしい|欲しい/giu, label: 'polite_or_auxiliary' },
+];
+
+const GENERIC_STOP_TERMS = new Set([
+  'この',
+  'その',
+  'あの',
+  'ここ',
+  'そこ',
+  'どこ',
+  'もの',
+  'こと',
+  'ため',
+  '対象',
+  '候補',
+  'ファイル',
+  '資料',
+  '文書',
+  'ドキュメント',
+  'フォルダ',
+  'folder',
+  'file',
+  'files',
+  'document',
+  'documents',
+  'search',
+  'find',
+]);
+
+const EXCLUSION_HINTS: Array<{ pattern: RegExp; terms: string[] }> = [
+  {
+    pattern: /(?:バックアップ|backup|bak|old|archive|履歴|過去|旧)(?:を)?(?:除外|外して|抜いて|以外|なし|不要|含めない)|(?:除外|外して|抜いて|以外|なし|不要|含めない).{0,8}(?:バックアップ|backup|bak|old|archive|履歴|過去|旧)/iu,
+    terms: ['バックアップ', 'backup', 'bak', 'old', 'archive', '履歴', '過去', '旧'],
+  },
+  {
+    pattern: /(?:ファイリング|filing|xsa|開示|disclosure)(?:を)?(?:除外|外して|抜いて|以外|なし|不要|含めない)|(?:除外|外して|抜いて|以外|なし|不要|含めない).{0,8}(?:ファイリング|filing|xsa|開示|disclosure)/iu,
+    terms: ['ファイリング', 'filing', 'xsa', '開示', 'disclosure'],
+  },
+  {
+    pattern: /(?:出力|output|提出|submit)(?:を)?(?:除外|外して|抜いて|以外|なし|不要|含めない)|(?:除外|外して|抜いて|以外|なし|不要|含めない).{0,8}(?:出力|output|提出|submit)/iu,
+    terms: ['出力', 'output', '提出', 'submit'],
+  },
+];
+
 export function normalizeRelaySearchText(value: string): string {
   return value
     .normalize('NFKC')
@@ -74,23 +128,65 @@ export function normalizeRelaySearchText(value: string): string {
     .trim();
 }
 
+function stripJapaneseParticles(value: string): string {
+  return value.replace(/^[のにをがはへとやもでからまで]+|[のにをがはへとやもでからまで]+$/gu, '');
+}
+
 function addTerm(terms: Set<string>, value: string): void {
   const normalized = normalizeRelaySearchText(value);
   if (normalized.length >= 2) terms.add(normalized);
 }
 
-function baseTokens(query: string): { terms: Set<string>; rejectedTokens: RelayDocumentSearchQueryPlanV1['rejectedTokens'] } {
+function collectIntentNoise(query: string): { cleaned: string; ignoredIntentTerms: string[] } {
+  let cleaned = query.normalize('NFKC');
+  const ignoredIntentTerms = new Set<string>();
+  for (const hint of EXCLUSION_HINTS) {
+    cleaned = cleaned.replace(hint.pattern, (match) => {
+      const normalized = normalizeRelaySearchText(match);
+      if (normalized) ignoredIntentTerms.add(`exclusion_instruction:${normalized}`);
+      return ' ';
+    });
+  }
+  for (const item of INTENT_WORD_PATTERNS) {
+    cleaned = cleaned.replace(item.pattern, (match) => {
+      const normalized = normalizeRelaySearchText(match);
+      if (normalized) ignoredIntentTerms.add(`${item.label}:${normalized}`);
+      return ' ';
+    });
+  }
+  return { cleaned, ignoredIntentTerms: [...ignoredIntentTerms] };
+}
+
+function baseTokens(query: string): {
+  terms: Set<string>;
+  rejectedTokens: RelayDocumentSearchQueryPlanV1['rejectedTokens'];
+  ignoredIntentTerms: string[];
+} {
   const terms = new Set<string>();
   const rejectedTokens: RelayDocumentSearchQueryPlanV1['rejectedTokens'] = [];
-  for (const token of normalizeRelaySearchText(query).split(/\s+/u)) {
+  const ignoredIntentTerms = new Set<string>();
+  const { cleaned, ignoredIntentTerms: ignored } = collectIntentNoise(query);
+  for (const token of ignored) ignoredIntentTerms.add(token);
+  const normalized = normalizeRelaySearchText(cleaned);
+  for (const rawToken of normalized.split(/\s+/u)) {
+    const token = stripJapaneseParticles(rawToken);
     if (!token) continue;
-    if (token.length < 2) {
-      rejectedTokens.push({ token, reason: 'too_short' });
+    if (token.length < 2 || GENERIC_STOP_TERMS.has(token)) {
+      rejectedTokens.push({ token, reason: token.length < 2 ? 'too_short' : 'generic_intent_word' });
       continue;
     }
     terms.add(token);
   }
-  return { terms, rejectedTokens };
+  for (const match of cleaned.matchAll(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]{2,}|[A-Za-z][A-Za-z0-9]{1,}|\d{2,4}(?:期|q)?/giu)) {
+    const token = stripJapaneseParticles(normalizeRelaySearchText(match[0]));
+    if (!token || terms.has(token)) continue;
+    if (token.length < 2 || GENERIC_STOP_TERMS.has(token)) {
+      rejectedTokens.push({ token, reason: token.length < 2 ? 'too_short' : 'generic_intent_word' });
+      continue;
+    }
+    terms.add(token);
+  }
+  return { terms, rejectedTokens, ignoredIntentTerms: [...ignoredIntentTerms] };
 }
 
 function periodHints(query: string): string[] {
@@ -135,11 +231,62 @@ function confirmationPolicy(request: RelayDocumentSearchRequestV1): RelayDocumen
     : 'candidate_ok';
 }
 
+function excludedTerms(query: string): string[] {
+  const out = new Set<string>();
+  for (const hint of EXCLUSION_HINTS) {
+    if (!hint.pattern.test(query)) continue;
+    for (const term of hint.terms) addTerm(out, term);
+  }
+  return [...out];
+}
+
+function recencyPreference(query: string): RelayDocumentSearchQueryPlanV1['recencyPreference'] {
+  if (/最新|最新版|直近|新しい|最近|recent|newest|latest|current/iu.test(query)) return 'prefer_recent';
+  if (/古い|過去|旧版|以前|old|older|archive/iu.test(query)) return 'prefer_older';
+  return 'neutral';
+}
+
+function modeForRequest(
+  request: RelayDocumentSearchRequestV1,
+  policy: RelayDocumentSearchQueryPlanV1['confirmationPolicy'],
+): {
+  mode: RelayDocumentSearchQueryPlanV1['mode'];
+  contentStrategy: RelayDocumentSearchQueryPlanV1['contentStrategy'];
+  searchModeReason: string;
+} {
+  if (request.intent === 'answer_with_evidence' || request.intent === 'summarize_with_evidence') {
+    return {
+      mode: 'answer',
+      contentStrategy: 'answer_required',
+      searchModeReason: 'intent_requires_answerable_content_evidence',
+    };
+  }
+  if (policy === 'content_required') {
+    return {
+      mode: 'evidence',
+      contentStrategy: 'content_required',
+      searchModeReason: 'request_requires_content_confirmation',
+    };
+  }
+  if (request.thoroughness === 'quick') {
+    return {
+      mode: 'filename',
+      contentStrategy: 'candidate_first',
+      searchModeReason: 'quick_search_uses_metadata_first_candidates',
+    };
+  }
+  return {
+    mode: 'hybrid',
+    contentStrategy: 'candidate_first',
+    searchModeReason: 'thorough_find_files_uses_filename_plus_bounded_content',
+  };
+}
+
 export function buildRelayDocumentSearchQueryPlan(
   request: RelayDocumentSearchRequestV1,
   roots: string[],
 ): RelayDocumentSearchQueryPlanV1 {
-  const { terms, rejectedTokens } = baseTokens(request.query);
+  const { terms, rejectedTokens, ignoredIntentTerms } = baseTokens(request.query);
   const synonymExpansions: RelayDocumentSearchQueryPlanV1['synonymExpansions'] = [];
   for (const synonym of ACCOUNTING_SYNONYMS) {
     if (!synonym.pattern.test(request.query)) continue;
@@ -155,10 +302,13 @@ export function buildRelayDocumentSearchQueryPlan(
   for (const hint of periods) addTerm(terms, hint);
   const hints = fileTypeHints(request.query, request);
   const policy = confirmationPolicy(request);
+  const mode = modeForRequest(request, policy);
   return {
     schemaVersion: RELAY_DOCUMENT_SEARCH_QUERY_PLAN_CONTRACT,
     normalizerVersion: RELAY_DOCUMENT_SEARCH_QUERY_NORMALIZER_VERSION,
-    mode: request.thoroughness === 'quick' ? 'filename' : policy === 'content_required' ? 'evidence' : 'hybrid',
+    mode: mode.mode,
+    searchModeReason: mode.searchModeReason,
+    contentStrategy: mode.contentStrategy,
     query: request.query,
     roots,
     normalizedTerms: [...terms],
@@ -166,6 +316,9 @@ export function buildRelayDocumentSearchQueryPlan(
     periodHints: periods,
     fileTypeHints: hints,
     rejectedTokens,
+    ignoredIntentTerms,
+    excludedTerms: excludedTerms(request.query),
+    recencyPreference: recencyPreference(request.query),
     confirmationPolicy: policy,
   };
 }

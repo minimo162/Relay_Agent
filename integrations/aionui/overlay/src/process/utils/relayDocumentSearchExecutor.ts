@@ -272,12 +272,21 @@ type RankedCandidate = {
   indexDbScore: number;
   indexDbUncappedScore: number;
   indexDbScoreCapLoss: number;
+  recencyScore: number;
   userMemoryBoost: number;
   warningPenalty: number;
   rankingWarnings: string[];
   filenameIndexMatch?: RelayDocumentSearchFilenameIndexMatch;
   contentEvidence?: ContentEvidence;
 };
+
+type RelayDocumentSearchCandidateBucket =
+  | 'direct_source_workpaper'
+  | 'supporting_evidence'
+  | 'disclosure_output'
+  | 'backup_or_archive'
+  | 'review_or_audit'
+  | 'uncategorized';
 
 type RankingScoreBreakdownSummary = {
   score_breakdown_contract: typeof RELAY_DOCUMENT_SEARCH_SCORE_BREAKDOWN_CONTRACT;
@@ -793,6 +802,65 @@ function scoreCandidate(file: FileMetadata, terms: string[]): { score: number; r
   return { score, reasons };
 }
 
+function fileMatchesExcludedTerms(file: FileMetadata, excludedTerms: string[]): boolean {
+  if (!excludedTerms.length) return false;
+  const name = normalizeRelaySearchText(file.name);
+  const displayPath = normalizeRelaySearchText(file.displayPath);
+  const haystack = `${name} ${displayPath}`;
+  return excludedTerms.some((term) => term.length >= 2 && haystack.includes(term));
+}
+
+function recencyScoreForCandidate(
+  file: FileMetadata,
+  preference: 'neutral' | 'prefer_recent' | 'prefer_older' | undefined,
+  now: Date,
+): number {
+  if (!file.modifiedTime || !preference || preference === 'neutral') return 0;
+  const modifiedMs = Date.parse(file.modifiedTime);
+  if (!Number.isFinite(modifiedMs)) return 0;
+  const ageDays = Math.max(0, (now.getTime() - modifiedMs) / 86_400_000);
+  if (preference === 'prefer_recent') {
+    if (ageDays <= 7) return 3;
+    if (ageDays <= 90) return 2;
+    if (ageDays <= 365) return 1;
+    return 0.25;
+  }
+  if (ageDays > 365 * 3) return 2;
+  if (ageDays > 365) return 1;
+  return 0;
+}
+
+function candidateBucketForFolderRoles(
+  folderRoles: RelayDocumentSearchFolderRoleReport,
+): RelayDocumentSearchCandidateBucket {
+  const roles = new Set([folderRoles.primaryRole, ...folderRoles.roles].filter(Boolean));
+  if (roles.has('backup')) return 'backup_or_archive';
+  if (roles.has('filing') || roles.has('output')) return 'disclosure_output';
+  if (roles.has('audit') || roles.has('review')) return 'review_or_audit';
+  if (roles.has('source') || roles.has('work')) return 'direct_source_workpaper';
+  return 'uncategorized';
+}
+
+function summarizeCandidateBuckets(
+  results: Array<Record<string, unknown>>,
+): Record<RelayDocumentSearchCandidateBucket, number> {
+  const summary: Record<RelayDocumentSearchCandidateBucket, number> = {
+    direct_source_workpaper: 0,
+    supporting_evidence: 0,
+    disclosure_output: 0,
+    backup_or_archive: 0,
+    review_or_audit: 0,
+    uncategorized: 0,
+  };
+  for (const result of results) {
+    const bucket = result.candidate_bucket;
+    if (typeof bucket === 'string' && bucket in summary) {
+      summary[bucket as RelayDocumentSearchCandidateBucket] += 1;
+    }
+  }
+  return summary;
+}
+
 function scoreFromReasons(reasons: string[], prefix: string, weight: number): number {
   return reasons.filter((reason) => reason.startsWith(prefix)).length * weight;
 }
@@ -965,7 +1033,7 @@ function scoreBreakdownForCandidate(
     pin_history: candidate.userMemoryBoost,
     content: candidate.contentScore,
     table_cell: tableCellScore,
-    recency: 0,
+    recency: candidate.recencyScore,
     grouping: 0,
     hybrid_merge: candidate.baseScore,
     base_score: candidate.baseScore,
@@ -988,7 +1056,7 @@ function scoreBreakdownForCandidate(
       }),
       content: scoreComponent(candidate.contentScore, candidate.contentScore > 0, 'derived_content_match'),
       table_cell: scoreComponent(tableCellScore, tableCellScore > 0, 'table_or_cell_match'),
-      recency: scoreComponent(0, false, 'modified_time_tie_breaker', {
+      recency: scoreComponent(candidate.recencyScore, candidate.recencyScore > 0, 'modified_time_preference', {
         details: { modifiedTimePresent: Boolean(candidate.file.modifiedTime) },
       }),
       pin_history: scoreComponent(candidate.userMemoryBoost, candidate.userMemoryBoost > 0, 'pinned_or_recent_user_signal'),
@@ -1012,6 +1080,7 @@ function scoreBreakdownForCandidate(
           filenamePathKeywordScore: candidate.filenameScore + candidate.pathScore + candidate.termScore,
           contentScore: candidate.contentScore,
           sqliteFtsScore: candidate.indexDbScore,
+          recencyScore: candidate.recencyScore,
           pinHistoryScore: candidate.userMemoryBoost,
         },
       }),
@@ -1054,7 +1123,7 @@ function rankingScoreBreakdownSummary(
           ? candidate.contentScore || candidate.indexDbScore
           : 0,
       ),
-      recency: 0,
+      recency: sum(returned, (candidate) => candidate.recencyScore),
       pin_history: sum(returned, (candidate) => candidate.userMemoryBoost),
       grouping: 0,
       warning_penalty: -sum(returned, (candidate) => candidate.warningPenalty),
@@ -1724,6 +1793,7 @@ function indexDbPrimaryModeForOptions(options: RelayDocumentSearchExecutorOption
   const configured = options.indexDbPrimaryMode ??
     process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PRIMARY_MODE ??
     process.env.RELAY_DOCUMENT_SEARCH_INDEX_DB_PRIMARY;
+  if (configured === undefined && indexDbEnabled(options)) return 'primary';
   const normalized = String(configured ?? 'disabled').trim().toLowerCase();
   if (normalized === '1' || normalized === 'true' || normalized === 'primary') return 'primary';
   if (normalized === 'shadow') return 'shadow';
@@ -2933,6 +3003,7 @@ export async function executeRelayDocumentSearch(
   const userMemory = await prepareUserMemory(options);
   const syncJournalEvents: RelayDocumentSearchSyncJournalEventInput[] = [];
   let filteredFiles: FileMetadata[] = [];
+  let excludedByQueryPlanCount = 0;
   let contentEvidence: Awaited<ReturnType<typeof collectContentEvidence>> = {
     byFileId: new Map<string, ContentEvidence>(),
     scannedFiles: 0,
@@ -2979,6 +3050,15 @@ export async function executeRelayDocumentSearch(
       if (state.truncated) break;
     }
     filteredFiles = files.filter((file) => fileTypeMatches(file, request));
+    const excludedByQueryPlan = filteredFiles.filter((file) =>
+      fileMatchesExcludedTerms(file, relayQueryPlan.excludedTerms ?? []),
+    );
+    excludedByQueryPlanCount = excludedByQueryPlan.length;
+    if (excludedByQueryPlanCount > 0) {
+      filteredFiles = filteredFiles.filter((file) =>
+        !fileMatchesExcludedTerms(file, relayQueryPlan.excludedTerms ?? []),
+      );
+    }
     await writeIndexDbMetadata(filteredFiles, options, indexDb);
     filenameIndex = await prepareFilenameIndex(roots, filteredFiles, terms, request, state, options);
     if (parsedDocumentCacheEnabled(options) && freshnessReports.some((report) => report.moved_file_count > 0)) {
@@ -3062,7 +3142,8 @@ export async function executeRelayDocumentSearch(
         : evidence
           ? indexDbSearchProbe.scoreCapLossByFileId.get(file.fileId) ?? 0
           : 0;
-      const baseScore = filenameScore.score + memoryScore.score + contentComponent + indexDbComponent;
+      const recencyScore = recencyScoreForCandidate(file, relayQueryPlan.recencyPreference, options.now ?? new Date());
+      const baseScore = filenameScore.score + memoryScore.score + contentComponent + indexDbComponent + recencyScore;
       const rankingWarnings = rankingWarningsForCandidate(file, request, Boolean(evidence));
       const penalty = warningPenalty(rankingWarnings, request);
       return {
@@ -3077,6 +3158,7 @@ export async function executeRelayDocumentSearch(
         indexDbScore: indexDbComponent,
         indexDbUncappedScore,
         indexDbScoreCapLoss,
+        recencyScore,
         userMemoryBoost: memoryScore.score,
         warningPenalty: penalty,
         rankingWarnings,
@@ -3101,6 +3183,10 @@ export async function executeRelayDocumentSearch(
 
   const results = ranked.map((candidate) => {
     const folderRoles = classifyRelayDocumentSearchFolderRoles(candidate.file.displayPath);
+    const roleBucket = candidateBucketForFolderRoles(folderRoles);
+    const candidateBucket = roleBucket === 'uncategorized' && candidate.contentEvidence
+      ? 'supporting_evidence'
+      : roleBucket;
     const warnings = candidate.rankingWarnings;
     const matchMode = candidate.contentEvidence ? 'content' : 'filename';
     const evidenceState = candidate.contentEvidence ? 'content_confirmed' : 'filename_only';
@@ -3137,8 +3223,10 @@ export async function executeRelayDocumentSearch(
       result_group: resultGroup,
       folder_roles: folderRoles,
       folder_role: folderRoles.primaryRole,
+      candidate_bucket: candidateBucket,
     };
   });
+  const candidateBuckets = summarizeCandidateBuckets(results);
   if (userMemory.diagnostics.persistent && !state.cancelled) {
     try {
       userMemory.record = withRelayDocumentSearchRecentSearch(
@@ -3675,6 +3763,7 @@ export async function executeRelayDocumentSearch(
       truncated: state.truncated,
       scannedFiles: state.scannedFiles,
       skippedFiles: state.skippedFiles,
+      excludedByQueryPlanCount,
       generatedAt: now,
     },
     results,
@@ -3712,6 +3801,11 @@ export async function executeRelayDocumentSearch(
         warningPenaltyTotal: rankedAll.reduce((sum, candidate) => sum + candidate.warningPenalty, 0),
         scoreBreakdown: rankingScoreSummary,
         tieBreakers: ['score', 'content_evidence', 'user_memory', 'base_score', 'warning_penalty', 'modified_time', 'display_path', 'file_id'],
+      },
+      candidateBuckets,
+      queryFiltering: {
+        excludedTerms: relayQueryPlan.excludedTerms,
+        excludedByQueryPlanCount,
       },
       diversity: {
         enabled: true,

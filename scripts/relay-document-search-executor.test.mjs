@@ -2443,6 +2443,64 @@ test("executeRelayDocumentSearch writes a metadata-only sync journal when enable
   }
 });
 
+test("executeRelayDocumentSearch applies query-plan exclusions, recency boost, and candidate buckets", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-query-plan-filter-workspace-"));
+  const workDir = resolve(workspace, "02CFS-作業-精算表");
+  const backupDir = resolve(workspace, "backup");
+  const filingDir = resolve(workspace, "ファイリング");
+  mkdirSync(workDir, { recursive: true });
+  mkdirSync(backupDir, { recursive: true });
+  mkdirSync(filingDir, { recursive: true });
+  const currentWorkpaper = resolve(workDir, "FY160_連結CFS精算表.xlsx");
+  const oldWorkpaper = resolve(workDir, "FY159_連結CFS精算表.xlsx");
+  const backupWorkpaper = resolve(backupDir, "FY160_連結CFS精算表_backup.xlsx");
+  const filingOutput = resolve(filingDir, "Final_連結キャッシュフロー計算書.xlsx");
+  writeFileSync(currentWorkpaper, "placeholder", "utf8");
+  writeFileSync(oldWorkpaper, "placeholder", "utf8");
+  writeFileSync(backupWorkpaper, "placeholder", "utf8");
+  writeFileSync(filingOutput, "placeholder", "utf8");
+  const currentTime = new Date("2026-05-10T00:00:00.000Z");
+  const oldTime = new Date("2024-05-10T00:00:00.000Z");
+  utimesSync(currentWorkpaper, currentTime, currentTime);
+  utimesSync(oldWorkpaper, oldTime, oldTime);
+  utimesSync(backupWorkpaper, currentTime, currentTime);
+  utimesSync(filingOutput, currentTime, currentTime);
+
+  const { module, cleanup } = await loadExecutorModule();
+  try {
+    const result = await module.executeRelayDocumentSearch(
+      {
+        query: "最新の連結キャッシュフロー計算書 精算表を探して。バックアップ除外。",
+        roots: [workspace],
+        fileTypes: ["xlsx"],
+        evidence: "candidate",
+        thoroughness: "quick",
+      },
+      {
+        jobId: "job-query-plan-filter",
+        now: new Date("2026-05-12T00:00:00.000Z"),
+      },
+    );
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.queryPlan.recencyPreference, "prefer_recent");
+    assert.ok(result.queryPlan.excludedTerms.includes("バックアップ"));
+    assert.equal(result.coverage.excludedByQueryPlanCount, 1);
+    assert.equal(
+      result.results.some((candidate) => String(candidate.path).includes("backup")),
+      false,
+    );
+    assert.equal(result.results[0].path, currentWorkpaper);
+    assert.equal(result.results[0].candidate_bucket, "direct_source_workpaper");
+    assert.equal(result.results[0].score_breakdown.recency > 0, true);
+    assert.equal(result.diagnostics.candidateBuckets.direct_source_workpaper >= 1, true);
+    assert.equal(result.diagnostics.queryFiltering.excludedByQueryPlanCount, 1);
+  } finally {
+    cleanup();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("executeRelayDocumentSearch asks for a folder when no roots are supplied", async () => {
   const { module, cleanup } = await loadExecutorModule();
   try {

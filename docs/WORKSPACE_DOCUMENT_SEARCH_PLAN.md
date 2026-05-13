@@ -31,6 +31,32 @@ AionUi skills and deterministic bridge contracts rather than by model-only tool
 planning. Relay must not become a parallel document-search app, conversation
 store, preview surface, or approval surface.
 
+## 2026-05-13 Implemented Bridge Slice
+
+The first Docufinder-inspired slice has landed in the Relay bridge. It does not
+copy Docufinder code and does not create a separate search product surface.
+Instead, it makes the existing high-level `relay_document_search` tool a safer
+first step for Copilot-backed AionUi sessions:
+
+- Query planning now records mode, content strategy, ignored intent words,
+  exclusion terms, and recency preference.
+- Japanese natural-language finance searches keep terms such as
+  `キャッシュフロー計算書`, `CFS`, `連結CF`, and `精算表` even when the user writes
+  one unspaced sentence.
+- Search-time exclusions such as `バックアップ除外` are applied before indexing
+  and ranking.
+- Ranking exposes a recency component when the user asks for latest/current
+  files.
+- Result diagnostics include candidate buckets so answers can distinguish
+  source/workpapers from disclosure/output files, backup/archive material, and
+  review/audit files.
+- When SQLite/FTS is explicitly enabled, it is eligible to become the primary
+  path only after the existing cutover readiness gate says the index is safe.
+
+The next acceptance step remains installed Windows validation on a representative
+shared folder: top-k relevance, folder-skew behavior, preview/open/copy/refine
+actions, partial/no-result/permission states, and support export.
+
 ## Bridge-First Scope Correction
 
 The plan must be read with this ownership boundary:

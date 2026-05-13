@@ -25,6 +25,33 @@
 
 ## Milestone Log
 
+### 2026-05-13 Docufinder-inspired document-search planning slice
+
+Improved `relay_document_search` without changing the two-mode AionUi product
+surface. Relay now owns more of the first-step search plan instead of relying
+on Copilot to decompose broad folder searches into low-level glob patterns.
+
+- Query planning now separates search mode, content strategy, ignored user
+  instruction words, exclusion hints, and recency preference. Unspaced Japanese
+  requests such as `このフォルダからキャッシュフロー計算書に関係するファイルを探して`
+  keep the finance terms while dropping generic words such as folder/file/find.
+- The executor applies query-plan exclusions before indexing/ranking, so
+  requests such as `バックアップ除外` do not return backup-path candidates.
+- Ranking now exposes a real recency score when the query asks for latest or
+  recent files, and result diagnostics include source/workpaper, output,
+  backup/archive, review/audit, and supporting-evidence buckets.
+- Optional SQLite/FTS primary mode now defaults to primary when the index DB is
+  explicitly enabled, while the existing readiness gate still rolls back to the
+  filename/content path unless the DB is fresh and safe.
+
+Verification:
+
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs`:
+  passed, 37 tests.
+- `node --test scripts/relay-document-search-filename-index.test.mjs scripts/relay-document-search-folder-roles.test.mjs scripts/apply-aionui-overlay.test.mjs apps/desktop/scripts/aionui_provider_seed.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs`:
+  passed, 43 tests.
+- `pnpm check`: passed.
+
 ### 2026-05-13 Two-mode AionUi beginner shell
 
 Relay beginner UX is now scoped to two visible preset assistants:
