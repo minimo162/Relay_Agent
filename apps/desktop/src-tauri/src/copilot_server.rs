@@ -950,8 +950,8 @@ impl CopilotServer {
             .await
             .map_err(|error| match error {
                 CopilotStatusCheckError::Transport(error) => error,
-                CopilotStatusCheckError::Http(error) => CopilotError::PromptError(Box::new(
-                    CopilotPromptFailure::Message(format!(
+                CopilotStatusCheckError::Http(error) => {
+                    CopilotError::PromptError(Box::new(CopilotPromptFailure::Message(format!(
                         "warmup check failed: status {}{}",
                         error.status,
                         error
@@ -959,8 +959,8 @@ impl CopilotServer {
                             .as_deref()
                             .map(|code| format!(" ({code})"))
                             .unwrap_or_default()
-                    )),
-                )),
+                    ))))
+                }
             })
     }
 

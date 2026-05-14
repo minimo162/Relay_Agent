@@ -141,6 +141,57 @@ test("filename index uses inverted postings for partial Latin and CJK narrowing"
   }
 });
 
+test("filename index avoids CJK ngram-only broadening when direct compound matches exist", async () => {
+  const root = resolve(mkdtempSync(resolve(tmpdir(), "relay-document-search-filename-index-compound-")));
+  const { module, cleanup } = await loadFilenameIndexModule();
+  try {
+    const index = module.buildRelayDocumentSearchFilenameIndex(
+      root,
+      [
+        file(
+          root,
+          "160期-1Q/連結決算/08未実現利益-棚卸資産/2_実績データ/1_原価/301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx",
+          "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx",
+          "xlsx",
+        ),
+        file(
+          root,
+          "160期-1Q/連結決算/08未実現利益-棚卸資産/2_実績データ/2_国内DL・部販/FY160-1Q_販社・パーツ残高_DBLink.xlsx",
+          "FY160-1Q_販社・パーツ残高_DBLink.xlsx",
+          "xlsx",
+        ),
+        file(
+          root,
+          "160期-1Q/連結決算/08未実現利益-棚卸資産/2_実績データ/1_原価/302 自動車国別月別売上総利益(easyG009U)_160_1Q.xlsx",
+          "302 自動車国別月別売上総利益(easyG009U)_160_1Q.xlsx",
+          "xlsx",
+        ),
+      ],
+      { now: new Date("2026-05-09T00:00:00.000Z") },
+    );
+
+    const matches = module.searchRelayDocumentSearchFilenameIndex(
+      index,
+      ["部品売上", "部品他売上", "部販", "パーツ"],
+      { fileTypes: ["xlsx"], maxResults: 10 },
+    );
+    assert.deepEqual(
+      matches.map((match) => match.displayPath),
+      [
+        "160期-1Q/連結決算/08未実現利益-棚卸資産/2_実績データ/2_国内DL・部販/FY160-1Q_販社・パーツ残高_DBLink.xlsx",
+        "160期-1Q/連結決算/08未実現利益-棚卸資産/2_実績データ/1_原価/301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx",
+      ],
+    );
+    assert.equal(
+      matches.some((match) => match.displayPath.includes("302 自動車国別月別売上総利益")),
+      false,
+    );
+  } finally {
+    cleanup();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("filename index persists and rejects stale normalizer-compatible records by age", async () => {
   const root = resolve(mkdtempSync(resolve(tmpdir(), "relay-document-search-filename-index-store-")));
   const indexDir = mkdtempSync(resolve(tmpdir(), "relay-document-search-filename-index-store-dir-"));

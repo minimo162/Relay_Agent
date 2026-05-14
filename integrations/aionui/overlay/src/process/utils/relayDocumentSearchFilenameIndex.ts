@@ -299,6 +299,17 @@ function scoreEntry(
   return { score, reasons };
 }
 
+function entryDirectlyMatchesTerm(
+  entry: RelayDocumentSearchFilenameIndexEntry,
+  term: string,
+): boolean {
+  return (
+    entry.normalizedName.includes(term) ||
+    entry.normalizedDisplayPath.includes(term) ||
+    entry.terms.includes(term)
+  );
+}
+
 function searchKeysForTerm(term: string): string[] {
   const normalizedTerm = normalizeRelaySearchText(term);
   if (!normalizedTerm) return [];
@@ -314,18 +325,31 @@ function candidateEntriesForTerms(
   terms: string[],
 ): RelayDocumentSearchFilenameIndexEntry[] {
   if (terms.length === 0) return index.entries;
-  const candidateIds = new Set<string>();
+  const directCandidateIds = new Set<string>();
   for (const term of terms) {
-    for (const key of searchKeysForTerm(term)) {
-      for (const fileId of index.invertedIndex[key] ?? []) {
-        candidateIds.add(fileId);
+    for (const entry of index.entries) {
+      if (entryDirectlyMatchesTerm(entry, term)) {
+        directCandidateIds.add(entry.fileId);
       }
     }
   }
-  if (!candidateIds.size) {
+
+  if (directCandidateIds.size > 0) {
+    return index.entries.filter((entry) => directCandidateIds.has(entry.fileId));
+  }
+
+  const fallbackCandidateIds = new Set<string>();
+  for (const term of terms) {
+    for (const key of searchKeysForTerm(term)) {
+      for (const fileId of index.invertedIndex[key] ?? []) {
+        fallbackCandidateIds.add(fileId);
+      }
+    }
+  }
+  if (!fallbackCandidateIds.size) {
     return index.entries;
   }
-  return index.entries.filter((entry) => candidateIds.has(entry.fileId));
+  return index.entries.filter((entry) => fallbackCandidateIds.has(entry.fileId));
 }
 
 function fileTypeAllowed(entry: RelayDocumentSearchFilenameIndexEntry, fileTypes?: string[]): boolean {

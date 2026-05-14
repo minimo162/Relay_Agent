@@ -113,6 +113,36 @@ test("Relay document search query plan extracts finance terms from unspaced Japa
   }
 });
 
+test("Relay document search query plan keeps Japanese business compounds and expands parts sales terms", async () => {
+  const { module, cleanup } = await loadQueryPlanModule();
+  try {
+    const plan = module.buildRelayDocumentSearchQueryPlan(
+      {
+        schemaVersion: "RelayDocumentSearchRequest.v1",
+        query: "部品売上に関するファイルを探して",
+        roots: ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+        intent: "find_files",
+        thoroughness: "thorough",
+        fileTypes: ["any"],
+        maxResults: 80,
+        evidence: "candidate",
+      },
+      ["H:/shr1/05_経理部/03_連結財務G/160連結"],
+    );
+
+    assert.equal(plan.mode, "hybrid");
+    assert.ok(plan.normalizedTerms.includes("部品売上"));
+    assert.ok(plan.normalizedTerms.includes("部品他売上"));
+    assert.ok(plan.normalizedTerms.includes("部販"));
+    assert.ok(plan.normalizedTerms.includes("パーツ"));
+    assert.equal(plan.normalizedTerms.includes("部品売上に関する"), false);
+    assert.ok(plan.synonymExpansions.some((item) => item.source === "parts_sales"));
+    assert.ok(plan.ignoredIntentTerms.some((term) => term.startsWith("search_instruction:に関する")));
+  } finally {
+    cleanup();
+  }
+});
+
 test("Relay document search query plan captures exclusion and recency hints", async () => {
   const { module, cleanup } = await loadQueryPlanModule();
   try {

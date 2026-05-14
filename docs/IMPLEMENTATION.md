@@ -21,6 +21,43 @@
 
 ## Milestone Log
 
+### 2026-05-14 Parts-sales search precision and latency hardening
+
+Fixed the observed `部品売上に関するファイルを探して` behavior where Japanese
+compound terms could be broadened into CJK n-gram fragments such as `売上`,
+causing low-score, filename-only candidates from unrelated folders to dominate
+and pushing detailed searches toward long partial runs.
+
+Changes:
+
+- Added deterministic query-plan handling for `に関する` / `について` request
+  wording so business compounds remain as the topic term.
+- Added parts-sales synonym expansion (`部品売上`, `部品他売上`, `部販`,
+  `パーツ`, `補修部品`, and related terms).
+- Changed filename-index candidate selection to prefer direct compound matches
+  across all normalized terms before using CJK n-gram fallback.
+- Bounded candidate-first content inspection to the top filename/path matches
+  for `find_files` searches, with the desktop runner passing a 60 second
+  executor deadline and 120-file content-inspection cap.
+- Prevented folder-role scores from admitting candidates that have no filename,
+  path, content, SQLite FTS, or user-memory signal for the query.
+- Suppressed transient Office lock files (`~$...`) from document-search
+  candidates.
+- Replaced raw UI labels such as `filename_only` and numeric scores with
+  beginner-safe labels such as `ファイル名候補`.
+
+Verification:
+
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-filename-index.test.mjs` — pass.
+- `node --test scripts/relay-document-search-executor.test.mjs` — pass.
+- Synthetic CLI smoke for `部品売上に関するファイルを探して` — pass; the broad
+  `自動車国別月別売上総利益` candidate is excluded.
+- `pnpm typecheck` — pass.
+- `pnpm check` — pass.
+- `cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `git diff --check` — pass.
+
 ### 2026-05-14 Search freeze, simplified search mode, and snapshot cleanup
 
 Hardened the dedicated Relay desktop workbench after UI search could appear

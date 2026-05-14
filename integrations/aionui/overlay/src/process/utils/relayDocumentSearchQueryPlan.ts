@@ -64,6 +64,20 @@ const ACCOUNTING_SYNONYMS: Array<{ pattern: RegExp; source: string; terms: strin
     source: 'profit_loss',
     terms: ['pl', '損益計算書', 'profit loss'],
   },
+  {
+    pattern: /部品\s*売上|パーツ\s*売上|部販|補修部品|parts?\s*sales?/iu,
+    source: 'parts_sales',
+    terms: [
+      '部品売上',
+      '部品他売上',
+      'パーツ売上',
+      '部販',
+      'パーツ',
+      '補修部品',
+      '販社 パーツ',
+      'parts sales',
+    ],
+  },
 ];
 
 const FILE_TYPE_HINTS: Array<{ pattern: RegExp; type: string }> = [
@@ -81,7 +95,7 @@ const INTENT_WORD_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /このフォルダ|当フォルダ|対象フォルダ|指定フォルダ|フォルダ|folder/giu, label: 'folder_reference' },
   { pattern: /配下|以下|直下|中から|から/giu, label: 'scope_instruction' },
   { pattern: /ファイル|資料|文書|ドキュメント|document|file/giu, label: 'document_noun' },
-  { pattern: /探して|探す|検索して|検索|見つけて|見つける|抽出して|抽出|列挙して|一覧|関係する|関連する|関係ありそうな|関連しそうな/giu, label: 'search_instruction' },
+  { pattern: /探して|探す|検索して|検索|見つけて|見つける|抽出して|抽出|列挙して|一覧|に関する|に関連する|に係る|について|関係する|関連する|関係ありそうな|関連しそうな/giu, label: 'search_instruction' },
   { pattern: /ください|下さい|お願い|して|する|ほしい|欲しい/giu, label: 'polite_or_auxiliary' },
 ];
 

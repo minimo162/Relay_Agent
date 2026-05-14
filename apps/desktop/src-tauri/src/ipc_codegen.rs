@@ -4,11 +4,10 @@ use ts_rs::TS;
 
 use crate::models::{
     BrowserAutomationSettings, CopilotBridgeFailureInfo, CopilotRepairStageFailureCount,
-    CopilotRepairStageStats, OpenWorkSetupSnapshot, RelayDiagnostics,
-    RelayDocumentSearchEvidence, RelayDocumentSearchIntent, RelayDocumentSearchRequest,
-    RelayDocumentSearchResponse, RelayDocumentSearchThoroughness, RelayOfficeCommandResponse,
-    RelayOfficeExecuteRequest, RelayOfficeInspectRequest, RelaySearchResultCard,
-    RelayWorkspaceState,
+    CopilotRepairStageStats, OpenWorkSetupSnapshot, RelayDiagnostics, RelayDocumentSearchEvidence,
+    RelayDocumentSearchIntent, RelayDocumentSearchRequest, RelayDocumentSearchResponse,
+    RelayDocumentSearchThoroughness, RelayOfficeCommandResponse, RelayOfficeExecuteRequest,
+    RelayOfficeInspectRequest, RelaySearchResultCard, RelayWorkspaceState,
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, ConnectCdpRequest,

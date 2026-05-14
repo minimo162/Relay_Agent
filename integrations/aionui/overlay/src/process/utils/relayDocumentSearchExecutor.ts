@@ -759,6 +759,8 @@ type ParsedDocumentStructureProfileSummary = {
 const DEFAULT_MAX_SCAN_FILES = 5000;
 const DEFAULT_MAX_RESULTS = 50;
 const DEFAULT_MAX_CONTENT_INSPECT_FILES = 500;
+const CANDIDATE_FIRST_CONTENT_SCAN_MIN_FILES = 40;
+const CANDIDATE_FIRST_CONTENT_SCAN_MAX_FILES = 120;
 const DEFAULT_MAX_EVIDENCE_ANCHORS = 3;
 const DEFAULT_INDEX_DB_SEARCH_MAX_ROWS = 20;
 const MAX_INDEX_DB_SEARCH_MAX_ROWS = 100;
@@ -846,6 +848,10 @@ function scoreCandidate(file: FileMetadata, terms: string[]): { score: number; r
     }
   }
   return { score, reasons };
+}
+
+function isTransientOfficeLockFile(file: FileMetadata): boolean {
+  return file.name.startsWith('~$');
 }
 
 function fileMatchesExcludedTerms(file: FileMetadata, excludedTerms: string[]): boolean {
@@ -1797,6 +1803,32 @@ async function collectContentEvidence(
     if (scannedFiles % 50 === 0) emitProgress(state, 'content_scan', 70);
   }
   return { byFileId, scannedFiles, skippedFiles };
+}
+
+function filesForCandidateFirstContentScan(
+  files: FileMetadata[],
+  filenameMatches: Map<string, RelayDocumentSearchFilenameIndexMatch>,
+  request: RelayDocumentSearchRequestV1,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
+): FileMetadata[] {
+  if (queryPlan.contentStrategy !== 'candidate_first' || requiresContentConfirmation(request)) {
+    return files;
+  }
+
+  const limit = Math.min(
+    CANDIDATE_FIRST_CONTENT_SCAN_MAX_FILES,
+    Math.max(CANDIDATE_FIRST_CONTENT_SCAN_MIN_FILES, request.maxResults * 2),
+  );
+  const byFileId = new Map(files.map((file) => [file.fileId, file]));
+  const matched = [...filenameMatches.values()]
+    .sort((left, right) => right.score - left.score || left.displayPath.localeCompare(right.displayPath))
+    .map((match) => byFileId.get(match.fileId))
+    .filter((file): file is FileMetadata => Boolean(file));
+
+  if (matched.length > 0) {
+    return matched.slice(0, limit);
+  }
+  return files.slice(0, limit);
 }
 
 function periodKeyFromPathSegment(value: string): number | undefined {
@@ -3525,7 +3557,9 @@ export async function executeRelayDocumentSearch(
       }
       if (state.truncated) break;
     }
-    filteredFiles = files.filter((file) => fileTypeMatches(file, request));
+    filteredFiles = files
+      .filter((file) => fileTypeMatches(file, request))
+      .filter((file) => !isTransientOfficeLockFile(file));
     const excludedByQueryPlan = filteredFiles.filter((file) =>
       fileMatchesExcludedTerms(file, relayQueryPlan.excludedTerms ?? []),
     );
@@ -3547,8 +3581,14 @@ export async function executeRelayDocumentSearch(
         onPolicy: (policy) => recordParsedDocumentCachePolicy(parsedDocumentCache, policy),
       });
     }
-    contentEvidence = await collectContentEvidence(
+    const contentScanFiles = filesForCandidateFirstContentScan(
       filteredFiles,
+      filenameIndex.matches,
+      request,
+      relayQueryPlan,
+    );
+    contentEvidence = await collectContentEvidence(
+      contentScanFiles,
       terms,
       request,
       state,
@@ -3651,7 +3691,15 @@ export async function executeRelayDocumentSearch(
         contentEvidence: evidence,
       };
     })
-    .filter((candidate) => candidate.baseScore > 0 || terms.length === 0);
+    .filter((candidate) =>
+      terms.length === 0 ||
+      candidate.filenameScore > 0 ||
+      candidate.pathScore > 0 ||
+      candidate.termScore > 0 ||
+      candidate.contentScore > 0 ||
+      candidate.indexDbScore > 0 ||
+      candidate.userMemoryBoost > 0
+    );
   const rankedAll = withRrfHybridScores(rankedCandidates).sort(candidateComparator);
   userMemory.diagnostics.boostedFileCount = rankedAll.filter((candidate) => candidate.userMemoryBoost > 0).length;
   const groupedRanked = groupRelayDocumentSearchCandidates(rankedAll);

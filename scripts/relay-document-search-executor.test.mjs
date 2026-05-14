@@ -519,6 +519,60 @@ test("executeRelayDocumentSearch returns filename-only candidates without parsin
   }
 });
 
+test("executeRelayDocumentSearch excludes folder-role-only files from compound parts-sales results", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-parts-sales-"));
+  const baseDir = resolve(workspace, "160期-1Q", "連結決算", "08未実現利益-棚卸資産", "2_実績データ");
+  mkdirSync(resolve(baseDir, "1_原価"), { recursive: true });
+  mkdirSync(resolve(baseDir, "2_国内DL・部販"), { recursive: true });
+  writeFileSync(
+    resolve(baseDir, "1_原価", "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx"),
+    "placeholder",
+    "utf8",
+  );
+  writeFileSync(
+    resolve(baseDir, "2_国内DL・部販", "FY160-1Q_販社・パーツ残高_DBLink.xlsx"),
+    "placeholder",
+    "utf8",
+  );
+  writeFileSync(
+    resolve(baseDir, "1_原価", "302 自動車国別月別売上総利益(easyG009U)_160_1Q.xlsx"),
+    "placeholder",
+    "utf8",
+  );
+
+  const { module, cleanup } = await loadExecutorModule();
+  try {
+    const result = await module.executeRelayDocumentSearch(
+      {
+        query: "部品売上に関するファイルを探して",
+        roots: [workspace],
+        fileTypes: ["xlsx"],
+        intent: "find_files",
+        thoroughness: "thorough",
+        evidence: "candidate",
+        maxResults: 10,
+      },
+      {
+        jobId: "job-parts-sales",
+        queryId: "query-parts-sales",
+        now: new Date("2026-05-09T00:00:00.000Z"),
+        useIndexDb: false,
+      },
+    );
+
+    const names = result.results.map((candidate) => candidate.display_name);
+    assert.equal(result.status, "ok");
+    assert.deepEqual(names, [
+      "FY160-1Q_販社・パーツ残高_DBLink.xlsx",
+      "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx",
+    ]);
+    assert.equal(names.some((name) => name.includes("302 自動車国別月別売上総利益")), false);
+  } finally {
+    cleanup();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("executeRelayDocumentSearch keeps quick candidate searches out of content scan", async () => {
   const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-quick-candidate-"));
   mkdirSync(workspace, { recursive: true });

@@ -57,6 +57,18 @@ function cardBucketLabel(card: RelaySearchResultCard): string {
   return labels[bucket] || bucket || "候補";
 }
 
+function cardEvidenceLabel(card: RelaySearchResultCard): string {
+  const evidence = card.evidenceState || card.matchMode || "";
+  const labels: Record<string, string> = {
+    content_confirmed: "中身確認済み",
+    filename_only: "ファイル名候補",
+    filename: "ファイル名候補",
+    path: "パス候補",
+    candidate: "候補",
+  };
+  return labels[evidence] || "候補";
+}
+
 function firstNonEmpty(...values: Array<string | null | undefined>): string {
   return values.find((value) => value && value.trim())?.trim() || "";
 }
@@ -474,10 +486,7 @@ export default function Shell(): JSX.Element {
                         </div>
                         <div class="relay-card-meta">
                           <span>{cardBucketLabel(card)}</span>
-                          <span>{card.evidenceState || card.matchMode || "candidate"}</span>
-                          <Show when={card.score != null}>
-                            <span>{card.score}</span>
-                          </Show>
+                          <span>{cardEvidenceLabel(card)}</span>
                         </div>
                       </button>
                     )}
@@ -561,7 +570,7 @@ export default function Shell(): JSX.Element {
                   <div class="relay-detail-grid">
                     <p><span>分類</span>{cardBucketLabel(card())}</p>
                     <p><span>種類</span>{card().fileType || "-"}</p>
-                    <p><span>根拠</span>{card().evidenceState || "-"}</p>
+                    <p><span>根拠</span>{cardEvidenceLabel(card())}</p>
                     <p><span>更新</span>{card().modifiedTime || "-"}</p>
                   </div>
                   <div class="relay-action-row relay-action-row--compact">

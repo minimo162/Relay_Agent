@@ -122,6 +122,8 @@ fn run_relay_document_search_blocking(
             "jobStoreDir": cache_root.join("jobs").display().to_string(),
             "userMemoryDir": cache_root.join("user-memory").display().to_string(),
             "syncJournalDir": cache_root.join("sync-journal").display().to_string(),
+            "timeoutMs": 60_000,
+            "maxContentInspectFiles": 120,
             "source": "relay-desktop",
             "appVersion": env!("CARGO_PKG_VERSION"),
         }
