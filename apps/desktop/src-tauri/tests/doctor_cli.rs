@@ -16,6 +16,7 @@ use serde_json::Value;
 enum StatusMode {
     Ready,
     LoginRequired,
+    LoginRequiredBrokenHealth,
     Unauthorized,
 }
 
@@ -118,6 +119,13 @@ fn handle_connection(stream: &mut TcpStream, mode: StatusMode, expected_boot_tok
             })
             .to_string(),
         ),
+        "/health" if matches!(mode, StatusMode::LoginRequiredBrokenHealth) => (
+            "HTTP/1.1 503 Service Unavailable",
+            serde_json::json!({
+                "error": "health_unavailable",
+            })
+            .to_string(),
+        ),
         "/health" => (
             "HTTP/1.1 200 OK",
             serde_json::json!({
@@ -139,7 +147,7 @@ fn handle_connection(stream: &mut TcpStream, mode: StatusMode, expected_boot_tok
                 })
                 .to_string(),
             ),
-            StatusMode::LoginRequired => (
+            StatusMode::LoginRequired | StatusMode::LoginRequiredBrokenHealth => (
                 "HTTP/1.1 200 OK",
                 serde_json::json!({
                     "connected": false,
@@ -266,6 +274,31 @@ fn doctor_cli_reports_bridge_auth_failure() {
         .find(|check| check["id"].as_str() == Some("bridge_status"))
         .expect("bridge_status check");
     assert_eq!(bridge_status["status"].as_str(), Some("fail"));
+}
+
+#[test]
+fn doctor_cli_reports_login_required_as_warn_when_health_probe_flakes() {
+    let workspace = create_workspace();
+    let server = start_mock_server(StatusMode::LoginRequiredBrokenHealth, "token-2b");
+
+    let (status, report) = run_doctor(&workspace, &server, Some("token-2b"), &[]);
+
+    assert_eq!(status.code(), Some(1), "{report}");
+    assert_eq!(report.get("status").and_then(Value::as_str), Some("warn"));
+    let bridge_health = report["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .find(|check| check["id"].as_str() == Some("bridge_health"))
+        .expect("bridge_health check");
+    assert_eq!(bridge_health["status"].as_str(), Some("warn"));
+    let sign_in = report["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .find(|check| check["id"].as_str() == Some("m365_sign_in"))
+        .expect("m365_sign_in check");
+    assert_eq!(sign_in["status"].as_str(), Some("warn"));
 }
 
 #[test]

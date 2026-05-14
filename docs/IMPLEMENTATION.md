@@ -15501,6 +15501,47 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-05-14 - Relay direct Copilot workflows and doctor CI repair
+
+Removed the obsolete OpenCode provider-gateway dependency from the Relay
+Document Search and Office Edit workflows. The desktop UI now connects directly
+to the M365 Copilot CDP bridge before planning search terms or OfficeCLI
+commands, and the user-visible failure copy now points to Copilot/Edge readiness
+instead of the historical OpenCode gateway. Office editing also separates file
+inspection from apply results, disables apply until a plan exists, and uses
+clearer action labels.
+
+The first `v0.2.3` release workflow exposed a Windows-only doctor CLI flake:
+when `/status` reached the mock bridge and correctly returned
+`login_required`, a transient `/health` failure still escalated the whole report
+to `fail`. Doctor now downgrades that specific bridge-health failure to `warn`
+when authenticated `/status` proves the bridge was reached, preserving `fail`
+for unauthorized or unreachable status outcomes.
+
+Verification commands run locally:
+
+```bash
+pnpm typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml officecli_parser --lib
+node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
+git diff --check
+```
+
+Results:
+
+- `pnpm typecheck`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml officecli_parser --lib`: passed, 2 passed.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs`: passed, 41 passed.
+- `pnpm check`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 6 passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

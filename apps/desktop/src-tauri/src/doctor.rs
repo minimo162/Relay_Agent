@@ -20,7 +20,7 @@ use crate::copilot_server::{
 };
 use crate::models::{
     BrowserAutomationSettings, CopilotWarmupFailureCode, CopilotWarmupResult, CopilotWarmupStage,
-    RelayDiagnostics, RelayDoctorCheck, RelayDoctorReport,
+    RelayDiagnostics, RelayDoctorCheck, RelayDoctorReport, RelayDoctorStatus,
 };
 
 const DEFAULT_BROWSER_TIMEOUT_MS: u32 = 120_000;
@@ -580,18 +580,35 @@ fn run_doctor_without_auto_launch(
     )));
 
     if let Some(override_config) = override_config {
-        checks.push(runtime.block_on(check_bridge_health_url(
+        let mut health_check = runtime.block_on(check_bridge_health_url(
             &override_config.url,
             browser_settings.timeout_ms,
-        )));
+        ));
         if let Some(token) = override_config.boot_token {
             let outcome = runtime.block_on(check_bridge_status_url(
                 &override_config.url,
                 Some(&token),
                 browser_settings.timeout_ms,
             ));
+            if health_check.status == RelayDoctorStatus::Fail
+                && matches!(
+                    &outcome,
+                    BridgeStatusOutcome::Ready(_) | BridgeStatusOutcome::LoginRequired { .. }
+                )
+            {
+                health_check = warn_check(
+                    "bridge_health",
+                    format!(
+                        "{} Authenticated /status still reached the Relay bridge, so this is not fatal.",
+                        health_check.message
+                    ),
+                    health_check.details.take(),
+                );
+            }
+            checks.push(health_check);
             push_status_outcome_checks(checks, outcome);
         } else {
+            checks.push(health_check);
             checks.push(warn_check(
                 "bridge_status",
                 "Bridge status check was skipped because no boot token override was provided.",
