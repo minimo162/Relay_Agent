@@ -1,6 +1,7 @@
-import type { RelayDocumentSearchQueryPlanHints } from "./ipc";
+import type { RelayDocumentSearchQueryPlanHints, RelaySearchResultCard } from "./ipc";
 
 const SEARCH_PLAN_SCHEMA_VERSION = "RelayDocumentSearchCopilotQueryPlan.v1";
+const SEARCH_RESULT_SCHEMA_VERSION = "RelayDocumentSearchCopilotResultSummary.v1";
 const OFFICE_PLAN_SCHEMA_VERSION = "RelayOfficeEditPlan.v1";
 
 const SEARCH_INTENTS = new Set(["find_files", "answer_with_evidence", "summarize_with_evidence", "inspect_file", "similar_documents"]);
@@ -9,6 +10,7 @@ const THOROUGHNESS = new Set(["quick", "thorough"]);
 const FILE_TYPES = new Set(["any", "txt", "md", "csv", "docx", "xlsx", "xlsm", "pptx", "pdf"]);
 const TIME_SCOPE_INTENTS = new Set(["latest_first", "historical_examples", "balanced", "explicit_period", "unknown"]);
 const OFFICE_RISK_LEVELS = new Set(["low", "medium", "high"]);
+const RESULT_CONFIDENCE_LEVELS = new Set(["high", "medium", "low"]);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -24,6 +26,22 @@ export type RelayOfficeEditPlan = {
   risk: "low" | "medium" | "high";
   commands: RelayOfficePlanCommand[];
   summary?: string;
+};
+
+export type RelayDocumentSearchResultCategory = {
+  label: string;
+  rationale: string;
+  confidence: "high" | "medium" | "low";
+  paths: string[];
+};
+
+export type RelayDocumentSearchResultSummary = {
+  schemaVersion: "RelayDocumentSearchCopilotResultSummary.v1";
+  rawQuery: string;
+  snapshotId: string;
+  summary: string;
+  categories: RelayDocumentSearchResultCategory[];
+  caveats: string[];
 };
 
 export type PlannerValidation<T> =
@@ -74,6 +92,74 @@ export function buildDocumentSearchPlanPrompt(params: {
     "USER REQUEST DATA:",
     JSON.stringify(userQuery),
     "Return the query-plan JSON object now.",
+  ].join("\n");
+}
+
+export function buildDocumentSearchResultSummaryPrompt(params: {
+  rawQuery: string;
+  snapshotId: string;
+  workspacePath: string;
+  localSummary: string;
+  coverageLabel: string;
+  cards: RelaySearchResultCard[];
+}): string {
+  const cardFacts = params.cards.slice(0, 80).map((card, index) => ({
+    position: index + 1,
+    title: card.title,
+    path: card.path,
+    displayPath: card.displayPath || card.path,
+    fileType: card.fileType || "",
+    modifiedTime: card.modifiedTime || "",
+    evidenceState: card.evidenceState || card.matchMode || "candidate",
+    score: typeof card.score === "number" ? card.score : null,
+    warnings: card.warnings.slice(0, 8),
+  }));
+  return [
+    "RELAY DOCUMENT SEARCH RESULT ORGANIZER",
+    "Mode: document_search_result_summary. This is not a search task.",
+    "Your only job is to organize the completed local Relay search results into a concise JSON summary.",
+    "Do not call tools. Do not search Microsoft 365, SharePoint, the web, memory, plugins, or local files.",
+    "Do not claim file contents are confirmed unless evidenceState says content_confirmed.",
+    "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
+    "Use this schema exactly:",
+    JSON.stringify({
+      schemaVersion: SEARCH_RESULT_SCHEMA_VERSION,
+      rawQuery: params.rawQuery,
+      snapshotId: params.snapshotId,
+      summary: "one or two short Japanese sentences for the visible result snapshot",
+      categories: [
+        {
+          label: "dynamic category label based only on these results",
+          rationale: "why these files belong together, based only on names/paths/evidence states",
+          confidence: "medium",
+          paths: ["exact candidate path from CANDIDATE FACTS"],
+        },
+      ],
+      caveats: ["short caveat when content is not confirmed or coverage is partial"],
+    }),
+    "Rules:",
+    `- schemaVersion must be ${SEARCH_RESULT_SCHEMA_VERSION}.`,
+    "- rawQuery must equal USER REQUEST DATA exactly.",
+    "- snapshotId must equal SNAPSHOT ID exactly.",
+    "- categories must be dynamic. Do not force fixed labels such as 作業元, 出力, 監査, バックアップ unless the result facts themselves support them.",
+    "- Each category must include one or more exact paths from CANDIDATE FACTS.",
+    "- A path may appear in at most one category.",
+    "- Use at most eight categories and keep labels short.",
+    "- If the evidenceState is filename_only, call it a candidate and do not state that the document content proves relevance.",
+    "- Do not include markdown, prose outside JSON, tool calls, citations, or fields not shown in the schema.",
+    "SNAPSHOT ID:",
+    params.snapshotId,
+    "WORKSPACE:",
+    params.workspacePath,
+    "LOCAL RELAY SUMMARY:",
+    params.localSummary,
+    "COVERAGE:",
+    params.coverageLabel,
+    "CANDIDATE FACTS:",
+    JSON.stringify(cardFacts),
+    "USER REQUEST DATA:",
+    JSON.stringify(params.rawQuery),
+    "Return the result-summary JSON object now.",
   ].join("\n");
 }
 
@@ -129,6 +215,17 @@ export function validateDocumentSearchPlanText(text: string, rawQuery: string): 
   const parsed = parseStrictJsonObject(text);
   if (!parsed.ok) return parsed;
   return validateDocumentSearchPlan(parsed.value, rawQuery);
+}
+
+export function validateDocumentSearchResultSummaryText(
+  text: string,
+  rawQuery: string,
+  snapshotId: string,
+  candidatePaths: string[],
+): PlannerValidation<RelayDocumentSearchResultSummary> {
+  const parsed = parseStrictJsonObject(text);
+  if (!parsed.ok) return parsed;
+  return validateDocumentSearchResultSummary(parsed.value, rawQuery, snapshotId, candidatePaths);
 }
 
 export function validateOfficeEditPlanText(text: string, rawInstruction: string, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
@@ -225,6 +322,103 @@ function validateOfficeEditPlan(value: JsonRecord, rawInstruction: string, fileP
       summary,
     },
   };
+}
+
+function validateDocumentSearchResultSummary(
+  value: JsonRecord,
+  rawQuery: string,
+  snapshotId: string,
+  candidatePaths: string[],
+): PlannerValidation<RelayDocumentSearchResultSummary> {
+  const errors: string[] = [];
+  rejectUnknownFields(value, ["schemaVersion", "rawQuery", "snapshotId", "summary", "categories", "caveats"], errors, "result summary");
+  if (value.schemaVersion !== SEARCH_RESULT_SCHEMA_VERSION) errors.push(`schemaVersion must be ${SEARCH_RESULT_SCHEMA_VERSION}.`);
+  if (value.rawQuery !== rawQuery) errors.push("rawQuery must exactly match the original user request.");
+  if (value.snapshotId !== snapshotId) errors.push("snapshotId must exactly match the Relay snapshot id.");
+  const summary = stringValue(value.summary, "summary", 420, errors);
+  const caveats = stringArray(value.caveats, "caveats", 6, errors).map((item) => item.slice(0, 160));
+  const categories = validateResultCategories(value.categories, new Set(candidatePaths), errors);
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      schemaVersion: SEARCH_RESULT_SCHEMA_VERSION,
+      rawQuery,
+      snapshotId,
+      summary,
+      categories,
+      caveats,
+    },
+  };
+}
+
+function validateResultCategories(
+  value: unknown,
+  candidatePaths: Set<string>,
+  errors: string[],
+): RelayDocumentSearchResultCategory[] {
+  if (!Array.isArray(value)) {
+    errors.push("categories must be an array.");
+    return [];
+  }
+  if (value.length > 8) errors.push("categories may contain at most eight entries.");
+  const usedPaths = new Set<string>();
+  const categories: RelayDocumentSearchResultCategory[] = [];
+  value.slice(0, 8).forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      errors.push(`categories[${index}] must be an object.`);
+      return;
+    }
+    rejectUnknownFields(entry, ["label", "rationale", "confidence", "paths"], errors, `categories[${index}]`);
+    const label = stringValue(entry.label, `categories[${index}].label`, 40, errors);
+    const rationale = stringValue(entry.rationale, `categories[${index}].rationale`, 220, errors);
+    const confidence = enumValue(entry.confidence, RESULT_CONFIDENCE_LEVELS, `categories[${index}].confidence`, errors);
+    const paths = exactPathArray(entry.paths, `categories[${index}].paths`, 30, candidatePaths, usedPaths, errors);
+    if (label && rationale && confidence && paths.length) {
+      categories.push({
+        label,
+        rationale,
+        confidence: confidence as RelayDocumentSearchResultCategory["confidence"],
+        paths,
+      });
+    }
+  });
+  return categories;
+}
+
+function exactPathArray(
+  value: unknown,
+  field: string,
+  maxItems: number,
+  allowedPaths: Set<string>,
+  usedPaths: Set<string>,
+  errors: string[],
+): string[] {
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be an array.`);
+    return [];
+  }
+  if (value.length > maxItems) errors.push(`${field} may contain at most ${maxItems} entries.`);
+  const out: string[] = [];
+  for (const item of value.slice(0, maxItems)) {
+    if (typeof item !== "string" || !item.trim()) {
+      errors.push(`${field} entries must be non-empty strings.`);
+      continue;
+    }
+    const path = item.trim();
+    if (hasControlCharacters(path)) errors.push(`${field} entries must not contain control characters.`);
+    if (!allowedPaths.has(path)) {
+      errors.push(`${field} includes a path that was not in the Relay candidate set: ${path}`);
+      continue;
+    }
+    if (usedPaths.has(path)) {
+      errors.push(`${field} includes a path already assigned to another category: ${path}`);
+      continue;
+    }
+    usedPaths.add(path);
+    out.push(path);
+  }
+  return out;
 }
 
 function validateOfficeCommands(value: unknown, filePath: string, errors: string[]): RelayOfficePlanCommand[] {

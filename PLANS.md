@@ -20,9 +20,11 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
 - Desktop shell: Tauri v2 + SolidJS.
 - Primary LLM controller: M365 Copilot via Edge CDP, started on demand rather
   than during first paint.
-- Search engine: Relay document search with metadata cache, filename index,
-  SQLite/FTS, parsed-document cache, result grouping, evidence packs, and
-  deterministic folder-budget allocation.
+- Search engine: Relay document search with ripgrep-backed enumeration,
+  in-memory filename/path/metadata ranking, bounded on-demand content evidence,
+  and deterministic folder-budget allocation. SQLite/FTS, semantic indexes,
+  background indexes, and persistent filename indexes are not part of the active
+  desktop product path.
 - Search storage: user-local Relay app data only. Shared folders and searched
   folders must not receive `.aionrs`, index databases, or cache artifacts.
 - Office editing: OfficeCLI-backed inspection and mutation only. Relay creates
@@ -70,6 +72,19 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
 - The Office workflow now separates file inspection from edit execution and
   presents the two user actions as `変更内容を確認` and
   `バックアップを作成して適用`.
+- Document search now uses Copilot twice through strict JSON contracts: first
+  to expand the natural-language query into validated search terms, then after
+  local search to summarize and dynamically categorize only the returned
+  evidence pack/candidate facts.
+- The search UI shows one fixed snapshot per search. It does not stream partial
+  result lists or silently update displayed results after Copilot result
+  organization completes. Additional exploration is an explicit
+  `さらに詳しく調べる` action that replaces the snapshot.
+- The desktop search execution path disables durable metadata caches,
+  persistent filename indexes, SQLite/FTS, parsed-document caches,
+  derived-content caches, background/index coordinators, job-store snapshots,
+  sync journals, and user-memory writes. Search work stays in-memory plus
+  bounded temp files under Relay app-local data.
 
 ## Remaining Hardening Tasks
 

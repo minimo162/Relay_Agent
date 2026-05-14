@@ -934,6 +934,28 @@ body a:focus-visible {
   color: var(--ra-color-text-muted);
 }
 
+.relay-progress-panel > div {
+  width: 100%;
+  min-width: 0;
+}
+
+.relay-progress-bar {
+  overflow: hidden;
+  width: min(100%, 28rem);
+  height: 0.42rem;
+  margin-top: 0.75rem;
+  border-radius: var(--ra-radius-pill);
+  background: color-mix(in oklab, var(--ra-color-accent) 8%, var(--ra-color-border));
+}
+
+.relay-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ra-color-accent);
+  transition: width 220ms ease;
+}
+
 .relay-state-panel {
   border-color: color-mix(in oklab, var(--ra-color-accent) 18%, var(--ra-color-border));
 }
@@ -1027,6 +1049,53 @@ body a:focus-visible {
 .relay-result-header p {
   margin: 0.25rem 0 0;
   color: var(--ra-color-text-muted);
+}
+
+.relay-result-header__actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.45rem;
+}
+
+.relay-result-header__actions .relay-secondary-action {
+  margin-top: 0;
+}
+
+.relay-category-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.relay-category-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  max-width: 100%;
+  border: 1px solid var(--ra-color-border);
+  border-radius: var(--ra-radius-pill);
+  background: color-mix(in oklab, var(--ra-color-bg) 78%, var(--ra-color-surface));
+  padding: 0.32rem 0.62rem;
+  color: var(--ra-color-text);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.relay-category-strip small {
+  color: var(--ra-color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.relay-caveat-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.relay-caveat-list p {
+  margin: 0;
+  color: var(--ra-color-text-muted);
+  font-size: 0.82rem;
 }
 
 .relay-result-list {

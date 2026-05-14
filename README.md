@@ -6,8 +6,8 @@ Relay Agent is a Windows desktop application for two focused workflows:
 - inspect and edit Office files through OfficeCLI.
 
 The app uses Microsoft 365 Copilot as the planning and language layer when
-needed, but local file discovery, indexing, OfficeCLI execution, cache
-placement, and safety checks are owned by Relay Agent.
+needed, but local file discovery, OfficeCLI execution, cache placement, and
+safety checks are owned by Relay Agent.
 
 ## Current Product
 
@@ -34,15 +34,17 @@ Search features:
 - strict Copilot query-plan JSON for natural-language expansion, validated by
   Relay with no silent fallback;
 - ripgrep-backed local file enumeration before Relay ranking and evidence work;
-- metadata-first candidate discovery for fast first results;
-- filename/path index with Japanese and Latin term expansion;
-- optional SQLite/FTS and parsed-document evidence;
+- two-layer search: filename/path/metadata candidates first, then bounded
+  content evidence for the candidates that need confirmation;
+- no SQLite/FTS, semantic index, background index, or searched-folder index
+  artifacts in the desktop product path;
 - deterministic large-folder scan budgeting across fiscal-year or period
   folders;
-- result grouping by workpaper/source, support, disclosure/output, audit, and
-  backup/archive role;
-- candidate/evidence labels so the UI does not overstate unverified files;
-- user-local caches under Relay Agent app data.
+- one stable result snapshot per search. Results are not silently updated after
+  they are shown;
+- strict Copilot result-summary JSON after the local search completes, used only
+  to summarize and dynamically group the already-returned candidates;
+- candidate/evidence labels so the UI does not overstate unverified files.
 
 Relay Agent does not write `.aionrs`, SQLite databases, or index files into the
 searched shared folder.
@@ -76,7 +78,7 @@ Rust IPC commands
   expose document search, OfficeCLI inspection/execution, diagnostics
 
 Relay document-search runner
-  owns local search, indexing, ranking, evidence packaging, user-local caches
+  owns local search, ranking, bounded evidence packaging, and candidate facts
 
 OfficeCLI
   owns Word / Excel / PowerPoint inspection and mutation

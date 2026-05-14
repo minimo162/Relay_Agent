@@ -8,7 +8,6 @@ import {
   getRelayWorkspaceState,
   inspectOfficeFile,
   runRelayDocumentSearch,
-  type RelayDocumentSearchQueryPlanHints,
   type RelayDocumentSearchResponse,
   type RelayOfficeCommandResponse,
   type RelaySearchResultCard,
@@ -16,10 +15,13 @@ import {
 } from "../lib/ipc";
 import {
   buildDocumentSearchPlanPrompt,
+  buildDocumentSearchResultSummaryPrompt,
   buildOfficeEditPlanPrompt,
   officePlanToArgs,
   validateDocumentSearchPlanText,
+  validateDocumentSearchResultSummaryText,
   validateOfficeEditPlanText,
+  type RelayDocumentSearchResultSummary,
   type RelayOfficeEditPlan,
 } from "../lib/copilot-planners";
 import { loadWorkspacePath, saveWorkspacePath } from "../lib/settings-storage";
@@ -28,6 +30,14 @@ import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { StatusToasts } from "../components/StatusToasts";
 
 type Mode = "search" | "office";
+type SearchPhase = "" | "planning" | "searching" | "organizing";
+type SearchSnapshot = {
+  id: string;
+  query: string;
+  createdAt: string;
+  result: RelayDocumentSearchResponse;
+  organizer: RelayDocumentSearchResultSummary;
+};
 
 function shortPath(path: string): string {
   const normalized = path.replaceAll("\\", "/");
@@ -40,31 +50,32 @@ function statusTone(ok: boolean): string {
   return ok ? "text-[var(--ra-color-success)]" : "text-[var(--ra-color-danger)]";
 }
 
-function cardBucketLabel(card: RelaySearchResultCard): string {
-  const bucket = card.bucket || card.folderRole || "";
-  const labels: Record<string, string> = {
-    direct_source_workpaper: "作業元",
-    supporting_evidence: "補助資料",
-    disclosure_output: "開示/出力",
-    review_or_audit: "監査/確認",
-    backup_or_archive: "バックアップ",
-    source_workpaper: "作業元",
-    filing: "提出/保管",
-    audit: "監査",
-  };
-  return labels[bucket] || bucket || "候補";
-}
-
 function cardEvidenceLabel(card: RelaySearchResultCard): string {
   const evidence = card.evidenceState || card.matchMode || "";
   const labels: Record<string, string> = {
-    content_confirmed: "中身確認済み",
-    filename_only: "ファイル名候補",
-    filename: "ファイル名候補",
-    path: "パス候補",
+    content_confirmed: "内容から確認",
+    content: "内容から確認",
+    filename_only: "ファイル名・パスからの候補",
+    filename: "ファイル名・パスからの候補",
+    path: "パスからの候補",
     candidate: "候補",
   };
   return labels[evidence] || "候補";
+}
+
+function warningLabel(value: string): string {
+  const labels: Record<string, string> = {
+    filename_only: "内容までは未確認です",
+    content_not_confirmed: "検索語が内容からは確認できませんでした",
+    content_reader_unavailable: "内容確認に対応していない形式です",
+    unsupported_content_reader: "内容確認に対応していない形式です",
+    access_denied: "アクセスできませんでした",
+    not_found: "ファイルが見つかりませんでした",
+    offline_share: "共有フォルダがオフラインです",
+    locked_file: "ファイルがロックされています",
+    policy_denied: "ポリシーにより確認できませんでした",
+  };
+  return labels[value] || value.replaceAll("_", " ");
 }
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string {
@@ -95,11 +106,11 @@ export default function Shell(): JSX.Element {
 
   const [searchQuery, setSearchQuery] = createSignal("");
   const [searching, setSearching] = createSignal(false);
-  const [searchResult, setSearchResult] = createSignal<RelayDocumentSearchResponse | null>(null);
+  const [searchSnapshot, setSearchSnapshot] = createSignal<SearchSnapshot | null>(null);
   const [selectedCard, setSelectedCard] = createSignal<RelaySearchResultCard | null>(null);
   const [searchError, setSearchError] = createSignal("");
   const [searchStatus, setSearchStatus] = createSignal("");
-  const [searchPlan, setSearchPlan] = createSignal<RelayDocumentSearchQueryPlanHints | null>(null);
+  const [searchPhase, setSearchPhase] = createSignal<SearchPhase>("");
   const [visibleResultCount, setVisibleResultCount] = createSignal(24);
 
   const [officeFilePath, setOfficeFilePath] = createSignal("");
@@ -112,10 +123,29 @@ export default function Shell(): JSX.Element {
   const [officeError, setOfficeError] = createSignal("");
 
   const workspaceReady = createMemo(() => workspacePath().trim().length > 0);
-  const activeCard = createMemo(() => selectedCard() || searchResult()?.cards[0] || null);
-  const resultCards = createMemo(() => searchResult()?.cards ?? []);
+  const activeCard = createMemo(() => selectedCard() || searchSnapshot()?.result.cards[0] || null);
+  const resultCards = createMemo(() => searchSnapshot()?.result.cards ?? []);
   const visibleCards = createMemo(() => resultCards().slice(0, visibleResultCount()));
   const hasMoreCards = createMemo(() => resultCards().length > visibleResultCount());
+  const searchCategoryByPath = createMemo(() => {
+    const map = new Map<string, RelayDocumentSearchResultSummary["categories"][number]>();
+    for (const category of searchSnapshot()?.organizer.categories ?? []) {
+      for (const path of category.paths) map.set(path, category);
+    }
+    return map;
+  });
+  const searchProgressPercent = createMemo(() => {
+    switch (searchPhase()) {
+      case "planning":
+        return 18;
+      case "searching":
+        return 62;
+      case "organizing":
+        return 88;
+      default:
+        return 0;
+    }
+  });
   let searchSequence = 0;
 
   const refreshState = async (showSuccess = false) => {
@@ -172,6 +202,7 @@ export default function Shell(): JSX.Element {
   };
 
   const compileSearchPlan = async (query: string, workspace: string) => {
+    setSearchPhase("planning");
     setSearchStatus("Copilotで検索語を整理しています");
     await ensureCopilotReady();
     const prompt = buildDocumentSearchPlanPrompt({ userQuery: query, workspacePath: workspace });
@@ -186,7 +217,40 @@ export default function Shell(): JSX.Element {
     return validation.value;
   };
 
-  const runSearch = async () => {
+  const organizeSearchSnapshot = async (
+    query: string,
+    workspace: string,
+    snapshotId: string,
+    result: RelayDocumentSearchResponse,
+  ): Promise<RelayDocumentSearchResultSummary> => {
+    setSearchPhase("organizing");
+    setSearchStatus("Copilotで結果を整理しています");
+    await ensureCopilotReady();
+    const prompt = buildDocumentSearchResultSummaryPrompt({
+      rawQuery: query,
+      snapshotId,
+      workspacePath: workspace,
+      localSummary: result.summary,
+      coverageLabel: result.coverageLabel,
+      cards: result.cards,
+    });
+    const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
+    if (!response.ok) {
+      throw new Error(response.error || "Copilot から検索結果の整理が返りませんでした。");
+    }
+    const validation = validateDocumentSearchResultSummaryText(
+      response.responseText,
+      query,
+      snapshotId,
+      result.cards.map((card) => card.path),
+    );
+    if (!validation.ok) {
+      throw new Error(`Copilot検索結果整理の検証に失敗しました: ${validation.errors.join(" / ")}`);
+    }
+    return validation.value;
+  };
+
+  const runSearch = async (refine = false) => {
     const query = searchQuery().trim();
     const workspace = workspacePath().trim();
     if (!workspace) {
@@ -199,17 +263,19 @@ export default function Shell(): JSX.Element {
     }
 
     setSearching(true);
-    setSearchResult(null);
-    setSelectedCard(null);
+    if (!refine) {
+      setSearchSnapshot(null);
+      setSelectedCard(null);
+      setVisibleResultCount(24);
+    }
     setSearchError("");
-    setSearchPlan(null);
     setSearchStatus("");
-    setVisibleResultCount(24);
+    setSearchPhase("");
     const searchId = ++searchSequence;
     try {
       const plan = await compileSearchPlan(query, workspace);
       if (searchId !== searchSequence) return;
-      setSearchPlan(plan);
+      setSearchPhase("searching");
       setSearchStatus("ローカル検索を実行しています");
       const result = await runRelayDocumentSearch({
         query,
@@ -217,18 +283,27 @@ export default function Shell(): JSX.Element {
         intent: "find_files",
         thoroughness: "thorough",
         evidence: "candidate",
-        maxResults: 80,
+        maxResults: refine ? 120 : 80,
         fileTypes: plan.fileTypeHints.length ? plan.fileTypeHints : ["any"],
         queryPlanHints: plan,
       });
       if (searchId !== searchSequence) return;
-      setSearchResult(result);
+      const snapshotId = `snapshot-${Date.now().toString(36)}-${searchId}`;
+      const organizer = await organizeSearchSnapshot(query, workspace, snapshotId, result);
+      if (searchId !== searchSequence) return;
+      setSearchSnapshot({
+        id: snapshotId,
+        query,
+        createdAt: new Date().toISOString(),
+        result,
+        organizer,
+      });
       setSelectedCard(result.cards[0] ?? null);
       if (!result.ok) setSearchError(result.error || result.summary);
       showToast({
         tone: result.ok ? "ok" : "danger",
         message: result.ok ? "検索が完了しました" : "検索に失敗しました",
-        detail: result.summary,
+        detail: organizer.summary,
       });
     } catch (error) {
       if (searchId !== searchSequence) return;
@@ -239,6 +314,7 @@ export default function Shell(): JSX.Element {
       if (searchId === searchSequence) {
         setSearching(false);
         setSearchStatus("");
+        setSearchPhase("");
         void refreshState(false);
       }
     }
@@ -341,6 +417,10 @@ export default function Shell(): JSX.Element {
   const copyPath = async (path: string) => {
     await navigator.clipboard.writeText(path);
     showToast({ tone: "ok", message: "パスをコピーしました" });
+  };
+
+  const categoryLabelForCard = (card: RelaySearchResultCard): string => {
+    return searchCategoryByPath().get(card.path)?.label || "候補";
   };
 
   return (
@@ -527,7 +607,7 @@ export default function Shell(): JSX.Element {
                   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runSearch();
                 }}
               />
-              <button type="button" class="ra-button relay-search-button" disabled={searching() || !workspaceReady() || !searchQuery().trim()} onClick={runSearch}>
+              <button type="button" class="ra-button relay-search-button" disabled={searching() || !workspaceReady() || !searchQuery().trim()} onClick={() => void runSearch()}>
                 {searching() ? "検索中" : "検索"}
               </button>
             </div>
@@ -537,17 +617,11 @@ export default function Shell(): JSX.Element {
                 <span class="relay-spinner" aria-hidden="true" />
                 <div>
                   <strong>{searchStatus() || "検索しています"}</strong>
+                  <div class="relay-progress-bar" aria-hidden="true">
+                    <span style={{ width: `${searchProgressPercent()}%` }} />
+                  </div>
                 </div>
               </div>
-            </Show>
-
-            <Show when={!searching() ? searchPlan() : null}>
-              {(plan) => (
-                <div class="relay-plan-strip">
-                  <span>{plan().summary || "検索語を展開しました"}</span>
-                  <small>{[...plan().expandedTerms, ...plan().supportTerms].slice(0, 8).join(" / ")}</small>
-                </div>
-              )}
             </Show>
 
             <Show when={searchError() && !searching()}>
@@ -557,25 +631,54 @@ export default function Shell(): JSX.Element {
               </div>
             </Show>
 
-            <Show when={searchResult() && !searching() && resultCards().length === 0}>
+            <Show when={searchSnapshot() && !searching() && resultCards().length === 0}>
               <div class="relay-state-panel">
                 <strong>候補は見つかりませんでした</strong>
                 <p>別名、略称、年度、対象部署などを加えて再検索してください。</p>
               </div>
             </Show>
 
-            <Show when={searchResult() && resultCards().length > 0}>
+            <Show when={searchSnapshot() && resultCards().length > 0}>
               <section class="relay-result-block">
                 <div class="relay-result-header">
                   <div>
                     <h2>検索結果</h2>
-                    <p>{searchResult()?.summary}</p>
+                    <p>{searchSnapshot()?.organizer.summary}</p>
                   </div>
-                  <p class={statusTone(Boolean(searchResult()?.ok))}>
-                    {resultCards().length}件 · {searchResult()?.elapsedMs ?? 0}ms
-                  </p>
+                  <div class="relay-result-header__actions">
+                    <p class={statusTone(Boolean(searchSnapshot()?.result.ok))}>
+                      {resultCards().length}件 · {searchSnapshot()?.result.elapsedMs ?? 0}ms
+                    </p>
+                    <button
+                      type="button"
+                      class="relay-secondary-action"
+                      disabled={searching()}
+                      onClick={() => void runSearch(true)}
+                    >
+                      さらに詳しく調べる
+                    </button>
+                  </div>
                 </div>
-                <p class="relay-hint">{searchResult()?.coverageLabel}</p>
+                <p class="relay-hint">{searchSnapshot()?.result.coverageLabel}</p>
+                <Show when={searchSnapshot()?.organizer.categories.length}>
+                  <div class="relay-category-strip">
+                    <For each={searchSnapshot()?.organizer.categories ?? []}>
+                      {(category) => (
+                        <span title={category.rationale}>
+                          {category.label}
+                          <small>{category.paths.length}</small>
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+                <Show when={searchSnapshot()?.organizer.caveats.length}>
+                  <div class="relay-caveat-list">
+                    <For each={searchSnapshot()?.organizer.caveats ?? []}>
+                      {(caveat) => <p>{caveat}</p>}
+                    </For>
+                  </div>
+                </Show>
                 <div class="relay-result-list">
                   <For each={visibleCards()}>
                     {(card) => (
@@ -590,7 +693,7 @@ export default function Shell(): JSX.Element {
                           <p class="relay-result-card__path">{card.displayPath || card.path}</p>
                         </div>
                         <div class="relay-card-meta">
-                          <span>{cardBucketLabel(card)}</span>
+                          <span>{categoryLabelForCard(card)}</span>
                           <span>{cardEvidenceLabel(card)}</span>
                         </div>
                       </button>
@@ -603,7 +706,7 @@ export default function Shell(): JSX.Element {
                     class="relay-secondary-action relay-secondary-action--center"
                     onClick={() => setVisibleResultCount((count) => count + 24)}
                   >
-                    さらに表示
+                    表示件数を増やす
                   </button>
                 </Show>
               </section>
@@ -642,14 +745,14 @@ export default function Shell(): JSX.Element {
           </section>
         }>
           <section class="relay-detail-panel">
-            <p class="relay-kicker">Selected candidate</p>
+            <p class="relay-kicker">Candidate</p>
             <Show when={activeCard()} fallback={<p class="relay-hint">検索結果を選択すると詳細が表示されます。</p>}>
               {(card) => (
                 <>
                   <h2>{card().title}</h2>
                   <p class="relay-detail-path">{card().path}</p>
                   <div class="relay-detail-grid">
-                    <p><span>分類</span>{cardBucketLabel(card())}</p>
+                    <p><span>分類</span>{categoryLabelForCard(card())}</p>
                     <p><span>種類</span>{card().fileType || "-"}</p>
                     <p><span>根拠</span>{cardEvidenceLabel(card())}</p>
                     <p><span>更新</span>{card().modifiedTime || "-"}</p>
@@ -662,7 +765,7 @@ export default function Shell(): JSX.Element {
                   <Show when={card().warnings.length > 0}>
                     <div class="relay-warning-list">
                       <For each={card().warnings}>
-                        {(warning) => <p>{warning}</p>}
+                        {(warning) => <p>{warningLabel(warning)}</p>}
                       </For>
                     </div>
                   </Show>

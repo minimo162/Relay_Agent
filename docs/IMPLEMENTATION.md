@@ -21,6 +21,39 @@
 
 ## Milestone Log
 
+### 2026-05-14 Stable two-layer document search snapshots
+
+Implemented the final document-search direction: no desktop FTS cutover, no
+semantic/background index, and no result mutation after display. The desktop
+search execution path now forces durable search infrastructure off
+(`useIndexDb=false`, persistent filename index off, parsed/derived cache off,
+index coordinator off, job/sync/user-memory writes off) while still using
+ripgrep enumeration, in-memory filename/path/metadata ranking, deterministic
+folder budgets, and bounded on-demand content evidence.
+
+The search UI now waits until both local Relay search and Copilot result
+organization complete, then displays one stable snapshot. Copilot is used after
+the local search only through a strict
+`RelayDocumentSearchCopilotResultSummary.v1` JSON contract. Relay validates the
+snapshot id, raw query, category schema, and exact candidate paths before any
+summary/category labels are shown. Categories are dynamic and evidence-bound;
+the UI no longer exposes internal labels such as `filename_only`, `作業元`, or
+`出力` as the primary classification. Additional exploration is an explicit
+`さらに詳しく調べる` action that runs a new search and replaces the snapshot.
+
+Verification:
+
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `pnpm --filter @relay-agent/desktop build` — pass.
+- `node --check scripts/relay-document-search-cli.mjs` — pass.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs` — pass, 41 passed.
+- `node --test scripts/relay-document-search-mcp.test.mjs` — pass, 1 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `git diff --check` — pass.
+- `pnpm check` — pass.
+- `pnpm --filter @relay-agent/desktop prep:tauri-bundle` — pass.
+
 ### 2026-05-14 Remove OpenCode gateway dependency from Relay workflows
 
 Fixed the installed-app failure where document search and Office editing were
