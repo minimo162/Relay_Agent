@@ -74,8 +74,10 @@ function readFixture(root, relativePath) {
 
 function createRelayToolFixtureSources(root) {
   writeFileSync(join(root, "rg.exe"), "relay-rg-fixture", "utf8");
+  writeFileSync(join(root, "officecli.exe"), "relay-officecli-fixture", "utf8");
   return {
     ripgrepSourcePath: join(root, "rg.exe"),
+    officeCliSourcePath: join(root, "officecli.exe"),
   };
 }
 
@@ -703,7 +705,7 @@ function createPinnedAionUiFixture(root) {
     ].join("\n"),
   );
   writeFixture(root, "src/process/agent/aionrs/index.ts", "export class AionrsAgent {\n  private mcpReadyPromise: Promise<void>;\n  private mcpReadyResolve!: () => void;\n  options: { stdioMcpServers?: Array<{ name: string; awaitReady?: boolean; env: Array<{ name: string; value: string }>; command: string; args: string[] }> } = {};\n  constructor() {\n    this.mcpReadyPromise = new Promise((resolve) => {\n      this.mcpReadyResolve = resolve;\n    });\n  }\n  sendCommand(_command: unknown) {}\n  async start() {\n    const stdioMcpServers = this.options.stdioMcpServers ?? [];\n    let awaitAnyReady = false;\n    for (const server of stdioMcpServers) {\n      const envRecord: Record<string, string> = {};\n      for (const { name: k, value: v } of server.env) {\n        envRecord[k] = v;\n      }\n      this.sendCommand({ type: 'add_mcp_server', name: server.name, transport: 'stdio', command: server.command, args: server.args, env: envRecord });\n      if (server.awaitReady) awaitAnyReady = true;\n    }\n    if (awaitAnyReady) {\n      await Promise.race([this.mcpReadyPromise, new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('MCP ready timeout (30s)')), 30000))]).catch((err) => {\n        console.warn('[AionrsAgent] MCP setup warning:', err);\n      });\n    }\n  }\n  private handleEvent(event: { type: string; name?: string }) {\n    switch (event.type) {\n      case 'mcp_ready':\n        this.mcpReadyResolve();\n        break;\n    }\n  }\n}\n");
-  writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nexport class AionrsManager {\n  workspace = '/workspace';\n  conversation_id = 'conversation-1';\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return {\n      name: 'aionui-team-guide',\n      command: 'node',\n      args: ['team-guide-mcp-stdio.js'],\n      env: [\n        { name: 'AION_MCP_BACKEND', value: 'aionrs' },\n        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },\n      ],\n    };\n  }\n\n  async sendMessage(data: { content: string; msg_id: string; files?: string[] }) {\n    const message = {\n      content: { content: data.content },\n    };\n  }\n\n  async stop() {\n  }\n}\n");
+  writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nimport { mainError } from '@process/utils/mainLogger';\nexport class AionrsManager {\n  workspace = '/workspace';\n  conversation_id = 'conversation-1';\n  private agent: AionrsAgent | null = null;\n  private agentReady: Promise<void>;\n  private _messageSentAt: number | null = null;\n  constructor() {\n    this.agentReady = this.start().catch(() => {});\n  }\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return {\n      name: 'aionui-team-guide',\n      command: 'node',\n      args: ['team-guide-mcp-stdio.js'],\n      env: [\n        { name: 'AION_MCP_BACKEND', value: 'aionrs' },\n        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },\n      ],\n    };\n  }\n\n  async sendMessage(data: { content: string; msg_id: string; files?: string[] }) {\n    const message = {\n      content: { content: data.content },\n    };\n    await this.agentReady;\n    this._messageSentAt = Date.now();\n    if (this.agent) {\n      await this.agent.send(data.content, data.msg_id, data.files);\n    }\n  }\n\n  async stop() {\n  }\n}\n");
   writeFixture(root, "src/process/bridge/conversationBridge.ts", "export const bridge = () => {\n      await task.sendMessage({\n        ...other,\n        content: other.input,\n        files: workspaceFiles,\n        agentContent,\n      });\n};\n");
 }
 
@@ -1564,8 +1566,12 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(patchedAionrsManager, /resolveMcpScriptDir/);
     assert.match(patchedAionrsManager, /awaitReady: true/);
     assert.match(patchedAionrsManager, /ELECTRON_RUN_AS_NODE/);
+    assert.match(patchedAionrsManager, /private agentStartError: unknown = null/);
+    assert.match(patchedAionrsManager, /Relay Agent runtime startup failed/);
+    assert.match(patchedAionrsManager, /Relay Agent runtime is not available after startup/);
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-gateway/copilot_server.mjs")));
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/ripgrep/rg.exe")));
+    assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/officecli/officecli.exe")));
     assert.equal(existsSync(join(fixtureRoot, "resources/relay-tools/node/relay-node.exe")), false);
     assert.equal(existsSync(join(fixtureRoot, "resources/relay-tools/liteparse-runner/parse.mjs")), false);
     assert.equal(result.relayToolsResourcesDir, join(fixtureRoot, "resources/relay-tools"));
@@ -2677,6 +2683,8 @@ test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic pr
   assert.match(relayGateway, /RELAY_OFFICECLI_PATH/);
   assert.match(relayGateway, /RELAY_OFFICECLI_EXPECTED_PATH/);
   assert.match(relayGateway, /prepareOfficeCli/);
+  assert.match(relayGateway, /resolveBundledOfficeCliPath/);
+  assert.match(relayGateway, /ready-bundled/);
   assert.match(relayGateway, /RELAY_BUNDLED_RIPGREP/);
   assert.match(relayGateway, /RELAY_RIPGREP_PATH/);
   assert.match(relayGateway, /prepareRipgrep/);
@@ -2689,6 +2697,7 @@ test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic pr
   assert.match(relayGateway, /RELAY_SHARED_SEARCH_BRANCH_DEPTH/);
   assert.match(relayGateway, /applySharedSearchDefaults/);
   assert.match(relayGateway, /resources', 'relay-tools', 'ripgrep'/);
+  assert.match(relayGateway, /bundledRelayToolCandidates\('officecli', RELAY_OFFICECLI_ENTRYPOINT\)/);
   assert.match(relayGateway, /resources', 'relay-tools'/);
   assert.match(relayGateway, /liteparse-runner/);
   assert.match(relayGateway, /\.gemini', 'tmp', 'bin'/);

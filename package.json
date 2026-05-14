@@ -10,6 +10,7 @@
     "bootstrap:openwork-opencode": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap",
     "bootstrap:openwork-opencode:auto": "cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin relay-openwork-bootstrap -- --auto --pretty",
     "bootstrap:officecli": "pnpm --filter @relay-agent/desktop bootstrap:officecli",
+    "prep:bundled-officecli": "pnpm --filter @relay-agent/desktop prep:bundled-officecli",
     "start:opencode-provider-gateway": "pnpm --filter @relay-agent/desktop start:opencode-provider-gateway",
     "start:aionui-relay-gateway": "pnpm --filter @relay-agent/desktop start:aionui-relay-gateway",
     "apply:aionui-provider-seed": "pnpm --filter @relay-agent/desktop apply:aionui-provider-seed",

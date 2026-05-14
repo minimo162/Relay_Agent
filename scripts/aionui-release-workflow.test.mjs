@@ -37,15 +37,17 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   const text = workflow();
   const installIndex = text.indexOf("bun install --frozen-lockfile");
   const ripgrepIndex = text.indexOf("node apps/desktop/scripts/fetch-bundled-ripgrep.mjs");
+  const officeCliIndex = text.indexOf("node apps/desktop/scripts/fetch-bundled-officecli.mjs");
   const overlayIndex = text.indexOf("node scripts/apply-aionui-overlay.mjs --aionui-dir aionui");
   const validateIndex = text.indexOf("name: Validate Relay overlay");
   const buildIndex = text.indexOf("bun run build-win:x64");
 
   assert.ok(installIndex > 0, "workflow should install pinned upstream dependencies");
   assert.ok(ripgrepIndex > installIndex, "workflow should fetch bundled ripgrep after frozen install");
+  assert.ok(officeCliIndex > ripgrepIndex, "workflow should fetch bundled OfficeCLI after ripgrep");
   assert.equal(text.includes("fetch-bundled-node.mjs"), false, "lean installer should not fetch standalone Node");
   assert.equal(text.includes("npm ci --omit=dev --prefix apps/desktop/src-tauri/liteparse-runner"), false, "lean installer should not prepare LiteParse");
-  assert.ok(overlayIndex > ripgrepIndex, "workflow should apply Relay overlay after search resources are ready");
+  assert.ok(overlayIndex > officeCliIndex, "workflow should apply Relay overlay after search and Office resources are ready");
   assert.ok(validateIndex > overlayIndex, "workflow should validate overlay after applying it");
   assert.ok(buildIndex > validateIndex, "workflow should build after overlay validation");
   assert.match(text, /Relay overlay did not update productName/);
@@ -63,6 +65,8 @@ test("AionUi release workflow installs pinned dependencies before overlay and bu
   assert.match(text, /@process\/utils\/relayDocumentSearchBridge/);
   assert.match(text, /TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc/);
   assert.match(text, /relay-tools\\ripgrep\\rg\.exe/);
+  assert.match(text, /relay-tools\\officecli\\officecli\.exe/);
+  assert.match(text, /Bundled OfficeCLI was not copied into AionUi resources/);
   assert.match(text, /Standalone Node should not be bundled/);
   assert.match(text, /LiteParse runner should not be bundled/);
   assert.match(text, /Relay Agent shared-folder search override/);

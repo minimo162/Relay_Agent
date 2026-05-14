@@ -143,6 +143,9 @@ jobs:
           TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
         run: node apps/desktop/scripts/fetch-bundled-ripgrep.mjs
 
+      - name: Fetch bundled OfficeCLI for Relay Office tools
+        run: node apps/desktop/scripts/fetch-bundled-officecli.mjs
+
       - name: Apply Relay overlay
         run: node scripts/apply-aionui-overlay.mjs --aionui-dir aionui
 
@@ -220,6 +223,11 @@ jobs:
           if (Test-Path -LiteralPath "aionui\resources\relay-tools\liteparse-runner\parse.mjs") {
             throw "LiteParse runner should not be bundled in the lean Relay Agent installer."
           }
+          $officeCliPath = "aionui\resources\relay-tools\officecli\officecli.exe"
+          if (-not (Test-Path -LiteralPath $officeCliPath)) {
+            throw "Bundled OfficeCLI was not copied into AionUi resources."
+          }
+          & $officeCliPath --version
           $aionCliGlobPath = "aionui\node_modules\@office-ai\aioncli-core\dist\src\tools\glob.js"
           $aionCliRipGrepPath = "aionui\node_modules\@office-ai\aioncli-core\dist\src\tools\ripGrep.js"
           foreach ($searchPatchPath in @($aionCliGlobPath, $aionCliRipGrepPath)) {

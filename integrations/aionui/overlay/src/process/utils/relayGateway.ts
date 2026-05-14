@@ -538,7 +538,13 @@ const GATEWAY_FILES = [
 ];
 
 type RelayGatewayStartupState = 'ready' | 'needs_attention' | 'disabled';
-type OfficeCliStatusState = 'ready-env' | 'ready-reused' | 'ready-downloaded' | 'skipped' | 'needs_attention';
+type OfficeCliStatusState =
+  | 'ready-env'
+  | 'ready-bundled'
+  | 'ready-reused'
+  | 'ready-downloaded'
+  | 'skipped'
+  | 'needs_attention';
 type RipgrepStatusState = 'ready-env' | 'ready-copied' | 'ready-reused' | 'skipped' | 'needs_attention';
 type PdfReaderStatusState = 'ready-env' | 'ready-bundled' | 'skipped' | 'needs_attention';
 
@@ -731,6 +737,22 @@ function bundledRelayToolCandidates(...parts: string[]): string[] {
   ].filter(Boolean);
 }
 
+function bundledOfficeCliCandidates(): string[] {
+  const explicit = process.env[RELAY_OFFICECLI_PATH_ENV]?.trim();
+  return [
+    explicit || '',
+    ...bundledRelayToolCandidates('officecli', RELAY_OFFICECLI_ENTRYPOINT),
+  ];
+}
+
+function resolveBundledOfficeCliPath(): string | null {
+  for (const candidate of bundledOfficeCliCandidates()) {
+    const candidatePath = resolve(candidate);
+    if (existsSync(candidatePath)) return candidatePath;
+  }
+  return null;
+}
+
 function resolveBundledNodePath(): string | null {
   const explicit = process.env[RELAY_BUNDLED_NODE_ENV]?.trim();
   const candidates = [
@@ -912,10 +934,23 @@ async function prepareOfficeCli(): Promise<OfficeCliStatus> {
     if (!existsSync(explicitPath)) {
       throw new Error(`RELAY_OFFICECLI_PATH was set but OfficeCLI was not found: ${explicitPath}`);
     }
-    registerOfficeCliPath(explicitPath);
+    const verified = verifyOfficeCliArtifactFile(explicitPath);
+    registerOfficeCliPath(resolve(explicitPath));
     return {
       state: 'ready-env',
-      path: explicitPath,
+      path: resolve(explicitPath),
+      ...verified,
+    };
+  }
+
+  const bundledPath = resolveBundledOfficeCliPath();
+  if (bundledPath) {
+    const verified = verifyOfficeCliArtifactFile(bundledPath);
+    registerOfficeCliPath(bundledPath);
+    return {
+      state: 'ready-bundled',
+      path: bundledPath,
+      ...verified,
     };
   }
 

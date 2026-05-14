@@ -1,3 +1,5 @@
 # Tauri externalBin sidecars (downloaded by apps/desktop/scripts/fetch-bundled-*.mjs)
 binaries/relay-node-*
 binaries/relay-rg-*
+binaries/relay-officecli-*
+binaries/.relay-officecli-download-cache/

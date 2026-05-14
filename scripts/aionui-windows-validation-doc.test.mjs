@@ -19,7 +19,8 @@ test("AionUi Windows validation checklist covers install, provider, tools, and O
   assert.match(validationDoc, /Defender/);
   assert.match(validationDoc, /Relay Agent \/ M365 Copilot/);
   assert.match(validationDoc, /relay-agent\/m365-copilot/);
-  assert.match(validationDoc, /OfficeCLI downloads into a user-local Relay-managed cache/);
+  assert.match(validationDoc, /bundled OfficeCLI payload/);
+  assert.match(validationDoc, /resources\\relay-tools\\officecli/);
   assert.match(validationDoc, /resources\\relay-tools\\ripgrep/);
   assert.match(validationDoc, /rg --version/);
   assert.match(validationDoc, /ripgrep, not slow grep\s+fallback/);

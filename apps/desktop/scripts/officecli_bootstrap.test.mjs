@@ -21,7 +21,7 @@ test("OfficeCLI bootstrap plan is user-local and admin-free", () => {
   assert.equal(plan.platform, "windows-x64");
   assert.equal(plan.version, "1.0.76");
   assert.equal(plan.requiresAdmin, false);
-  assert.equal(plan.installMode, "relay-managed-portable-user-local");
+  assert.equal(plan.installMode, "relay-bundled-portable-with-user-local-fallback");
   assert.equal(
     plan.url,
     "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe",

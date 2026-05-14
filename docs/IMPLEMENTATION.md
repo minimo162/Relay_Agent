@@ -25,6 +25,26 @@
 
 ## Milestone Log
 
+### 2026-05-14 Bundled OfficeCLI and visible Aionrs startup failures
+
+Changed the Relay-branded AionUi installer path so OfficeCLI is bundled as a
+release-critical payload under `resources/relay-tools/officecli/officecli.exe`.
+The Relay gateway now resolves and verifies that bundled executable before any
+network bootstrap path, registers it on `PATH`, and reports `ready-bundled` in
+gateway status. This removes the blocked upstream OfficeCLI auto-install path
+from normal Office editing and preview workflows.
+
+Also hardened the Aionrs first-message path. If the Aionrs runtime fails to
+start, `AionrsManager` now records the startup error and throws it from
+`sendMessage` instead of silently accepting the visible user message while no
+agent work is launched.
+
+Verification:
+- `node --test apps/desktop/scripts/aionui_relay_manifest.test.mjs apps/desktop/scripts/officecli_bootstrap.test.mjs scripts/aionui-release-workflow.test.mjs scripts/aionui-windows-validation-doc.test.mjs scripts/apply-aionui-overlay.test.mjs` — pass (48 tests).
+- `node apps/desktop/scripts/fetch-bundled-officecli.mjs` — pass; downloaded and verified the pinned OfficeCLI artifact into the ignored Tauri binary staging directory.
+- `pnpm check` — pass.
+- `git diff --check` — pass.
+
 ### 2026-05-14 AionUi Relay task-mode message handoff fix
 
 Fixed a document-search startup regression where the Relay task-mode wrapper
@@ -2766,8 +2786,8 @@ Implementation artifacts:
   preserves Aionrs' `/v1` stripping rule. It also carries the default OfficeCLI
   assistant/skill policy for Word, Excel, and PowerPoint.
 - `apps/desktop/scripts/officecli_bootstrap.mjs` derives the Relay-managed
-  user-local OfficeCLI cache path, verifies size/SHA256, and computes the PATH
-  prepend used by the future AionUi child-process environment.
+  OfficeCLI fallback cache path, verifies size/SHA256, and computes the PATH
+  prepend used by the AionUi child-process environment.
 - `scripts/apply-aionui-overlay.mjs` applies the Relay overlay to an AionUi
   checkout by copying `relaySeed.ts` and patching `initStorage.ts` to import
   the Relay provider/assistant seed during startup.

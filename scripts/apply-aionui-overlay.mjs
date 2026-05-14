@@ -2067,18 +2067,29 @@ function copyRelayToolResources(targetRoot, sources = {}) {
   const ripgrepSourcePath =
     sources.ripgrepSourcePath ??
     resolve(repoRoot, "apps/desktop/src-tauri/binaries/relay-rg-x86_64-pc-windows-msvc.exe");
+  const officeCliSourcePath =
+    sources.officeCliSourcePath ??
+    resolve(repoRoot, "apps/desktop/src-tauri/binaries/relay-officecli-win-x64.exe");
   if (!existsSync(ripgrepSourcePath)) {
     throw new Error(
       `Bundled ripgrep was not found: ${ripgrepSourcePath}. Run TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-msvc node apps/desktop/scripts/fetch-bundled-ripgrep.mjs before applying the AionUi overlay.`,
     );
   }
+  if (!existsSync(officeCliSourcePath)) {
+    throw new Error(
+      `Bundled OfficeCLI was not found: ${officeCliSourcePath}. Run node apps/desktop/scripts/fetch-bundled-officecli.mjs before applying the AionUi overlay.`,
+    );
+  }
 
   const relayToolsDir = resolve(targetRoot, "resources/relay-tools");
   const ripgrepDir = resolve(relayToolsDir, "ripgrep");
+  const officeCliDir = resolve(relayToolsDir, "officecli");
   mkdirSync(ripgrepDir, { recursive: true });
+  mkdirSync(officeCliDir, { recursive: true });
   rmSync(resolve(relayToolsDir, "node"), { recursive: true, force: true });
   rmSync(resolve(relayToolsDir, "liteparse-runner"), { recursive: true, force: true });
   copyFileSync(ripgrepSourcePath, resolve(ripgrepDir, "rg.exe"));
+  copyFileSync(officeCliSourcePath, resolve(officeCliDir, "officecli.exe"));
   return relayToolsDir;
 }
 
@@ -2569,6 +2580,58 @@ export function patchAionrsManagerContent(input) {
       managerDisplayAnchor,
       "      content: { content: data.displayContent || data.content },",
     );
+  }
+
+  if (!output.includes("private agentStartError: unknown = null;")) {
+    const agentReadyAnchor = [
+      "  private agent: AionrsAgent | null = null;",
+      "  private agentReady: Promise<void>;",
+    ].join("\n");
+    if (output.includes(agentReadyAnchor)) {
+      output = output.replace(
+        agentReadyAnchor,
+        [
+          "  private agent: AionrsAgent | null = null;",
+          "  private agentReady: Promise<void>;",
+          "  private agentStartError: unknown = null;",
+        ].join("\n"),
+      );
+    }
+  }
+
+  if (output.includes("this.agentReady = this.start().catch(() => {});")) {
+    output = output.replace(
+      "this.agentReady = this.start().catch(() => {});",
+      [
+        "this.agentReady = this.start().catch((error) => {",
+        "      this.agentStartError = error;",
+        "      mainError('[AionrsManager]', 'Relay Agent runtime startup failed', error);",
+        "    });",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent runtime is not available after startup.")) {
+    const sendReadyAnchor = [
+      "    await this.agentReady;",
+      "    this._messageSentAt = Date.now();",
+    ].join("\n");
+    if (output.includes(sendReadyAnchor)) {
+      output = output.replace(
+        sendReadyAnchor,
+        [
+          "    await this.agentReady;",
+          "    if (this.agentStartError) {",
+          "      const detail = this.agentStartError instanceof Error ? this.agentStartError.message : String(this.agentStartError);",
+          "      throw new Error(`Relay Agent runtime failed to start: ${detail}`);",
+          "    }",
+          "    if (!this.agent) {",
+          "      throw new Error('Relay Agent runtime is not available after startup.');",
+          "    }",
+          "    this._messageSentAt = Date.now();",
+        ].join("\n"),
+      );
+    }
   }
 
   const injection = [

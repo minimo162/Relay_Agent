@@ -24,7 +24,7 @@
       "tag": "v1.0.76",
       "commit": "958717ea25351b8920a3d8313d46e08b24b9c95b",
       "license": "Apache-2.0",
-      "installMode": "relay-managed-portable-user-local",
+      "installMode": "relay-bundled-portable-with-user-local-fallback",
       "artifacts": {
         "windows-x64": {
           "name": "officecli-win-x64.exe",
@@ -37,8 +37,8 @@
         }
       },
       "notes": [
-        "Relay stores OfficeCLI under app-local data and prepends that directory to the AionUi child-process PATH.",
-        "Relay does not use the upstream PowerShell or shell install scripts in the product first-run path.",
+        "Relay bundles the pinned OfficeCLI executable in the installer and prepends that directory to the AionUi child-process PATH.",
+        "Relay may reuse a verified user-local fallback cache, but does not use the upstream PowerShell or shell install scripts in the product first-run path.",
         "The SHA256 value is cross-checked against the upstream OfficeCLI v1.0.76 SHA256SUMS release asset."
       ]
     }
@@ -520,6 +520,11 @@
         "id": "ripgrep",
         "installedPath": "resources/relay-tools/ripgrep/rg.exe",
         "requiredFor": "workspace-file-search"
+      },
+      {
+        "id": "officecli",
+        "installedPath": "resources/relay-tools/officecli/officecli.exe",
+        "requiredFor": "office-file-edit"
       }
     ],
     "requiredOverlayAssertions": [

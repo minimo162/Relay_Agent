@@ -129,7 +129,10 @@ Get-AuthenticodeSignature ".\Relay.Agent-*-win-x64*.exe" | Format-List
 
 ## OfficeCLI Bootstrap
 
-- [ ] Confirm OfficeCLI downloads into a user-local Relay-managed cache.
+- [ ] Confirm the bundled OfficeCLI payload exists under the installed app's
+      `resources\relay-tools\officecli\officecli.exe`.
+- [ ] Confirm Relay uses the bundled OfficeCLI path before attempting any
+      user-local fallback cache or network bootstrap.
 - [ ] Confirm no OfficeCLI installer or script asks for administrator approval.
 - [ ] Confirm OfficeCLI is on the AionUi child-process `PATH`.
 - [ ] Confirm `officecli --version` works from an AionUi tool or diagnostic

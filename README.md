@@ -91,11 +91,13 @@ Office editing routes through the OfficeCLI skill family:
 - Excel: `officecli-xlsx`
 - PowerPoint: `officecli-pptx`
 
-Relay manages a portable, user-local OfficeCLI installation for Windows. The
-product path does not ask users to run upstream install scripts, use admin
-rights, or paste terminal commands. Existing Office files should be inspected
-before edits, and Excel edits should use sheet-qualified cell/range references
-when a workbook already exists.
+Relay bundles the pinned Windows OfficeCLI executable in the installer and
+registers it on the child-process `PATH` before Office tools run. A verified
+user-local cache can still be reused as a fallback, but the product path does
+not ask users to run upstream install scripts, use admin rights, or paste
+terminal commands. Existing Office files should be inspected before edits, and
+Excel edits should use sheet-qualified cell/range references when a workbook
+already exists.
 
 ## Architecture
 

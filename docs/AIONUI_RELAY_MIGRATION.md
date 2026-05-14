@@ -305,8 +305,8 @@ installed-app evidence.
    branding.
 4. Add a Relay bootstrap step that starts the provider gateway, writes the
    AionUi provider seed, and launches the Relay-branded AionUi shell.
-5. Replace AionUi's OfficeCLI auto-install bridge with the Relay-managed
-   portable OfficeCLI cache.
+5. Replace AionUi's OfficeCLI auto-install bridge with the Relay-bundled
+   portable OfficeCLI executable and a verified user-local fallback cache.
 6. Bundle ripgrep into the AionUi installer and seed AionUi search defaults to
    use it.
 7. Enable only the curated beginner assistant catalog by default: Word, Excel,
@@ -488,8 +488,8 @@ Windows gates:
 - First launch starts the provider gateway and opens the Relay-branded AionUi
   shell.
 - M365 Copilot sign-in state is visible and recoverable.
-- OfficeCLI downloads into a user-local Relay directory, verifies SHA256, and
-  runs `officecli --version`.
+- OfficeCLI is present as a bundled installer payload, verifies SHA256, is added
+  to the Relay child-process `PATH`, and runs `officecli --version`.
 - `Officeファイルを編集する` can inspect/edit Word, Excel, and PowerPoint files in
   the selected workspace through OfficeCLI.
 - Workspace Document Search can add a folder, show candidates-visible progress,

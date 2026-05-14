@@ -42,7 +42,7 @@ test("AionUi Relay manifest pins admin-free OfficeCLI Windows artifact", () => {
   const officeCli = manifest.upstreams.officeCli;
   const artifact = officeCli.artifacts["windows-x64"];
 
-  assert.equal(officeCli.installMode, "relay-managed-portable-user-local");
+  assert.equal(officeCli.installMode, "relay-bundled-portable-with-user-local-fallback");
   assert.equal(artifact.name, "officecli-win-x64.exe");
   assert.equal(artifact.kind, "binary");
   assert.equal(artifact.format, "exe");
@@ -495,6 +495,11 @@ test("AionUi Relay manifest defines release artifact gate metadata", () => {
         id: "ripgrep",
         installedPath: "resources/relay-tools/ripgrep/rg.exe",
         requiredFor: "workspace-file-search",
+      },
+      {
+        id: "officecli",
+        installedPath: "resources/relay-tools/officecli/officecli.exe",
+        requiredFor: "office-file-edit",
       },
     ],
     requiredOverlayAssertions: [
