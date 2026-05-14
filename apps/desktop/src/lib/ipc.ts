@@ -24,6 +24,7 @@ import type {
   ConnectCdpRequest as GeneratedConnectCdpRequest,
   RelayDocumentSearchRequest as GeneratedRelayDocumentSearchRequest,
   RelayDocumentSearchResponse as GeneratedRelayDocumentSearchResponse,
+  RelayDocumentSearchQueryPlanHints as GeneratedRelayDocumentSearchQueryPlanHints,
   RelaySearchResultCard as GeneratedRelaySearchResultCard,
   RelayDiagnostics as GeneratedRelayDiagnostics,
   RelayOfficeCommandResponse as GeneratedRelayOfficeCommandResponse,
@@ -43,6 +44,7 @@ export type RelayDiagnostics = GeneratedRelayDiagnostics;
 export type RelayWorkspaceState = GeneratedRelayWorkspaceState;
 export type RelayDocumentSearchRequest = GeneratedRelayDocumentSearchRequest;
 export type RelayDocumentSearchResponse = GeneratedRelayDocumentSearchResponse;
+export type RelayDocumentSearchQueryPlanHints = GeneratedRelayDocumentSearchQueryPlanHints;
 export type RelaySearchResultCard = GeneratedRelaySearchResultCard;
 export type RelayOfficeInspectRequest = GeneratedRelayOfficeInspectRequest;
 export type RelayOfficeExecuteRequest = GeneratedRelayOfficeExecuteRequest;

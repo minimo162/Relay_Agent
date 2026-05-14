@@ -7,8 +7,9 @@
  * and an explicitly enabled ParsedDocument cache.
  */
 
+import { spawn } from 'child_process';
 import { readdir, stat } from 'fs/promises';
-import { basename, extname, join, resolve, sep } from 'path';
+import { basename, dirname, extname, join, resolve, sep } from 'path';
 
 import {
   RELAY_DOCUMENT_SEARCH_RESULT_CONTRACT,
@@ -242,6 +243,9 @@ export type RelayDocumentSearchExecutorOptions = {
   aionuiMessageId?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  ripgrepPath?: string;
+  ripgrepListTimeoutMs?: number;
+  ripgrepMaxFiles?: number;
   onProgress?: (progress: RelayDocumentSearchResultV1['progress']) => void;
 };
 
@@ -766,7 +770,9 @@ const DEFAULT_INDEX_DB_SEARCH_MAX_ROWS = 20;
 const MAX_INDEX_DB_SEARCH_MAX_ROWS = 100;
 const INDEX_DB_SCORE_CAP = 8;
 const DEFAULT_DIRECTORY_DIVERSITY_RATIO = 0.5;
-const SKIPPED_DIRS = new Set(['.git', 'node_modules', 'target', 'dist', 'build']);
+const DEFAULT_RIPGREP_LIST_TIMEOUT_MS = 15_000;
+const DEFAULT_RIPGREP_MAX_FILES = 50_000;
+const SKIPPED_DIRS = new Set(['.git', '.aionrs', 'node_modules', 'target', 'dist', 'build']);
 const TEXT_CONTENT_EXTENSIONS = new Set(['txt', 'md', 'csv']);
 const PDF_CONTENT_EXTENSIONS = new Set(['pdf']);
 const STRUCTURED_CONTENT_EXTENSIONS = new Set(['docx', 'xlsx', 'xlsm', 'pptx']);
@@ -2126,12 +2132,227 @@ async function walkDirectoryWithBudget(
   return out;
 }
 
+type RipgrepFileListResult = {
+  paths: string[];
+  truncated: boolean;
+  error?: string;
+};
+
+async function listFilesWithRipgrep(
+  normalizedRoot: string,
+  state: WalkState,
+  maxScanFiles: number,
+  options: RelayDocumentSearchExecutorOptions,
+): Promise<RipgrepFileListResult | null> {
+  const executable = String(options.ripgrepPath || '').trim();
+  if (!executable) return null;
+  const maxFiles = Math.max(
+    maxScanFiles,
+    Math.min(
+      Math.trunc(options.ripgrepMaxFiles ?? DEFAULT_RIPGREP_MAX_FILES),
+      DEFAULT_RIPGREP_MAX_FILES,
+    ),
+  );
+  const timeoutMs = Math.max(
+    1_000,
+    Math.trunc(options.ripgrepListTimeoutMs ?? DEFAULT_RIPGREP_LIST_TIMEOUT_MS),
+  );
+  const args = [
+    '--files',
+    '--hidden',
+    '--no-messages',
+    ...[...SKIPPED_DIRS].flatMap((name) => ['--glob', `!**/${name}/**`]),
+    normalizedRoot,
+  ];
+
+  return new Promise((resolvePromise) => {
+    const child = spawn(executable, args, { windowsHide: true });
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+    let settled = false;
+    let killedForLimit = false;
+    const finish = (result: RipgrepFileListResult | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(result);
+    };
+    const pushLine = (line: string) => {
+      const value = line.trim();
+      if (!value) return;
+      const fullPath = resolve(value);
+      if (!isInsideRoot(normalizedRoot, fullPath)) return;
+      if (seen.has(fullPath)) return;
+      seen.add(fullPath);
+      paths.push(fullPath);
+      if (paths.length >= maxFiles && !killedForLimit) {
+        killedForLimit = true;
+        child.kill();
+      }
+    };
+    const flushStdout = () => {
+      const lines = stdoutBuffer.split(/\r?\n/u);
+      stdoutBuffer = lines.pop() ?? '';
+      for (const line of lines) pushLine(line);
+    };
+    const timer = setTimeout(() => {
+      killedForLimit = true;
+      child.kill();
+    }, timeoutMs);
+
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => {
+      stdoutBuffer += String(chunk);
+      flushStdout();
+    });
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk) => {
+      stderrBuffer += String(chunk);
+      if (stderrBuffer.length > 1_000) stderrBuffer = stderrBuffer.slice(-1_000);
+    });
+    child.on('error', (error) => {
+      finish({ paths: [], truncated: false, error: error.message });
+    });
+    child.on('close', (code) => {
+      if (stdoutBuffer) {
+        pushLine(stdoutBuffer);
+        stdoutBuffer = '';
+      }
+      const uniqueSorted = [...paths].sort((left, right) => rootRelativePath(normalizedRoot, left).localeCompare(rootRelativePath(normalizedRoot, right)));
+      if (code && code !== 1 && uniqueSorted.length === 0) {
+        finish({
+          paths: [],
+          truncated: false,
+          error: stderrBuffer.trim() || `ripgrep exited with code ${code}`,
+        });
+        return;
+      }
+      finish({
+        paths: uniqueSorted,
+        truncated: killedForLimit || uniqueSorted.length >= maxFiles,
+      });
+    });
+  }).then((result) => {
+    if (result?.error) {
+      state.inaccessiblePaths.push(`${normalizedRoot} (ripgrep: ${result.error})`);
+      return null;
+    }
+    return result;
+  });
+}
+
+async function appendRipgrepMetadata(
+  out: FileMetadata[],
+  normalizedRoot: string,
+  fullPath: string,
+  checkedAt: string,
+  state: WalkState,
+  folder?: ScanBudgetFolderReport,
+): Promise<boolean> {
+  try {
+    out.push(await fileMetadataForPath(normalizedRoot, fullPath, checkedAt));
+    state.scannedFiles += 1;
+    if (folder) folder.scannedFiles += 1;
+    if (state.scannedFiles % 250 === 0) emitProgress(state, 'metadata_scan', 40);
+    return true;
+  } catch {
+    state.inaccessiblePaths.push(fullPath);
+    state.skippedFiles += 1;
+    if (folder) folder.skippedFiles += 1;
+    return false;
+  }
+}
+
+async function filesFromRipgrepList(
+  normalizedRoot: string,
+  paths: string[],
+  state: WalkState,
+  maxScanFiles: number,
+  checkedAt: string,
+): Promise<FileMetadata[]> {
+  const out: FileMetadata[] = [];
+  for (const fullPath of paths) {
+    if (shouldStop(state)) break;
+    if (state.scannedFiles >= maxScanFiles) {
+      state.truncated = true;
+      break;
+    }
+    await appendRipgrepMetadata(out, normalizedRoot, fullPath, checkedAt, state);
+  }
+  if (paths.length > out.length) state.truncated = true;
+  return out;
+}
+
+async function filesFromRipgrepBudget(
+  normalizedRoot: string,
+  paths: string[],
+  budgetReport: ScanBudgetReport,
+  state: WalkState,
+  maxScanFiles: number,
+  checkedAt: string,
+): Promise<FileMetadata[]> {
+  const out: FileMetadata[] = [];
+  const consumed = new Set<string>();
+  for (const fullPath of paths) {
+    if (shouldStop(state) || state.scannedFiles >= maxScanFiles) break;
+    if (dirname(fullPath) !== normalizedRoot) continue;
+    if (budgetReport.rootFilesScanned >= budgetReport.rootFileBudget) {
+      budgetReport.rootFilesTruncated = true;
+      break;
+    }
+    if (await appendRipgrepMetadata(out, normalizedRoot, fullPath, checkedAt, state)) {
+      budgetReport.rootFilesScanned += 1;
+      consumed.add(fullPath);
+    } else {
+      budgetReport.rootFilesSkipped += 1;
+    }
+  }
+
+  for (const folder of budgetReport.folders) {
+    if (shouldStop(state) || state.scannedFiles >= maxScanFiles) break;
+    if (folder.allocatedFiles <= 0) {
+      folder.truncated = true;
+      continue;
+    }
+    const folderPrefix = folder.path.endsWith(sep) ? folder.path : `${folder.path}${sep}`;
+    for (const fullPath of paths) {
+      if (shouldStop(state) || state.scannedFiles >= maxScanFiles) break;
+      if (folder.scannedFiles >= folder.allocatedFiles) {
+        folder.truncated = true;
+        break;
+      }
+      if (consumed.has(fullPath) || !fullPath.startsWith(folderPrefix)) continue;
+      if (await appendRipgrepMetadata(out, normalizedRoot, fullPath, checkedAt, state, folder)) {
+        consumed.add(fullPath);
+      }
+    }
+    if (paths.some((fullPath) => !consumed.has(fullPath) && fullPath.startsWith(folderPrefix))) {
+      folder.truncated = true;
+    }
+  }
+
+  budgetReport.budgetTruncatedFolderCount = budgetReport.folders.filter((folder) => folder.truncated).length;
+  if (
+    state.scannedFiles >= maxScanFiles ||
+    budgetReport.rootFilesTruncated ||
+    budgetReport.budgetTruncatedFolderCount > 0 ||
+    paths.length > consumed.size
+  ) {
+    state.truncated = true;
+  }
+  state.budgetReports.push(budgetReport);
+  return out;
+}
+
 async function walkRoot(
   root: string,
   state: WalkState,
   maxScanFiles: number,
   checkedAt: string,
   queryPlan: RelayDocumentSearchQueryPlanV1,
+  options: RelayDocumentSearchExecutorOptions,
 ): Promise<FileMetadata[]> {
   const normalizedRoot = resolve(root);
   const out: FileMetadata[] = [];
@@ -2150,6 +2371,24 @@ async function walkRoot(
     .filter((entry) => entry.isDirectory() && !SKIPPED_DIRS.has(entry.name))
     .map((entry) => ({ name: entry.name, path: join(normalizedRoot, entry.name) }));
   const budgetReport = await buildScanBudgetReport(normalizedRoot, rootDirs, rootFiles.length, maxScanFiles, queryPlan);
+  const ripgrepList = await listFilesWithRipgrep(normalizedRoot, state, maxScanFiles, options);
+  if (ripgrepList) {
+    if (budgetReport) {
+      const files = await filesFromRipgrepBudget(
+        normalizedRoot,
+        ripgrepList.paths,
+        budgetReport,
+        state,
+        maxScanFiles,
+        checkedAt,
+      );
+      if (ripgrepList.truncated) state.truncated = true;
+      return files;
+    }
+    const files = await filesFromRipgrepList(normalizedRoot, ripgrepList.paths, state, maxScanFiles, checkedAt);
+    if (ripgrepList.truncated) state.truncated = true;
+    return files;
+  }
   if (budgetReport) {
     for (const entry of rootFiles) {
       if (shouldStop(state) || state.scannedFiles >= maxScanFiles) {
@@ -3181,7 +3420,7 @@ async function filesForRoot(
   }
 
   const inaccessibleBefore = state.inaccessiblePaths.length;
-  const files = await walkRoot(root, state, maxScanFiles, (options.now ?? new Date()).toISOString(), queryPlan);
+  const files = await walkRoot(root, state, maxScanFiles, (options.now ?? new Date()).toISOString(), queryPlan, options);
   if (previousCacheForFreshness) {
     freshnessReports.push(buildRelayDocumentSearchFreshnessReport({
       root: resolve(root),

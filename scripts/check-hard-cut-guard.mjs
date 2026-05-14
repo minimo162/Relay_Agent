@@ -305,11 +305,11 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Copilot接続を確認",
+    text: "Copilotで検索語を整理しています",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Runtime",
+    text: "編集案を作成",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",

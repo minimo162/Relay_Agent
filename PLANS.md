@@ -58,21 +58,23 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
 - Document search IPC now runs through an async Tauri boundary, exposes visible
   loading/error states in the Relay UI, fixes search mode to detailed search,
   and automatically prunes app-local job snapshots and orphan temp files.
+- The desktop UI now asks M365 Copilot only for strict JSON search/Office
+  plans, validates those plans in Relay, and then executes local ripgrep-backed
+  document search or OfficeCLI operations itself.
+- Document search receives the bundled/user-local ripgrep path explicitly and
+  fails visibly if ripgrep is unavailable instead of falling back to a silent
+  slow scan.
 
 ## Remaining Hardening Tasks
 
 1. Port the document-search TypeScript sources from the historical
    `integrations/aionui/overlay` path into a Relay-owned source path without
    changing behavior.
-2. Add Copilot query-plan generation as an optional strict JSON step before
-   search, with Relay validation and no silent fallback.
-3. Add Copilot Office edit-plan generation as an optional strict JSON step
-   before OfficeCLI execution, with Relay validation and user confirmation.
-4. Add Playwright screenshots for the Relay desktop workbench at desktop and
+2. Add Playwright screenshots for the Relay desktop workbench at desktop and
    narrow widths.
-5. Add Windows installed-app validation evidence for startup, search, Office
+3. Add Windows installed-app validation evidence for startup, search, Office
    inspect/edit, installer size, and uninstall behavior.
-6. Remove or archive remaining AionUi overlay scripts/tests once search source
+4. Remove or archive remaining AionUi overlay scripts/tests once search source
    ownership has moved.
 
 ## Verification Gates

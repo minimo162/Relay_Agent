@@ -120,6 +120,27 @@ export type RelayDocumentSearchEvidence =
   | "candidate"
   | "required";
 
+export type RelayDocumentSearchTimeScopeIntent =
+  | "latest_first"
+  | "historical_examples"
+  | "balanced"
+  | "explicit_period"
+  | "unknown";
+
+export interface RelayDocumentSearchQueryPlanHints {
+  schemaVersion: string;
+  rawQuery: string;
+  intent: RelayDocumentSearchIntent;
+  evidence: RelayDocumentSearchEvidence;
+  thoroughness: RelayDocumentSearchThoroughness;
+  expandedTerms: string[];
+  supportTerms: string[];
+  demoteTerms: string[];
+  fileTypeHints: string[];
+  timeScopeIntent?: RelayDocumentSearchTimeScopeIntent | null;
+  summary?: string | null;
+}
+
 export interface RelayDocumentSearchRequest {
   query: string;
   workspacePath: string;
@@ -128,6 +149,7 @@ export interface RelayDocumentSearchRequest {
   evidence: RelayDocumentSearchEvidence;
   maxResults: number;
   fileTypes: string[];
+  queryPlanHints?: RelayDocumentSearchQueryPlanHints | null;
 }
 
 export interface RelaySearchResultCard {

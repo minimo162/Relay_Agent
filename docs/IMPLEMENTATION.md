@@ -21,6 +21,35 @@
 
 ## Milestone Log
 
+### 2026-05-14 Copilot-planned local search and Office edits
+
+Implemented the Docufinder-aligned split where Copilot improves user intent
+under a strict harness, while Relay owns local execution. The desktop search UI
+now sends the user's natural-language request to M365 Copilot only as a
+`RelayDocumentSearchCopilotQueryPlan.v1` JSON compiler prompt. Relay validates
+the JSON with no fallback, passes the accepted `queryPlanHints` into the local
+document-search engine, and executes search through the bundled/user-local
+ripgrep path. If ripgrep is unavailable, search now fails visibly instead of
+silently using a slower path.
+
+Office editing now follows the same pattern. The UI inspects the selected file
+with OfficeCLI, asks Copilot for a strict `RelayOfficeEditPlan.v1` argv plan,
+validates that the selected file appears exactly once in each command, then
+executes only the reviewed OfficeCLI argv with a Relay-created backup. The UI
+was simplified to two focused modes with the runtime/history diagnostics
+removed from the primary surface.
+
+Verification:
+
+- `pnpm typecheck` — pass.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs` — pass, 41 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml ipc_codegen::tests::every_ts_deriving_ipc_type_is_rendered --lib` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml officecli_parser --lib` — pass, 2 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `pnpm check` — pass.
+- `git diff --check` — pass.
+
 ### 2026-05-14 Parts-sales search precision and latency hardening
 
 Fixed the observed `部品売上に関するファイルを探して` behavior where Japanese

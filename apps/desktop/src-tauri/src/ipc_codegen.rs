@@ -5,8 +5,9 @@ use ts_rs::TS;
 use crate::models::{
     BrowserAutomationSettings, CopilotBridgeFailureInfo, CopilotRepairStageFailureCount,
     CopilotRepairStageStats, OpenWorkSetupSnapshot, RelayDiagnostics, RelayDocumentSearchEvidence,
-    RelayDocumentSearchIntent, RelayDocumentSearchRequest, RelayDocumentSearchResponse,
-    RelayDocumentSearchThoroughness, RelayOfficeCommandResponse, RelayOfficeExecuteRequest,
+    RelayDocumentSearchIntent, RelayDocumentSearchQueryPlanHints, RelayDocumentSearchRequest,
+    RelayDocumentSearchResponse, RelayDocumentSearchThoroughness,
+    RelayDocumentSearchTimeScopeIntent, RelayOfficeCommandResponse, RelayOfficeExecuteRequest,
     RelayOfficeInspectRequest, RelaySearchResultCard, RelayWorkspaceState,
 };
 use crate::tauri_bridge::{
@@ -29,6 +30,8 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<RelayDocumentSearchIntent>(),
         decl::<RelayDocumentSearchThoroughness>(),
         decl::<RelayDocumentSearchEvidence>(),
+        decl::<RelayDocumentSearchTimeScopeIntent>(),
+        decl::<RelayDocumentSearchQueryPlanHints>(),
         decl::<RelayDocumentSearchRequest>(),
         decl::<RelaySearchResultCard>(),
         decl::<RelayDocumentSearchResponse>(),

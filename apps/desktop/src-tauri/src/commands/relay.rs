@@ -85,6 +85,10 @@ fn run_relay_document_search_blocking(
         .ok_or_else(|| "Node.js runtime was not found for document search.".to_string())?;
     let script = resolve_document_search_cli(&app)
         .ok_or_else(|| "Relay document-search runner was not found.".to_string())?;
+    let ripgrep = resolve_ripgrep_path(&app).ok_or_else(|| {
+        "ripgrep was not found in bundled resources or PATH; document search requires ripgrep."
+            .to_string()
+    })?;
     let cache_root = app_local_data_dir(&app)?.join("document-search");
     prune_document_search_runtime(&cache_root);
     fs::create_dir_all(&cache_root).map_err(|error| {
@@ -101,16 +105,22 @@ fn run_relay_document_search_blocking(
         )
     })?;
 
+    let mut request_payload = json!({
+        "query": request.query.trim(),
+        "roots": [workspace.display().to_string()],
+        "intent": intent_as_str(&request.intent),
+        "thoroughness": thoroughness_as_str(&request.thoroughness),
+        "evidence": evidence_as_str(&request.evidence),
+        "maxResults": request.max_results.clamp(1, 300),
+        "fileTypes": if request.file_types.is_empty() { vec!["any".to_string()] } else { request.file_types.clone() },
+    });
+    if let Some(query_plan_hints) = request.query_plan_hints.as_ref() {
+        request_payload["queryPlanHints"] =
+            serde_json::to_value(query_plan_hints).map_err(|error| error.to_string())?;
+    }
+
     let input = json!({
-        "request": {
-            "query": request.query.trim(),
-            "roots": [workspace.display().to_string()],
-            "intent": intent_as_str(&request.intent),
-            "thoroughness": thoroughness_as_str(&request.thoroughness),
-            "evidence": evidence_as_str(&request.evidence),
-            "maxResults": request.max_results.clamp(1, 300),
-            "fileTypes": if request.file_types.is_empty() { vec!["any".to_string()] } else { request.file_types.clone() },
-        },
+        "request": request_payload,
         "options": {
             "metadataCacheDir": cache_root.join("metadata").display().to_string(),
             "filenameIndexDir": cache_root.join("filename-index").display().to_string(),
@@ -122,6 +132,7 @@ fn run_relay_document_search_blocking(
             "jobStoreDir": cache_root.join("jobs").display().to_string(),
             "userMemoryDir": cache_root.join("user-memory").display().to_string(),
             "syncJournalDir": cache_root.join("sync-journal").display().to_string(),
+            "ripgrepPath": ripgrep.display().to_string(),
             "timeoutMs": 60_000,
             "maxContentInspectFiles": 120,
             "source": "relay-desktop",
@@ -547,17 +558,7 @@ fn split_command_words(input: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
-    let mut escaped = false;
     for ch in input.trim().chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
         if let Some(active) = quote {
             if ch == active {
                 quote = None;
@@ -580,9 +581,6 @@ fn split_command_words(input: &str) -> Result<Vec<String>, String> {
     }
     if quote.is_some() {
         return Err("OfficeCLI arguments contain an unterminated quote.".to_string());
-    }
-    if escaped {
-        current.push('\\');
     }
     if !current.is_empty() {
         out.push(current);
@@ -715,5 +713,31 @@ fn trim_for_error(value: &str) -> String {
         trimmed.to_string()
     } else {
         format!("{}...", &trimmed[..LIMIT])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_officecli_args, split_command_words};
+
+    #[test]
+    fn officecli_parser_preserves_windows_backslashes_inside_quotes() {
+        let args = split_command_words(r#"set "H:\shr1\book.xlsx" "/Sheet1/A1" --prop value=売上"#)
+            .expect("split OfficeCLI args");
+
+        assert_eq!(args[0], "set");
+        assert_eq!(args[1], r#"H:\shr1\book.xlsx"#);
+        assert_eq!(args[2], "/Sheet1/A1");
+    }
+
+    #[test]
+    fn officecli_parser_appends_json_without_losing_selected_file_path() {
+        let args = parse_officecli_args(r#"view "H:\shr1\book.xlsx" outline"#)
+            .expect("parse OfficeCLI args");
+
+        assert_eq!(
+            args,
+            vec!["view", r#"H:\shr1\book.xlsx"#, "outline", "--json"]
+        );
     }
 }

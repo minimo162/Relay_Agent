@@ -21,7 +21,8 @@ The first visible screen is the Relay workbench with two task modes:
   selected Office file.
 
 The app does not open Edge or legacy OpenCode/AionUi surfaces during first
-paint. Copilot connection checks are explicit user actions.
+paint. Copilot is started on demand when a search or Office edit needs a
+planning step.
 
 ## Document Search
 
@@ -30,6 +31,9 @@ does not ask Copilot to compose low-level `glob` or `grep` patterns.
 
 Search features:
 
+- strict Copilot query-plan JSON for natural-language expansion, validated by
+  Relay with no silent fallback;
+- ripgrep-backed local file enumeration before Relay ranking and evidence work;
 - metadata-first candidate discovery for fast first results;
 - filename/path index with Japanese and Latin term expansion;
 - optional SQLite/FTS and parsed-document evidence;
@@ -52,7 +56,8 @@ The desktop UI supports:
 
 - Office file selection;
 - structure inspection through `officecli view <file> outline --json`;
-- reviewed OfficeCLI argument execution;
+- strict Copilot Office-edit JSON plans for natural-language instructions;
+- reviewed OfficeCLI argv execution;
 - app-local backup creation before execution.
 
 Relay Agent does not mutate binary Office files through text tools, VBA, or

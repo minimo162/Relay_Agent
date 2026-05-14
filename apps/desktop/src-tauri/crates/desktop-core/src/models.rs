@@ -235,6 +235,33 @@ pub enum RelayDocumentSearchEvidence {
     Required,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayDocumentSearchTimeScopeIntent {
+    LatestFirst,
+    HistoricalExamples,
+    Balanced,
+    ExplicitPeriod,
+    Unknown,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayDocumentSearchQueryPlanHints {
+    pub schema_version: String,
+    pub raw_query: String,
+    pub intent: RelayDocumentSearchIntent,
+    pub evidence: RelayDocumentSearchEvidence,
+    pub thoroughness: RelayDocumentSearchThoroughness,
+    pub expanded_terms: Vec<String>,
+    pub support_terms: Vec<String>,
+    pub demote_terms: Vec<String>,
+    pub file_type_hints: Vec<String>,
+    pub time_scope_intent: Option<RelayDocumentSearchTimeScopeIntent>,
+    pub summary: Option<String>,
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -246,6 +273,7 @@ pub struct RelayDocumentSearchRequest {
     pub evidence: RelayDocumentSearchEvidence,
     pub max_results: u16,
     pub file_types: Vec<String>,
+    pub query_plan_hints: Option<RelayDocumentSearchQueryPlanHints>,
 }
 
 #[skip_serializing_none]

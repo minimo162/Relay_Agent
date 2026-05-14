@@ -541,7 +541,7 @@ body a:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 2rem;
+  padding: 3rem;
   background: var(--ra-color-bg);
 }
 
@@ -779,8 +779,8 @@ body a:focus-visible {
 
 .relay-work-panel {
   display: grid;
-  gap: 1.35rem;
-  max-width: 1080px;
+  gap: 1.65rem;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
@@ -941,6 +941,49 @@ body a:focus-visible {
 .relay-result-block {
   display: grid;
   gap: 1rem;
+}
+
+.relay-plan-strip {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid var(--ra-color-border);
+  border-radius: var(--ra-radius);
+  background: color-mix(in oklab, var(--ra-color-surface) 80%, var(--ra-color-bg));
+  padding: 0.8rem 0.95rem;
+}
+
+.relay-plan-strip span {
+  font-weight: 650;
+}
+
+.relay-plan-strip small {
+  color: var(--ra-color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.relay-plan-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.relay-plan-item {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--ra-color-border);
+  border-radius: var(--ra-radius);
+  background: var(--ra-color-bg);
+  padding: 0.8rem;
+}
+
+.relay-plan-item strong {
+  overflow-wrap: anywhere;
+}
+
+.relay-plan-item code {
+  color: var(--ra-color-text-muted);
+  font-family: var(--ra-font-mono);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
 }
 
 .relay-result-header p {
