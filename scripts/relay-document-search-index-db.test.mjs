@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -12,6 +12,10 @@ const indexDbPath = resolve(
   repoRoot,
   "integrations/aionui/overlay/src/process/utils/relayDocumentSearchIndexDb.ts",
 );
+
+function expectedLikePattern(value) {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
 
 function transpile(path) {
   const source = readFileSync(path, "utf8");
@@ -592,7 +596,13 @@ test("index DB FTS can constrain content search to selected roots", async () => 
       (call) => call.kind === "all" && /JOIN file_metadata/.test(call.sql) && /LIKE \? ESCAPE/.test(call.sql),
     );
     assert.equal(allCalls.length, 2);
-    assert.deepEqual(allCalls[0].params, ['"キャッシュフロー"', selectedRoot, `${selectedRoot}/%`, 5]);
+    const selectedRootPrefix = selectedRoot.endsWith(sep) ? selectedRoot : `${selectedRoot}${sep}`;
+    assert.deepEqual(allCalls[0].params, [
+      '"キャッシュフロー"',
+      selectedRoot,
+      `${expectedLikePattern(selectedRootPrefix)}%`,
+      5,
+    ]);
   } finally {
     cleanup();
     rmSync(root, { recursive: true, force: true });

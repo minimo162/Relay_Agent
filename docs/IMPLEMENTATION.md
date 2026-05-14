@@ -21,6 +21,19 @@
 
 ## Milestone Log
 
+### 2026-05-14 Windows CI root-filter assertion fix
+
+Fixed the Windows-only CI failure in
+`scripts/relay-document-search-index-db.test.mjs`. The SQLite FTS root filter
+implementation correctly escapes Windows backslashes for `LIKE ? ESCAPE '\'`,
+but the test expected a POSIX-style `/%` child-prefix pattern. The test now
+derives the expected child-prefix from `path.sep` and applies the same LIKE
+escaping rule as the production query builder.
+
+Verification:
+- `node --test scripts/relay-document-search-index-db.test.mjs` — pass.
+- `pnpm check` — pass.
+
 ### 2026-05-14 Relay dedicated desktop UX and direct search/Office IPC
 
 Replaced the active product direction from AionUi-first to a dedicated Relay
