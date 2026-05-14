@@ -5,6 +5,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'fs';
 import { homedir } from 'os';
@@ -17,11 +18,17 @@ export const RELAY_DOCUMENT_SEARCH_JOB_STORE_CONTRACT = 'RelayDocumentSearchJobS
 const JOB_STORE_ENV = 'RELAY_DOCUMENT_SEARCH_JOB_STORE';
 const JOB_STORE_DIR_ENV = 'RELAY_DOCUMENT_SEARCH_JOB_STORE_DIR';
 const DEFAULT_ACTIVE_STALE_MS = 5 * 60 * 1000;
+const DEFAULT_FINISHED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_FINISHED_SNAPSHOTS = 200;
+const DEFAULT_TEMP_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export type RelayDocumentSearchJobStoreOptions = {
   useJobStore?: boolean;
   jobStoreDir?: string;
   jobStoreActiveStaleMs?: number;
+  jobStoreFinishedRetentionMs?: number;
+  jobStoreMaxFinishedSnapshots?: number;
+  jobStoreTempFileMaxAgeMs?: number;
   now?: Date;
 };
 
@@ -30,12 +37,23 @@ export type RelayDocumentSearchJobStoreRecovery = {
   abandoned: RelayDocumentSearchJobSnapshot[];
 };
 
+export type RelayDocumentSearchJobStorePruneResult = {
+  schemaVersion: typeof RELAY_DOCUMENT_SEARCH_JOB_STORE_CONTRACT;
+  removedSnapshots: number;
+  removedTempFiles: number;
+  retainedSnapshots: number;
+};
+
 function nowIso(options: RelayDocumentSearchJobStoreOptions): string {
   return (options.now ?? new Date()).toISOString();
 }
 
 function activeLifecycle(lifecycle: RelayDocumentSearchJobSnapshot['lifecycle']): boolean {
   return lifecycle === 'queued' || lifecycle === 'running';
+}
+
+function optionMs(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(0, value as number) : fallback;
 }
 
 function stale(snapshot: RelayDocumentSearchJobSnapshot, options: RelayDocumentSearchJobStoreOptions): boolean {
@@ -114,6 +132,95 @@ export function listRelayDocumentSearchJobSnapshots(
   return snapshots.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+export function pruneRelayDocumentSearchJobStore(
+  options: RelayDocumentSearchJobStoreOptions = {},
+): RelayDocumentSearchJobStorePruneResult {
+  const dir = relayDocumentSearchJobStoreDir(options);
+  const nowMs = (options.now ?? new Date()).getTime();
+  const retentionMs = optionMs(options.jobStoreFinishedRetentionMs, DEFAULT_FINISHED_RETENTION_MS);
+  const tempFileMaxAgeMs = optionMs(options.jobStoreTempFileMaxAgeMs, DEFAULT_TEMP_FILE_MAX_AGE_MS);
+  const maxFinishedSnapshots = Math.max(
+    1,
+    options.jobStoreMaxFinishedSnapshots ?? DEFAULT_MAX_FINISHED_SNAPSHOTS,
+  );
+  let removedSnapshots = 0;
+  let removedTempFiles = 0;
+  let retainedSnapshots = 0;
+
+  if (!existsSync(dir)) {
+    return {
+      schemaVersion: RELAY_DOCUMENT_SEARCH_JOB_STORE_CONTRACT,
+      removedSnapshots,
+      removedTempFiles,
+      retainedSnapshots,
+    };
+  }
+
+  const candidates: Array<{
+    path: string;
+    snapshot: RelayDocumentSearchJobSnapshot;
+    updatedAtMs: number;
+  }> = [];
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(dir, entry.name);
+    if (entry.name.endsWith('.tmp')) {
+      try {
+        const modifiedMs = statSync(path).mtimeMs;
+        if (nowMs - modifiedMs > tempFileMaxAgeMs) {
+          rmSync(path, { force: true });
+          removedTempFiles += 1;
+        }
+      } catch {
+        rmSync(path, { force: true });
+        removedTempFiles += 1;
+      }
+      continue;
+    }
+    if (!entry.name.endsWith('.json')) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      if (!isSnapshot(parsed)) {
+        rmSync(path, { force: true });
+        removedSnapshots += 1;
+        continue;
+      }
+      const updatedAtMs = Date.parse(parsed.updatedAt);
+      candidates.push({
+        path,
+        snapshot: parsed,
+        updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : 0,
+      });
+    } catch {
+      rmSync(path, { force: true });
+      removedSnapshots += 1;
+    }
+  }
+
+  candidates.sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+  let retainedFinished = 0;
+  for (const candidate of candidates) {
+    const active = activeLifecycle(candidate.snapshot.lifecycle);
+    const expired = !active && nowMs - candidate.updatedAtMs > retentionMs;
+    const overLimit = !active && retainedFinished >= maxFinishedSnapshots;
+    if (expired || overLimit) {
+      rmSync(candidate.path, { force: true });
+      removedSnapshots += 1;
+      continue;
+    }
+    retainedSnapshots += 1;
+    if (!active) retainedFinished += 1;
+  }
+
+  return {
+    schemaVersion: RELAY_DOCUMENT_SEARCH_JOB_STORE_CONTRACT,
+    removedSnapshots,
+    removedTempFiles,
+    retainedSnapshots,
+  };
+}
+
 function abandonSnapshot(
   snapshot: RelayDocumentSearchJobSnapshot,
   options: RelayDocumentSearchJobStoreOptions,
@@ -135,6 +242,7 @@ function abandonSnapshot(
 export function recoverRelayDocumentSearchJobStore(
   options: RelayDocumentSearchJobStoreOptions = {},
 ): RelayDocumentSearchJobStoreRecovery {
+  pruneRelayDocumentSearchJobStore(options);
   const abandoned: RelayDocumentSearchJobSnapshot[] = [];
   for (const snapshot of listRelayDocumentSearchJobSnapshots(options)) {
     if (!activeLifecycle(snapshot.lifecycle) || !stale(snapshot, options)) continue;

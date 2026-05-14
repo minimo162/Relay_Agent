@@ -55,6 +55,9 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   OfficeCLI as a resource.
 - The primary Windows release workflow now builds the Relay Tauri installer.
 - The AionUi Windows release workflow has been removed.
+- Document search IPC now runs through an async Tauri boundary, exposes visible
+  loading/error states in the Relay UI, fixes search mode to detailed search,
+  and automatically prunes app-local job snapshots and orphan temp files.
 
 ## Remaining Hardening Tasks
 

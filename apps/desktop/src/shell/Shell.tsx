@@ -68,10 +68,11 @@ export default function Shell(): JSX.Element {
   const [stateLoading, setStateLoading] = createSignal(false);
 
   const [searchQuery, setSearchQuery] = createSignal("");
-  const [searchThoroughness, setSearchThoroughness] = createSignal<"quick" | "thorough">("thorough");
   const [searching, setSearching] = createSignal(false);
   const [searchResult, setSearchResult] = createSignal<RelayDocumentSearchResponse | null>(null);
   const [selectedCard, setSelectedCard] = createSignal<RelaySearchResultCard | null>(null);
+  const [searchError, setSearchError] = createSignal("");
+  const [visibleResultCount, setVisibleResultCount] = createSignal(24);
 
   const [officeFilePath, setOfficeFilePath] = createSignal("");
   const [officeArgs, setOfficeArgs] = createSignal("");
@@ -85,6 +86,10 @@ export default function Shell(): JSX.Element {
   const workspaceReady = createMemo(() => workspacePath().trim().length > 0);
   const appState = createMemo(() => state());
   const activeCard = createMemo(() => selectedCard() || searchResult()?.cards[0] || null);
+  const resultCards = createMemo(() => searchResult()?.cards ?? []);
+  const visibleCards = createMemo(() => resultCards().slice(0, visibleResultCount()));
+  const hasMoreCards = createMemo(() => resultCards().length > visibleResultCount());
+  let searchSequence = 0;
 
   const appendActivity = (entry: Omit<Activity, "id" | "at">) => {
     setActivity((current) => [
@@ -151,18 +156,23 @@ export default function Shell(): JSX.Element {
     setSearching(true);
     setSearchResult(null);
     setSelectedCard(null);
+    setSearchError("");
+    setVisibleResultCount(24);
+    const searchId = ++searchSequence;
     try {
       const result = await runRelayDocumentSearch({
         query,
         workspacePath: workspace,
         intent: "find_files",
-        thoroughness: searchThoroughness(),
+        thoroughness: "thorough",
         evidence: "candidate",
         maxResults: 80,
         fileTypes: ["any"],
       });
+      if (searchId !== searchSequence) return;
       setSearchResult(result);
       setSelectedCard(result.cards[0] ?? null);
+      if (!result.ok) setSearchError(result.error || result.summary);
       appendActivity({
         mode: "search",
         title: query,
@@ -175,12 +185,16 @@ export default function Shell(): JSX.Element {
         detail: result.summary,
       });
     } catch (error) {
+      if (searchId !== searchSequence) return;
       const message = error instanceof Error ? error.message : String(error);
+      setSearchError(message);
       showToast({ tone: "danger", message: "検索に失敗しました", detail: message });
       appendActivity({ mode: "search", title: query, status: "失敗", detail: message });
     } finally {
-      setSearching(false);
-      void refreshState(false);
+      if (searchId === searchSequence) {
+        setSearching(false);
+        void refreshState(false);
+      }
     }
   };
 
@@ -265,7 +279,7 @@ export default function Shell(): JSX.Element {
 
   return (
     <main class="relay-app-shell bg-[var(--ra-color-bg)] text-[var(--ra-color-text)]">
-      <aside class="relay-sidebar">
+      <header class="relay-topbar">
         <div class="relay-brand">
           <div class="relay-brand__mark" aria-hidden="true">R</div>
           <div>
@@ -291,52 +305,16 @@ export default function Shell(): JSX.Element {
           </button>
         </div>
 
-        <section class="relay-sidebar-section">
-          <div class="relay-section-heading">
+        <div class="relay-workspace-pill">
+          <div>
             <p>Workspace</p>
-            <button type="button" onClick={chooseWorkspace}>変更</button>
+            <strong title={workspacePath()}>{workspacePath() ? shortPath(workspacePath()) : "未選択"}</strong>
           </div>
-          <p class="relay-path" title={workspacePath()}>
-            {workspacePath() || "未選択"}
-          </p>
-          <Show when={!workspaceReady()}>
-            <p class="relay-hint relay-hint--danger">先に検索・編集対象のフォルダを選択してください。</p>
-          </Show>
-        </section>
-
-        <section class="relay-sidebar-section">
-          <div class="relay-section-heading">
-            <p>Runtime</p>
-            <button type="button" disabled={stateLoading()} onClick={() => refreshState(true)}>
-              更新
-            </button>
-          </div>
-          <div class="relay-status-list">
-            <p><span class={statusTone(Boolean(appState()?.documentSearchAvailable))}>●</span> Search</p>
-            <p><span class={statusTone(Boolean(appState()?.officecliAvailable))}>●</span> OfficeCLI</p>
-            <p><span class={statusTone(Boolean(appState()?.ripgrepAvailable))}>●</span> ripgrep</p>
-            <p><span class="text-[var(--ra-color-text-muted)]">●</span> Copilot: {copilotMessage()}</p>
-          </div>
-          <button type="button" class="relay-secondary-action" disabled={copilotChecking()} onClick={checkCopilot}>
-            {copilotChecking() ? "確認中" : "Copilot接続を確認"}
+          <button type="button" class="ra-button ra-button--secondary" onClick={chooseWorkspace}>
+            変更
           </button>
-        </section>
-
-        <section class="relay-sidebar-section relay-history">
-          <p class="relay-sidebar-title">履歴</p>
-          <Show when={activity().length > 0} fallback={<p class="relay-hint">実行履歴はまだありません。</p>}>
-            <For each={activity()}>
-              {(item) => (
-                <button type="button" class="relay-history-item" onClick={() => setMode(item.mode)}>
-                  <span>{item.status}</span>
-                  <strong>{item.title}</strong>
-                  <small>{item.at}</small>
-                </button>
-              )}
-            </For>
-          </Show>
-        </section>
-      </aside>
+        </div>
+      </header>
 
       <section class="relay-workbench">
         <Show when={mode() === "search"} fallback={
@@ -345,11 +323,19 @@ export default function Shell(): JSX.Element {
               <div>
                 <p class="relay-kicker">OfficeCLI workflow</p>
                 <h1>Officeファイルを安全に確認・編集する</h1>
+                <p class="relay-panel-copy">構造確認、引数レビュー、バックアップ作成を同じ画面で行います。</p>
               </div>
               <button type="button" class="ra-button ra-button--secondary" onClick={chooseOfficeFile}>
                 ファイルを選択
               </button>
             </div>
+
+            <Show when={!workspaceReady()}>
+              <div class="relay-state-panel relay-state-panel--warning">
+                <strong>ワークスペースが未設定です</strong>
+                <p>対象フォルダを選択すると、Officeファイル選択時の初期位置にも使われます。</p>
+              </div>
+            </Show>
 
             <div class="relay-form-grid">
               <label class="relay-field relay-field--wide">
@@ -376,9 +362,19 @@ export default function Shell(): JSX.Element {
                 構造を確認
               </button>
               <button type="button" class="ra-button" disabled={officeRunning()} onClick={executeOffice}>
-                バックアップして実行
+                {officeRunning() ? "実行中" : "バックアップして実行"}
               </button>
             </div>
+
+            <Show when={officeRunning()}>
+              <div class="relay-progress-panel" role="status" aria-live="polite">
+                <span class="relay-spinner" aria-hidden="true" />
+                <div>
+                  <strong>OfficeCLI を実行しています</strong>
+                  <p>完了までこの画面を開いたまま待機してください。</p>
+                </div>
+              </div>
+            </Show>
 
             <Show when={officeResult()}>
               {(result) => (
@@ -401,24 +397,16 @@ export default function Shell(): JSX.Element {
               <div>
                 <p class="relay-kicker">Document search</p>
                 <h1>資料を探す</h1>
-              </div>
-              <div class="relay-segment">
-                <button
-                  type="button"
-                  classList={{ "is-active": searchThoroughness() === "quick" }}
-                  onClick={() => setSearchThoroughness("quick")}
-                >
-                  高速
-                </button>
-                <button
-                  type="button"
-                  classList={{ "is-active": searchThoroughness() === "thorough" }}
-                  onClick={() => setSearchThoroughness("thorough")}
-                >
-                  詳細
-                </button>
+                <p class="relay-panel-copy">ファイル名、フォルダ構造、抽出済みメタデータを使って候補を整理します。検索は詳細モードに固定されています。</p>
               </div>
             </div>
+
+            <Show when={!workspaceReady()}>
+              <div class="relay-state-panel relay-state-panel--warning">
+                <strong>ワークスペースを選択してください</strong>
+                <p>検索対象のフォルダを選ぶまで、検索は実行できません。</p>
+              </div>
+            </Show>
 
             <div class="relay-search-box">
               <textarea
@@ -430,51 +418,123 @@ export default function Shell(): JSX.Element {
                   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runSearch();
                 }}
               />
-              <button type="button" class="ra-button" disabled={searching()} onClick={runSearch}>
+              <button type="button" class="ra-button relay-search-button" disabled={searching() || !workspaceReady()} onClick={runSearch}>
                 {searching() ? "検索中" : "検索"}
               </button>
             </div>
 
-            <Show when={searchResult()}>
-              {(result) => (
-                <section class="relay-result-block">
-                  <div class="relay-result-header">
-                    <div>
-                      <h2>検索結果</h2>
-                      <p>{result().summary}</p>
-                    </div>
-                    <p class={statusTone(result().ok)}>{result().status} · {result().elapsedMs}ms</p>
+            <Show when={searching()}>
+              <div class="relay-progress-panel" role="status" aria-live="polite">
+                <span class="relay-spinner" aria-hidden="true" />
+                <div>
+                  <strong>詳細検索を実行しています</strong>
+                  <p>候補が多いフォルダでも UI は操作可能な状態を保ちます。</p>
+                </div>
+              </div>
+            </Show>
+
+            <Show when={searchError() && !searching()}>
+              <div class="relay-state-panel relay-state-panel--danger">
+                <strong>検索を完了できませんでした</strong>
+                <p>{searchError()}</p>
+              </div>
+            </Show>
+
+            <Show when={searchResult() && !searching() && resultCards().length === 0}>
+              <div class="relay-state-panel">
+                <strong>候補は見つかりませんでした</strong>
+                <p>別名、略称、年度、対象部署などを加えて再検索してください。</p>
+              </div>
+            </Show>
+
+            <Show when={searchResult() && resultCards().length > 0}>
+              <section class="relay-result-block">
+                <div class="relay-result-header">
+                  <div>
+                    <h2>検索結果</h2>
+                    <p>{searchResult()?.summary}</p>
                   </div>
-                  <p class="relay-hint">{result().coverageLabel}</p>
-                  <div class="relay-result-list">
-                    <For each={result().cards}>
-                      {(card) => (
-                        <button
-                          type="button"
-                          class="relay-result-card"
-                          classList={{ "is-active": activeCard()?.path === card.path }}
-                          onClick={() => setSelectedCard(card)}
-                        >
-                          <div>
-                            <p class="relay-result-card__title">{card.title}</p>
-                            <p class="relay-result-card__path">{card.displayPath || card.path}</p>
-                          </div>
-                          <div class="relay-card-meta">
-                            <span>{cardBucketLabel(card)}</span>
-                            <span>{card.evidenceState || card.matchMode || "candidate"}</span>
-                            <Show when={card.score != null}>
-                              <span>{card.score}</span>
-                            </Show>
-                          </div>
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </section>
-              )}
+                  <p class={statusTone(Boolean(searchResult()?.ok))}>
+                    {resultCards().length}件 · {searchResult()?.elapsedMs ?? 0}ms
+                  </p>
+                </div>
+                <p class="relay-hint">{searchResult()?.coverageLabel}</p>
+                <div class="relay-result-list">
+                  <For each={visibleCards()}>
+                    {(card) => (
+                      <button
+                        type="button"
+                        class="relay-result-card"
+                        classList={{ "is-active": activeCard()?.path === card.path }}
+                        onClick={() => setSelectedCard(card)}
+                      >
+                        <div>
+                          <p class="relay-result-card__title">{card.title}</p>
+                          <p class="relay-result-card__path">{card.displayPath || card.path}</p>
+                        </div>
+                        <div class="relay-card-meta">
+                          <span>{cardBucketLabel(card)}</span>
+                          <span>{card.evidenceState || card.matchMode || "candidate"}</span>
+                          <Show when={card.score != null}>
+                            <span>{card.score}</span>
+                          </Show>
+                        </div>
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <Show when={hasMoreCards()}>
+                  <button
+                    type="button"
+                    class="relay-secondary-action relay-secondary-action--center"
+                    onClick={() => setVisibleResultCount((count) => count + 24)}
+                  >
+                    さらに表示
+                  </button>
+                </Show>
+              </section>
             </Show>
           </section>
         </Show>
+
+        <details class="relay-runtime-details">
+          <summary>状態と履歴</summary>
+          <div class="relay-runtime-grid">
+            <section>
+              <div class="relay-section-heading">
+                <p>Runtime</p>
+                <button type="button" disabled={stateLoading()} onClick={() => refreshState(true)}>
+                  更新
+                </button>
+              </div>
+              <div class="relay-status-list">
+                <p><span class={statusTone(Boolean(appState()?.documentSearchAvailable))}>●</span> Search</p>
+                <p><span class={statusTone(Boolean(appState()?.officecliAvailable))}>●</span> OfficeCLI</p>
+                <p><span class={statusTone(Boolean(appState()?.ripgrepAvailable))}>●</span> ripgrep</p>
+                <p><span class="text-[var(--ra-color-text-muted)]">●</span> Copilot: {copilotMessage()}</p>
+              </div>
+              <button type="button" class="relay-secondary-action" disabled={copilotChecking()} onClick={checkCopilot}>
+                {copilotChecking() ? "確認中" : "Copilot接続を確認"}
+              </button>
+            </section>
+            <section>
+              <p class="relay-sidebar-title">履歴</p>
+              <Show when={activity().length > 0} fallback={<p class="relay-hint">実行履歴はまだありません。</p>}>
+                <div class="relay-history-list">
+                  <For each={activity().slice(0, 4)}>
+                    {(item) => (
+                      <button type="button" class="relay-history-item" onClick={() => setMode(item.mode)}>
+                        <span>{item.status}</span>
+                        <strong>{item.title}</strong>
+                        <small>{item.at}</small>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </section>
+          </div>
+        </details>
       </section>
 
       <aside class="relay-detail">

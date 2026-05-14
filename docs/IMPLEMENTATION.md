@@ -21,6 +21,44 @@
 
 ## Milestone Log
 
+### 2026-05-14 Search freeze, simplified search mode, and snapshot cleanup
+
+Hardened the dedicated Relay desktop workbench after UI search could appear
+frozen. Document search now runs behind an async Tauri command boundary with
+the blocking Node runner moved to a blocking task, app-local temp input/output
+files, and a bounded timeout. The search UI no longer exposes quick vs.
+thorough mode; the product surface always sends `thorough` search requests.
+
+UX changes:
+
+- Reworked the Relay shell into a roomier topbar + workbench + detail layout.
+- Added explicit workspace-required, loading, error, empty-result, and
+  show-more states.
+- Added latest-request guarding so an older search response cannot overwrite a
+  newer search result.
+- Moved runtime status and recent activity into a collapsed details section so
+  the main surface stays focused on document search and Office workflows.
+
+Storage cleanup:
+
+- Search input/stdout/stderr temp files are created under app-local
+  `document-search/tmp` and pruned when older than 24 hours.
+- Orphan job-store `.tmp` files are pruned when older than 24 hours.
+- Finished job snapshots are pruned from the durable job store after seven days
+  or once more than 200 finished snapshots are retained. Active jobs are kept
+  for stale-job recovery.
+
+Verification:
+
+- `node --test scripts/relay-document-search-job-store.test.mjs` — pass.
+- `pnpm typecheck` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `pnpm check` — pass.
+- `pnpm --filter @relay-agent/desktop dev` + Playwright screenshot against the
+  Vite surface — rendered successfully; browser-only Tauri IPC produced the
+  expected status toast because native IPC is unavailable outside Tauri.
+- `git diff --check` — pass.
+
 ### 2026-05-14 Windows CI root-filter assertion fix
 
 Fixed the Windows-only CI failure in

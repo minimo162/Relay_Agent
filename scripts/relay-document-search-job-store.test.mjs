@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -115,6 +115,90 @@ test("Relay document search job store marks stale active jobs abandoned", async 
     });
     assert.equal(recovery.schemaVersion, "RelayDocumentSearchJobStore.v1");
     assert.equal(recovery.abandoned.length, 0);
+  } finally {
+    cleanup();
+    rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("Relay document search job store prunes stale finished snapshots and temp files", async () => {
+  const storeDir = mkdtempSync(resolve(tmpdir(), "relay-document-search-job-store-prune-"));
+  const { module, cleanup } = await loadJobStoreModule();
+  try {
+    module.writeRelayDocumentSearchJobSnapshot(snapshot({
+      jobId: "old-finished",
+      lifecycle: "completed",
+      cancellable: false,
+      updatedAt: "2026-05-01T00:00:00.000Z",
+      finishedAt: "2026-05-01T00:00:00.000Z",
+    }), { jobStoreDir: storeDir });
+    module.writeRelayDocumentSearchJobSnapshot(snapshot({
+      jobId: "fresh-finished",
+      lifecycle: "completed",
+      cancellable: false,
+      updatedAt: "2026-05-09T00:00:00.000Z",
+      finishedAt: "2026-05-09T00:00:00.000Z",
+    }), { jobStoreDir: storeDir });
+    module.writeRelayDocumentSearchJobSnapshot(snapshot({
+      jobId: "active-old",
+      lifecycle: "running",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    }), { jobStoreDir: storeDir });
+    const tempPath = resolve(storeDir, "orphan.tmp");
+    writeFileSync(tempPath, "temporary", "utf8");
+    const oldDate = new Date("2026-05-01T00:00:00.000Z");
+    utimesSync(tempPath, oldDate, oldDate);
+
+    const pruned = module.pruneRelayDocumentSearchJobStore({
+      jobStoreDir: storeDir,
+      jobStoreFinishedRetentionMs: 24 * 60 * 60 * 1000,
+      jobStoreTempFileMaxAgeMs: 24 * 60 * 60 * 1000,
+      now: new Date("2026-05-10T00:00:00.000Z"),
+    });
+
+    assert.equal(pruned.schemaVersion, "RelayDocumentSearchJobStore.v1");
+    assert.equal(pruned.removedSnapshots, 1);
+    assert.equal(pruned.removedTempFiles, 1);
+    assert.equal(module.readRelayDocumentSearchJobSnapshot("old-finished", { jobStoreDir: storeDir }), undefined);
+    assert.equal(module.readRelayDocumentSearchJobSnapshot("fresh-finished", { jobStoreDir: storeDir }).jobId, "fresh-finished");
+    assert.equal(module.readRelayDocumentSearchJobSnapshot("active-old", { jobStoreDir: storeDir }).jobId, "active-old");
+    assert.equal(existsSync(tempPath), false);
+  } finally {
+    cleanup();
+    rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("Relay document search job store caps retained finished snapshots", async () => {
+  const storeDir = mkdtempSync(resolve(tmpdir(), "relay-document-search-job-store-cap-"));
+  const { module, cleanup } = await loadJobStoreModule();
+  try {
+    for (const [jobId, updatedAt] of [
+      ["finished-new", "2026-05-10T00:00:00.000Z"],
+      ["finished-mid", "2026-05-09T00:00:00.000Z"],
+      ["finished-old", "2026-05-08T00:00:00.000Z"],
+    ]) {
+      module.writeRelayDocumentSearchJobSnapshot(snapshot({
+        jobId,
+        lifecycle: "completed",
+        cancellable: false,
+        updatedAt,
+        finishedAt: updatedAt,
+      }), { jobStoreDir: storeDir });
+    }
+
+    const pruned = module.pruneRelayDocumentSearchJobStore({
+      jobStoreDir: storeDir,
+      jobStoreFinishedRetentionMs: 30 * 24 * 60 * 60 * 1000,
+      jobStoreMaxFinishedSnapshots: 2,
+      now: new Date("2026-05-11T00:00:00.000Z"),
+    });
+
+    assert.equal(pruned.removedSnapshots, 1);
+    assert.deepEqual(
+      readdirSync(storeDir).filter((name) => name.endsWith(".json")).sort(),
+      ["finished-mid.json", "finished-new.json"],
+    );
   } finally {
     cleanup();
     rmSync(storeDir, { recursive: true, force: true });

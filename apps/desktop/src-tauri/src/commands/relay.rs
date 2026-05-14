@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as JsonValue};
 use tauri::{AppHandle, Manager};
@@ -12,6 +13,11 @@ use crate::models::{
     RelayOfficeExecuteRequest, RelayOfficeInspectRequest, RelaySearchResultCard,
     RelayWorkspaceState,
 };
+
+const DOCUMENT_SEARCH_DEFAULT_TIMEOUT_MS: u64 = 300_000;
+const DOCUMENT_SEARCH_MIN_TIMEOUT_MS: u64 = 10_000;
+const DOCUMENT_SEARCH_MAX_TIMEOUT_MS: u64 = 900_000;
+const DOCUMENT_SEARCH_TEMP_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 
 #[tauri::command]
 pub fn get_relay_workspace_state(
@@ -38,11 +44,15 @@ pub fn get_relay_workspace_state(
         app_local_data_dir: app_local.display().to_string(),
         document_search_cache_dir: search_cache.display().to_string(),
         office_backup_dir: office_backups.display().to_string(),
-        document_search_available: document_search_script.is_some() && crate::copilot_server::find_node().is_some(),
-        document_search_message: match (document_search_script, crate::copilot_server::find_node()) {
+        document_search_available: document_search_script.is_some()
+            && crate::copilot_server::find_node().is_some(),
+        document_search_message: match (document_search_script, crate::copilot_server::find_node())
+        {
             (Some(_), Some(_)) => "Document search is ready.".to_string(),
             (None, _) => "Document search runner was not found.".to_string(),
-            (_, None) => "Node.js runtime was not found for the document-search runner.".to_string(),
+            (_, None) => {
+                "Node.js runtime was not found for the document-search runner.".to_string()
+            }
         },
         officecli_available: officecli.is_some(),
         officecli_path: officecli.as_ref().map(|path| path.display().to_string()),
@@ -56,7 +66,16 @@ pub fn get_relay_workspace_state(
 }
 
 #[tauri::command]
-pub fn run_relay_document_search(
+pub async fn run_relay_document_search(
+    app: AppHandle,
+    request: RelayDocumentSearchRequest,
+) -> Result<RelayDocumentSearchResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || run_relay_document_search_blocking(app, request))
+        .await
+        .map_err(|error| format!("document-search task join failed: {error}"))?
+}
+
+fn run_relay_document_search_blocking(
     app: AppHandle,
     request: RelayDocumentSearchRequest,
 ) -> Result<RelayDocumentSearchResponse, String> {
@@ -67,10 +86,18 @@ pub fn run_relay_document_search(
     let script = resolve_document_search_cli(&app)
         .ok_or_else(|| "Relay document-search runner was not found.".to_string())?;
     let cache_root = app_local_data_dir(&app)?.join("document-search");
+    prune_document_search_runtime(&cache_root);
     fs::create_dir_all(&cache_root).map_err(|error| {
         format!(
             "create document-search cache at {}: {error}",
             cache_root.display()
+        )
+    })?;
+    let temp_dir = cache_root.join("tmp");
+    fs::create_dir_all(&temp_dir).map_err(|error| {
+        format!(
+            "create document-search temp dir at {}: {error}",
+            temp_dir.display()
         )
     })?;
 
@@ -100,26 +127,52 @@ pub fn run_relay_document_search(
         }
     });
 
-    let input_file = tempfile::NamedTempFile::new()
+    let input_file = tempfile::Builder::new()
+        .prefix("relay-search-input-")
+        .suffix(".json")
+        .tempfile_in(&temp_dir)
         .map_err(|error| format!("create document-search input file: {error}"))?;
-    fs::write(input_file.path(), serde_json::to_vec(&input).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("write document-search input file: {error}"))?;
+    fs::write(
+        input_file.path(),
+        serde_json::to_vec(&input).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("write document-search input file: {error}"))?;
 
-    let output = Command::new(node)
-        .arg(script)
-        .arg(input_file.path())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("run document-search runner: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let mut command = Command::new(node);
+    command.arg(script).arg(input_file.path());
+    let output = run_command_with_timeout(command, document_search_timeout(), &temp_dir)?;
+    let stdout = output.stdout;
+    let stderr = output.stderr;
+
+    if output.timed_out {
+        let timeout_ms = document_search_timeout().as_millis() as u64;
+        let message = format!(
+            "Document search timed out after {} seconds. Try narrowing the workspace or query.",
+            timeout_ms / 1000
+        );
+        return Ok(RelayDocumentSearchResponse {
+            ok: false,
+            status: "timeout".to_string(),
+            summary: message.clone(),
+            coverage_label: "検索を完了できませんでした。".to_string(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            cards: Vec::new(),
+            raw: json!({
+                "ok": false,
+                "error": message,
+                "stderr": trim_for_error(&stderr),
+            }),
+            error: Some(message),
+        });
+    }
+
     let envelope: JsonValue = serde_json::from_str(&stdout).map_err(|error| {
         format!(
             "document-search runner returned invalid JSON: {error}; stderr={}",
             trim_for_error(&stderr)
         )
     })?;
-    if !output.status.success() || envelope.get("ok").and_then(JsonValue::as_bool) == Some(false) {
+    if !output.success || envelope.get("ok").and_then(JsonValue::as_bool) == Some(false) {
         let message = envelope
             .get("error")
             .and_then(JsonValue::as_str)
@@ -142,6 +195,128 @@ pub fn run_relay_document_search(
         result,
         started.elapsed().as_millis() as u64,
     ))
+}
+
+struct RelayProcessOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
+}
+
+fn run_command_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+    temp_dir: &Path,
+) -> Result<RelayProcessOutput, String> {
+    let stdout_file = tempfile::Builder::new()
+        .prefix("relay-search-stdout-")
+        .suffix(".log")
+        .tempfile_in(temp_dir)
+        .map_err(|error| format!("create document-search stdout file: {error}"))?;
+    let stderr_file = tempfile::Builder::new()
+        .prefix("relay-search-stderr-")
+        .suffix(".log")
+        .tempfile_in(temp_dir)
+        .map_err(|error| format!("create document-search stderr file: {error}"))?;
+    let stdout_path = stdout_file.path().to_path_buf();
+    let stderr_path = stderr_file.path().to_path_buf();
+    let stdout_handle = stdout_file
+        .reopen()
+        .map_err(|error| format!("open document-search stdout file: {error}"))?;
+    let stderr_handle = stderr_file
+        .reopen()
+        .map_err(|error| format!("open document-search stderr file: {error}"))?;
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_handle))
+        .stderr(Stdio::from(stderr_handle));
+    crate::windows_command::no_console_window(&mut command);
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("start document-search runner: {error}"))?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("wait for document-search runner: {error}"))?
+        {
+            return Ok(RelayProcessOutput {
+                success: status.success(),
+                stdout: read_lossy(&stdout_path),
+                stderr: read_lossy(&stderr_path),
+                timed_out: false,
+            });
+        }
+
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(RelayProcessOutput {
+                success: false,
+                stdout: read_lossy(&stdout_path),
+                stderr: read_lossy(&stderr_path),
+                timed_out: true,
+            });
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn read_lossy(path: &Path) -> String {
+    fs::read(path)
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .unwrap_or_default()
+}
+
+fn document_search_timeout() -> Duration {
+    let millis = std::env::var("RELAY_DOCUMENT_SEARCH_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DOCUMENT_SEARCH_DEFAULT_TIMEOUT_MS)
+        .clamp(
+            DOCUMENT_SEARCH_MIN_TIMEOUT_MS,
+            DOCUMENT_SEARCH_MAX_TIMEOUT_MS,
+        );
+    Duration::from_millis(millis)
+}
+
+fn prune_document_search_runtime(cache_root: &Path) {
+    let max_age = Duration::from_secs(DOCUMENT_SEARCH_TEMP_MAX_AGE_SECS);
+    prune_old_files(&cache_root.join("tmp"), max_age, true);
+    prune_old_files(&cache_root.join("jobs"), max_age, false);
+}
+
+fn prune_old_files(dir: &Path, max_age: Duration, remove_any_file: bool) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        if !remove_any_file
+            && !path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name.ends_with(".tmp"))
+        {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified.elapsed().is_ok_and(|age| age > max_age) {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 #[tauri::command]
@@ -217,7 +392,8 @@ fn resolve_document_search_cli(app: &AppHandle) -> Option<PathBuf> {
     }
     let mut candidates = Vec::new();
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("relay-document-search/scripts/relay-document-search-cli.mjs"));
+        candidates
+            .push(resource_dir.join("relay-document-search/scripts/relay-document-search-cli.mjs"));
         candidates.push(resource_dir.join("scripts/relay-document-search-cli.mjs"));
     }
     if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
@@ -243,9 +419,14 @@ fn resolve_officecli_path(app: &AppHandle) -> Option<PathBuf> {
     if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
         let manifest_dir = PathBuf::from(manifest_dir);
         candidates.push(manifest_dir.join("binaries/relay-officecli-win-x64.exe"));
-        candidates.push(manifest_dir.join("binaries/.relay-officecli-download-cache/1.0.76/officecli.exe"));
+        candidates.push(
+            manifest_dir.join("binaries/.relay-officecli-download-cache/1.0.76/officecli.exe"),
+        );
     }
-    if let Some(found) = candidates.into_iter().find(|path| executable_ok(path, "--version")) {
+    if let Some(found) = candidates
+        .into_iter()
+        .find(|path| executable_ok(path, "--version"))
+    {
         return Some(found);
     }
     for name in ["officecli", "officecli.exe"] {
@@ -273,7 +454,9 @@ fn resolve_ripgrep_path(app: &AppHandle) -> Option<PathBuf> {
         candidates.push(manifest_dir.join("binaries/relay-rg-x86_64-pc-windows-msvc.exe"));
         candidates.push(manifest_dir.join("binaries/relay-rg-x86_64-unknown-linux-gnu"));
     }
-    candidates.into_iter().find(|path| executable_ok(path, "--version"))
+    candidates
+        .into_iter()
+        .find(|path| executable_ok(path, "--version"))
 }
 
 fn executable_ok(path: &Path, arg: &str) -> bool {
@@ -323,7 +506,10 @@ fn create_office_backup(app: &AppHandle, file_path: &Path) -> Result<PathBuf, St
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("office-file");
-    let ext = file_path.extension().and_then(|value| value.to_str()).unwrap_or("bak");
+    let ext = file_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bak");
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let backup = backup_dir.join(format!("{stem}.{timestamp}.backup.{ext}"));
     fs::copy(file_path, &backup).map_err(|error| {
@@ -337,14 +523,16 @@ fn create_office_backup(app: &AppHandle, file_path: &Path) -> Result<PathBuf, St
 }
 
 fn parse_officecli_args(input: &str) -> Result<Vec<String>, String> {
-    if input.chars().any(|ch| matches!(ch, '\n' | '\r' | '&' | '|' | ';' | '>' | '<' | '`')) {
+    if input
+        .chars()
+        .any(|ch| matches!(ch, '\n' | '\r' | '&' | '|' | ';' | '>' | '<' | '`'))
+    {
         return Err("OfficeCLI arguments must not contain shell control characters.".to_string());
     }
     let mut args = split_command_words(input)?;
-    if args
-        .first()
-        .is_some_and(|first| first.eq_ignore_ascii_case("officecli") || first.eq_ignore_ascii_case("officecli.exe"))
-    {
+    if args.first().is_some_and(|first| {
+        first.eq_ignore_ascii_case("officecli") || first.eq_ignore_ascii_case("officecli.exe")
+    }) {
         args.remove(0);
     }
     if !args.iter().any(|arg| arg == "--json") {
@@ -425,7 +613,10 @@ fn evidence_as_str(value: &RelayDocumentSearchEvidence) -> &'static str {
     }
 }
 
-fn response_from_document_search_result(raw: JsonValue, elapsed_ms: u64) -> RelayDocumentSearchResponse {
+fn response_from_document_search_result(
+    raw: JsonValue,
+    elapsed_ms: u64,
+) -> RelayDocumentSearchResponse {
     let status = raw
         .get("status")
         .and_then(JsonValue::as_str)
@@ -433,7 +624,11 @@ fn response_from_document_search_result(raw: JsonValue, elapsed_ms: u64) -> Rela
         .to_string();
     let display = raw.get("display").and_then(JsonValue::as_object);
     let summary = display
-        .and_then(|value| value.get("beginnerSummary").or_else(|| value.get("answerSummary")))
+        .and_then(|value| {
+            value
+                .get("beginnerSummary")
+                .or_else(|| value.get("answerSummary"))
+        })
         .and_then(JsonValue::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| fallback_search_summary(&raw));
