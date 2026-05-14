@@ -15168,6 +15168,46 @@ Results so far:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-05-14 - AionUi Relay task-send and beginner quick-action cleanup
+
+Fixed the AionUi overlay path used by the Relay Agent beginner workflows:
+
+- `GuidActionRow` click send is now patched to use the guarded `sendMessageHandler`
+  path, matching Enter-key send behavior.
+- Relay preset assistants now derive a deterministic task mode from their preset
+  id (`relay-workspace-search` -> `document_search`, `relay-office-edit` ->
+  `office_edit`) and wrap the first Aionrs message with `RELAY_TASK_MODE`,
+  `RELAY_FIRST_TOOL`, workspace, and the original user request.
+- Relay task-mode sends now fail visibly when the Aionrs model or conversation
+  creation is unavailable, instead of returning silently.
+- The old AionUi bottom quick actions (feedback bubble, GitHub star, WebUI globe)
+  are removed from the Relay beginner screen, with a CSS fallback for the
+  generated `guidQuickActions` class.
+- Additional AionUi-first controls that are not part of the current two Relay
+  workflows are hidden from the overlay: speech input, slash-command prompts,
+  conversation skill badges, export/side-question command overlays, and context
+  usage meters. File attachments, workspace references, previews, and normal
+  conversation navigation remain available because they support document search
+  and Office editing.
+
+Verification commands run locally:
+
+```bash
+node --test scripts/apply-aionui-overlay.test.mjs
+node scripts/apply-aionui-overlay.mjs --aionui-dir /tmp/relay-aionui-overlay-check
+pnpm --filter @relay-agent/desktop check:aionui-relay
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `node --test scripts/apply-aionui-overlay.test.mjs`: passed, 25 passed.
+- `node scripts/apply-aionui-overlay.mjs --aionui-dir /tmp/relay-aionui-overlay-check`: passed against the pinned AionUi v1.9.25 checkout copy.
+- `pnpm --filter @relay-agent/desktop check:aionui-relay`: passed, 29 passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

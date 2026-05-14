@@ -21,6 +21,8 @@ import {
   patchDeepLinkContent,
   patchElectronBuilderContent,
   patchGuidActionRowContent,
+  patchGuidSendContent,
+  patchChatConversationContent,
   patchIndexContent,
   patchInitStorageContent,
   patchGuidPageContent,
@@ -32,6 +34,7 @@ import {
   patchPublicManifestContent,
   patchRendererIndexHtmlContent,
   patchRendererThemeBaseContent,
+  patchSendBoxContent,
   patchSettingsModalContent,
   patchTitlebarContent,
   patchTrayContent,
@@ -226,13 +229,32 @@ function createPinnedAionUiFixture(root) {
     root,
     "src/renderer/pages/guid/GuidPage.tsx",
     [
+      "import { openExternalUrl, resolveExtensionAssetUrl } from '@/renderer/utils/platform';",
       "import AssistantSelectionArea from './components/AssistantSelectionArea';",
+      "import QuickActionButtons from './components/QuickActionButtons';",
       "import SkillsMarketBanner from './components/SkillsMarketBanner';",
+      "import FeedbackReportModal from '@/renderer/components/settings/SettingsModal/contents/FeedbackReportModal';",
       "",
       "const GuidPage = () => {",
+      "  const [showFeedbackModal, setShowFeedbackModal] = useState(false);",
+      "",
+      "  // Open external link",
+      "  const openLink = useCallback(async (url: string) => {",
+      "    try {",
+      "      await openExternalUrl(url);",
+      "    } catch (error) {",
+      "      console.error('Failed to open external link:', error);",
+      "    }",
+      "  }, []);",
+      "",
       "  return (",
       "    <div>",
       "        <SkillsMarketBanner />",
+      "      onSend={() => {",
+      "        send.handleSend().catch((error) => {",
+      "          console.error('Failed to send message:', error);",
+      "        });",
+      "      }}",
       "                  <Button",
       "                    size='mini'",
       "                    type='text'",
@@ -259,8 +281,79 @@ function createPinnedAionUiFixture(root) {
       "            />",
       "          ) : null}",
       "        <AssistantSelectionArea />",
+      "        <QuickActionButtons",
+      "          onOpenLink={openLink}",
+      "          onOpenBugReport={() => setShowFeedbackModal(true)}",
+      "          inactiveBorderColor={inactiveBorderColor}",
+      "          activeShadow={activeShadow}",
+      "        />",
+      "        <FeedbackReportModal visible={showFeedbackModal} onCancel={() => setShowFeedbackModal(false)} />",
       "    </div>",
       "  );",
+      "};",
+    ].join("\n"),
+  );
+  writeFixture(
+    root,
+    "src/renderer/pages/guid/hooks/useGuidSend.ts",
+    [
+      "export type GuidSendResult = {",
+      "  handleSend: () => Promise<void>;",
+      "  sendMessageHandler: () => void;",
+      "  isButtonDisabled: boolean;",
+      "};",
+      "",
+      "export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {",
+      "  const handleSend = useCallback(async () => {",
+      "    const isCustomWorkspace = !!dir;",
+      "    const finalWorkspace = dir || '';",
+      "",
+      "    const agentInfo = selectedAgentInfo;",
+      "    const isPreset = isPresetAgent;",
+      "    const presetAssistantId = isPreset ? agentInfo?.customAgentId : undefined;",
+      "",
+      "    if (selectedAgent === 'aionrs' || (isPreset && finalEffectiveAgentType === 'aionrs')) {",
+      "      if (!currentModel) {",
+      "        Message.warning(t('conversation.noModelConfigured'));",
+      "        return;",
+      "      }",
+      "      try {",
+      "        const conversation = await ipcBridge.conversation.create.invoke({",
+      "          type: 'aionrs',",
+      "          name: input,",
+      "          model: currentModel,",
+      "          extra: {",
+      "            defaultFiles: files,",
+      "            workspace: finalWorkspace,",
+      "            customWorkspace: isCustomWorkspace,",
+      "            presetRules: isPreset ? presetRules : undefined,",
+      "            enabledSkills: isPreset ? enabledSkills : undefined,",
+      "            excludeBuiltinSkills,",
+      "            presetAssistantId,",
+      "            sessionMode: selectedMode,",
+      "          },",
+      "        });",
+      "",
+      "        if (!conversation || !conversation.id) {",
+      "          alert('Failed to create Aion CLI conversation. Please ensure aionrs is installed.');",
+      "          return;",
+      "        }",
+      "",
+      "        const initialMessage = {",
+      "          input,",
+      "          files: files.length > 0 ? files : undefined,",
+      "        };",
+      "        sessionStorage.setItem(`aionrs_initial_message_${conversation.id}`, JSON.stringify(initialMessage));",
+      "      } catch (error: unknown) {",
+      "        const errorMessage = error instanceof Error ? error.message : String(error);",
+      "        alert(`Failed to create Aion CLI conversation: ${errorMessage}`);",
+      "        throw error;",
+      "      }",
+      "      return;",
+      "    }",
+      "  }, []);",
+      "",
+      "  return { handleSend, sendMessageHandler, isButtonDisabled };",
       "};",
     ].join("\n"),
   );
@@ -279,6 +372,115 @@ function createPinnedAionUiFixture(root) {
       "      )}",
       "    </Menu>",
       ");",
+    ].join("\n"),
+  );
+  writeFixture(
+    root,
+    "src/renderer/components/chat/sendbox.tsx",
+    [
+      "import BtwOverlay from '@/renderer/components/chat/BtwOverlay';",
+      "import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';",
+      "import { useBtwCommand } from '@/renderer/components/chat/BtwOverlay/useBtwCommand';",
+      "import SpeechInputButton from '@/renderer/components/chat/SpeechInputButton';",
+      "import { appendSpeechTranscript } from '@/renderer/hooks/system/useSpeechInput';",
+      "",
+      "const SendBox = () => {",
+      "  const { t, i18n } = useTranslation();",
+      "  const builtinSlashCommands = useMemo<SlashCommandItem[]>(() => {",
+      "    const commands: SlashCommandItem[] = [];",
+      "    if (enableBtw) {",
+      "      commands.push({",
+      "        name: 'btw',",
+      "        description: t('conversation.sideQuestion.description'),",
+      "        kind: 'builtin',",
+      "        source: 'builtin',",
+      "        selectionBehavior: 'insert',",
+      "      });",
+      "    }",
+      "    if (onSlashBuiltinCommand) {",
+      "      commands.push({",
+      "        name: 'open',",
+      "        description: t('conversation.workspace.addFile', { defaultValue: 'Add File' }),",
+      "        kind: 'builtin',",
+      "        source: 'builtin',",
+      "      });",
+      "    }",
+      "    if (conversationContext?.conversationId) {",
+      "      commands.push({",
+      "        name: 'copy',",
+      "        description: t('messages.copy', { defaultValue: 'Copy' }),",
+      "        kind: 'builtin',",
+      "        source: 'builtin',",
+      "      });",
+      "      commands.push({",
+      "        name: 'export',",
+      "        description: t('messages.export.commandDescription'),",
+      "        kind: 'builtin',",
+      "        source: 'builtin',",
+      "      });",
+      "    }",
+      "    return commands;",
+      "  }, [conversationContext?.conversationId, enableBtw, onSlashBuiltinCommand, t]);",
+      "",
+      "  const mergedSlashCommands = useMemo(() => {",
+      "    const map = new Map<string, SlashCommandItem>();",
+      "    for (const command of builtinSlashCommands) {",
+      "      map.set(command.name, command);",
+      "    }",
+      "    for (const command of slashCommands) {",
+      "      if (!map.has(command.name)) {",
+      "        map.set(command.name, command);",
+      "      }",
+      "    }",
+      "    return Array.from(map.values());",
+      "  }, [builtinSlashCommands, slashCommands]);",
+      "",
+      "  const isCommandMenuOpen = conversationExport.isOpen || slashController.isOpen;",
+      "  const handleOverlayKeyDown = (event: React.KeyboardEvent) => {",
+      "    return conversationExport.handleKeyDown(event) || slashController.onKeyDown(event);",
+      "  };",
+      "",
+      "  const handleSpeechTranscript = useCallback(",
+      "    (transcript: string) => {",
+      "      const currentValue = latestInputRef.current;",
+      "      setInputRef.current(appendSpeechTranscript(currentValue, transcript));",
+      "    },",
+      "    [latestInputRef, setInputRef]",
+      "  );",
+      "  const speechLocale = i18n?.language || 'en-US';",
+      "",
+      "  return (",
+      "    <div>",
+      "              <SpeechInputButton",
+      "                disabled={disabled || isLoading || loading || isUploading}",
+      "                locale={speechLocale}",
+      "                onTranscript={handleSpeechTranscript}",
+      "              />",
+      "              <SpeechInputButton",
+      "                disabled={disabled || isLoading || loading || isUploading}",
+      "                locale={speechLocale}",
+      "                onTranscript={handleSpeechTranscript}",
+      "              />",
+      "    </div>",
+      "  );",
+      "};",
+    ].join("\n"),
+  );
+  writeFixture(
+    root,
+    "src/renderer/pages/conversation/components/ChatConversation.tsx",
+    [
+      "import ConversationSkillsIndicator from './ConversationSkillsIndicator';",
+      "",
+      "const ChatConversation = () => {",
+      "  return (",
+      "    <div>",
+      "        <ConversationSkillsIndicator conversation={conversation} />",
+      "      <ConversationSkillsIndicator conversation={conversation} />",
+      "        <ConversationSkillsIndicator conversation={conversation} />",
+      "    </div>",
+      "  );",
+      "};",
     ].join("\n"),
   );
   writeFixture(
@@ -847,18 +1049,41 @@ test("renderer base stylesheet uses Japanese UI fonts for Relay Agent", () => {
   assert.match(once, /\[data-testid='btn-settings'\],/);
   assert.match(once, /\[data-testid='btn-webui'\],/);
   assert.match(once, /\[data-testid='btn-feedback'\],/);
+  assert.match(once, /\[class\*='guidQuickActions'\],/);
+  assert.match(once, /\.speech-input-control,/);
+  assert.match(once, /\.context-usage-indicator,/);
+  assert.match(once, /\[data-testid='skills-indicator'\],/);
   assert.match(once, /display: none !important;/);
 });
 
 test("patchGuidPageContent hides confusing AionUi beginner surfaces", () => {
   const fixture = [
+    "import { openExternalUrl, resolveExtensionAssetUrl } from '@/renderer/utils/platform';",
     "import AssistantSelectionArea from './components/AssistantSelectionArea';",
+    "import QuickActionButtons from './components/QuickActionButtons';",
     "import SkillsMarketBanner from './components/SkillsMarketBanner';",
+    "import FeedbackReportModal from '@/renderer/components/settings/SettingsModal/contents/FeedbackReportModal';",
     "",
     "const GuidPage = () => {",
+    "  const [showFeedbackModal, setShowFeedbackModal] = useState(false);",
+    "",
+    "  // Open external link",
+    "  const openLink = useCallback(async (url: string) => {",
+    "    try {",
+    "      await openExternalUrl(url);",
+    "    } catch (error) {",
+    "      console.error('Failed to open external link:', error);",
+    "    }",
+    "  }, []);",
+    "",
     "  return (",
     "    <div>",
     "        <SkillsMarketBanner />",
+    "      onSend={() => {",
+    "        send.handleSend().catch((error) => {",
+    "          console.error('Failed to send message:', error);",
+    "        });",
+    "      }}",
     "                  <Button",
     "                    size='mini'",
     "                    type='text'",
@@ -885,6 +1110,13 @@ test("patchGuidPageContent hides confusing AionUi beginner surfaces", () => {
     "            />",
     "          ) : null}",
     "        <AssistantSelectionArea />",
+    "        <QuickActionButtons",
+    "          onOpenLink={openLink}",
+    "          onOpenBugReport={() => setShowFeedbackModal(true)}",
+    "          inactiveBorderColor={inactiveBorderColor}",
+    "          activeShadow={activeShadow}",
+    "        />",
+    "        <FeedbackReportModal visible={showFeedbackModal} onCancel={() => setShowFeedbackModal(false)} />",
     "    </div>",
     "  );",
     "};",
@@ -895,14 +1127,99 @@ test("patchGuidPageContent hides confusing AionUi beginner surfaces", () => {
 
   assert.equal(twice, once);
   assert.doesNotMatch(once, /import SkillsMarketBanner/);
+  assert.doesNotMatch(once, /import QuickActionButtons/);
+  assert.doesNotMatch(once, /FeedbackReportModal/);
+  assert.doesNotMatch(once, /openExternalUrl/);
   assert.doesNotMatch(once, /<SkillsMarketBanner \/>/);
+  assert.doesNotMatch(once, /<QuickActionButtons/);
   assert.match(once, /Relay Agent beginner mode: Skills Market hidden/);
+  assert.match(once, /Relay Agent beginner mode: quick action buttons hidden/);
+  assert.match(once, /Relay Agent send path: use guarded sendMessageHandler/);
   assert.match(once, /Relay Agent beginner mode: assistant edit hidden/);
   assert.match(once, /Relay Agent beginner mode: preset backend switcher hidden/);
   assert.match(once, /Relay Agent beginner mode: detected agent selector hidden/);
   assert.match(once, /\{false \? \(\n\s+<Button/);
   assert.match(once, /\{false \? \(\n\s+<div className=\{styles\.heroHeaderRight\}>/);
   assert.match(once, /\) : false \? \(\n\s+agentSelection\.availableAgents === undefined/);
+  assert.match(once, /onSend=\{send\.sendMessageHandler\}/);
+});
+
+test("patchGuidSendContent makes Relay preset sends visible and tool-mode bound", () => {
+  const fixture = [
+    "export type GuidSendResult = {",
+    "  handleSend: () => Promise<void>;",
+    "  sendMessageHandler: () => void;",
+    "  isButtonDisabled: boolean;",
+    "};",
+    "",
+    "export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {",
+    "  const handleSend = useCallback(async () => {",
+    "    const isCustomWorkspace = !!dir;",
+    "    const finalWorkspace = dir || '';",
+    "",
+    "    const agentInfo = selectedAgentInfo;",
+    "    const isPreset = isPresetAgent;",
+    "    const presetAssistantId = isPreset ? agentInfo?.customAgentId : undefined;",
+    "",
+    "    if (selectedAgent === 'aionrs' || (isPreset && finalEffectiveAgentType === 'aionrs')) {",
+    "      if (!currentModel) {",
+    "        Message.warning(t('conversation.noModelConfigured'));",
+    "        return;",
+    "      }",
+    "      try {",
+    "        const conversation = await ipcBridge.conversation.create.invoke({",
+    "          type: 'aionrs',",
+    "          name: input,",
+    "          model: currentModel,",
+    "          extra: {",
+    "            defaultFiles: files,",
+    "            workspace: finalWorkspace,",
+    "            customWorkspace: isCustomWorkspace,",
+    "            presetRules: isPreset ? presetRules : undefined,",
+    "            enabledSkills: isPreset ? enabledSkills : undefined,",
+    "            excludeBuiltinSkills,",
+    "            presetAssistantId,",
+    "            sessionMode: selectedMode,",
+    "          },",
+    "        });",
+    "",
+    "        if (!conversation || !conversation.id) {",
+    "          alert('Failed to create Aion CLI conversation. Please ensure aionrs is installed.');",
+    "          return;",
+    "        }",
+    "",
+    "        const initialMessage = {",
+    "          input,",
+    "          files: files.length > 0 ? files : undefined,",
+    "        };",
+    "        sessionStorage.setItem(`aionrs_initial_message_${conversation.id}`, JSON.stringify(initialMessage));",
+    "      } catch (error: unknown) {",
+    "        const errorMessage = error instanceof Error ? error.message : String(error);",
+    "        alert(`Failed to create Aion CLI conversation: ${errorMessage}`);",
+    "        throw error;",
+    "      }",
+    "      return;",
+    "    }",
+    "  }, []);",
+    "",
+    "  return { handleSend, sendMessageHandler, isButtonDisabled };",
+    "};",
+  ].join("\n");
+
+  const once = patchGuidSendContent(fixture);
+  const twice = patchGuidSendContent(once);
+
+  assert.equal(twice, once);
+  assert.match(once, /Relay Agent task mode helpers/);
+  assert.match(once, /'relay-workspace-search': 'document_search'/);
+  assert.match(once, /'relay-office-edit': 'office_edit'/);
+  assert.match(once, /RELAY_FIRST_TOOL: \$\{firstTool\}/);
+  assert.match(once, /const relayTaskMode = getRelayGuidTaskMode\(presetAssistantId\);/);
+  assert.match(once, /relayTaskFirstTool: relayTaskMode \? RELAY_GUID_TASK_FIRST_TOOL_BY_MODE\[relayTaskMode\] : undefined/);
+  assert.match(once, /Message\.error\(message\);/);
+  assert.match(once, /buildRelayGuidTaskInitialInput\(input, relayTaskMode, finalWorkspace\)/);
+  assert.match(once, /input: initialInput/);
+  assert.match(once, /Relay Agent task mode conversation creation failure/);
 });
 
 test("patchGuidActionRowContent hides the auto skills menu from beginner plus actions", () => {
@@ -929,6 +1246,134 @@ test("patchGuidActionRowContent hides the auto skills menu from beginner plus ac
   assert.equal(twice, once);
   assert.match(once, /Relay Agent beginner mode: auto skill menu hidden/);
   assert.match(once, /\{false && builtinAutoSkills\.length > 0 && \(/);
+});
+
+test("patchSendBoxContent hides speech input and slash command overlays", () => {
+  const fixture = [
+    "import BtwOverlay from '@/renderer/components/chat/BtwOverlay';",
+    "import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';",
+    "import { useBtwCommand } from '@/renderer/components/chat/BtwOverlay/useBtwCommand';",
+    "import SpeechInputButton from '@/renderer/components/chat/SpeechInputButton';",
+    "import { appendSpeechTranscript } from '@/renderer/hooks/system/useSpeechInput';",
+    "",
+    "const SendBox = () => {",
+    "  const { t, i18n } = useTranslation();",
+    "  const builtinSlashCommands = useMemo<SlashCommandItem[]>(() => {",
+    "    const commands: SlashCommandItem[] = [];",
+    "    if (enableBtw) {",
+    "      commands.push({",
+    "        name: 'btw',",
+    "        description: t('conversation.sideQuestion.description'),",
+    "        kind: 'builtin',",
+    "        source: 'builtin',",
+    "        selectionBehavior: 'insert',",
+    "      });",
+    "    }",
+    "    if (onSlashBuiltinCommand) {",
+    "      commands.push({",
+    "        name: 'open',",
+    "        description: t('conversation.workspace.addFile', { defaultValue: 'Add File' }),",
+    "        kind: 'builtin',",
+    "        source: 'builtin',",
+    "      });",
+    "    }",
+    "    if (conversationContext?.conversationId) {",
+    "      commands.push({",
+    "        name: 'copy',",
+    "        description: t('messages.copy', { defaultValue: 'Copy' }),",
+    "        kind: 'builtin',",
+    "        source: 'builtin',",
+    "      });",
+    "      commands.push({",
+    "        name: 'export',",
+    "        description: t('messages.export.commandDescription'),",
+    "        kind: 'builtin',",
+    "        source: 'builtin',",
+    "      });",
+    "    }",
+    "    return commands;",
+    "  }, [conversationContext?.conversationId, enableBtw, onSlashBuiltinCommand, t]);",
+    "",
+    "  const mergedSlashCommands = useMemo(() => {",
+    "    const map = new Map<string, SlashCommandItem>();",
+    "    for (const command of builtinSlashCommands) {",
+    "      map.set(command.name, command);",
+    "    }",
+    "    for (const command of slashCommands) {",
+    "      if (!map.has(command.name)) {",
+    "        map.set(command.name, command);",
+    "      }",
+    "    }",
+    "    return Array.from(map.values());",
+    "  }, [builtinSlashCommands, slashCommands]);",
+    "",
+    "  const isCommandMenuOpen = conversationExport.isOpen || slashController.isOpen;",
+    "  const handleOverlayKeyDown = (event: React.KeyboardEvent) => {",
+    "    return conversationExport.handleKeyDown(event) || slashController.onKeyDown(event);",
+    "  };",
+    "",
+    "  const handleSpeechTranscript = useCallback(",
+    "    (transcript: string) => {",
+    "      const currentValue = latestInputRef.current;",
+    "      setInputRef.current(appendSpeechTranscript(currentValue, transcript));",
+    "    },",
+    "    [latestInputRef, setInputRef]",
+    "  );",
+    "  const speechLocale = i18n?.language || 'en-US';",
+    "",
+    "  return (",
+    "    <div>",
+    "              <SpeechInputButton",
+    "                disabled={disabled || isLoading || loading || isUploading}",
+    "                locale={speechLocale}",
+    "                onTranscript={handleSpeechTranscript}",
+    "              />",
+    "              <SpeechInputButton",
+    "                disabled={disabled || isLoading || loading || isUploading}",
+    "                locale={speechLocale}",
+    "                onTranscript={handleSpeechTranscript}",
+    "              />",
+    "    </div>",
+    "  );",
+    "};",
+  ].join("\n");
+
+  const once = patchSendBoxContent(fixture);
+  const twice = patchSendBoxContent(once);
+
+  assert.equal(twice, once);
+  assert.doesNotMatch(once, /SpeechInputButton/);
+  assert.doesNotMatch(once, /appendSpeechTranscript/);
+  assert.doesNotMatch(once, /i18n/);
+  assert.match(once, /Relay Agent beginner mode: speech input hidden/);
+  assert.match(once, /Relay Agent beginner mode: slash command menu hidden/);
+  assert.match(once, /const isCommandMenuOpen = false;/);
+  assert.match(once, /return false;/);
+  assert.match(once, /return builtinSlashCommands;/);
+});
+
+test("patchChatConversationContent hides conversation skill badges", () => {
+  const fixture = [
+    "import ConversationSkillsIndicator from './ConversationSkillsIndicator';",
+    "",
+    "const ChatConversation = () => {",
+    "  return (",
+    "    <div>",
+    "        <ConversationSkillsIndicator conversation={conversation} />",
+    "      <ConversationSkillsIndicator conversation={conversation} />",
+    "        <ConversationSkillsIndicator conversation={conversation} />",
+    "    </div>",
+    "  );",
+    "};",
+  ].join("\n");
+
+  const once = patchChatConversationContent(fixture);
+  const twice = patchChatConversationContent(once);
+
+  assert.equal(twice, once);
+  assert.doesNotMatch(once, /import ConversationSkillsIndicator/);
+  assert.doesNotMatch(once, /<ConversationSkillsIndicator/);
+  assert.match(once, /Relay Agent beginner mode: skills indicator hidden/);
 });
 
 test("relayDocumentSearchSkillContent defines one beginner document finding workflow", () => {
@@ -988,8 +1433,19 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
 
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/GuidPage.tsx"), /Skills Market hidden/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/GuidPage.tsx"), /assistant edit hidden/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/GuidPage.tsx"), /quick action buttons hidden/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/GuidPage.tsx"), /onSend=\{send\.sendMessageHandler\}/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /Relay Agent task mode helpers/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /relayTaskFirstTool/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /buildRelayGuidTaskInitialInput/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/components/chat/sendbox.tsx"), /speech input hidden/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/components/chat/sendbox.tsx"), /slash command menu hidden/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/conversation/components/ChatConversation.tsx"), /skills indicator hidden/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/components/GuidActionRow.tsx"), /false && builtinAutoSkills/);
     assert.match(readFixture(fixtureRoot, "src/renderer/styles/themes/base.css"), /guid-config-btn/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/styles/themes/base.css"), /guidQuickActions/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/styles/themes/base.css"), /speech-input-control/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/styles/themes/base.css"), /context-usage-indicator/);
     assert.match(readFixture(fixtureRoot, "src/renderer/styles/themes/base.css"), /agent-mode-compact-pill/);
     assert.match(readFixture(fixtureRoot, "src/renderer/components/settings/SettingsModal/index.tsx"), /relay\.advancedSurfaces\.enabled/);
     assert.match(readFixture(fixtureRoot, "src/renderer/components/settings/SettingsModal/contents/WebuiModalContent.tsx"), /relayAdvancedSurfacesEnabled/);
@@ -2097,6 +2553,12 @@ test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic pr
   assert.match(relayGateway, /relay\.beginnerUx\.hiddenSurfaces/);
   assert.match(relayGateway, /skills-market-banner/);
   assert.match(relayGateway, /agent-permission-mode-switcher/);
+  assert.match(relayGateway, /guid-quick-action-buttons/);
+  assert.match(relayGateway, /feedback-report-modal/);
+  assert.match(relayGateway, /sendbox-speech-input/);
+  assert.match(relayGateway, /sendbox-slash-command-menu/);
+  assert.match(relayGateway, /conversation-skills-indicator/);
+  assert.match(relayGateway, /context-usage-indicator/);
   assert.match(relayGateway, /assistant-preset-add-button/);
   assert.match(relayGateway, /copy-path/);
   assert.match(relayGateway, /broaden-keywords/);

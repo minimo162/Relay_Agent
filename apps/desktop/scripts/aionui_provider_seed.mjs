@@ -219,7 +219,6 @@ export const AIONUI_RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS = Object.freeze([
   "guid-page-input-card",
   "guid-page-workspace-folder-select",
   "conversation-preset-assistant-menu",
-  "sendbox-slash-command-menu",
   "sendbox-at-file-mentions",
   "workspace-toolbar-search",
 ]);
@@ -231,10 +230,8 @@ export const AIONUI_RELAY_AIONUI_UX_REUSED_SURFACES = Object.freeze([
   "ConversationTabs",
   "SendBox",
   "AtFileMenu",
-  "SlashCommandMenu",
   "Workspace",
   "PreviewPanel",
-  "ConversationSkillsIndicator",
 ]);
 export const AIONUI_RELAY_GUID_BEGINNER_FLOW_STEPS = Object.freeze([
   "choose-curated-task",
@@ -249,7 +246,6 @@ export const AIONUI_RELAY_GUID_REQUIRED_CONTROLS = Object.freeze([
   "GuidInputCard",
   "GuidActionRow",
   "WorkspaceFolderSelect",
-  "QuickActionButtons",
 ]);
 export const AIONUI_RELAY_GUID_START_ACTION = Object.freeze({
   owner: "aionui",
@@ -358,6 +354,14 @@ export const AIONUI_RELAY_BEGINNER_HIDDEN_SURFACES = Object.freeze([
   "agent-permission-mode-switcher",
   "acp-config-selector",
   "guid-auto-skills-menu",
+  "guid-quick-action-buttons",
+  "feedback-report-modal",
+  "sendbox-speech-input",
+  "sendbox-slash-command-menu",
+  "conversation-skills-indicator",
+  "context-usage-indicator",
+  "conversation-export-command",
+  "side-question-command",
   "assistant-preset-add-button",
   "settings-button",
   "webui-button",

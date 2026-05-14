@@ -321,6 +321,11 @@ export function patchRendererThemeBaseContent(input) {
     ".feedback-button,",
     ".evaluation-button,",
     ".rating-button,",
+    "[class*='guidQuickActions'],",
+    ".speech-input-control,",
+    ".speech-input-button,",
+    ".context-usage-indicator,",
+    "[data-testid='skills-indicator'],",
     "[data-testid='btn-settings'],",
     "[data-testid='btn-webui'],",
     "[data-testid='btn-feedback'],",
@@ -347,6 +352,62 @@ export function patchGuidPageContent(input) {
     output = output.replace(
       bannerAnchor,
       "        {/* Relay Agent beginner mode: Skills Market hidden. */}",
+    );
+  }
+
+  if (!output.includes("Relay Agent beginner mode: quick action buttons hidden")) {
+    output = output.replace("import QuickActionButtons from './components/QuickActionButtons';\n", "");
+    output = output.replace(
+      "import FeedbackReportModal from '@/renderer/components/settings/SettingsModal/contents/FeedbackReportModal';\n",
+      "",
+    );
+    output = output.replace(
+      "import { openExternalUrl, resolveExtensionAssetUrl } from '@/renderer/utils/platform';",
+      "import { resolveExtensionAssetUrl } from '@/renderer/utils/platform';",
+    );
+
+    const quickActionStatePattern =
+      /  const \[showFeedbackModal, setShowFeedbackModal\] = useState\(false\);\n\n  \/\/ Open external link\n  const openLink = useCallback\(async \(url: string\) => \{\n    try \{\n      await openExternalUrl\(url\);\n    \} catch \(error\) \{\n      console\.error\('Failed to open external link:', error\);\n    \}\n  \}, \[\]\);\n\n/u;
+    output = output.replace(
+      quickActionStatePattern,
+      "  // Relay Agent beginner mode: quick action buttons hidden.\n\n",
+    );
+
+    const quickActionRenderAnchor = [
+      "        <QuickActionButtons",
+      "          onOpenLink={openLink}",
+      "          onOpenBugReport={() => setShowFeedbackModal(true)}",
+      "          inactiveBorderColor={inactiveBorderColor}",
+      "          activeShadow={activeShadow}",
+      "        />",
+      "        <FeedbackReportModal visible={showFeedbackModal} onCancel={() => setShowFeedbackModal(false)} />",
+    ].join("\n");
+    if (!output.includes(quickActionRenderAnchor)) {
+      throw new Error("Could not find GuidPage quick action buttons anchor");
+    }
+    output = output.replace(
+      quickActionRenderAnchor,
+      "        {/* Relay Agent beginner mode: quick action buttons hidden. */}",
+    );
+  }
+
+  if (!output.includes("Relay Agent send path: use guarded sendMessageHandler")) {
+    const sendHandlerAnchor = [
+      "      onSend={() => {",
+      "        send.handleSend().catch((error) => {",
+      "          console.error('Failed to send message:', error);",
+      "        });",
+      "      }}",
+    ].join("\n");
+    if (!output.includes(sendHandlerAnchor)) {
+      throw new Error("Could not find GuidPage send handler anchor");
+    }
+    output = output.replace(
+      sendHandlerAnchor,
+      [
+        "      // Relay Agent send path: use guarded sendMessageHandler for click and Enter parity.",
+        "      onSend={send.sendMessageHandler}",
+      ].join("\n"),
     );
   }
 
@@ -426,6 +487,178 @@ export function patchGuidPageContent(input) {
   return output;
 }
 
+export function patchGuidSendContent(input) {
+  let output = input;
+
+  if (!output.includes("Relay Agent task mode helpers")) {
+    const helperAnchor = [
+      "export type GuidSendResult = {",
+      "  handleSend: () => Promise<void>;",
+      "  sendMessageHandler: () => void;",
+      "  isButtonDisabled: boolean;",
+      "};",
+    ].join("\n");
+    if (!output.includes(helperAnchor)) {
+      throw new Error("Could not find useGuidSend result type anchor");
+    }
+    output = output.replace(
+      helperAnchor,
+      [
+        helperAnchor,
+        "",
+        "// Relay Agent task mode helpers keep beginner workflows on their dedicated tool rails.",
+        "type RelayGuidTaskMode = 'document_search' | 'office_edit';",
+        "",
+        "const RELAY_GUID_TASK_MODE_BY_ASSISTANT_ID: Record<string, RelayGuidTaskMode> = {",
+        "  'relay-workspace-search': 'document_search',",
+        "  'relay-office-edit': 'office_edit',",
+        "};",
+        "",
+        "const RELAY_GUID_TASK_FIRST_TOOL_BY_MODE: Record<RelayGuidTaskMode, string> = {",
+        "  document_search: 'relay_document_search',",
+        "  office_edit: 'officecli',",
+        "};",
+        "",
+        "function getRelayGuidTaskMode(presetAssistantId: string | undefined): RelayGuidTaskMode | undefined {",
+        "  return presetAssistantId ? RELAY_GUID_TASK_MODE_BY_ASSISTANT_ID[presetAssistantId] : undefined;",
+        "}",
+        "",
+        "function buildRelayGuidTaskInitialInput(input: string, mode: RelayGuidTaskMode, workspace: string): string {",
+        "  const firstTool = RELAY_GUID_TASK_FIRST_TOOL_BY_MODE[mode];",
+        "  return [",
+        "    `RELAY_TASK_MODE: ${mode}`,",
+        "    `RELAY_FIRST_TOOL: ${firstTool}`,",
+        "    workspace ? `RELAY_WORKSPACE: ${workspace}` : 'RELAY_WORKSPACE: current AionUi workspace',",
+        "    'USER_REQUEST:',",
+        "    input,",
+        "  ].join('\\n');",
+        "}",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent task mode selected from preset assistant")) {
+    const modeAnchor = [
+      "    const agentInfo = selectedAgentInfo;",
+      "    const isPreset = isPresetAgent;",
+      "    const presetAssistantId = isPreset ? agentInfo?.customAgentId : undefined;",
+    ].join("\n");
+    if (!output.includes(modeAnchor)) {
+      throw new Error("Could not find useGuidSend preset assistant anchor");
+    }
+    output = output.replace(
+      modeAnchor,
+      [
+        modeAnchor,
+        "    // Relay Agent task mode selected from preset assistant.",
+        "    const relayTaskMode = getRelayGuidTaskMode(presetAssistantId);",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent task mode validation: fail visibly")) {
+    const currentModelAnchor = [
+      "      if (!currentModel) {",
+      "        Message.warning(t('conversation.noModelConfigured'));",
+      "        return;",
+      "      }",
+    ].join("\n");
+    if (!output.includes(currentModelAnchor)) {
+      throw new Error("Could not find useGuidSend aionrs model guard anchor");
+    }
+    output = output.replace(
+      currentModelAnchor,
+      [
+        "      if (!currentModel) {",
+        "        if (relayTaskMode) {",
+        "          const message = 'Relay Agent model is not configured. Restart Relay Agent or check the Copilot provider settings.';",
+        "          Message.error(message);",
+        "          throw new Error(message);",
+        "        }",
+        "        // Relay Agent task mode validation: fail visibly instead of appearing to do nothing.",
+        "        Message.warning(t('conversation.noModelConfigured'));",
+        "        return;",
+        "      }",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("relayTaskMode,")) {
+    const extraAnchor = [
+      "            presetAssistantId,",
+      "            sessionMode: selectedMode,",
+    ].join("\n");
+    if (!output.includes(extraAnchor)) {
+      throw new Error("Could not find useGuidSend aionrs extra anchor");
+    }
+    output = output.replace(
+      extraAnchor,
+      [
+        "            presetAssistantId,",
+        "            relayTaskMode,",
+        "            relayTaskFirstTool: relayTaskMode ? RELAY_GUID_TASK_FIRST_TOOL_BY_MODE[relayTaskMode] : undefined,",
+        "            sessionMode: selectedMode,",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent task mode message wrapper")) {
+    const initialMessageAnchor = [
+      "        const initialMessage = {",
+      "          input,",
+      "          files: files.length > 0 ? files : undefined,",
+      "        };",
+      "        sessionStorage.setItem(`aionrs_initial_message_${conversation.id}`, JSON.stringify(initialMessage));",
+    ].join("\n");
+    if (!output.includes(initialMessageAnchor)) {
+      throw new Error("Could not find useGuidSend aionrs initial message anchor");
+    }
+    output = output.replace(
+      initialMessageAnchor,
+      [
+        "        const initialInput = relayTaskMode",
+        "          ? buildRelayGuidTaskInitialInput(input, relayTaskMode, finalWorkspace)",
+        "          : input;",
+        "        // Relay Agent task mode message wrapper.",
+        "        const initialMessage = {",
+        "          input: initialInput,",
+        "          files: files.length > 0 ? files : undefined,",
+        "        };",
+        "        sessionStorage.setItem(`aionrs_initial_message_${conversation.id}`, JSON.stringify(initialMessage));",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent task mode conversation creation failure")) {
+    const conversationGuardAnchor = [
+      "        if (!conversation || !conversation.id) {",
+      "          alert('Failed to create Aion CLI conversation. Please ensure aionrs is installed.');",
+      "          return;",
+      "        }",
+    ].join("\n");
+    if (!output.includes(conversationGuardAnchor)) {
+      throw new Error("Could not find useGuidSend aionrs conversation guard anchor");
+    }
+    output = output.replace(
+      conversationGuardAnchor,
+      [
+        "        if (!conversation || !conversation.id) {",
+        "          const message = 'Failed to create Relay Agent conversation. Please restart Relay Agent and try again.';",
+        "          if (relayTaskMode) {",
+        "            // Relay Agent task mode conversation creation failure.",
+        "            Message.error(message);",
+        "            throw new Error(message);",
+        "          }",
+        "          alert('Failed to create Aion CLI conversation. Please ensure aionrs is installed.');",
+        "          return;",
+        "        }",
+      ].join("\n"),
+    );
+  }
+
+  return output;
+}
+
 export function patchGuidActionRowContent(input) {
   if (input.includes("Relay Agent beginner mode: auto skill menu hidden")) {
     return input;
@@ -442,6 +675,146 @@ export function patchGuidActionRowContent(input) {
       "      {false && builtinAutoSkills.length > 0 && (",
     ].join("\n"),
   );
+}
+
+export function patchSendBoxContent(input) {
+  let output = input;
+
+  if (!output.includes("Relay Agent beginner mode: speech input hidden")) {
+    output = output.replace("import SpeechInputButton from '@/renderer/components/chat/SpeechInputButton';\n", "");
+    output = output.replace("import { appendSpeechTranscript } from '@/renderer/hooks/system/useSpeechInput';\n", "");
+    output = output.replace("  const { t, i18n } = useTranslation();", "  const { t } = useTranslation();");
+
+    const speechHandlerAnchor = [
+      "  const handleSpeechTranscript = useCallback(",
+      "    (transcript: string) => {",
+      "      const currentValue = latestInputRef.current;",
+      "      setInputRef.current(appendSpeechTranscript(currentValue, transcript));",
+      "    },",
+      "    [latestInputRef, setInputRef]",
+      "  );",
+      "  const speechLocale = i18n?.language || 'en-US';",
+    ].join("\n");
+    if (!output.includes(speechHandlerAnchor)) {
+      throw new Error("Could not find SendBox speech transcript anchor");
+    }
+    output = output.replace(speechHandlerAnchor, "  // Relay Agent beginner mode: speech input hidden.");
+
+    const speechButtonSingleLineAnchor = [
+      "              <SpeechInputButton",
+      "                disabled={disabled || isLoading || loading || isUploading}",
+      "                locale={speechLocale}",
+      "                onTranscript={handleSpeechTranscript}",
+      "              />",
+    ].join("\n");
+    if (!output.includes(speechButtonSingleLineAnchor)) {
+      throw new Error("Could not find SendBox single-line speech button anchor");
+    }
+    output = output.replace(
+      speechButtonSingleLineAnchor,
+      "              {/* Relay Agent beginner mode: speech input hidden. */}",
+    );
+
+    const speechButtonMultiLineAnchor = [
+      "              <SpeechInputButton",
+      "                disabled={disabled || isLoading || loading || isUploading}",
+      "                locale={speechLocale}",
+      "                onTranscript={handleSpeechTranscript}",
+      "              />",
+    ].join("\n");
+    if (!output.includes(speechButtonMultiLineAnchor)) {
+      throw new Error("Could not find SendBox multi-line speech button anchor");
+    }
+    output = output.replace(
+      speechButtonMultiLineAnchor,
+      "              {/* Relay Agent beginner mode: speech input hidden. */}",
+    );
+  }
+
+  if (!output.includes("Relay Agent beginner mode: slash command menu hidden")) {
+    const builtinSlashPattern =
+      /  const builtinSlashCommands = useMemo<SlashCommandItem\[\]>\(\(\) => \{\n    const commands: SlashCommandItem\[\] = \[\];[\s\S]*?  \}, \[conversationContext\?\.conversationId, enableBtw, onSlashBuiltinCommand, t\]\);/u;
+    if (!builtinSlashPattern.test(output)) {
+      throw new Error("Could not find SendBox builtin slash command anchor");
+    }
+    output = output.replace(
+      builtinSlashPattern,
+      [
+        "  const builtinSlashCommands = useMemo<SlashCommandItem[]>(() => {",
+        "    // Relay Agent beginner mode: slash command menu hidden.",
+        "    return [];",
+        "  }, []);",
+      ].join("\n"),
+    );
+
+    const mergedSlashPattern =
+      /  const mergedSlashCommands = useMemo\(\(\) => \{\n    const map = new Map<string, SlashCommandItem>\(\);[\s\S]*?  \}, \[builtinSlashCommands, slashCommands\]\);/u;
+    if (!mergedSlashPattern.test(output)) {
+      throw new Error("Could not find SendBox merged slash command anchor");
+    }
+    output = output.replace(
+      mergedSlashPattern,
+      [
+        "  const mergedSlashCommands = useMemo(() => {",
+        "    // Relay Agent beginner mode: slash command menu hidden.",
+        "    return builtinSlashCommands;",
+        "  }, [builtinSlashCommands]);",
+      ].join("\n"),
+    );
+
+    const commandOpenAnchor = "  const isCommandMenuOpen = conversationExport.isOpen || slashController.isOpen;";
+    if (!output.includes(commandOpenAnchor)) {
+      throw new Error("Could not find SendBox command menu open anchor");
+    }
+    output = output.replace(
+      commandOpenAnchor,
+      [
+        "  // Relay Agent beginner mode: slash command menu hidden.",
+        "  const isCommandMenuOpen = false;",
+      ].join("\n"),
+    );
+
+    const overlayKeyDownAnchor = [
+      "  const handleOverlayKeyDown = (event: React.KeyboardEvent) => {",
+      "    return conversationExport.handleKeyDown(event) || slashController.onKeyDown(event);",
+      "  };",
+    ].join("\n");
+    if (!output.includes(overlayKeyDownAnchor)) {
+      throw new Error("Could not find SendBox overlay keydown anchor");
+    }
+    output = output.replace(
+      overlayKeyDownAnchor,
+      [
+        "  const handleOverlayKeyDown = (_event: React.KeyboardEvent) => {",
+        "    // Relay Agent beginner mode: slash command menu hidden.",
+        "    return false;",
+        "  };",
+      ].join("\n"),
+    );
+  }
+
+  return output;
+}
+
+export function patchChatConversationContent(input) {
+  let output = input;
+
+  if (!output.includes("Relay Agent beginner mode: skills indicator hidden")) {
+    output = output.replace(
+      "import ConversationSkillsIndicator from './ConversationSkillsIndicator';\n",
+      "",
+    );
+    const indicatorAnchor = "<ConversationSkillsIndicator conversation={conversation} />";
+    if (!output.includes(indicatorAnchor)) {
+      throw new Error("Could not find ChatConversation skills indicator anchor");
+    }
+    output = output.replaceAll(
+      indicatorAnchor,
+      "{/* Relay Agent beginner mode: skills indicator hidden. */}",
+    );
+  }
+
+  return output;
 }
 
 export function patchPublicManifestContent(input, branding = relayBranding()) {
@@ -2232,6 +2605,9 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   const layoutPath = resolve(targetRoot, "src/renderer/components/layout/Layout.tsx");
   const guidPagePath = resolve(targetRoot, "src/renderer/pages/guid/GuidPage.tsx");
   const guidActionRowPath = resolve(targetRoot, "src/renderer/pages/guid/components/GuidActionRow.tsx");
+  const guidSendPath = resolve(targetRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts");
+  const sendBoxPath = resolve(targetRoot, "src/renderer/components/chat/sendbox.tsx");
+  const chatConversationPath = resolve(targetRoot, "src/renderer/pages/conversation/components/ChatConversation.tsx");
   const rendererThemeBasePath = findRendererThemeBasePath(targetRoot);
   const settingsModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/index.tsx");
   const webuiModalPath = resolve(
@@ -2261,6 +2637,9 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
     layoutPath,
     guidPagePath,
     guidActionRowPath,
+    guidSendPath,
+    sendBoxPath,
+    chatConversationPath,
     rendererThemeBasePath,
     settingsModalPath,
     webuiModalPath,
@@ -2636,6 +3015,9 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   writeFileSync(layoutPath, patchLayoutBrandContent(readFileSync(layoutPath, "utf8")), "utf8");
   writeFileSync(guidPagePath, patchGuidPageContent(readFileSync(guidPagePath, "utf8")), "utf8");
   writeFileSync(guidActionRowPath, patchGuidActionRowContent(readFileSync(guidActionRowPath, "utf8")), "utf8");
+  writeFileSync(guidSendPath, patchGuidSendContent(readFileSync(guidSendPath, "utf8")), "utf8");
+  writeFileSync(sendBoxPath, patchSendBoxContent(readFileSync(sendBoxPath, "utf8")), "utf8");
+  writeFileSync(chatConversationPath, patchChatConversationContent(readFileSync(chatConversationPath, "utf8")), "utf8");
   writeFileSync(rendererThemeBasePath, patchRendererThemeBaseContent(readFileSync(rendererThemeBasePath, "utf8")), "utf8");
   patchRendererLocaleFiles(targetRoot);
   writeFileSync(settingsModalPath, patchSettingsModalContent(readFileSync(settingsModalPath, "utf8")), "utf8");

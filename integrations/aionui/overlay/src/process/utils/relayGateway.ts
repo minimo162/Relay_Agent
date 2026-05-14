@@ -342,7 +342,6 @@ const RELAY_AIONUI_UX_SEARCH_ENTRYPOINTS = [
   'guid-page-input-card',
   'guid-page-workspace-folder-select',
   'conversation-preset-assistant-menu',
-  'sendbox-slash-command-menu',
   'sendbox-at-file-mentions',
   'workspace-toolbar-search',
 ];
@@ -354,10 +353,8 @@ const RELAY_AIONUI_UX_REUSED_SURFACES = [
   'ConversationTabs',
   'SendBox',
   'AtFileMenu',
-  'SlashCommandMenu',
   'Workspace',
   'PreviewPanel',
-  'ConversationSkillsIndicator',
 ];
 const RELAY_GUID_BEGINNER_FLOW_STEPS = [
   'choose-curated-task',
@@ -372,7 +369,6 @@ const RELAY_GUID_REQUIRED_CONTROLS = [
   'GuidInputCard',
   'GuidActionRow',
   'WorkspaceFolderSelect',
-  'QuickActionButtons',
 ];
 const RELAY_GUID_START_ACTION = {
   owner: 'aionui',
@@ -481,6 +477,14 @@ const RELAY_BEGINNER_HIDDEN_SURFACES = [
   'agent-permission-mode-switcher',
   'acp-config-selector',
   'guid-auto-skills-menu',
+  'guid-quick-action-buttons',
+  'feedback-report-modal',
+  'sendbox-speech-input',
+  'sendbox-slash-command-menu',
+  'conversation-skills-indicator',
+  'context-usage-indicator',
+  'conversation-export-command',
+  'side-question-command',
   'assistant-preset-add-button',
   'settings-button',
   'webui-button',

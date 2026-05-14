@@ -205,7 +205,6 @@
       "guid-page-input-card",
       "guid-page-workspace-folder-select",
       "conversation-preset-assistant-menu",
-      "sendbox-slash-command-menu",
       "sendbox-at-file-mentions",
       "workspace-toolbar-search"
     ],
@@ -217,17 +216,15 @@
       "ConversationTabs",
       "SendBox",
       "AtFileMenu",
-      "SlashCommandMenu",
       "Workspace",
-      "PreviewPanel",
-      "ConversationSkillsIndicator"
+      "PreviewPanel"
     ],
     "resultPlacement": "chat-message-plus-preview-panel",
     "rules": [
       "Do not create a separate Relay document-search page for beginner use.",
       "Use AionUi GuidPage as the beginner task launcher before the conversation view.",
-      "Expose search as curated assistant/skill entries, GuidPage input/workspace controls, slash commands, workspace quick filter/status, and preview-linked results.",
-      "Keep AionUi GuidPage, conversation tabs, workspace panel, file mentions, command menu, preview panel, and skills indicator as the primary user-facing controls.",
+      "Expose search as curated assistant/skill entries, GuidPage input/workspace controls, workspace quick filter/status, and preview-linked results.",
+      "Keep AionUi GuidPage, conversation tabs, workspace panel, file mentions, and preview panel as the primary user-facing controls.",
       "Start search through AionUi's normal send flow; do not add a standalone Search Start button.",
       "Treat the Workspace toolbar search as a quick tree/filename filter and compact status affordance, not the broad document-search result surface."
     ]
@@ -247,8 +244,7 @@
       "AssistantSelectionArea",
       "GuidInputCard",
       "GuidActionRow",
-      "WorkspaceFolderSelect",
-      "QuickActionButtons"
+      "WorkspaceFolderSelect"
     ],
     "primaryCta": "aionui-normal-send-flow",
     "startAction": {
@@ -375,6 +371,14 @@
         "agent-permission-mode-switcher",
         "acp-config-selector",
         "guid-auto-skills-menu",
+        "guid-quick-action-buttons",
+        "feedback-report-modal",
+        "sendbox-speech-input",
+        "sendbox-slash-command-menu",
+        "conversation-skills-indicator",
+        "context-usage-indicator",
+        "conversation-export-command",
+        "side-question-command",
         "assistant-preset-add-button",
         "settings-button",
         "webui-button",
@@ -403,7 +407,7 @@
       "Search results render as actionable cards with preview, open, copy path, evidence, and refine actions.",
       "No-results and partial-results states must suggest next actions instead of ending silently.",
       "Use candidate language until an answer is backed by current Evidence Pack items.",
-      "Hide provider/model setup, tool settings, WebUI/channel setup, extension settings, Skills Market, model switchers, permission-mode controls, detected-agent selectors, preset edit controls, backend switchers, and assistant-management entrypoints from beginner views.",
+      "Hide provider/model setup, tool settings, WebUI/channel setup, extension settings, Skills Market, model switchers, permission-mode controls, detected-agent selectors, preset edit controls, backend switchers, speech input, slash commands, skill indicators, token usage meters, and assistant-management entrypoints from beginner views.",
       "Beginner send flow requires selecting either 資料を探す or Officeファイルを編集する before execution.",
       "Expose hidden AionUi surfaces only when relay.advancedSurfaces.enabled is deliberately enabled for support.",
       "Advanced parser, Evidence Pack, and Query Trace terms stay in support details only."
