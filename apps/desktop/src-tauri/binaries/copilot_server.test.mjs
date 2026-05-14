@@ -569,6 +569,28 @@ test("parseOpenAiRequest honors Relay selected document search mode markers", ()
   assert.doesNotMatch(parsed.systemPrompt, /"name":"glob"/);
 });
 
+test("parseOpenAiRequest unwraps Relay task envelopes from AionUi visible messages", () => {
+  const parsed = parseOpenAiRequest({
+    messages: [
+      {
+        role: "user",
+        content:
+          "RELAY_TASK_MODE: document_search\nRELAY_FIRST_TOOL: relay_document_search\nRELAY_WORKSPACE: H:\\shr1\\05_経理部\\03_連結財務G\\159連結\nUSER_REQUEST:\n部品売上に関するファイル",
+      },
+    ],
+    tools: [
+      { type: "function", function: { name: "relay_document_search", parameters: { type: "object" } } },
+      { type: "function", function: { name: "glob", parameters: { type: "object" } } },
+    ],
+  });
+
+  assert.equal(parsed.userPrompt, "部品売上に関するファイル");
+  assert.equal(parsed.relayTaskMode, "document_search");
+  assert.equal(parsed.toolIntent.intent, "local_file_discovery");
+  assert.equal(parsed.toolProtocolMode, "tool_planning");
+  assert.match(parsed.systemPrompt, /RELAY SELECTED MODE: document_search/);
+});
+
 test("parseOpenAiRequest honors Relay selected Office edit mode markers", () => {
   const parsed = parseOpenAiRequest({
     messages: [

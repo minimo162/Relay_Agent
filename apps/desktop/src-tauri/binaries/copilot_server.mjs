@@ -4930,6 +4930,10 @@ function parseOpenAiRequest(payload) {
       }
     }
   }
+  const relayUserEnvelope = extractRelayUserRequestEnvelope(userPrompt);
+  if (relayUserEnvelope.userRequest) {
+    userPrompt = relayUserEnvelope.userRequest;
+  }
   const ra = payload.relay_attachments;
   const attachmentPaths = Array.isArray(ra) ? ra.map((x) => String(x || "").trim()).filter(Boolean) : [];
   if (!userPrompt.trim()) throw new Error("User prompt is empty");
@@ -4948,7 +4952,8 @@ function parseOpenAiRequest(payload) {
       payload.relayTaskMode ||
       payload.metadata?.relay_task_mode ||
       payload.metadata?.relayTaskMode ||
-      extractRelayTaskModeFromText(systemPromptBase),
+      extractRelayTaskModeFromText(systemPromptBase) ||
+      relayUserEnvelope.mode,
   );
   const model = String(payload.model || OPENAI_COMPAT_DEFAULT_MODEL).trim() || OPENAI_COMPAT_DEFAULT_MODEL;
   const toolIntent = classifyToolIntent({
@@ -5211,6 +5216,19 @@ function extractRelayTaskModeFromText(text = "") {
   const assistantId = raw.match(/\b(?:relay[_-]assistant|assistant[_-]id)\s*:\s*([a-zA-Z0-9_-]+)/iu);
   if (!assistantId?.[1]) return "";
   return normalizeRelayTaskMode(assistantId[1]);
+}
+
+function extractRelayUserRequestEnvelope(text = "") {
+  const raw = String(text || "");
+  const mode = extractRelayTaskModeFromText(raw);
+  const firstTool = raw.match(/\bRELAY_FIRST_TOOL\s*:\s*([a-zA-Z0-9_.-]+)/u)?.[1]?.trim() || "";
+  const workspace = raw.match(/\bRELAY_WORKSPACE\s*:\s*([^\n\r]+)/u)?.[1]?.trim() || "";
+  const requestMatch = raw.match(/\bUSER_REQUEST\s*:\s*\r?\n?([\s\S]*)$/u);
+  const userRequest = requestMatch?.[1]?.trim() || "";
+  if (!mode && !firstTool && !workspace && !userRequest) {
+    return { mode: "", firstTool: "", workspace: "", userRequest: "" };
+  }
+  return { mode, firstTool, workspace, userRequest };
 }
 
 function normalizeOpenAiTools(rawTools) {

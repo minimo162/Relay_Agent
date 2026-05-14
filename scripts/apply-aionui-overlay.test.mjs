@@ -10,10 +10,12 @@ import {
   isCliEntrypoint,
   patchAionrsAgentContent,
   patchAionrsManagerContent,
+  patchAionrsSendBoxContent,
   patchAionCliCoreGlobContent,
   patchAionCliCoreRipGrepContent,
   patchAionCliCoreToolDefinitionsContent,
   patchAionuiBuildMcpServersContent,
+  patchConversationBridgeContent,
   patchTeamGuideMcpStdioContent,
   patchAboutModalContent,
   patchAgentLogoContent,
@@ -468,6 +470,33 @@ function createPinnedAionUiFixture(root) {
   );
   writeFixture(
     root,
+    "src/renderer/pages/conversation/platforms/aionrs/AionrsSendBox.tsx",
+    [
+      "const AionrsSendBox = () => {",
+      "  const executeCommand = useCallback(",
+      "    async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {",
+      "      const displayMessage = buildDisplayMessage(input, files, workspacePath);",
+      "      addOrUpdateMessage({ content: { content: displayMessage } }, true);",
+      "          const result = await ipcBridge.conversation.sendMessage.invoke({",
+      "            input: displayMessage,",
+      "            msg_id,",
+      "            conversation_id,",
+      "            files,",
+      "          });",
+      "    },",
+      "    []",
+      "  );",
+      "  useEffect(() => {",
+      "    const processInitialMessage = async () => {",
+      "        const { input, files: initialFiles } = JSON.parse(storedMessage);",
+      "        await executeCommand({ input, files: initialFiles || [] });",
+      "    };",
+      "  }, [conversation_id, executeCommand]);",
+      "};",
+    ].join("\n"),
+  );
+  writeFixture(
+    root,
     "src/renderer/pages/conversation/components/ChatConversation.tsx",
     [
       "import ConversationSkillsIndicator from './ConversationSkillsIndicator';",
@@ -674,7 +703,8 @@ function createPinnedAionUiFixture(root) {
     ].join("\n"),
   );
   writeFixture(root, "src/process/agent/aionrs/index.ts", "export class AionrsAgent {\n  private mcpReadyPromise: Promise<void>;\n  private mcpReadyResolve!: () => void;\n  options: { stdioMcpServers?: Array<{ name: string; awaitReady?: boolean; env: Array<{ name: string; value: string }>; command: string; args: string[] }> } = {};\n  constructor() {\n    this.mcpReadyPromise = new Promise((resolve) => {\n      this.mcpReadyResolve = resolve;\n    });\n  }\n  sendCommand(_command: unknown) {}\n  async start() {\n    const stdioMcpServers = this.options.stdioMcpServers ?? [];\n    let awaitAnyReady = false;\n    for (const server of stdioMcpServers) {\n      const envRecord: Record<string, string> = {};\n      for (const { name: k, value: v } of server.env) {\n        envRecord[k] = v;\n      }\n      this.sendCommand({ type: 'add_mcp_server', name: server.name, transport: 'stdio', command: server.command, args: server.args, env: envRecord });\n      if (server.awaitReady) awaitAnyReady = true;\n    }\n    if (awaitAnyReady) {\n      await Promise.race([this.mcpReadyPromise, new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('MCP ready timeout (30s)')), 30000))]).catch((err) => {\n        console.warn('[AionrsAgent] MCP setup warning:', err);\n      });\n    }\n  }\n  private handleEvent(event: { type: string; name?: string }) {\n    switch (event.type) {\n      case 'mcp_ready':\n        this.mcpReadyResolve();\n        break;\n    }\n  }\n}\n");
-  writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nexport class AionrsManager {\n  workspace = '/workspace';\n  conversation_id = 'conversation-1';\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return {\n      name: 'aionui-team-guide',\n      command: 'node',\n      args: ['team-guide-mcp-stdio.js'],\n      env: [\n        { name: 'AION_MCP_BACKEND', value: 'aionrs' },\n        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },\n      ],\n    };\n  }\n\n  async stop() {\n  }\n}\n");
+  writeFixture(root, "src/process/task/AionrsManager.ts", "import { ipcBridge } from '@/common';\nexport class AionrsManager {\n  workspace = '/workspace';\n  conversation_id = 'conversation-1';\n  async start() {\n    const mergedData = { workspace: '/workspace' };\n    const stdioMcpServers: StdioMcpOption[] = [];\n    if (mergedData.teamMcpStdioConfig) {\n      stdioMcpServers.push({ ...mergedData.teamMcpStdioConfig, awaitReady: true });\n    } else {\n      const teamGuide = await this.buildTeamGuideMcpStdioConfig();\n      if (teamGuide) stdioMcpServers.push(teamGuide);\n    }\n  }\n  private async buildTeamGuideMcpStdioConfig(): Promise<StdioMcpOption | undefined> {\n    return {\n      name: 'aionui-team-guide',\n      command: 'node',\n      args: ['team-guide-mcp-stdio.js'],\n      env: [\n        { name: 'AION_MCP_BACKEND', value: 'aionrs' },\n        { name: 'AION_MCP_CONVERSATION_ID', value: this.conversation_id },\n      ],\n    };\n  }\n\n  async sendMessage(data: { content: string; msg_id: string; files?: string[] }) {\n    const message = {\n      content: { content: data.content },\n    };\n  }\n\n  async stop() {\n  }\n}\n");
+  writeFixture(root, "src/process/bridge/conversationBridge.ts", "export const bridge = () => {\n      await task.sendMessage({\n        ...other,\n        content: other.input,\n        files: workspaceFiles,\n        agentContent,\n      });\n};\n");
 }
 
 const fixture = [
@@ -1218,7 +1248,7 @@ test("patchGuidSendContent makes Relay preset sends visible and tool-mode bound"
   assert.match(once, /relayTaskFirstTool: relayTaskMode \? RELAY_GUID_TASK_FIRST_TOOL_BY_MODE\[relayTaskMode\] : undefined/);
   assert.match(once, /Message\.error\(message\);/);
   assert.match(once, /buildRelayGuidTaskInitialInput\(input, relayTaskMode, finalWorkspace\)/);
-  assert.match(once, /input: initialInput/);
+  assert.match(once, /input,\n\s+agentInput: initialInput/);
   assert.match(once, /Relay Agent task mode conversation creation failure/);
 });
 
@@ -1376,6 +1406,61 @@ test("patchChatConversationContent hides conversation skill badges", () => {
   assert.match(once, /Relay Agent beginner mode: skills indicator hidden/);
 });
 
+test("patchAionrsSendBoxContent keeps Relay task wrappers out of visible chat", () => {
+  const fixture = [
+    "const AionrsSendBox = () => {",
+    "  const executeCommand = useCallback(",
+    "    async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {",
+    "      const displayMessage = buildDisplayMessage(input, files, workspacePath);",
+    "      addOrUpdateMessage({ content: { content: displayMessage } }, true);",
+    "          const result = await ipcBridge.conversation.sendMessage.invoke({",
+    "            input: displayMessage,",
+    "            msg_id,",
+    "            conversation_id,",
+    "            files,",
+    "          });",
+    "    },",
+    "    []",
+    "  );",
+    "  useEffect(() => {",
+    "    const processInitialMessage = async () => {",
+    "        const { input, files: initialFiles } = JSON.parse(storedMessage);",
+    "        await executeCommand({ input, files: initialFiles || [] });",
+    "    };",
+    "  }, [conversation_id, executeCommand]);",
+    "};",
+  ].join("\n");
+
+  const once = patchAionrsSendBoxContent(fixture);
+  const twice = patchAionrsSendBoxContent(once);
+
+  assert.equal(twice, once);
+  assert.match(once, /agentInput\?: string/);
+  assert.match(once, /const agentMessage = agentInput \? buildDisplayMessage\(agentInput, files, workspacePath\) : displayMessage/);
+  assert.match(once, /input: agentMessage/);
+  assert.match(once, /displayInput: displayMessage/);
+  assert.match(once, /const \{ input, agentInput, files: initialFiles \}/);
+  assert.match(once, /executeCommand\(\{ input, agentInput, files: initialFiles \|\| \[\] \}\)/);
+});
+
+test("patchConversationBridgeContent forwards separate display content", () => {
+  const fixture = [
+    "      await task.sendMessage({",
+    "        ...other,",
+    "        content: other.input,",
+    "        files: workspaceFiles,",
+    "        agentContent,",
+    "      });",
+  ].join("\n");
+
+  const once = patchConversationBridgeContent(fixture);
+  const twice = patchConversationBridgeContent(once);
+
+  assert.equal(twice, once);
+  assert.match(once, /content: other\.input/);
+  assert.match(once, /displayContent: other\.displayInput/);
+});
+
 test("relayDocumentSearchSkillContent defines one beginner document finding workflow", () => {
   const content = relayDocumentSearchSkillContent();
 
@@ -1438,6 +1523,19 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /Relay Agent task mode helpers/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /relayTaskFirstTool/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /buildRelayGuidTaskInitialInput/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /agentInput: initialInput/);
+    assert.match(
+      readFixture(fixtureRoot, "src/renderer/pages/conversation/platforms/aionrs/AionrsSendBox.tsx"),
+      /displayInput: displayMessage/,
+    );
+    assert.match(
+      readFixture(fixtureRoot, "src/process/bridge/conversationBridge.ts"),
+      /displayContent: other\.displayInput/,
+    );
+    assert.match(
+      readFixture(fixtureRoot, "src/process/task/AionrsManager.ts"),
+      /data\.displayContent \|\| data\.content/,
+    );
     assert.match(readFixture(fixtureRoot, "src/renderer/components/chat/sendbox.tsx"), /speech input hidden/);
     assert.match(readFixture(fixtureRoot, "src/renderer/components/chat/sendbox.tsx"), /slash command menu hidden/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/conversation/components/ChatConversation.tsx"), /skills indicator hidden/);

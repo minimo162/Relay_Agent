@@ -277,11 +277,11 @@ const required = [
   },
   {
     path: "README.md",
-    text: "**Installed desktop first run:** launch Relay Agent.",
+    text: "The product is intentionally narrow right now. The beginner UI exposes two",
   },
   {
     path: "README.md",
-    text: "`~/.config/opencode/opencode.json`",
+    text: "`資料を探す` - find and inspect local or shared-folder documents.",
   },
   {
     path: "apps/desktop/src-tauri/src/lib.rs",
@@ -325,11 +325,11 @@ const required = [
   },
   {
     path: "README.md",
-    text: "**Try Setup Again**",
+    text: "`Officeファイルを編集する` - edit Word, Excel, and PowerPoint files through",
   },
   {
     path: "README.md",
-    text: "**Open Relay Agent Web**",
+    text: "Searched shared folders are not polluted with `.aionrs` or Relay index files.",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",

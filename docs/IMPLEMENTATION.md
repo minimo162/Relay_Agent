@@ -25,6 +25,33 @@
 
 ## Milestone Log
 
+### 2026-05-14 AionUi Relay task-mode message handoff fix
+
+Fixed a document-search startup regression where the Relay task-mode wrapper
+could be shown and sent as the visible user message, leaving the conversation at
+`RELAY_TASK_MODE: document_search ... USER_REQUEST:` without executing
+`relay_document_search`. The AionUi overlay now stores both the natural user
+input and a hidden Relay agent input for first-message handoff. The send box
+renders and persists the natural input, while `conversation.sendMessage`
+receives the Relay agent input plus a separate display copy. The conversation
+bridge forwards that display copy and `AionrsManager` writes it to chat history
+without replacing the agent-facing content.
+
+The Copilot OpenAI-compatible gateway also unwraps a Relay task envelope from a
+user message as a defensive fallback. If an older overlay or cached session
+still sends the wrapper visibly, the gateway extracts `USER_REQUEST`, restores
+`document_search` mode from `RELAY_TASK_MODE`, and routes through the strict
+tool-planning path instead of treating the wrapper as normal chat text.
+
+Verification:
+
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs scripts/apply-aionui-overlay.test.mjs`: passed, 104 passed.
+- `node scripts/apply-aionui-overlay.mjs --aionui-dir /tmp/relay-aionui-overlay-check-fix`: passed against the pinned AionUi v1.9.25 checkout copy.
+- `rg -n "agentInput|displayInput|displayContent|data\\.displayContent|RELAY_TASK_MODE" ...`: confirmed the overlay sends hidden agent input while displaying natural text.
+- `pnpm --filter @relay-agent/desktop check:aionui-relay`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-05-13 Docufinder-style filename/FTS/RRF search acceleration
 
 Implemented the next Docufinder-inspired acceleration and precision slice for

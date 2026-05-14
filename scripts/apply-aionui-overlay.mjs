@@ -621,11 +621,18 @@ export function patchGuidSendContent(input) {
         "          : input;",
         "        // Relay Agent task mode message wrapper.",
         "        const initialMessage = {",
-        "          input: initialInput,",
+        "          input,",
+        "          agentInput: initialInput,",
         "          files: files.length > 0 ? files : undefined,",
         "        };",
         "        sessionStorage.setItem(`aionrs_initial_message_${conversation.id}`, JSON.stringify(initialMessage));",
       ].join("\n"),
+    );
+  }
+  if (output.includes("input: initialInput,") && !output.includes("agentInput: initialInput,")) {
+    output = output.replace(
+      "          input: initialInput,\n",
+      "          input,\n          agentInput: initialInput,\n",
     );
   }
 
@@ -811,6 +818,108 @@ export function patchChatConversationContent(input) {
     output = output.replaceAll(
       indicatorAnchor,
       "{/* Relay Agent beginner mode: skills indicator hidden. */}",
+    );
+  }
+
+  return output;
+}
+
+export function patchAionrsSendBoxContent(input) {
+  let output = input;
+
+  if (!output.includes("Relay Agent task mode: split display and agent input")) {
+    const executeAnchor =
+      "    async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {";
+    if (!output.includes(executeAnchor)) {
+      throw new Error("Could not find AionrsSendBox executeCommand parameter anchor");
+    }
+    output = output.replace(
+      executeAnchor,
+      "    async ({ input, files, agentInput }: Pick<ConversationCommandQueueItem, 'input' | 'files'> & { agentInput?: string }) => {",
+    );
+
+    const displayAnchor = "      const displayMessage = buildDisplayMessage(input, files, workspacePath);";
+    if (!output.includes(displayAnchor)) {
+      throw new Error("Could not find AionrsSendBox display message anchor");
+    }
+    output = output.replace(
+      displayAnchor,
+      [
+        displayAnchor,
+        "      // Relay Agent task mode: split display and agent input.",
+        "      const agentMessage = agentInput ? buildDisplayMessage(agentInput, files, workspacePath) : displayMessage;",
+      ].join("\n"),
+    );
+
+    const invokeAnchor = [
+      "          const result = await ipcBridge.conversation.sendMessage.invoke({",
+      "            input: displayMessage,",
+      "            msg_id,",
+      "            conversation_id,",
+      "            files,",
+      "          });",
+    ].join("\n");
+    if (!output.includes(invokeAnchor)) {
+      throw new Error("Could not find AionrsSendBox conversation send anchor");
+    }
+    output = output.replace(
+      invokeAnchor,
+      [
+        "          const result = await ipcBridge.conversation.sendMessage.invoke({",
+        "            input: agentMessage,",
+        "            displayInput: displayMessage,",
+        "            msg_id,",
+        "            conversation_id,",
+        "            files,",
+        "          });",
+      ].join("\n"),
+    );
+
+    const initialAnchor = [
+      "        const { input, files: initialFiles } = JSON.parse(storedMessage);",
+      "        await executeCommand({ input, files: initialFiles || [] });",
+    ].join("\n");
+    if (!output.includes(initialAnchor)) {
+      throw new Error("Could not find AionrsSendBox initial message anchor");
+    }
+    output = output.replace(
+      initialAnchor,
+      [
+        "        const { input, agentInput, files: initialFiles } = JSON.parse(storedMessage);",
+        "        await executeCommand({ input, agentInput, files: initialFiles || [] });",
+      ].join("\n"),
+    );
+  }
+
+  return output;
+}
+
+export function patchConversationBridgeContent(input) {
+  let output = input;
+
+  if (!output.includes("displayContent: other.displayInput")) {
+    const sendAnchor = [
+      "      await task.sendMessage({",
+      "        ...other,",
+      "        content: other.input,",
+      "        files: workspaceFiles,",
+      "        agentContent,",
+      "      });",
+    ].join("\n");
+    if (!output.includes(sendAnchor)) {
+      throw new Error("Could not find conversationBridge task.sendMessage anchor");
+    }
+    output = output.replace(
+      sendAnchor,
+      [
+        "      await task.sendMessage({",
+        "        ...other,",
+        "        content: other.input,",
+        "        displayContent: other.displayInput,",
+        "        files: workspaceFiles,",
+        "        agentContent,",
+        "      });",
+      ].join("\n"),
     );
   }
 
@@ -2445,6 +2554,23 @@ export function patchAionrsManagerContent(input) {
     output = output.replace(anchor, `${anchor}\n${mcpScriptDirImport}`);
   }
 
+  if (!output.includes("displayContent?: string")) {
+    const signatureAnchor = "  async sendMessage(data: { content: string; msg_id: string; files?: string[] }) {";
+    if (output.includes(signatureAnchor)) {
+      output = output.replace(
+        signatureAnchor,
+        "  async sendMessage(data: { content: string; displayContent?: string; msg_id: string; files?: string[] }) {",
+      );
+    }
+  }
+  const managerDisplayAnchor = "      content: { content: data.content },";
+  if (output.includes(managerDisplayAnchor) && !output.includes("data.displayContent || data.content")) {
+    output = output.replace(
+      managerDisplayAnchor,
+      "      content: { content: data.displayContent || data.content },",
+    );
+  }
+
   const injection = [
     "      const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig(mergedData.workspace);",
     "      if (relayDocumentSearch) stdioMcpServers.push(relayDocumentSearch);",
@@ -2607,6 +2733,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   const guidActionRowPath = resolve(targetRoot, "src/renderer/pages/guid/components/GuidActionRow.tsx");
   const guidSendPath = resolve(targetRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts");
   const sendBoxPath = resolve(targetRoot, "src/renderer/components/chat/sendbox.tsx");
+  const aionrsSendBoxPath = resolve(targetRoot, "src/renderer/pages/conversation/platforms/aionrs/AionrsSendBox.tsx");
   const chatConversationPath = resolve(targetRoot, "src/renderer/pages/conversation/components/ChatConversation.tsx");
   const rendererThemeBasePath = findRendererThemeBasePath(targetRoot);
   const settingsModalPath = resolve(targetRoot, "src/renderer/components/settings/SettingsModal/index.tsx");
@@ -2617,6 +2744,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   const buildMcpServersPath = resolve(targetRoot, "scripts/build-mcp-servers.js");
   const aionrsAgentPath = resolve(targetRoot, "src/process/agent/aionrs/index.ts");
   const aionrsManagerPath = resolve(targetRoot, "src/process/task/AionrsManager.ts");
+  const conversationBridgePath = resolve(targetRoot, "src/process/bridge/conversationBridge.ts");
   const teamGuideMcpStdioPath = resolve(targetRoot, "src/process/team/mcp/guide/teamGuideMcpStdio.ts");
   for (const requiredPath of [
     indexPath,
@@ -2639,6 +2767,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
     guidActionRowPath,
     guidSendPath,
     sendBoxPath,
+    aionrsSendBoxPath,
     chatConversationPath,
     rendererThemeBasePath,
     settingsModalPath,
@@ -2646,6 +2775,8 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
     buildMcpServersPath,
     aionrsAgentPath,
     aionrsManagerPath,
+    conversationBridgePath,
+    teamGuideMcpStdioPath,
   ]) {
     if (!existsSync(requiredPath)) {
       throw new Error(`AionUi overlay target was not found: ${requiredPath}`);
@@ -3017,6 +3148,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   writeFileSync(guidActionRowPath, patchGuidActionRowContent(readFileSync(guidActionRowPath, "utf8")), "utf8");
   writeFileSync(guidSendPath, patchGuidSendContent(readFileSync(guidSendPath, "utf8")), "utf8");
   writeFileSync(sendBoxPath, patchSendBoxContent(readFileSync(sendBoxPath, "utf8")), "utf8");
+  writeFileSync(aionrsSendBoxPath, patchAionrsSendBoxContent(readFileSync(aionrsSendBoxPath, "utf8")), "utf8");
   writeFileSync(chatConversationPath, patchChatConversationContent(readFileSync(chatConversationPath, "utf8")), "utf8");
   writeFileSync(rendererThemeBasePath, patchRendererThemeBaseContent(readFileSync(rendererThemeBasePath, "utf8")), "utf8");
   patchRendererLocaleFiles(targetRoot);
@@ -3030,6 +3162,7 @@ export function applyAionuiOverlay(aionuiDir, options = {}) {
   );
   writeFileSync(aionrsAgentPath, patchAionrsAgentContent(readFileSync(aionrsAgentPath, "utf8")), "utf8");
   writeFileSync(aionrsManagerPath, patchAionrsManagerContent(readFileSync(aionrsManagerPath, "utf8")), "utf8");
+  writeFileSync(conversationBridgePath, patchConversationBridgeContent(readFileSync(conversationBridgePath, "utf8")), "utf8");
   const aionCliCoreSearchPatch = patchAionCliCoreSearchFiles(targetRoot);
   const brandingAssets = copyBrandingAssets(targetRoot);
   const relayGatewayResourcesDir = copyRelayGatewayResources(targetRoot);
