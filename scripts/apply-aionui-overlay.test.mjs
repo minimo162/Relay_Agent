@@ -1568,6 +1568,9 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(patchedAionrsManager, /ELECTRON_RUN_AS_NODE/);
     assert.match(patchedAionrsManager, /private agentStartError: unknown = null/);
     assert.match(patchedAionrsManager, /Relay Agent runtime startup failed/);
+    assert.match(patchedAionrsManager, /waitForRelayAgentReady/);
+    assert.match(patchedAionrsManager, /RELAY_AIONRS_STARTUP_TIMEOUT_MS/);
+    assert.match(patchedAionrsManager, /Relay Agent runtime startup timed out after/);
     assert.match(patchedAionrsManager, /Relay Agent runtime is not available after startup/);
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-gateway/copilot_server.mjs")));
     assert.ok(existsSync(join(fixtureRoot, "resources/relay-tools/ripgrep/rg.exe")));

@@ -25,6 +25,30 @@
 
 ## Milestone Log
 
+### 2026-05-14 Relay Agent 0.1.1 upgrade and Aionrs startup timeout
+
+Responded to the report that the bundled OfficeCLI/search fixes still appeared
+unchanged after installation. The previous prerelease reused Relay Agent version
+`0.1.0`, so the installer asset name stayed `Relay.Agent-0.1.0-win-x64...`;
+that made it too easy to run or reinstall the older build and hard to verify
+which payload was active.
+
+Changed the active desktop package version to `0.1.1` and aligned the Tauri
+desktop metadata. The AionUi release workflow now rejects release tags that do
+not start with the active Relay Agent package version, so future prereleases
+cannot accidentally publish a mismatched installer tag.
+
+Also covered a real stuck-processing path: `AionrsManager.sendMessage` now waits
+for the Aionrs startup promise through a bounded 45 second timeout
+(`RELAY_AIONRS_STARTUP_TIMEOUT_MS` override). If startup hangs instead of
+failing, the first user message now surfaces a timeout error instead of sitting
+as visible text with no tool execution.
+
+Verification:
+- `node --test scripts/apply-aionui-overlay.test.mjs scripts/aionui-release-workflow.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs` — pass (42 tests).
+- `pnpm check` — pass.
+- `git diff --check` — pass.
+
 ### 2026-05-14 Bundled OfficeCLI and visible Aionrs startup failures
 
 Changed the Relay-branded AionUi installer path so OfficeCLI is bundled as a

@@ -31,6 +31,9 @@ test("AionUi release workflow checks out the pinned upstream baseline", () => {
   assert.match(text, /AionUi baseline drift/);
   assert.match(text, /AionUi tag drifted from the Relay manifest/);
   assert.match(text, /AionUi commit drifted from the Relay manifest/);
+  assert.match(text, /require\('\.\/apps\/desktop\/package\.json'\)\.version/);
+  assert.match(text, /Release tag '\$tag' must match Relay Agent version/);
+  assert.match(text, /relay_agent_version=%s/);
 });
 
 test("AionUi release workflow installs pinned dependencies before overlay and builds after overlay", () => {

@@ -2620,7 +2620,7 @@ export function patchAionrsManagerContent(input) {
       output = output.replace(
         sendReadyAnchor,
         [
-          "    await this.agentReady;",
+          "    await this.waitForRelayAgentReady();",
           "    if (this.agentStartError) {",
           "      const detail = this.agentStartError instanceof Error ? this.agentStartError.message : String(this.agentStartError);",
           "      throw new Error(`Relay Agent runtime failed to start: ${detail}`);",
@@ -2633,6 +2633,10 @@ export function patchAionrsManagerContent(input) {
       );
     }
   }
+  output = output.replace(
+    "    await this.agentReady;\n    if (this.agentStartError) {",
+    "    await this.waitForRelayAgentReady();\n    if (this.agentStartError) {",
+  );
 
   const injection = [
     "      const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig(mergedData.workspace);",
@@ -2730,12 +2734,14 @@ export function patchAionrsManagerContent(input) {
     "  }",
   ].join("\n");
   if (output.includes("private buildRelayDocumentSearchMcpStdioConfig")) {
-    const methodPattern =
-      /  private buildRelayDocumentSearchMcpStdioConfig\(workspace\?: string\): StdioMcpOption \| undefined \{[\s\S]*?\n  \}\n\n  async stop\(\) \{/;
-    if (!methodPattern.test(output)) {
-      throw new Error("Could not replace AionrsManager Relay document-search MCP method");
+    if (!output.includes(relayDocumentSearchMethod)) {
+      const methodPattern =
+        /  private buildRelayDocumentSearchMcpStdioConfig\(workspace\?: string\): StdioMcpOption \| undefined \{[\s\S]*?\n  \}\n\n  async stop\(\) \{/;
+      if (!methodPattern.test(output)) {
+        throw new Error("Could not replace AionrsManager Relay document-search MCP method");
+      }
+      output = output.replace(methodPattern, `${relayDocumentSearchMethod}\n\n  async stop() {`);
     }
-    output = output.replace(methodPattern, `${relayDocumentSearchMethod}\n\n  async stop() {`);
   } else {
     const anchor = [
       "  }",
@@ -2755,6 +2761,36 @@ export function patchAionrsManagerContent(input) {
         "  async stop() {",
       ].join("\n"),
     );
+  }
+
+  if (!output.includes("private async waitForRelayAgentReady(): Promise<void>")) {
+    const stopAnchor = [
+      "",
+      "  async stop() {",
+    ].join("\n");
+    const helper = [
+      "",
+      "  private async waitForRelayAgentReady(): Promise<void> {",
+      "    const configuredTimeoutMs = Number.parseInt(process.env.RELAY_AIONRS_STARTUP_TIMEOUT_MS || '', 10);",
+      "    const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 45000;",
+      "    let timeout: ReturnType<typeof setTimeout> | undefined;",
+      "    try {",
+      "      await Promise.race([",
+      "        this.agentReady,",
+      "        new Promise<void>((_, reject) => {",
+      "          timeout = setTimeout(() => {",
+      "            reject(new Error(`Relay Agent runtime startup timed out after ${timeoutMs}ms.`));",
+      "          }, timeoutMs);",
+      "        }),",
+      "      ]);",
+      "    } finally {",
+      "      if (timeout) clearTimeout(timeout);",
+      "    }",
+      "  }",
+    ].join("\n");
+    if (output.includes(stopAnchor)) {
+      output = output.replace(stopAnchor, `${helper}${stopAnchor}`);
+    }
   }
 
   return output;

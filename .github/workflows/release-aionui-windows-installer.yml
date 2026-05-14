@@ -59,12 +59,19 @@ jobs:
             exit 1
           fi
 
+          relay_agent_version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ "$tag" != "v${relay_agent_version}" && "$tag" != v${relay_agent_version}-* ]]; then
+            echo "Release tag '$tag' must match Relay Agent version '$relay_agent_version' (expected v${relay_agent_version} or v${relay_agent_version}-...)." >&2
+            exit 1
+          fi
+
           if [ -z "$release_name" ]; then
             release_name="Relay Agent ${tag}"
           fi
 
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
+          printf 'relay_agent_version=%s\n' "$relay_agent_version" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Trusted Signing mode
         id: signing_mode
