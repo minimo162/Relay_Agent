@@ -1,8 +1,8 @@
 {
-  "projectName": "Relay_Agent AionUi Release Acceptance",
-  "version": "6.0",
+  "projectName": "Relay_Agent Dedicated Desktop Completion",
+  "version": "7.0",
   "createdAt": "2026-04-14",
-  "summary": "Current task graph for the Relay-branded AionUi release acceptance path, OpenAI-compatible M365 Copilot provider gateway, and remaining Windows-only bootstrap sign-off.",
+  "summary": "Historical task graph retained for artifact traceability. The current executable plan is PLANS.md: a dedicated Relay desktop application for document search and OfficeCLI-backed Office file operations, with AionUi paths treated as historical references only.",
   "phases": [
     {
       "id": "baseline",

@@ -764,7 +764,7 @@ test("patchPackageJsonContent rebrands the AionUi package metadata", () => {
   assert.match(patched.description, /Microsoft 365 Copilot/);
 });
 
-test("patchIndexContent starts the Relay gateway before AionUi storage initialization", () => {
+test("patchIndexContent starts the Relay gateway before storage and defers Copilot prewarm", () => {
   const fixture = [
     "import { app, BrowserWindow, nativeImage, net, powerMonitor, protocol, screen } from 'electron';",
     "import { ProcessConfig } from './process/utils/initStorage';",
@@ -796,13 +796,13 @@ test("patchIndexContent starts the Relay gateway before AionUi storage initializ
   assert.equal(twice, once);
   assert.match(once, /startRelayGatewayBeforeShell/);
   assert.ok(
-    once.indexOf("await startRelayGatewayBeforeShell();") < once.indexOf("await initializeProcess();"),
+    once.indexOf("await startRelayGatewayBeforeShell({ prewarm: false });") < once.indexOf("await initializeProcess();"),
     "gateway should start before initStorage consumes the Relay provider seed",
   );
   assert.match(once, /dialog, nativeImage/);
   assert.match(once, /RelayGatewayStartupResult/);
   assert.match(once, /title: 'Relay Agent'/);
-  assert.match(once, /relayGatewayStartup = await startRelayGatewayBeforeShell\(\);/);
+  assert.match(once, /relayGatewayStartup = await startRelayGatewayBeforeShell\(\{ prewarm: false \}\);/);
   assert.match(once, /if \(!isWebUIMode && !isResetPasswordMode\)/);
   assert.match(once, /mark\('relayGateway'\);/);
   assert.match(once, /relayGatewayStartup\?\.state === 'needs_attention'/);
@@ -1245,8 +1245,10 @@ test("patchGuidSendContent makes Relay preset sends visible and tool-mode bound"
   assert.match(once, /Relay Agent task mode helpers/);
   assert.match(once, /'relay-workspace-search': 'document_search'/);
   assert.match(once, /'relay-office-edit': 'office_edit'/);
+  assert.match(once, /relayGuidWorkspaceRequiredMessage/);
   assert.match(once, /RELAY_FIRST_TOOL: \$\{firstTool\}/);
   assert.match(once, /const relayTaskMode = getRelayGuidTaskMode\(presetAssistantId\);/);
+  assert.match(once, /Relay Agent task mode validation: workspace required/);
   assert.match(once, /relayTaskFirstTool: relayTaskMode \? RELAY_GUID_TASK_FIRST_TOOL_BY_MODE\[relayTaskMode\] : undefined/);
   assert.match(once, /Message\.error\(message\);/);
   assert.match(once, /buildRelayGuidTaskInitialInput\(input, relayTaskMode, finalWorkspace\)/);
@@ -1523,6 +1525,7 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/GuidPage.tsx"), /quick action buttons hidden/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/GuidPage.tsx"), /onSend=\{send\.sendMessageHandler\}/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /Relay Agent task mode helpers/);
+    assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /workspace required/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /relayTaskFirstTool/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /buildRelayGuidTaskInitialInput/);
     assert.match(readFixture(fixtureRoot, "src/renderer/pages/guid/hooks/useGuidSend.ts"), /agentInput: initialInput/);
@@ -1562,6 +1565,11 @@ test("pinned AionUi overlay application smoke preserves release-critical Relay s
     assert.match(readFixture(fixtureRoot, "src/process/agent/aionrs/index.ts"), /awaitedMcpReadyNames/);
     assert.match(readFixture(fixtureRoot, "src/process/agent/aionrs/index.ts"), /seenMcpReadyNames/);
     const patchedAionrsManager = readFixture(fixtureRoot, "src/process/task/AionrsManager.ts");
+    assert.match(patchedAionrsManager, /relayTaskModeFromContent/);
+    assert.match(patchedAionrsManager, /relayDocumentSearchIntentFromRequest/);
+    assert.match(patchedAionrsManager, /handleRelayDirectDocumentSearch/);
+    assert.match(patchedAionrsManager, /relayOfficeEditPreflight/);
+    assert.match(patchedAionrsManager, /handleRelayDocumentSearchToolCall/);
     assert.match(patchedAionrsManager, /buildRelayDocumentSearchMcpStdioConfig/);
     assert.match(patchedAionrsManager, /resolveMcpScriptDir/);
     assert.match(patchedAionrsManager, /awaitReady: true/);
@@ -2136,6 +2144,11 @@ test("Relay document search MCP entry is built and injected into aionrs sessions
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_USER_MEMORY_DIR/);
   assert.match(patchedManager, /RELAY_DOCUMENT_SEARCH_TEAM_GUIDE_FALLBACK/);
+  assert.match(patchedManager, /relayTaskModeFromContent/);
+  assert.match(patchedManager, /relayDocumentSearchIntentFromRequest/);
+  assert.match(patchedManager, /handleRelayDirectDocumentSearch/);
+  assert.match(patchedManager, /relayOfficeEditPreflight/);
+  assert.match(patchedManager, /handleRelayDocumentSearchToolCall/);
   assert.equal(patchAionrsManagerContent(patchedManager), patchedManager);
 });
 
@@ -2565,12 +2578,16 @@ test("Relay gateway overlay starts bundled Copilot gateway and writes dynamic pr
   assert.match(relayGateway, /ELECTRON_RUN_AS_NODE/);
   assert.match(relayGateway, /--port',\n\s+'0'/);
   assert.match(relayGateway, /--port-file/);
+  assert.match(relayGateway, /prewarm\?: boolean/);
+  assert.match(relayGateway, /Copilot prewarm is deferred until a task actually needs Copilot/);
   assert.match(relayGateway, /RELAY_AIONUI_PROVIDER_SEED_FILE/);
   assert.match(relayGateway, /Relay Agent \/ M365 Copilot/);
   assert.match(relayGateway, /function_calling/);
   assert.match(relayGateway, /tools\.useRipgrep/);
   assert.match(relayGateway, /relay-document-search/);
   assert.match(relayGateway, /relay\.workspaceSearch\.enabled/);
+  assert.match(relayGateway, /relay-direct-first/);
+  assert.match(relayGateway, /relay-preflight-then-copilot-officecli/);
   assert.match(relayGateway, /relay\.workspaceSearch\.defaultSkillEntrypoints/);
   assert.match(relayGateway, /RELAY_DOCUMENT_SEARCH_HIGH_LEVEL_TOOL/);
   assert.match(relayGateway, /RelayDocumentSearchRequest\.v1/);

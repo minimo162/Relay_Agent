@@ -2,28 +2,106 @@
 
 ## Status
 
-- Current phase: Relay_Agent is moving to a Relay-branded AionUi shell while
-  retaining the OpenAI-compatible M365 Copilot provider gateway and Tool Call
-  Emulation Layer. The current OpenCode Web implementation remains the working
-  provider-gateway reference until the AionUi cutover lands.
-- Repository state: pnpm workspace, OpenCode provider gateway scripts, SolidJS
-  + Vite diagnostic desktop shell, Tauri v2 shell, Rust-source IPC contracts
-  with generated TS bindings, shared doctor service, and deterministic
-  provider/diagnostic coverage are in source.
+- Current phase: Relay_Agent is a dedicated Relay desktop application for
+  document search and OfficeCLI-backed Office file operations. AionUi overlay
+  work is historical reference code, not the product shell.
+- Repository state: pnpm workspace, Relay SolidJS workbench, Tauri v2 shell,
+  Rust-source IPC contracts with generated TS bindings, shared doctor service,
+  deterministic provider/diagnostic coverage, app-local document-search
+  storage, and OfficeCLI packaging are in source.
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `docs/CLAW_CODE_ALIGNMENT.md`
-- Active task graph: `.taskmaster/tasks/tasks.json` now includes the
-  OpenCode provider gateway reference path, completed Workspace Document Search
-  hardening, and the new AionUi release acceptance / Windows sign-off phase.
-  The AionUi-first migration baseline is captured in
-  `docs/AIONUI_RELAY_MIGRATION.md`.
+- Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
+  task metadata. The current executable plan is `PLANS.md`.
 - Packaging policy: `docs/PACKAGING_POLICY.md` still fixes the packaged end-user release path to Windows 10/11 x64 via NSIS, with installer-driven updates and preserved app-local storage across upgrades.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-14 Relay dedicated desktop UX and direct search/Office IPC
+
+Replaced the active product direction from AionUi-first to a dedicated Relay
+desktop workbench for the two supported workflows: document search and
+OfficeCLI-backed Office file operations. `PLANS.md` now treats AionUi overlay
+work as historical implementation reference rather than the product shell.
+
+Implemented the first Relay-owned vertical slice:
+
+- The SolidJS shell now opens directly as a Relay workbench with two task modes,
+  `資料を探す` and `Officeファイルを編集する`.
+- The app no longer autostarts the legacy OpenCode/AionUi path on startup. Edge
+  / Copilot checks run only when the user asks for Copilot status.
+- Added `run_relay_document_search` Tauri IPC. It runs the existing Relay
+  document-search engine from the desktop UI, with metadata, filename, SQLite,
+  parsed-document, derived-content, job, sync, failure, and memory stores under
+  the user's Relay app-local data directory instead of the searched/shared
+  folder.
+- Added `inspect_office_file` and `execute_officecli_command` Tauri IPC.
+  Office commands resolve bundled OfficeCLI first, reject shell control
+  characters, require the selected file path in the OfficeCLI argument list,
+  and create an app-local backup before execution when requested.
+- Added `scripts/relay-document-search-cli.mjs` and
+  `apps/desktop/scripts/build-document-search-bundle.mjs` so the Tauri package
+  can prepare a runtime document-search bundle without shipping AionUi.
+- Updated Tauri resources to include OfficeCLI and the generated search bundle,
+  while removing LiteParse runner from the normal bundle resource list.
+- Updated CI to prepare Relay bundle resources through
+  `pnpm run prep:tauri-bundle` instead of the removed LiteParse runner path.
+- Changed the primary Windows release workflow to build the Relay Tauri NSIS
+  installer and removed the AionUi Windows release workflow.
+
+Verification so far:
+
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass after
+  adding the new Relay IPC types and commands.
+- `node scripts/relay-document-search-cli.mjs <fixture-input>` — pass on a
+  temporary fixture folder; the search engine returned a valid
+  `RelayDocumentSearchResult.v1`.
+- `pnpm --filter @relay-agent/desktop build` — pass.
+- `node --test scripts/relay-document-search-contract.test.mjs scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs scripts/relay-document-search-display.test.mjs` — pass.
+- `pnpm --filter @relay-agent/desktop prep:tauri-bundle` — pass; reused cached
+  Node/ripgrep/OfficeCLI and generated the document-search runtime bundle.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop` — pass.
+- `pnpm check` — pass.
+- `git diff --check` — pass.
+
+### 2026-05-14 Relay task-mode direct search and Office edit preflight
+
+Fixed the Relay-branded AionUi task handoff so the two supported beginner
+workflows share one deterministic entry contract instead of depending on
+Aionrs/Copilot startup before any visible work happens.
+
+For `資料を探す`, the hidden Relay task envelope is now handled directly inside
+`AionrsManager` before waiting for the Aionrs runtime. It parses
+`RELAY_TASK_MODE`, `RELAY_WORKSPACE`, and `USER_REQUEST`, derives the Relay
+document-search intent from the natural-language request, invokes
+`relay_document_search` through the Relay bridge, and emits a concise assistant
+message with candidate files and coverage. If the selected workspace is missing
+or the search throws, the chat now receives a concrete error instead of leaving
+only the user message visible.
+
+For `Officeファイルを編集する`, the same task-mode path now performs immediate
+preflight before handing off to Copilot/OfficeCLI: workspace selected, target
+Office file present in the message or attachments, and bundled OfficeCLI path
+registered. Missing prerequisites are returned as assistant messages instead of
+appearing to stall. Once preflight passes, Copilot remains responsible for
+compiling the exact OfficeCLI inspection/edit step.
+
+Also changed the AionUi shell bootstrap to start the provider gateway without
+Copilot prewarm. The provider seed still exists before AionUi storage
+initialization, but Edge/Copilot is no longer proactively focused before a user
+task actually needs it.
+
+Verification:
+- `node --test scripts/apply-aionui-overlay.test.mjs` — pass (27 tests).
+- `node --test apps/desktop/scripts/aionui_provider_seed.test.mjs` — pass (8 tests).
+- `node scripts/apply-aionui-overlay.mjs --aionui-dir /tmp/relay-aionui-overlay-check-fix` — pass against the pinned AionUi checkout copy.
+- `pnpm check` — pass.
+- `git diff --check` — pass.
 
 ### 2026-05-14 Relay Agent 0.1.1 upgrade and Aionrs startup timeout
 

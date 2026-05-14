@@ -51,15 +51,9 @@ jobs:
           test -f pnpm-lock.yaml
           test ! -f package-lock.json
 
-      - name: Fetch Tauri externalBin sidecars
+      - name: Prepare Relay desktop bundle resources
         working-directory: apps/desktop
-        run: |
-          node ./scripts/fetch-bundled-node.mjs
-          node ./scripts/fetch-bundled-ripgrep.mjs
-
-      - name: Install LiteParse runner dependencies
-        working-directory: apps/desktop
-        run: npm ci --omit=dev --prefix ./src-tauri/liteparse-runner
+        run: pnpm run prep:tauri-bundle
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'

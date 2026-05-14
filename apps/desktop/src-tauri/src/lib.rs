@@ -59,10 +59,15 @@ pub fn run() {
         .setup(|app| {
             liteparse_env::apply(app);
             let services = AppServices::new();
-            let provider_bridge = services.opencode_provider_bridge();
-            let openwork_setup = services.openwork_setup_store();
             app.manage(services);
-            openwork_autostart::spawn(app.handle().clone(), provider_bridge, openwork_setup);
+            if std::env::var("RELAY_LEGACY_OPENCODE_AUTOSTART").as_deref() == Ok("1") {
+                let services = app.state::<AppServices>();
+                openwork_autostart::spawn(
+                    app.handle().clone(),
+                    services.opencode_provider_bridge(),
+                    services.openwork_setup_store(),
+                );
+            }
             dev_control::spawn(app.handle());
             Ok(())
         })
@@ -77,6 +82,10 @@ pub fn run() {
             commands::diagnostics::open_opencode_web,
             commands::diagnostics::retry_opencode_setup,
             commands::diagnostics::write_text_export,
+            commands::relay::get_relay_workspace_state,
+            commands::relay::run_relay_document_search,
+            commands::relay::inspect_office_file,
+            commands::relay::execute_officecli_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

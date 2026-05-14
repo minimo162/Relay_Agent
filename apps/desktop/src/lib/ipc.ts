@@ -22,7 +22,14 @@ import type {
   CdpPromptResult as GeneratedCdpPromptResult,
   CdpSendPromptRequest as GeneratedCdpSendPromptRequest,
   ConnectCdpRequest as GeneratedConnectCdpRequest,
+  RelayDocumentSearchRequest as GeneratedRelayDocumentSearchRequest,
+  RelayDocumentSearchResponse as GeneratedRelayDocumentSearchResponse,
+  RelaySearchResultCard as GeneratedRelaySearchResultCard,
   RelayDiagnostics as GeneratedRelayDiagnostics,
+  RelayOfficeCommandResponse as GeneratedRelayOfficeCommandResponse,
+  RelayOfficeExecuteRequest as GeneratedRelayOfficeExecuteRequest,
+  RelayOfficeInspectRequest as GeneratedRelayOfficeInspectRequest,
+  RelayWorkspaceState as GeneratedRelayWorkspaceState,
 } from "./ipc.generated";
 
 /* ============================================================
@@ -33,6 +40,13 @@ export type BrowserAutomationSettings = GeneratedBrowserAutomationSettings;
 
 /** `get_relay_diagnostics` payload (camelCase from Rust). */
 export type RelayDiagnostics = GeneratedRelayDiagnostics;
+export type RelayWorkspaceState = GeneratedRelayWorkspaceState;
+export type RelayDocumentSearchRequest = GeneratedRelayDocumentSearchRequest;
+export type RelayDocumentSearchResponse = GeneratedRelayDocumentSearchResponse;
+export type RelaySearchResultCard = GeneratedRelaySearchResultCard;
+export type RelayOfficeInspectRequest = GeneratedRelayOfficeInspectRequest;
+export type RelayOfficeExecuteRequest = GeneratedRelayOfficeExecuteRequest;
+export type RelayOfficeCommandResponse = GeneratedRelayOfficeCommandResponse;
 
 /* ============================================================
    Diagnostic Tauri commands
@@ -40,6 +54,32 @@ export type RelayDiagnostics = GeneratedRelayDiagnostics;
 
 export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
   return invoke<RelayDiagnostics>("get_relay_diagnostics");
+}
+
+export async function getRelayWorkspaceState(
+  workspacePath?: string | null,
+): Promise<RelayWorkspaceState> {
+  return invoke<RelayWorkspaceState>("get_relay_workspace_state", {
+    workspacePath: workspacePath?.trim() || null,
+  });
+}
+
+export async function runRelayDocumentSearch(
+  request: RelayDocumentSearchRequest,
+): Promise<RelayDocumentSearchResponse> {
+  return invoke<RelayDocumentSearchResponse>("run_relay_document_search", { request });
+}
+
+export async function inspectOfficeFile(
+  request: RelayOfficeInspectRequest,
+): Promise<RelayOfficeCommandResponse> {
+  return invoke<RelayOfficeCommandResponse>("inspect_office_file", { request });
+}
+
+export async function executeOfficeCliCommand(
+  request: RelayOfficeExecuteRequest,
+): Promise<RelayOfficeCommandResponse> {
+  return invoke<RelayOfficeCommandResponse>("execute_officecli_command", { request });
 }
 
 /** Retry installed OpenCode provider setup. */

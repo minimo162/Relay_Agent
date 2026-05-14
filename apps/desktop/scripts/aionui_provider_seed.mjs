@@ -37,8 +37,9 @@ export const AIONUI_RELAY_TASK_MODE_PROMPT_TEMPLATES = Object.freeze({
   document_search: {
     selectedModeMarker: "RELAY_TASK_MODE: document_search",
     firstTool: "relay_document_search",
+    executionPath: "relay-direct-first",
     requiredToolPolicy:
-      "Use the high-level Relay document search tool first. Preserve the user request in query, pass the selected workspace root when available, and do not narrow roots, fileTypes, or keywords unless the user explicitly asked for that filter.",
+      "Relay runtime executes the high-level document search directly first. Preserve the user request in query, pass the selected workspace root, and do not narrow roots, fileTypes, or keywords unless the user explicitly asked for that filter.",
     defaultArguments: {
       intent: "find_files",
       evidence: "candidate",
@@ -51,8 +52,9 @@ export const AIONUI_RELAY_TASK_MODE_PROMPT_TEMPLATES = Object.freeze({
   office_edit: {
     selectedModeMarker: "RELAY_TASK_MODE: office_edit",
     firstTool: "officecli",
+    executionPath: "relay-preflight-then-copilot-officecli",
     requiredToolPolicy:
-      "Use OfficeCLI-backed tools only for Office document inspection and edits. Do not use Microsoft 365 built-in editing, shell prose, or text-file edit tools for binary Office files.",
+      "Relay runtime must verify workspace, target Office file, and bundled OfficeCLI readiness before Copilot compiles any OfficeCLI step. Use OfficeCLI-backed tools only for Office document inspection and edits. Do not use Microsoft 365 built-in editing, shell prose, or text-file edit tools for binary Office files.",
     missingFieldsPolicy:
       "If the file path, target sheet/range/object, or requested edit is missing, ask for the missing field instead of guessing. For existing workbooks, inspect sheets before using a sheet-qualified range when the sheet is not known.",
     responsePolicy:

@@ -1,555 +1,528 @@
 /// <reference types="vite/client" />
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { open } from "@tauri-apps/plugin-dialog";
+import { For, Show, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import {
-  getRelayDiagnostics,
-  openOpencodeWeb,
-  retryOpencodeSetup,
-  type RelayDiagnostics,
+  executeOfficeCliCommand,
+  getRelayWorkspaceState,
+  inspectOfficeFile,
+  runRelayDocumentSearch,
+  warmupCopilotBridge,
+  type RelayDocumentSearchResponse,
+  type RelayOfficeCommandResponse,
+  type RelaySearchResultCard,
+  type RelayWorkspaceState,
 } from "../lib/ipc";
-import {
-  loadAlwaysOnTop,
-  loadBrowserSettings,
-  loadMaxTurns,
-  loadWorkspacePath,
-} from "../lib/settings-storage";
+import { loadWorkspacePath, saveWorkspacePath } from "../lib/settings-storage";
 import { showToast } from "../lib/status-toasts";
-import { SettingsModal, type ShellSettingsDraft } from "../components/SettingsModal";
+import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { StatusToasts } from "../components/StatusToasts";
-import { useCopilotWarmup } from "./useCopilotWarmup";
 
-async function applyAlwaysOnTopSetting(enabled: boolean) {
-  try {
-    await getCurrentWindow().setAlwaysOnTop(enabled);
-  } catch (error) {
-    console.error("[DiagnosticShell] setAlwaysOnTop failed", error);
-  }
-}
-
-async function showMainWindow() {
-  try {
-    const win = getCurrentWindow();
-    await win.show();
-    await win.setFocus();
-  } catch (error) {
-    console.error("[Shell] window show/focus failed", error);
-  }
-}
-
-function providerBaseUrl(): string {
-  const port = import.meta.env.VITE_RELAY_OPENCODE_PROVIDER_PORT || "18180";
-  return `http://127.0.0.1:${port}/v1`;
-}
-
-function formatBool(value: boolean | null | undefined): string {
-  if (value == null) return "unknown";
-  return value ? "yes" : "no";
-}
-
-function diagnosticsSummary(diagnostics: RelayDiagnostics | null): string[] {
-  if (!diagnostics) return [];
-  const setup = diagnostics.openworkSetup;
-  return [
-    `architecture: ${diagnostics.architectureNotes}`,
-    "product path: Relay-branded AionUi is the primary UX; this shell is retained for legacy OpenCode diagnostics.",
-    "provider policy: Relay asks M365 Copilot only for strict tool JSON or final answers from tool results.",
-    "legacy tool scope: OpenCode-standard file discovery, text search, code/text edits, and explicit test/build commands.",
-    `target OS: ${diagnostics.targetOs}`,
-    `process cwd: ${diagnostics.processCwd}`,
-    `CDP port: ${diagnostics.defaultEdgeCdpPort}`,
-    `bridge running: ${formatBool(diagnostics.copilotBridgeRunning)}`,
-    `bridge connected: ${formatBool(diagnostics.copilotBridgeConnected)}`,
-    `M365 sign-in required: ${formatBool(diagnostics.copilotBridgeLoginRequired)}`,
-    `OpenCode runtime: ${diagnostics.opencodeRuntimeMessage ?? "unknown"}`,
-    `OpenCode setup: ${setup?.status ?? "unknown"}`,
-    `setup stage: ${setup?.stage ?? "unknown"}`,
-    `setup detail: ${setup?.message ?? "unknown"}`,
-    `setup config: ${setup?.configPath ?? "unknown"}`,
-  ];
-}
-
-function setupTitle(diagnostics: RelayDiagnostics | null, copilotStatus: string): string {
-  const setup = diagnostics?.openworkSetup;
-  const providerReady = diagnostics?.copilotBridgeConnected === true;
-  const providerNeedsSignIn = diagnostics?.copilotBridgeLoginRequired === true;
-  if (setup?.status === "needs_attention") return "Setup needs attention";
-  if (copilotStatus === "needs_sign_in" || providerNeedsSignIn) return "Sign in to Microsoft 365";
-  if (setup?.status === "ready" && (copilotStatus === "ready" || providerReady)) return "Ready to start";
-  return "Setting things up";
-}
-
-function setupMessage(diagnostics: RelayDiagnostics | null, copilotMessage: string | null | undefined): string {
-  const setup = diagnostics?.openworkSetup;
-  if (setup?.status === "needs_attention") {
-    return "Relay could not finish setup. Review the stopped step below, then use Try Setup Again.";
-  }
-  if (diagnostics?.copilotBridgeLoginRequired) {
-    return "Sign in to Microsoft 365 Copilot in Edge, then use Check Microsoft Sign-In.";
-  }
-  if (copilotMessage && copilotMessage.toLowerCase().includes("sign")) return copilotMessage;
-  if (setup?.status === "ready") {
-    return "The legacy Relay Agent Web diagnostic path is ready. Use it only for OpenCode compatibility checks.";
-  }
-  return "Relay is preparing the legacy OpenCode diagnostic path and the Copilot connection.";
-}
-
-type SetupProgressStep = {
+type Mode = "search" | "office";
+type Activity = {
   id: string;
-  label: string;
+  mode: Mode;
+  title: string;
+  status: string;
   detail: string;
+  at: string;
 };
 
-type SetupProgressState = "done" | "current" | "blocked" | "waiting";
-
-const OPENWORK_SETUP_STEPS: SetupProgressStep[] = [
-  {
-    id: "setup",
-    label: "Prepare Relay",
-    detail: "Create the setup workspace.",
-  },
-  {
-    id: "provider_gateway",
-    label: "Start provider",
-    detail: "Start the local Copilot gateway.",
-  },
-  {
-    id: "provider_config",
-    label: "Write config",
-    detail: "Connect legacy OpenCode diagnostics to Relay.",
-  },
-  {
-    id: "provider_warmup",
-    label: "Connect Copilot",
-    detail: "Prepare Microsoft 365 Copilot before the legacy web shell opens.",
-  },
-  {
-    id: "download_opencode",
-    label: "Get OpenCode",
-    detail: "Download and verify portable OpenCode for legacy diagnostics.",
-  },
-  {
-    id: "opencode_web",
-    label: "Prepare legacy web",
-    detail: "Create the diagnostic workspace.",
-  },
-  {
-    id: "ready",
-    label: "Ready",
-    detail: "Legacy OpenCode diagnostics can start.",
-  },
-];
-
-function inferSetupStage(diagnostics: RelayDiagnostics | null): string {
-  const setup = diagnostics?.openworkSetup;
-  if (!setup) return "setup";
-  if (setup.status === "ready") return "ready";
-  if (setup.stage && setup.stage !== "needs_attention") return setup.stage;
-
-  const detail = setup.message.toLowerCase();
-  if (detail.includes("provider gateway") || detail.includes("copilot_server") || detail.includes("18180")) {
-    return "provider_gateway";
-  }
-  if (detail.includes("config")) return "provider_config";
-  if (detail.includes("sign-in") || detail.includes("microsoft 365") || detail.includes("m365 copilot")) {
-    return "provider_warmup";
-  }
-  if (detail.includes("download") || detail.includes("extract") || detail.includes("probe opencode")) {
-    return "download_opencode";
-  }
-  if (detail.includes("web") || detail.includes("launch")) {
-    return "opencode_web";
-  }
-  return "setup";
+function nowLabel(): string {
+  return new Date().toLocaleString();
 }
 
-function setupProgressIndex(stage: string): number {
-  const index = OPENWORK_SETUP_STEPS.findIndex((step) => step.id === stage);
-  return index >= 0 ? index : 0;
+function shortPath(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 3) return path;
+  return `.../${parts.slice(-3).join("/")}`;
 }
 
-function setupProgressPercent(index: number, status: string, needsAttention: boolean): number {
-  const maxIndex = OPENWORK_SETUP_STEPS.length - 1;
-  if (status === "ready") return 100;
-  if (needsAttention) return Math.round(Math.max(8, (index / maxIndex) * 100));
-  return Math.round(Math.min(95, ((index + 0.35) / maxIndex) * 100));
+function statusTone(ok: boolean): string {
+  return ok ? "text-[var(--ra-color-success)]" : "text-[var(--ra-color-danger)]";
 }
 
-function normalizedProgressPercent(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return Math.max(0, Math.min(100, Math.round(value)));
+function cardBucketLabel(card: RelaySearchResultCard): string {
+  const bucket = card.bucket || card.folderRole || "";
+  const labels: Record<string, string> = {
+    direct_source_workpaper: "作業元",
+    supporting_evidence: "補助資料",
+    disclosure_output: "開示/出力",
+    review_or_audit: "監査/確認",
+    backup_or_archive: "バックアップ",
+    source_workpaper: "作業元",
+    filing: "提出/保管",
+    audit: "監査",
+  };
+  return labels[bucket] || bucket || "候補";
 }
 
-function setupStepState(index: number, currentIndex: number, status: string, needsAttention: boolean): SetupProgressState {
-  if (status === "ready") return "done";
-  if (index < currentIndex) return "done";
-  if (index === currentIndex) return needsAttention ? "blocked" : "current";
-  return "waiting";
-}
-
-function setupStepValue(state: SetupProgressState): string {
-  if (state === "done") return "Done";
-  if (state === "blocked") return "Needs attention";
-  if (state === "current") return "In progress";
-  return "Waiting";
-}
-
-function setupAttentionDetail(diagnostics: RelayDiagnostics | null): string | null {
-  const setup = diagnostics?.openworkSetup;
-  if (setup?.status !== "needs_attention") return null;
-  return setup.progressDetail || setup.message || "Relay could not finish setup.";
+function firstNonEmpty(...values: Array<string | null | undefined>): string {
+  return values.find((value) => value && value.trim())?.trim() || "";
 }
 
 export default function Shell(): JSX.Element {
-  const [settingsOpen, setSettingsOpen] = createSignal(false);
-  const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
-  const [browserSettings, setBrowserSettings] = createSignal(loadBrowserSettings());
-  const [maxTurns, setMaxTurns] = createSignal(loadMaxTurns());
-  const [alwaysOnTop, setAlwaysOnTop] = createSignal(loadAlwaysOnTop());
-  const [diagnostics, setDiagnostics] = createSignal<RelayDiagnostics | null>(null);
-  const [diagnosticsLoading, setDiagnosticsLoading] = createSignal(false);
-  const [diagnosticsError, setDiagnosticsError] = createSignal<string | null>(null);
-  const [openingWorkspace, setOpeningWorkspace] = createSignal(false);
-  const [setupRetrying, setSetupRetrying] = createSignal(false);
-  const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
+  const [mode, setMode] = createSignal<Mode>("search");
+  const [workspacePath, setWorkspacePath] = createSignal(loadWorkspacePath());
+  const [state, setState] = createSignal<RelayWorkspaceState | null>(null);
+  const [stateLoading, setStateLoading] = createSignal(false);
 
-  const workspace = createMemo(() => workspaceLabel() || "Legacy OpenCode workspace owns execution state");
-  const endpoint = createMemo(providerBaseUrl);
-  const diagLines = createMemo(() => diagnosticsSummary(diagnostics()));
-  const setupState = createMemo(() => {
-    const copilot = copilotState();
-    const report = diagnostics();
-    const setupStatus = report?.openworkSetup?.status ?? "preparing";
-    const setupReady = setupStatus === "ready";
-    const copilotReady = copilot.status === "ready" || report?.copilotBridgeConnected === true;
-    const needsSignIn = copilot.status === "needs_sign_in" || report?.copilotBridgeLoginRequired === true;
-    const needsAttention = setupStatus === "needs_attention";
-    const setupStage = inferSetupStage(report);
-    const progressIndex = setupProgressIndex(setupStage);
-    const explicitProgressPercent = normalizedProgressPercent(report?.openworkSetup?.progressPercent);
-    const progressPercent = explicitProgressPercent ?? setupProgressPercent(progressIndex, setupStatus, needsAttention);
-    const currentStep = OPENWORK_SETUP_STEPS[progressIndex] ?? OPENWORK_SETUP_STEPS[0];
-    const progressDetail = report?.openworkSetup?.progressDetail || currentStep.detail;
-    const attentionDetail = setupAttentionDetail(report);
-    return {
-      title: setupTitle(report, copilot.status),
-      message: setupMessage(report, copilot.message),
-      status: setupStatus,
-      setupStage,
-      progressPercent,
-      progressDetail,
-      attentionDetail,
-      currentStep,
-      setupReady,
-      copilotReady,
-      needsSignIn,
-      needsAttention,
-      launchLabel: report?.openworkSetup?.launchLabel ?? "Open Relay Agent Web (Legacy)",
-      providerBaseUrl: report?.openworkSetup?.providerBaseUrl ?? endpoint(),
-      configPath: report?.openworkSetup?.configPath ?? "~/.config/opencode/opencode.json",
-      steps: [
-        ...OPENWORK_SETUP_STEPS.map((step, index) => {
-          const state = setupStepState(index, progressIndex, setupStatus, needsAttention);
-          return {
-            ...step,
-            state,
-            value: setupStepValue(state),
-          };
-        }),
-        {
-          id: "m365",
-          label: "Microsoft 365",
-          detail: "Check Copilot sign-in.",
-          state: copilotReady ? "done" : needsSignIn ? "blocked" : "current",
-          value: copilotReady ? "Signed in" : needsSignIn ? "Sign-in needed" : "Checking",
-        },
-      ] satisfies Array<SetupProgressStep & { state: SetupProgressState; value: string }>,
-    };
-  });
+  const [searchQuery, setSearchQuery] = createSignal("");
+  const [searchThoroughness, setSearchThoroughness] = createSignal<"quick" | "thorough">("thorough");
+  const [searching, setSearching] = createSignal(false);
+  const [searchResult, setSearchResult] = createSignal<RelayDocumentSearchResponse | null>(null);
+  const [selectedCard, setSelectedCard] = createSignal<RelaySearchResultCard | null>(null);
+
+  const [officeFilePath, setOfficeFilePath] = createSignal("");
+  const [officeArgs, setOfficeArgs] = createSignal("");
+  const [officeRunning, setOfficeRunning] = createSignal(false);
+  const [officeResult, setOfficeResult] = createSignal<RelayOfficeCommandResponse | null>(null);
+
+  const [copilotChecking, setCopilotChecking] = createSignal(false);
+  const [copilotMessage, setCopilotMessage] = createSignal("未確認");
+  const [activity, setActivity] = createSignal<Activity[]>([]);
+
+  const workspaceReady = createMemo(() => workspacePath().trim().length > 0);
+  const appState = createMemo(() => state());
+  const activeCard = createMemo(() => selectedCard() || searchResult()?.cards[0] || null);
+
+  const appendActivity = (entry: Omit<Activity, "id" | "at">) => {
+    setActivity((current) => [
+      { ...entry, id: crypto.randomUUID(), at: nowLabel() },
+      ...current,
+    ].slice(0, 12));
+  };
+
+  const refreshState = async (showSuccess = false) => {
+    setStateLoading(true);
+    try {
+      const next = await getRelayWorkspaceState(workspacePath());
+      setState(next);
+      if (showSuccess) showToast({ tone: "ok", message: "状態を更新しました" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      showToast({ tone: "danger", message: "状態確認に失敗しました", detail: message });
+    } finally {
+      setStateLoading(false);
+    }
+  };
 
   onMount(() => {
-    void showMainWindow();
-    void refreshDiagnostics(false);
-    const copilotPrewarmTimer = window.setTimeout(() => {
-      runCopilotWarmup(false);
-    }, 500);
-    const timer = window.setInterval(() => {
-      const setup = diagnostics()?.openworkSetup?.status;
-      if (setup !== "ready") {
-        void refreshDiagnostics(false);
-      }
-    }, 2500);
-    onCleanup(() => {
-      window.clearTimeout(copilotPrewarmTimer);
-      window.clearInterval(timer);
+    void refreshState(false);
+  });
+
+  const chooseWorkspace = async () => {
+    const selected = await pickWorkspaceFolder(workspacePath());
+    if (!selected) return;
+    setWorkspacePath(selected);
+    saveWorkspacePath(selected);
+    await refreshState(true);
+  };
+
+  const chooseOfficeFile = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      defaultPath: firstNonEmpty(officeFilePath(), workspacePath()) || undefined,
+      filters: [
+        {
+          name: "Office files",
+          extensions: ["docx", "docm", "xlsx", "xlsm", "pptx", "pptm"],
+        },
+      ],
     });
-  });
+    if (typeof selected !== "string") return;
+    setOfficeFilePath(selected);
+    setOfficeArgs(`view "${selected}" outline --json`);
+  };
 
-  createEffect(() => {
-    void applyAlwaysOnTopSetting(alwaysOnTop());
-  });
+  const runSearch = async () => {
+    const query = searchQuery().trim();
+    const workspace = workspacePath().trim();
+    if (!workspace) {
+      showToast({ tone: "danger", message: "先にワークスペースを選択してください" });
+      return;
+    }
+    if (!query) {
+      showToast({ tone: "danger", message: "検索したい内容を入力してください" });
+      return;
+    }
 
-  const refreshDiagnostics = async (showSuccess = true) => {
-    setDiagnosticsLoading(true);
-    setDiagnosticsError(null);
+    setSearching(true);
+    setSearchResult(null);
+    setSelectedCard(null);
     try {
-      const report = await getRelayDiagnostics();
-      setDiagnostics(report);
-      if (showSuccess) showToast({ tone: "ok", message: "Diagnostics refreshed" });
+      const result = await runRelayDocumentSearch({
+        query,
+        workspacePath: workspace,
+        intent: "find_files",
+        thoroughness: searchThoroughness(),
+        evidence: "candidate",
+        maxResults: 80,
+        fileTypes: ["any"],
+      });
+      setSearchResult(result);
+      setSelectedCard(result.cards[0] ?? null);
+      appendActivity({
+        mode: "search",
+        title: query,
+        status: result.ok ? "完了" : "失敗",
+        detail: `${result.cards.length}件 / ${result.coverageLabel}`,
+      });
+      showToast({
+        tone: result.ok ? "ok" : "danger",
+        message: result.ok ? "検索が完了しました" : "検索に失敗しました",
+        detail: result.summary,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setDiagnosticsError(message);
-      showToast({ tone: "danger", message: "Diagnostics unavailable", detail: message });
+      showToast({ tone: "danger", message: "検索に失敗しました", detail: message });
+      appendActivity({ mode: "search", title: query, status: "失敗", detail: message });
     } finally {
-      setDiagnosticsLoading(false);
+      setSearching(false);
+      void refreshState(false);
     }
   };
 
-  const reconnectCopilot = () => {
-    void runCopilotWarmup(false);
-  };
-
-  const retrySetup = async () => {
-    setSetupRetrying(true);
+  const inspectOffice = async () => {
+    const filePath = officeFilePath().trim();
+    if (!filePath) {
+      showToast({ tone: "danger", message: "Officeファイルを選択してください" });
+      return;
+    }
+    setOfficeRunning(true);
     try {
-      await retryOpencodeSetup();
-      showToast({ tone: "ok", message: "Legacy OpenCode setup restarted" });
-      await refreshDiagnostics(false);
+      const result = await inspectOfficeFile({ filePath });
+      setOfficeResult(result);
+      appendActivity({
+        mode: "office",
+        title: shortPath(filePath),
+        status: result.ok ? "構造確認" : "失敗",
+        detail: result.ok ? "outline --json" : result.stderr || result.error || "OfficeCLI failed",
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      showToast({ tone: "danger", message: "Setup retry failed", detail: message });
+      showToast({ tone: "danger", message: "Office構造確認に失敗しました", detail: message });
     } finally {
-      setSetupRetrying(false);
+      setOfficeRunning(false);
     }
   };
 
-  const openWorkspace = async () => {
-    setOpeningWorkspace(true);
+  const executeOffice = async () => {
+    const filePath = officeFilePath().trim();
+    const args = officeArgs().trim();
+    if (!filePath || !args) {
+      showToast({ tone: "danger", message: "OfficeファイルとOfficeCLI引数を入力してください" });
+      return;
+    }
+    setOfficeRunning(true);
     try {
-      await openOpencodeWeb(workspaceLabel());
-      showToast({ tone: "ok", message: "Opening legacy Relay Agent Web" });
+      const result = await executeOfficeCliCommand({
+        filePath,
+        officecliArgs: args,
+        createBackup: true,
+      });
+      setOfficeResult(result);
+      appendActivity({
+        mode: "office",
+        title: shortPath(filePath),
+        status: result.ok ? "実行完了" : "失敗",
+        detail: result.command.join(" "),
+      });
+      showToast({
+        tone: result.ok ? "ok" : "danger",
+        message: result.ok ? "OfficeCLIを実行しました" : "OfficeCLIが失敗しました",
+        detail: result.backupPath ? `バックアップ: ${result.backupPath}` : result.error || undefined,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      showToast({ tone: "danger", message: "Legacy OpenCode is not ready", detail: message });
-      await refreshDiagnostics(false);
+      showToast({ tone: "danger", message: "OfficeCLI実行に失敗しました", detail: message });
     } finally {
-      setOpeningWorkspace(false);
+      setOfficeRunning(false);
+      void refreshState(false);
     }
   };
 
-  const applySettings = (settings: ShellSettingsDraft) => {
-    setWorkspaceLabel(settings.workspacePath);
-    setBrowserSettings(settings.browserSettings);
-    setMaxTurns(settings.maxTurns);
-    setAlwaysOnTop(settings.alwaysOnTop);
+  const checkCopilot = async () => {
+    setCopilotChecking(true);
+    try {
+      const result = await warmupCopilotBridge(null);
+      setCopilotMessage(result.connected ? "接続済み" : result.message);
+      showToast({ tone: result.connected ? "ok" : "danger", message: result.message });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCopilotMessage(message);
+      showToast({ tone: "danger", message: "Copilot確認に失敗しました", detail: message });
+    } finally {
+      setCopilotChecking(false);
+    }
+  };
+
+  const copyPath = async (path: string) => {
+    await navigator.clipboard.writeText(path);
+    showToast({ tone: "ok", message: "パスをコピーしました" });
   };
 
   return (
-    <main class="min-h-screen bg-[var(--ra-color-bg)] text-[var(--ra-color-text)]">
-      <div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 py-5">
-        <header
-          role="banner"
-          class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ra-color-border)] pb-4"
-        >
+    <main class="relay-app-shell bg-[var(--ra-color-bg)] text-[var(--ra-color-text)]">
+      <aside class="relay-sidebar">
+        <div class="relay-brand">
+          <div class="relay-brand__mark" aria-hidden="true">R</div>
           <div>
-            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--ra-color-text-muted)]">
-              Legacy OpenCode diagnostics + M365 Copilot gateway
-            </p>
-            <h1 class="text-2xl font-semibold">Relay Agent</h1>
+            <p class="relay-brand__name">Relay Agent</p>
+            <p class="relay-brand__caption">Documents and Office tools</p>
           </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <button type="button" class="ra-button ra-button--secondary" onClick={reconnectCopilot}>
-              Reconnect Copilot
-            </button>
-            <button type="button" class="ra-button" onClick={() => setSettingsOpen(true)}>
-              Settings
-            </button>
-          </div>
-        </header>
+        </div>
 
-        <section class="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <article class="ra-surface p-5">
-            <p class="text-sm font-semibold text-[var(--ra-color-text-muted)]">Legacy OpenCode diagnostics</p>
-            <h2 class="mt-2 text-2xl font-semibold">{setupState().title}</h2>
-            <p class="mt-2 max-w-3xl text-sm text-[var(--ra-color-text-muted)]">{setupState().message}</p>
-            <div
-              class="ra-setup-progress mt-5"
-              data-state={setupState().needsAttention ? "blocked" : setupState().status === "ready" ? "done" : "current"}
-              aria-label="Legacy OpenCode setup progress"
-            >
-              <div class="ra-setup-progress__topline">
-                <div>
-                  <p class="ra-setup-progress__eyebrow">Setup progress</p>
-                  <p class="ra-setup-progress__current">{setupState().currentStep.label}</p>
-                </div>
-                <p class="ra-setup-progress__percent">{setupState().progressPercent}%</p>
+        <div class="relay-mode-switch" role="tablist" aria-label="Relay task mode">
+          <button
+            type="button"
+            classList={{ "is-active": mode() === "search" }}
+            onClick={() => setMode("search")}
+          >
+            資料を探す
+          </button>
+          <button
+            type="button"
+            classList={{ "is-active": mode() === "office" }}
+            onClick={() => setMode("office")}
+          >
+            Officeファイルを編集する
+          </button>
+        </div>
+
+        <section class="relay-sidebar-section">
+          <div class="relay-section-heading">
+            <p>Workspace</p>
+            <button type="button" onClick={chooseWorkspace}>変更</button>
+          </div>
+          <p class="relay-path" title={workspacePath()}>
+            {workspacePath() || "未選択"}
+          </p>
+          <Show when={!workspaceReady()}>
+            <p class="relay-hint relay-hint--danger">先に検索・編集対象のフォルダを選択してください。</p>
+          </Show>
+        </section>
+
+        <section class="relay-sidebar-section">
+          <div class="relay-section-heading">
+            <p>Runtime</p>
+            <button type="button" disabled={stateLoading()} onClick={() => refreshState(true)}>
+              更新
+            </button>
+          </div>
+          <div class="relay-status-list">
+            <p><span class={statusTone(Boolean(appState()?.documentSearchAvailable))}>●</span> Search</p>
+            <p><span class={statusTone(Boolean(appState()?.officecliAvailable))}>●</span> OfficeCLI</p>
+            <p><span class={statusTone(Boolean(appState()?.ripgrepAvailable))}>●</span> ripgrep</p>
+            <p><span class="text-[var(--ra-color-text-muted)]">●</span> Copilot: {copilotMessage()}</p>
+          </div>
+          <button type="button" class="relay-secondary-action" disabled={copilotChecking()} onClick={checkCopilot}>
+            {copilotChecking() ? "確認中" : "Copilot接続を確認"}
+          </button>
+        </section>
+
+        <section class="relay-sidebar-section relay-history">
+          <p class="relay-sidebar-title">履歴</p>
+          <Show when={activity().length > 0} fallback={<p class="relay-hint">実行履歴はまだありません。</p>}>
+            <For each={activity()}>
+              {(item) => (
+                <button type="button" class="relay-history-item" onClick={() => setMode(item.mode)}>
+                  <span>{item.status}</span>
+                  <strong>{item.title}</strong>
+                  <small>{item.at}</small>
+                </button>
+              )}
+            </For>
+          </Show>
+        </section>
+      </aside>
+
+      <section class="relay-workbench">
+        <Show when={mode() === "search"} fallback={
+          <section class="relay-work-panel">
+            <div class="relay-panel-heading">
+              <div>
+                <p class="relay-kicker">OfficeCLI workflow</p>
+                <h1>Officeファイルを安全に確認・編集する</h1>
               </div>
-              <div
-                class="ra-setup-progress__bar"
-                role="progressbar"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow={setupState().progressPercent}
-                aria-label={`Legacy OpenCode setup is ${setupState().progressPercent}% complete`}
-                aria-valuetext={`${setupState().currentStep.label}: ${setupState().progressDetail}`}
-              >
-                <div class="ra-setup-progress__fill" style={{ width: `${setupState().progressPercent}%` }} />
-              </div>
-              <p class="ra-setup-progress__hint">{setupState().progressDetail}</p>
+              <button type="button" class="ra-button ra-button--secondary" onClick={chooseOfficeFile}>
+                ファイルを選択
+              </button>
             </div>
-            <Show when={setupState().attentionDetail}>
-              <div class="ra-setup-attention" role="status" aria-live="polite">
-                <p class="ra-setup-attention__label">Setup stopped here</p>
-                <p class="ra-setup-attention__detail">{setupState().attentionDetail}</p>
-              </div>
-            </Show>
-            <div class="ra-setup-steps mt-4">
-              {setupState().steps.map((step) => (
-                <div class="ra-setup-step" data-state={step.state}>
-                  <div class="ra-setup-step__marker" aria-hidden="true" />
-                  <div class="ra-setup-step__copy">
-                    <p class="ra-setup-step__label">{step.label}</p>
-                    <p class="ra-setup-step__detail">{step.detail}</p>
+
+            <div class="relay-form-grid">
+              <label class="relay-field relay-field--wide">
+                <span>対象ファイル</span>
+                <input
+                  value={officeFilePath()}
+                  onInput={(event) => setOfficeFilePath(event.currentTarget.value)}
+                  placeholder="C:/path/to/workbook.xlsx"
+                />
+              </label>
+              <label class="relay-field relay-field--wide">
+                <span>OfficeCLI引数</span>
+                <textarea
+                  rows="5"
+                  value={officeArgs()}
+                  onInput={(event) => setOfficeArgs(event.currentTarget.value)}
+                  placeholder={`view "C:/path/file.xlsx" outline --json`}
+                />
+              </label>
+            </div>
+
+            <div class="relay-action-row">
+              <button type="button" class="ra-button ra-button--secondary" disabled={officeRunning()} onClick={inspectOffice}>
+                構造を確認
+              </button>
+              <button type="button" class="ra-button" disabled={officeRunning()} onClick={executeOffice}>
+                バックアップして実行
+              </button>
+            </div>
+
+            <Show when={officeResult()}>
+              {(result) => (
+                <section class="relay-result-block">
+                  <div class="relay-result-header">
+                    <h2>実行結果</h2>
+                    <p class={statusTone(result().ok)}>{result().ok ? "成功" : "失敗"} · {result().elapsedMs}ms</p>
                   </div>
-                  <p class="ra-setup-step__value">{step.value}</p>
-                </div>
-              ))}
+                  <Show when={result().backupPath}>
+                    <p class="relay-hint">バックアップ: {result().backupPath}</p>
+                  </Show>
+                  <pre>{result().stdout || result().stderr || result().error || "No output"}</pre>
+                </section>
+              )}
+            </Show>
+          </section>
+        }>
+          <section class="relay-work-panel">
+            <div class="relay-panel-heading">
+              <div>
+                <p class="relay-kicker">Document search</p>
+                <h1>資料を探す</h1>
+              </div>
+              <div class="relay-segment">
+                <button
+                  type="button"
+                  classList={{ "is-active": searchThoroughness() === "quick" }}
+                  onClick={() => setSearchThoroughness("quick")}
+                >
+                  高速
+                </button>
+                <button
+                  type="button"
+                  classList={{ "is-active": searchThoroughness() === "thorough" }}
+                  onClick={() => setSearchThoroughness("thorough")}
+                >
+                  詳細
+                </button>
+              </div>
             </div>
-          </article>
-          <div class="ra-surface flex flex-col justify-center gap-3 p-5">
-            <Show
-              when={setupState().needsAttention}
-              fallback={
-                <Show
-                  when={setupState().needsSignIn}
-                  fallback={
-                    <button
-                      type="button"
-                      class="ra-button"
-                      disabled={openingWorkspace() || !setupState().setupReady || !setupState().copilotReady}
-                      onClick={openWorkspace}
-                    >
-                      {openingWorkspace() ? "Opening" : setupState().launchLabel}
+
+            <div class="relay-search-box">
+              <textarea
+                rows="4"
+                value={searchQuery()}
+                onInput={(event) => setSearchQuery(event.currentTarget.value)}
+                placeholder="例: 部品売上に関するファイルを探して"
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runSearch();
+                }}
+              />
+              <button type="button" class="ra-button" disabled={searching()} onClick={runSearch}>
+                {searching() ? "検索中" : "検索"}
+              </button>
+            </div>
+
+            <Show when={searchResult()}>
+              {(result) => (
+                <section class="relay-result-block">
+                  <div class="relay-result-header">
+                    <div>
+                      <h2>検索結果</h2>
+                      <p>{result().summary}</p>
+                    </div>
+                    <p class={statusTone(result().ok)}>{result().status} · {result().elapsedMs}ms</p>
+                  </div>
+                  <p class="relay-hint">{result().coverageLabel}</p>
+                  <div class="relay-result-list">
+                    <For each={result().cards}>
+                      {(card) => (
+                        <button
+                          type="button"
+                          class="relay-result-card"
+                          classList={{ "is-active": activeCard()?.path === card.path }}
+                          onClick={() => setSelectedCard(card)}
+                        >
+                          <div>
+                            <p class="relay-result-card__title">{card.title}</p>
+                            <p class="relay-result-card__path">{card.displayPath || card.path}</p>
+                          </div>
+                          <div class="relay-card-meta">
+                            <span>{cardBucketLabel(card)}</span>
+                            <span>{card.evidenceState || card.matchMode || "candidate"}</span>
+                            <Show when={card.score != null}>
+                              <span>{card.score}</span>
+                            </Show>
+                          </div>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </section>
+              )}
+            </Show>
+          </section>
+        </Show>
+      </section>
+
+      <aside class="relay-detail">
+        <Show when={mode() === "search"} fallback={
+          <section class="relay-detail-panel">
+            <p class="relay-kicker">Applied steps</p>
+            <h2>Office編集の安全確認</h2>
+            <ol class="relay-step-list">
+              <li>対象ファイルを選択</li>
+              <li>構造確認でシート・ページ・範囲を確認</li>
+              <li>OfficeCLI引数をレビュー</li>
+              <li>バックアップを作成して実行</li>
+            </ol>
+            <p class="relay-hint">Officeファイルはテキスト置換ではなく、OfficeCLI経由でのみ変更します。</p>
+          </section>
+        }>
+          <section class="relay-detail-panel">
+            <p class="relay-kicker">Selected candidate</p>
+            <Show when={activeCard()} fallback={<p class="relay-hint">検索結果を選択すると詳細が表示されます。</p>}>
+              {(card) => (
+                <>
+                  <h2>{card().title}</h2>
+                  <p class="relay-detail-path">{card().path}</p>
+                  <div class="relay-detail-grid">
+                    <p><span>分類</span>{cardBucketLabel(card())}</p>
+                    <p><span>種類</span>{card().fileType || "-"}</p>
+                    <p><span>根拠</span>{card().evidenceState || "-"}</p>
+                    <p><span>更新</span>{card().modifiedTime || "-"}</p>
+                  </div>
+                  <div class="relay-action-row relay-action-row--compact">
+                    <button type="button" class="ra-button ra-button--secondary" onClick={() => copyPath(card().path)}>
+                      パスをコピー
                     </button>
-                  }
-                >
-                  <button type="button" class="ra-button" onClick={reconnectCopilot}>
-                    Check Microsoft Sign-In
-                  </button>
-                </Show>
-              }
-            >
-              <button
-                type="button"
-                class="ra-button"
-                disabled={setupRetrying()}
-                onClick={retrySetup}
-              >
-                {setupRetrying() ? "Trying Again" : "Try Setup Again"}
-              </button>
-            </Show>
-            <Show when={!setupState().needsAttention}>
-              <button
-                type="button"
-                class="ra-button ra-button--secondary"
-                disabled={setupRetrying()}
-                onClick={retrySetup}
-              >
-                {setupRetrying() ? "Trying Again" : "Refresh Setup"}
-              </button>
-            </Show>
-          </div>
-        </section>
-
-        <section class="grid gap-4 pb-5 md:grid-cols-2">
-          <article class="ra-surface p-5">
-            <h2 class="text-xl font-semibold">What happens next</h2>
-            <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
-              <p>The normal installer path is the Relay-branded AionUi desktop shell.</p>
-              <p>This window prepares the legacy OpenCode web diagnostic path for compatibility checks.</p>
-              <p>Use it only when validating the old OpenCode provider gateway behavior.</p>
-              <p>For normal chat, tools, OfficeCLI assistants, files, approvals, and history, use Relay Agent from the AionUi installer.</p>
-            </div>
-          </article>
-          <article class="ra-surface p-5">
-            <h2 class="text-xl font-semibold">If setup stops</h2>
-            <div class="mt-4 grid gap-3 text-sm text-[var(--ra-color-text-muted)]">
-              <p>Use Try Setup Again first. Relay will restart the setup without command line steps.</p>
-              <p>If Microsoft 365 sign-in is needed, use Check Microsoft Sign-In.</p>
-              <p>Advanced details are only needed when sharing a support report.</p>
-            </div>
-          </article>
-        </section>
-
-        <section class="pb-5">
-          <details class="ra-surface p-5">
-            <summary class="cursor-pointer text-lg font-semibold">Advanced diagnostics</summary>
-            <div class="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-              <div class="grid gap-3">
-                <div class="rounded border border-[var(--ra-color-border)] p-4">
-                  <p class="text-sm font-semibold">Workspace</p>
-                  <p class="mt-2 break-all text-sm text-[var(--ra-color-text-muted)]">{workspace()}</p>
-                </div>
-                <div class="rounded border border-[var(--ra-color-border)] p-4">
-                  <p class="text-sm font-semibold">Provider</p>
-                  <p class="mt-2 break-all font-mono text-sm text-[var(--ra-color-text-muted)]">{endpoint()}</p>
-                  <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
-                    Model id: <span class="font-mono">relay-agent/m365-copilot</span>
-                  </p>
-                </div>
-                <div class="rounded border border-[var(--ra-color-border)] p-4">
-                  <p class="text-sm font-semibold">Transport defaults</p>
-                  <p class="mt-2 text-sm text-[var(--ra-color-text-muted)]">
-                    CDP {browserSettings().cdpPort} · timeout {browserSettings().timeoutMs} ms · max turns {maxTurns()}
-                  </p>
-                </div>
-              </div>
-
-              <aside>
-                <div class="flex items-center justify-between gap-3">
-                  <h2 class="text-lg font-semibold">Diagnostics</h2>
-                  <button
-                    type="button"
-                    class="ra-button ra-button--secondary"
-                    disabled={diagnosticsLoading()}
-                    onClick={() => refreshDiagnostics()}
-                  >
-                    {diagnosticsLoading() ? "Refreshing" : "Refresh"}
-                  </button>
-                </div>
-                <Show
-                  when={diagnostics()}
-                  fallback={
-                    <p class="mt-4 text-sm text-[var(--ra-color-text-muted)]">
-                      Refresh diagnostics to inspect provider bridge, CDP, M365 sign-in, and legacy OpenCode status.
-                    </p>
-                  }
-                >
-                  <div class="mt-4 grid gap-2 text-sm">
-                    {diagLines().map((line) => (
-                      <p class="break-words rounded border border-[var(--ra-color-border)] bg-[var(--ra-color-surface-subtle)] p-2">
-                        {line}
-                      </p>
-                    ))}
                   </div>
-                </Show>
-                <Show when={diagnosticsError()}>
-                  <p class="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-700">
-                    {diagnosticsError()}
-                  </p>
-                </Show>
-              </aside>
-            </div>
-          </details>
-        </section>
-      </div>
+                  <Show when={card().warnings.length > 0}>
+                    <div class="relay-warning-list">
+                      <For each={card().warnings}>
+                        {(warning) => <p>{warning}</p>}
+                      </For>
+                    </div>
+                  </Show>
+                </>
+              )}
+            </Show>
+          </section>
+        </Show>
+      </aside>
 
-      <SettingsModal
-        open={settingsOpen()}
-        onClose={() => setSettingsOpen(false)}
-        onApply={applySettings}
-        copilotState={copilotState()}
-        onReconnectCopilot={reconnectCopilot}
-      />
       <StatusToasts />
     </main>
   );

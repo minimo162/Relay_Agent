@@ -25,11 +25,11 @@ const windowsBootstrapE2eDoc = read("docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2
 const required = [
   {
     path: "PLANS.md",
-    text: "Relay_Agent makes OpenCode easy to use with M365 Copilot",
+    text: "Relay_Agent is a dedicated Windows desktop application",
   },
   {
     path: "PLANS.md",
-    text: "Do not add new production features to the Relay-owned Rust execution runtime.",
+    text: "AionUi overlay",
   },
   {
     path: "docs/COPILOT_OPENCODE_HARD_CUT_PLAN.md",
@@ -97,11 +97,11 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "What happens next",
+    text: "資料を探す",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Advanced diagnostics",
+    text: "Officeファイルを編集する",
   },
   {
     path: "package.json",
@@ -277,11 +277,11 @@ const required = [
   },
   {
     path: "README.md",
-    text: "The product is intentionally narrow right now. The beginner UI exposes two",
+    text: "Relay Agent now ships as a dedicated Tauri + SolidJS desktop app.",
   },
   {
     path: "README.md",
-    text: "`資料を探す` - find and inspect local or shared-folder documents.",
+    text: "`資料を探す` — run Relay document search against a selected workspace folder.",
   },
   {
     path: "apps/desktop/src-tauri/src/lib.rs",
@@ -305,15 +305,15 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Try Setup Again",
+    text: "Copilot接続を確認",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Refresh Setup",
+    text: "Runtime",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Open Relay Agent Web",
+    text: "OfficeCLI",
   },
   {
     path: "apps/desktop/src-tauri/src/commands/diagnostics.rs",
@@ -321,15 +321,15 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Sign in to Microsoft 365",
+    text: "Copilot",
   },
   {
     path: "README.md",
-    text: "`Officeファイルを編集する` - edit Word, Excel, and PowerPoint files through",
+    text: "`Officeファイルを編集する` — inspect or execute OfficeCLI operations against a",
   },
   {
     path: "README.md",
-    text: "Searched shared folders are not polluted with `.aionrs` or Relay index files.",
+    text: "Relay Agent does not write `.aionrs`, SQLite databases, or index files into the",
   },
   {
     path: "apps/desktop/src-tauri/src/openwork_bootstrap.rs",
@@ -341,7 +341,7 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "Advanced details are only needed",
+    text: "バックアップして実行",
   },
   {
     path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",

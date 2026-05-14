@@ -1473,7 +1473,7 @@ fn bundled_node_path() -> Option<PathBuf> {
     node.is_file().then_some(node)
 }
 
-fn find_node() -> Option<PathBuf> {
+pub(crate) fn find_node() -> Option<PathBuf> {
     if let Some(node) = bundled_node_path() {
         let mut command = Command::new(&node);
         command.arg("--version");

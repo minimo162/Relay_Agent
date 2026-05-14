@@ -89,6 +89,93 @@ export interface RelayDiagnostics {
   openworkSetup?: OpenWorkSetupSnapshot | null;
 }
 
+export interface RelayWorkspaceState {
+  appVersion: string;
+  workspacePath?: string | null;
+  appLocalDataDir: string;
+  documentSearchCacheDir: string;
+  officeBackupDir: string;
+  documentSearchAvailable: boolean;
+  documentSearchMessage: string;
+  officecliAvailable: boolean;
+  officecliPath?: string | null;
+  officecliMessage: string;
+  ripgrepAvailable: boolean;
+  ripgrepPath?: string | null;
+}
+
+export type RelayDocumentSearchIntent =
+  | "find_files"
+  | "answer_with_evidence"
+  | "summarize_with_evidence"
+  | "inspect_file"
+  | "similar_documents";
+
+export type RelayDocumentSearchThoroughness =
+  | "quick"
+  | "thorough";
+
+export type RelayDocumentSearchEvidence =
+  | "none"
+  | "candidate"
+  | "required";
+
+export interface RelayDocumentSearchRequest {
+  query: string;
+  workspacePath: string;
+  intent: RelayDocumentSearchIntent;
+  thoroughness: RelayDocumentSearchThoroughness;
+  evidence: RelayDocumentSearchEvidence;
+  maxResults: number;
+  fileTypes: string[];
+}
+
+export interface RelaySearchResultCard {
+  title: string;
+  path: string;
+  displayPath?: string | null;
+  fileType?: string | null;
+  modifiedTime?: string | null;
+  matchMode?: string | null;
+  evidenceState?: string | null;
+  score?: number | null;
+  bucket?: string | null;
+  folderRole?: string | null;
+  warnings: string[];
+}
+
+export interface RelayDocumentSearchResponse {
+  ok: boolean;
+  status: string;
+  summary: string;
+  coverageLabel: string;
+  elapsedMs: number;
+  cards: RelaySearchResultCard[];
+  raw: unknown;
+  error?: string | null;
+}
+
+export interface RelayOfficeInspectRequest {
+  filePath: string;
+}
+
+export interface RelayOfficeExecuteRequest {
+  filePath: string;
+  officecliArgs: string;
+  createBackup: boolean;
+}
+
+export interface RelayOfficeCommandResponse {
+  ok: boolean;
+  command: string[];
+  stdout: string;
+  stderr: string;
+  exitCode?: number | null;
+  backupPath?: string | null;
+  elapsedMs: number;
+  error?: string | null;
+}
+
 export type CopilotWarmupStage =
   | "ensure_server"
   | "health_check"

@@ -173,7 +173,7 @@ export function patchIndexContent(input, branding = relayBranding()) {
   const gatewayStartupBlock = [
     "  let relayGatewayStartup: RelayGatewayStartupResult | null = null;",
     "  if (!isWebUIMode && !isResetPasswordMode) {",
-    "    relayGatewayStartup = await startRelayGatewayBeforeShell();",
+    "    relayGatewayStartup = await startRelayGatewayBeforeShell({ prewarm: false });",
     "    mark('relayGateway');",
     "  }",
   ].join("\n");
@@ -200,6 +200,10 @@ export function patchIndexContent(input, branding = relayBranding()) {
       ].join("\n"),
     );
   }
+  output = output.replace(
+    "relayGatewayStartup = await startRelayGatewayBeforeShell();",
+    "relayGatewayStartup = await startRelayGatewayBeforeShell({ prewarm: false });",
+  );
 
   if (!output.includes("relayGatewayStartup?.state === 'needs_attention'")) {
     const anchor = [
@@ -523,6 +527,12 @@ export function patchGuidSendContent(input) {
         "  return presetAssistantId ? RELAY_GUID_TASK_MODE_BY_ASSISTANT_ID[presetAssistantId] : undefined;",
         "}",
         "",
+        "function relayGuidWorkspaceRequiredMessage(mode: RelayGuidTaskMode): string {",
+        "  return mode === 'office_edit'",
+        "    ? 'Officeファイルを編集するには、先に作業フォルダを選択してください。'",
+        "    : '資料を探すには、先に検索するフォルダを選択してください。';",
+        "}",
+        "",
         "function buildRelayGuidTaskInitialInput(input: string, mode: RelayGuidTaskMode, workspace: string): string {",
         "  const firstTool = RELAY_GUID_TASK_FIRST_TOOL_BY_MODE[mode];",
         "  return [",
@@ -532,6 +542,28 @@ export function patchGuidSendContent(input) {
         "    'USER_REQUEST:',",
         "    input,",
         "  ].join('\\n');",
+        "}",
+      ].join("\n"),
+    );
+  }
+  if (!output.includes("function relayGuidWorkspaceRequiredMessage")) {
+    const helperAnchor = [
+      "function getRelayGuidTaskMode(presetAssistantId: string | undefined): RelayGuidTaskMode | undefined {",
+      "  return presetAssistantId ? RELAY_GUID_TASK_MODE_BY_ASSISTANT_ID[presetAssistantId] : undefined;",
+      "}",
+    ].join("\n");
+    if (!output.includes(helperAnchor)) {
+      throw new Error("Could not find Relay task mode helper insertion anchor");
+    }
+    output = output.replace(
+      helperAnchor,
+      [
+        helperAnchor,
+        "",
+        "function relayGuidWorkspaceRequiredMessage(mode: RelayGuidTaskMode): string {",
+        "  return mode === 'office_edit'",
+        "    ? 'Officeファイルを編集するには、先に作業フォルダを選択してください。'",
+        "    : '資料を探すには、先に検索するフォルダを選択してください。';",
         "}",
       ].join("\n"),
     );
@@ -579,6 +611,29 @@ export function patchGuidSendContent(input) {
         "        Message.warning(t('conversation.noModelConfigured'));",
         "        return;",
         "      }",
+      ].join("\n"),
+    );
+  }
+
+  if (!output.includes("Relay Agent task mode validation: workspace required")) {
+    const workspaceGuardAnchor = [
+      "      try {",
+      "        const conversation = await ipcBridge.conversation.create.invoke({",
+    ].join("\n");
+    if (!output.includes(workspaceGuardAnchor)) {
+      throw new Error("Could not find useGuidSend conversation creation try anchor");
+    }
+    output = output.replace(
+      workspaceGuardAnchor,
+      [
+        "      if (relayTaskMode && !finalWorkspace.trim()) {",
+        "        // Relay Agent task mode validation: workspace required before creating a conversation.",
+        "        const message = relayGuidWorkspaceRequiredMessage(relayTaskMode);",
+        "        Message.error(message);",
+        "        throw new Error(message);",
+        "      }",
+        "      try {",
+        "        const conversation = await ipcBridge.conversation.create.invoke({",
       ].join("\n"),
     );
   }
@@ -2638,6 +2693,49 @@ export function patchAionrsManagerContent(input) {
     "    await this.waitForRelayAgentReady();\n    if (this.agentStartError) {",
   );
 
+  if (!output.includes("await this.handleRelayDirectDocumentSearch(data);")) {
+    const directTaskAnchor = [
+      "    this.status = 'pending';",
+      "    this._lastActivityAt = Date.now();",
+    ].join("\n");
+    if (output.includes(directTaskAnchor)) {
+      output = output.replace(
+        directTaskAnchor,
+        [
+          directTaskAnchor,
+          "    const relayTaskMode = this.relayTaskModeFromContent(data.content);",
+          "    if (relayTaskMode === 'document_search') {",
+          "      await this.handleRelayDirectDocumentSearch(data);",
+          "      return;",
+          "    }",
+          "    if (relayTaskMode === 'office_edit') {",
+          "      const canContinue = await this.relayOfficeEditPreflight(data);",
+          "      if (!canContinue) return;",
+          "    }",
+        ].join("\n"),
+      );
+    } else {
+      const directBeforeWaitAnchor = "    await this.waitForRelayAgentReady();";
+      if (output.includes(directBeforeWaitAnchor)) {
+        output = output.replace(
+          directBeforeWaitAnchor,
+          [
+            "    const relayTaskMode = this.relayTaskModeFromContent(data.content);",
+            "    if (relayTaskMode === 'document_search') {",
+            "      await this.handleRelayDirectDocumentSearch(data);",
+            "      return;",
+            "    }",
+            "    if (relayTaskMode === 'office_edit') {",
+            "      const canContinue = await this.relayOfficeEditPreflight(data);",
+            "      if (!canContinue) return;",
+            "    }",
+            directBeforeWaitAnchor,
+          ].join("\n"),
+        );
+      }
+    }
+  }
+
   const injection = [
     "      const relayDocumentSearch = this.buildRelayDocumentSearchMcpStdioConfig(mergedData.workspace);",
     "      if (relayDocumentSearch) stdioMcpServers.push(relayDocumentSearch);",
@@ -2761,6 +2859,176 @@ export function patchAionrsManagerContent(input) {
         "  async stop() {",
       ].join("\n"),
     );
+  }
+
+  if (!output.includes("private relayTaskModeFromContent(content: string): 'document_search' | 'office_edit' | null")) {
+    const stopAnchor = [
+      "",
+      "  async stop() {",
+    ].join("\n");
+    const helper = [
+      "",
+      "  private relayTaskModeFromContent(content: string): 'document_search' | 'office_edit' | null {",
+      "    const match = /^RELAY_TASK_MODE:\\s*(document_search|office_edit)\\s*$/m.exec(content || '');",
+      "    return match ? (match[1] as 'document_search' | 'office_edit') : null;",
+      "  }",
+      "",
+      "  private relayUserRequestFromContent(content: string): string {",
+      "    const marker = 'USER_REQUEST:';",
+      "    const markerIndex = content.indexOf(marker);",
+      "    return (markerIndex >= 0 ? content.slice(markerIndex + marker.length) : content).trim();",
+      "  }",
+      "",
+      "  private relayWorkspaceFromContent(content: string): string {",
+      "    const match = /^RELAY_WORKSPACE:\\s*(.+)\\s*$/m.exec(content || '');",
+      "    const value = (match?.[1] || '').trim();",
+      "    if (!value || value === 'current AionUi workspace') return this.workspace || '';",
+      "    return value;",
+      "  }",
+      "",
+      "  private relayDocumentSearchIntentFromRequest(request: string): 'find_files' | 'answer_with_evidence' | 'summarize_with_evidence' | 'inspect_file' {",
+      "    const normalized = request.toLowerCase();",
+      "    if (/要約|まとめ|summari[sz]e|summary/u.test(normalized)) return 'summarize_with_evidence';",
+      "    if (/中身|内容|確認|inspect|review/u.test(normalized)) return 'inspect_file';",
+      "    if (/教えて|答え|回答|answer/u.test(normalized)) return 'answer_with_evidence';",
+      "    return 'find_files';",
+      "  }",
+      "",
+      "  private relayFormatDirectDocumentSearchResult(execution: any): string {",
+      "    const display = execution?.display || {};",
+      "    const cards = Array.isArray(display.cards) ? display.cards : [];",
+      "    const totalResults = Number.isFinite(display.totalResults) ? display.totalResults : cards.length;",
+      "    const shownResults = Number.isFinite(display.shownResults) ? display.shownResults : cards.length;",
+      "    const lines: string[] = [];",
+      "    lines.push('資料検索を実行しました。');",
+      "    if (typeof display.coverageLabel === 'string' && display.coverageLabel.trim()) {",
+      "      lines.push(`検索状況: ${display.coverageLabel.trim()}`);",
+      "    }",
+      "    lines.push(`候補: ${totalResults}件（表示 ${Math.min(cards.length, shownResults)}件）`);",
+      "    if (typeof display.answerSummary === 'string' && display.answerSummary.trim()) {",
+      "      lines.push('');",
+      "      lines.push(display.answerSummary.trim());",
+      "    } else if (typeof display.summary === 'string' && display.summary.trim()) {",
+      "      lines.push('');",
+      "      lines.push(display.summary.trim());",
+      "    }",
+      "    const selectedCards = cards.slice(0, 20);",
+      "    if (selectedCards.length) {",
+      "      lines.push('');",
+      "      lines.push('候補ファイル:');",
+      "      for (const [index, card] of selectedCards.entries()) {",
+      "        const title = typeof card.title === 'string' ? card.title : `候補 ${index + 1}`;",
+      "        const cardPath = typeof card.path === 'string' ? card.path : '';",
+      "        const matchLabel = typeof card.matchLabel === 'string' ? card.matchLabel : '';",
+      "        const evidenceLabel = typeof card.evidenceLabel === 'string' ? card.evidenceLabel : '';",
+      "        const labels = [matchLabel, evidenceLabel].filter(Boolean).join(' / ');",
+      "        lines.push(`${index + 1}. ${title}`);",
+      "        if (cardPath) lines.push(`   ${cardPath}`);",
+      "        if (labels) lines.push(`   ${labels}`);",
+      "      }",
+      "    }",
+      "    if (display.hasMore) {",
+      "      lines.push('');",
+      "      lines.push('さらに候補があります。必要なら条件を絞るか、追加表示してください。');",
+      "    }",
+      "    return lines.join('\\n');",
+      "  }",
+      "",
+      "  private async emitRelayDirectAssistantText(content: string): Promise<void> {",
+      "    const msgId = uuid();",
+      "    const message: TMessage = {",
+      "      id: msgId,",
+      "      msg_id: msgId,",
+      "      type: 'text',",
+      "      position: 'left',",
+      "      conversation_id: this.conversation_id,",
+      "      content: { content },",
+      "      status: 'finish',",
+      "      createdAt: Date.now(),",
+      "    };",
+      "    addOrUpdateMessage(this.conversation_id, message, 'aionrs');",
+      "    const contentMessage: IResponseMessage = {",
+      "      type: 'content',",
+      "      conversation_id: this.conversation_id,",
+      "      msg_id: msgId,",
+      "      data: content,",
+      "    };",
+      "    ipcBridge.conversation.responseStream.emit(contentMessage);",
+      "    this.emitToEventBuses(contentMessage);",
+      "    const finishMessage: IResponseMessage = {",
+      "      type: 'finish',",
+      "      conversation_id: this.conversation_id,",
+      "      msg_id: msgId,",
+      "      data: null,",
+      "    };",
+      "    ipcBridge.conversation.responseStream.emit(finishMessage);",
+      "    this.emitToEventBuses(finishMessage);",
+      "    this.status = 'finished';",
+      "    cronBusyGuard.setProcessing(this.conversation_id, false);",
+      "    this.notifyTurnCompletion();",
+      "  }",
+      "",
+      "  private async handleRelayDirectDocumentSearch(data: { content: string; msg_id: string; files?: string[] }): Promise<void> {",
+      "    const workspace = this.relayWorkspaceFromContent(data.content);",
+      "    if (!workspace) {",
+      "      await this.emitRelayDirectAssistantText('資料を探すには、先に検索するフォルダを選択してください。');",
+      "      return;",
+      "    }",
+      "    const query = this.relayUserRequestFromContent(data.content);",
+      "    const intent = this.relayDocumentSearchIntentFromRequest(query);",
+      "    const evidence = intent === 'find_files' ? 'candidate' : 'required';",
+      "    try {",
+      "      const { handleRelayDocumentSearchToolCall } = await import('@process/utils/relayDocumentSearchBridge');",
+      "      const execution = await handleRelayDocumentSearchToolCall(",
+      "        {",
+      "          id: `relay-direct-document-search-${data.msg_id}`,",
+      "          function: {",
+      "            name: 'relay_document_search',",
+      "            arguments: JSON.stringify({",
+      "              query,",
+      "              roots: [workspace],",
+      "              intent,",
+      "              evidence,",
+      "              thoroughness: 'quick',",
+      "              maxResults: 120,",
+      "            }),",
+      "          },",
+      "        },",
+      "        { source: 'aionui-skill', displayMaxCards: 20 },",
+      "      );",
+      "      await this.emitRelayDirectAssistantText(this.relayFormatDirectDocumentSearchResult(execution));",
+      "    } catch (error) {",
+      "      const detail = error instanceof Error ? error.message : String(error);",
+      "      mainError('[AionrsManager]', 'Relay direct document search failed', error);",
+      "      await this.emitRelayDirectAssistantText(`資料検索中にエラーが発生しました。${detail}`);",
+      "    }",
+      "  }",
+      "",
+      "  private async relayOfficeEditPreflight(data: { content: string; files?: string[] }): Promise<boolean> {",
+      "    const workspace = this.relayWorkspaceFromContent(data.content);",
+      "    if (!workspace) {",
+      "      await this.emitRelayDirectAssistantText('Officeファイルを編集するには、先に作業フォルダを選択してください。');",
+      "      return false;",
+      "    }",
+      "    const request = this.relayUserRequestFromContent(data.content);",
+      "    const files = data.files ?? [];",
+      "    const officeFilePattern = /\\.(docx|xlsx|xlsm|pptx)\\b/i;",
+      "    const hasOfficeTarget = files.some((file) => officeFilePattern.test(file)) || officeFilePattern.test(request);",
+      "    if (!hasOfficeTarget) {",
+      "      await this.emitRelayDirectAssistantText('編集対象のOfficeファイルを選択するか、ファイルパスをメッセージに含めてください。');",
+      "      return false;",
+      "    }",
+      "    const officeCliPath = process.env.RELAY_OFFICECLI_PATH || process.env.RELAY_OFFICECLI_EXPECTED_PATH || '';",
+      "    if (!officeCliPath.trim()) {",
+      "      await this.emitRelayDirectAssistantText('OfficeCLIの準備が完了していません。Relay Agentを再起動してからもう一度実行してください。');",
+      "      return false;",
+      "    }",
+      "    return true;",
+      "  }",
+    ].join("\n");
+    if (output.includes(stopAnchor)) {
+      output = output.replace(stopAnchor, `${helper}${stopAnchor}`);
+    }
   }
 
   if (!output.includes("private async waitForRelayAgentReady(): Promise<void>")) {

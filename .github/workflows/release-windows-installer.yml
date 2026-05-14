@@ -1,10 +1,10 @@
-name: legacy-release-tauri-windows-installer
+name: release-windows-installer
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to publish, for example v0.1.0"
+        description: "Release tag to publish, for example v0.2.0 or v0.2.0-rc.1"
         required: true
         type: string
       release_name:
@@ -15,11 +15,6 @@ on:
         description: "When Trusted Signing is absent, publish a self-signed internal prerelease installer instead of unsigned."
         required: false
         default: true
-        type: boolean
-      confirm_legacy_tauri_release:
-        description: "Deprecated path: set true only when intentionally publishing the legacy Tauri/OpenCode diagnostic installer."
-        required: true
-        default: false
         type: boolean
 
 jobs:
@@ -34,16 +29,6 @@ jobs:
       AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
 
     steps:
-      - name: Guard deprecated Tauri/OpenCode release path
-        shell: bash
-        run: |
-          if [ "${{ inputs.confirm_legacy_tauri_release }}" != "true" ]; then
-            echo "This workflow builds the deprecated Tauri/OpenCode diagnostic installer." >&2
-            echo "Use release-windows-installer from release-aionui-windows-installer.yml for the primary Relay-branded AionUi installer." >&2
-            echo "Set confirm_legacy_tauri_release=true only for deliberate legacy diagnostics." >&2
-            exit 1
-          fi
-
       - name: Check out repository
         uses: actions/checkout@v5
         with:
@@ -77,12 +62,19 @@ jobs:
             exit 1
           fi
 
+          relay_agent_version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ "$tag" != "v${relay_agent_version}" && "$tag" != v${relay_agent_version}-* ]]; then
+            echo "Release tag '$tag' must match Relay Agent version '$relay_agent_version' (expected v${relay_agent_version} or v${relay_agent_version}-...)." >&2
+            exit 1
+          fi
+
           if [ -z "$release_name" ]; then
             release_name="Relay Agent ${tag}"
           fi
 
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
+          printf 'relay_agent_version=%s\n' "$relay_agent_version" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Trusted Signing mode
         id: signing_mode
@@ -114,7 +106,7 @@ jobs:
 
           if [ "$present" -eq 0 ]; then
             if [[ "${{ steps.release_meta.outputs.tag }}" != *-* ]]; then
-              echo "Trusted Signing is required for formal releases. Use a prerelease tag for internal legacy fallback builds." >&2
+              echo "Trusted Signing is required for formal releases. Use a prerelease tag for internal fallback builds." >&2
               exit 1
             fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -305,11 +297,11 @@ jobs:
           SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
         run: |
           $releaseNotes = @"
-          Deprecated legacy Tauri/OpenCode diagnostic Windows NSIS installer for Relay Agent.
+          Relay Agent Windows NSIS installer.
 
           Signing mode: $env:SIGNING_MODE
 
-          This is not the primary Relay Agent installer. Use the Relay-branded AionUi Windows release workflow for normal installs.
+          This release contains the dedicated Relay Agent desktop UX for document search and OfficeCLI-backed Office file workflows.
           "@
 
           if ($env:SIGNING_MODE -eq "self-signed-prerelease") {
@@ -359,11 +351,11 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## Legacy Tauri/OpenCode Windows Installer Release"
+            echo "## Relay Agent Windows Installer Release"
             echo ""
             echo "- Release tag: \`${{ steps.release_meta.outputs.tag }}\`"
             echo "- Release name: \`${{ steps.release_meta.outputs.release_name }}\`"
-            echo "- Bundle target: \`legacy tauri nsis\`"
+            echo "- Bundle target: \`tauri nsis\`"
             echo "- Installer asset: \`${{ steps.release_asset.outputs.name }}\`"
             echo "- Installer SHA256: \`${{ steps.installer_digest.outputs.sha256 }}\`"
             echo "- Signing mode: \`${{ steps.signing_mode.outputs.mode }}\`"

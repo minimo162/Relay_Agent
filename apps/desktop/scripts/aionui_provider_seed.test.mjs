@@ -125,6 +125,11 @@ test("AionUi config seed disables beginner-hostile surfaces by default", () => {
   assert.equal(seed["relay.taskMode.modeByAssistantId"]["relay-office-edit"], "office_edit");
   assert.equal(seed["relay.taskMode.sendWithoutMode"], "blocked");
   assert.equal(seed["relay.taskMode.promptTemplates"].document_search.defaultArguments.maxResults, 120);
+  assert.equal(seed["relay.taskMode.promptTemplates"].document_search.executionPath, "relay-direct-first");
+  assert.equal(
+    seed["relay.taskMode.promptTemplates"].office_edit.executionPath,
+    "relay-preflight-then-copilot-officecli",
+  );
   assert.equal(seed["relay.documentSearch.candidateFirst"], true);
   assert.equal(seed["relay.documentSearch.candidateLimit"], 120);
   assert.equal(seed["relay.documentSearch.displayLimit"], 30);
@@ -321,6 +326,8 @@ test("seed bundle records provider-before-shell lifecycle contract", () => {
   assert.deepEqual(seed.ux.taskMode.allowedModes, ["document_search", "office_edit"]);
   assert.equal(seed.ux.taskMode.sendWithoutMode, "blocked");
   assert.equal(seed.ux.taskMode.promptTemplates.document_search.defaultArguments.maxResults, 120);
+  assert.equal(seed.ux.taskMode.promptTemplates.document_search.executionPath, "relay-direct-first");
+  assert.equal(seed.ux.taskMode.promptTemplates.office_edit.executionPath, "relay-preflight-then-copilot-officecli");
   assert.deepEqual(seed.ux.search.states, [...AIONUI_RELAY_SEARCH_STATE_LABELS]);
   assert.deepEqual(seed.ux.search.resultCardFields, [
     ...AIONUI_RELAY_SEARCH_RESULT_CARD_FIELDS,

@@ -63,3 +63,9 @@ tetris.html
 # Playwright saved Microsoft session (sensitive)
 apps/desktop/tests/.auth/*.json
 apps/desktop/tests/auth.json
+
+# Generated at packaging time by apps/desktop/scripts/build-document-search-bundle.mjs
+!apps/desktop/src-tauri/resources/
+!apps/desktop/src-tauri/resources/relay-document-search/
+apps/desktop/src-tauri/resources/relay-document-search/*
+!apps/desktop/src-tauri/resources/relay-document-search/.gitkeep

@@ -192,6 +192,122 @@ pub struct RelayDiagnostics {
     pub openwork_setup: Option<OpenWorkSetupSnapshot>,
 }
 
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayWorkspaceState {
+    pub app_version: String,
+    pub workspace_path: Option<String>,
+    pub app_local_data_dir: String,
+    pub document_search_cache_dir: String,
+    pub office_backup_dir: String,
+    pub document_search_available: bool,
+    pub document_search_message: String,
+    pub officecli_available: bool,
+    pub officecli_path: Option<String>,
+    pub officecli_message: String,
+    pub ripgrep_available: bool,
+    pub ripgrep_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayDocumentSearchIntent {
+    FindFiles,
+    AnswerWithEvidence,
+    SummarizeWithEvidence,
+    InspectFile,
+    SimilarDocuments,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayDocumentSearchThoroughness {
+    Quick,
+    Thorough,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayDocumentSearchEvidence {
+    None,
+    Candidate,
+    Required,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayDocumentSearchRequest {
+    pub query: String,
+    pub workspace_path: String,
+    pub intent: RelayDocumentSearchIntent,
+    pub thoroughness: RelayDocumentSearchThoroughness,
+    pub evidence: RelayDocumentSearchEvidence,
+    pub max_results: u16,
+    pub file_types: Vec<String>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelaySearchResultCard {
+    pub title: String,
+    pub path: String,
+    pub display_path: Option<String>,
+    pub file_type: Option<String>,
+    pub modified_time: Option<String>,
+    pub match_mode: Option<String>,
+    pub evidence_state: Option<String>,
+    pub score: Option<f64>,
+    pub bucket: Option<String>,
+    pub folder_role: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayDocumentSearchResponse {
+    pub ok: bool,
+    pub status: String,
+    pub summary: String,
+    pub coverage_label: String,
+    pub elapsed_ms: u64,
+    pub cards: Vec<RelaySearchResultCard>,
+    #[ts(type = "unknown")]
+    pub raw: JsonValue,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayOfficeInspectRequest {
+    pub file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayOfficeExecuteRequest {
+    pub file_path: String,
+    pub officecli_args: String,
+    pub create_backup: bool,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayOfficeCommandResponse {
+    pub ok: bool,
+    pub command: Vec<String>,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+    pub backup_path: Option<String>,
+    pub elapsed_ms: u64,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CopilotWarmupStage {

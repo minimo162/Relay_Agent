@@ -39,7 +39,7 @@ impl AppServices {
             copilot_bridge: Arc::new(CopilotBridgeManager::new()),
             opencode_provider_bridge: Arc::new(CopilotBridgeManager::new()),
             openwork_setup: Arc::new(Mutex::new(OpenWorkSetupSnapshot::preparing(
-                "Preparing OpenCode for M365 Copilot.",
+                "Legacy OpenCode diagnostics are disabled by default in the Relay Agent desktop UX.",
             ))),
         }
     }
