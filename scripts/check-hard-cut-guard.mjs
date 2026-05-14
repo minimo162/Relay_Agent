@@ -309,7 +309,7 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "編集案を作成",
+    text: "変更内容を確認",
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
@@ -341,7 +341,7 @@ const required = [
   },
   {
     path: "apps/desktop/src/shell/Shell.tsx",
-    text: "バックアップして実行",
+    text: "バックアップを作成して適用",
   },
   {
     path: "apps/desktop/src-tauri/src/bin/relay-openwork-bootstrap.rs",

@@ -21,6 +21,33 @@
 
 ## Milestone Log
 
+### 2026-05-14 Remove OpenCode gateway dependency from Relay workflows
+
+Fixed the installed-app failure where document search and Office editing were
+blocked by the historical OpenCode gateway readiness path. The Relay desktop
+workbench now connects directly to M365 Copilot through the CDP commands used
+by the current product surface. Search and Office editing no longer call the
+OpenWork/OpenCode warmup bridge before planning.
+
+The CDP prompt IPC now reuses the current Copilot page when available and
+auto-connects a dedicated Edge/CDP session when no page is registered, so
+`cdp_send_prompt` is robust even if the UI did not perform a separate warmup.
+The Office workflow state was split into file inspection versus apply results:
+`officecli view ... outline --json` success no longer appears as a completed
+edit when Copilot planning fails. The Office UI now uses clearer step labels:
+`変更内容を確認` and `バックアップを作成して適用`, with a prominent file picker and
+separate file-confirmed status.
+
+Verification:
+
+- `pnpm typecheck` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml officecli_parser --lib` — pass, 2 passed.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-executor.test.mjs` — pass, 41 passed.
+- `pnpm check` — pass.
+- `git diff --check` — pass.
+
 ### 2026-05-14 Copilot-planned local search and Office edits
 
 Implemented the Docufinder-aligned split where Copilot improves user intent

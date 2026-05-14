@@ -21,8 +21,8 @@ The first visible screen is the Relay workbench with two task modes:
   selected Office file.
 
 The app does not open Edge or legacy OpenCode/AionUi surfaces during first
-paint. Copilot is started on demand when a search or Office edit needs a
-planning step.
+paint. Copilot is connected directly through Edge CDP, on demand, when a search
+or Office edit needs a planning step.
 
 ## Document Search
 
@@ -59,6 +59,9 @@ The desktop UI supports:
 - strict Copilot Office-edit JSON plans for natural-language instructions;
 - reviewed OfficeCLI argv execution;
 - app-local backup creation before execution.
+
+The UI separates the Office flow into two explicit actions: first confirm the
+planned change, then create a backup and apply it.
 
 Relay Agent does not mutate binary Office files through text tools, VBA, or
 Microsoft 365 built-in editing.

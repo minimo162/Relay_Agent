@@ -45,14 +45,19 @@ pub fn get_relay_workspace_state(
         document_search_cache_dir: search_cache.display().to_string(),
         office_backup_dir: office_backups.display().to_string(),
         document_search_available: document_search_script.is_some()
-            && crate::copilot_server::find_node().is_some(),
-        document_search_message: match (document_search_script, crate::copilot_server::find_node())
-        {
-            (Some(_), Some(_)) => "Document search is ready.".to_string(),
-            (None, _) => "Document search runner was not found.".to_string(),
-            (_, None) => {
+            && crate::copilot_server::find_node().is_some()
+            && ripgrep.is_some(),
+        document_search_message: match (
+            document_search_script,
+            crate::copilot_server::find_node(),
+            ripgrep.as_ref(),
+        ) {
+            (Some(_), Some(_), Some(_)) => "Document search is ready.".to_string(),
+            (None, _, _) => "Document search runner was not found.".to_string(),
+            (_, None, _) => {
                 "Node.js runtime was not found for the document-search runner.".to_string()
             }
+            (_, _, None) => "ripgrep was not found for local document search.".to_string(),
         },
         officecli_available: officecli.is_some(),
         officecli_path: officecli.as_ref().map(|path| path.display().to_string()),

@@ -794,23 +794,45 @@ pub async fn cdp_send_prompt(
     _app: AppHandle,
     request: CdpSendPromptRequest,
 ) -> Result<CdpPromptResult, String> {
-    let port = cdp_copilot::resolve_cdp_attachment_port(COPILOT_JS_CDP_PORT).await;
-    let debug_url = get_cdp_debug_url(port);
     let timeout_secs = request.wait_response_secs.unwrap_or(120);
 
-    let prompt_preview = &request.prompt[..request.prompt.len().min(60)];
+    let prompt_preview = request.prompt.chars().take(60).collect::<String>();
     tracing::info!("[CDP] send prompt: {prompt_preview}…");
 
-    // Use existing connection if available, otherwise connect fresh
-    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, port).await {
-        Ok(r) => r.page.clone(),
-        Err(e) => {
-            return Ok(CdpPromptResult {
-                ok: false,
-                response_text: String::new(),
-                body_length: 0,
-                error: Some(format!("CDP connect: {e}")),
-            })
+    let existing_page = cdp_session()
+        .lock()
+        .map_err(|e| format!("cdp_session lock poisoned: {e}"))?
+        .page
+        .clone();
+    let page = if let Some(page) = existing_page {
+        page
+    } else {
+        let base_port = COPILOT_JS_CDP_PORT;
+        let debug_url = get_cdp_debug_url(base_port);
+        match cdp_copilot::connect_copilot_page(&debug_url, true, base_port).await {
+            Ok(res) => {
+                tracing::info!(
+                    "[CDP] connected for prompt → {} — {}",
+                    res.page.url,
+                    res.page.title
+                );
+                set_cdp_session_connected(
+                    res.port,
+                    res.launched,
+                    res.edge_process_id(),
+                    res.page.url.clone(),
+                    res.page.clone(),
+                );
+                res.page.clone()
+            }
+            Err(e) => {
+                return Ok(CdpPromptResult {
+                    ok: false,
+                    response_text: String::new(),
+                    body_length: 0,
+                    error: Some(format!("CDP connect: {e}")),
+                })
+            }
         }
     };
 

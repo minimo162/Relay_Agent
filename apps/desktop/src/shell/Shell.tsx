@@ -3,11 +3,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { For, Show, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import {
   cdpSendPrompt,
+  connectCdp,
   executeOfficeCliCommand,
   getRelayWorkspaceState,
   inspectOfficeFile,
   runRelayDocumentSearch,
-  warmupCopilotBridge,
   type RelayDocumentSearchQueryPlanHints,
   type RelayDocumentSearchResponse,
   type RelayOfficeCommandResponse,
@@ -71,6 +71,22 @@ function firstNonEmpty(...values: Array<string | null | undefined>): string {
   return values.find((value) => value && value.trim())?.trim() || "";
 }
 
+function fileNameFromPath(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  return normalized.split("/").filter(Boolean).at(-1) || path;
+}
+
+function friendlyErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/provider gateway is still starting/iu.test(message)) {
+    return "Copilot接続を準備できませんでした。EdgeでMicrosoft 365 Copilotにサインインしてから、もう一度実行してください。";
+  }
+  if (/CDP connect|composer not found|Copilot page may not be ready/iu.test(message)) {
+    return "Copilotに接続できませんでした。EdgeでMicrosoft 365 Copilotを開いてサインインしてから、もう一度実行してください。";
+  }
+  return message;
+}
+
 export default function Shell(): JSX.Element {
   const [mode, setMode] = createSignal<Mode>("search");
   const [workspacePath, setWorkspacePath] = createSignal(loadWorkspacePath());
@@ -90,7 +106,9 @@ export default function Shell(): JSX.Element {
   const [officeInstruction, setOfficeInstruction] = createSignal("");
   const [officePlan, setOfficePlan] = createSignal<RelayOfficeEditPlan | null>(null);
   const [officeRunning, setOfficeRunning] = createSignal(false);
-  const [officeResult, setOfficeResult] = createSignal<RelayOfficeCommandResponse | null>(null);
+  const [officePhase, setOfficePhase] = createSignal("");
+  const [officeInspectResult, setOfficeInspectResult] = createSignal<RelayOfficeCommandResponse | null>(null);
+  const [officeApplyResult, setOfficeApplyResult] = createSignal<RelayOfficeCommandResponse | null>(null);
   const [officeError, setOfficeError] = createSignal("");
 
   const workspaceReady = createMemo(() => workspacePath().trim().length > 0);
@@ -140,15 +158,16 @@ export default function Shell(): JSX.Element {
     });
     if (typeof selected !== "string") return;
     setOfficeFilePath(selected);
+    setOfficeInspectResult(null);
+    setOfficeApplyResult(null);
     setOfficePlan(null);
-    setOfficeResult(null);
     setOfficeError("");
   };
 
   const ensureCopilotReady = async () => {
-    const warmup = await warmupCopilotBridge(null);
-    if (!warmup.connected) {
-      throw new Error(warmup.message || "Copilot に接続できませんでした。Edge で M365 Copilot にサインインしてから再実行してください。");
+    const connection = await connectCdp({ autoLaunch: true });
+    if (!connection.ok) {
+      throw new Error(connection.error || "Copilot に接続できませんでした。Edge で M365 Copilot にサインインしてから再実行してください。");
     }
   };
 
@@ -213,7 +232,7 @@ export default function Shell(): JSX.Element {
       });
     } catch (error) {
       if (searchId !== searchSequence) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = friendlyErrorMessage(error);
       setSearchError(message);
       showToast({ tone: "danger", message: "検索に失敗しました", detail: message });
     } finally {
@@ -230,8 +249,9 @@ export default function Shell(): JSX.Element {
     if (!filePath) {
       throw new Error("Officeファイルを選択してください。");
     }
+    setOfficePhase("ファイルを確認しています");
     const result = await inspectOfficeFile({ filePath });
-    setOfficeResult(result);
+    setOfficeInspectResult(result);
     if (!result.ok) {
       throw new Error(result.stderr || result.error || "OfficeCLI outline failed.");
     }
@@ -246,10 +266,13 @@ export default function Shell(): JSX.Element {
       return;
     }
     setOfficeRunning(true);
+    setOfficePhase("変更内容を確認しています");
     setOfficeError("");
     setOfficePlan(null);
+    setOfficeApplyResult(null);
     try {
       const outline = await inspectOffice();
+      setOfficePhase("Copilotで変更内容を整理しています");
       await ensureCopilotReady();
       const prompt = buildOfficeEditPlanPrompt({
         instruction,
@@ -263,13 +286,14 @@ export default function Shell(): JSX.Element {
         throw new Error(`Copilot Office編集計画の検証に失敗しました: ${validation.errors.join(" / ")}`);
       }
       setOfficePlan(validation.value);
-      showToast({ tone: "ok", message: "編集案を作成しました" });
+      showToast({ tone: "ok", message: "変更内容を確認しました" });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = friendlyErrorMessage(error);
       setOfficeError(message);
-      showToast({ tone: "danger", message: "編集案を作成できませんでした", detail: message });
+      showToast({ tone: "danger", message: "変更内容を確認できませんでした", detail: message });
     } finally {
       setOfficeRunning(false);
+      setOfficePhase("");
       void refreshState(false);
     }
   };
@@ -278,10 +302,11 @@ export default function Shell(): JSX.Element {
     const filePath = officeFilePath().trim();
     const plan = officePlan();
     if (!filePath || !plan) {
-      showToast({ tone: "danger", message: "先に編集案を作成してください" });
+      showToast({ tone: "danger", message: "先に変更内容を確認してください" });
       return;
     }
     setOfficeRunning(true);
+    setOfficePhase("バックアップを作成して適用しています");
     setOfficeError("");
     try {
       let lastResult: RelayOfficeCommandResponse | null = null;
@@ -292,7 +317,7 @@ export default function Shell(): JSX.Element {
           createBackup: index === 0,
         });
         lastResult = result;
-        setOfficeResult(result);
+        setOfficeApplyResult(result);
         if (!result.ok) {
           throw new Error(result.stderr || result.error || "OfficeCLI command failed.");
         }
@@ -303,11 +328,12 @@ export default function Shell(): JSX.Element {
         detail: lastResult?.backupPath ? `バックアップ: ${lastResult.backupPath}` : undefined,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = friendlyErrorMessage(error);
       setOfficeError(message);
       showToast({ tone: "danger", message: "Office編集に失敗しました", detail: message });
     } finally {
       setOfficeRunning(false);
+      setOfficePhase("");
       void refreshState(false);
     }
   };
@@ -363,9 +389,6 @@ export default function Shell(): JSX.Element {
                 <p class="relay-kicker">Office</p>
                 <h1>Officeファイルを編集する</h1>
               </div>
-              <button type="button" class="ra-button ra-button--secondary" onClick={chooseOfficeFile}>
-                ファイルを選択
-              </button>
             </div>
 
             <Show when={!workspaceReady()}>
@@ -375,12 +398,28 @@ export default function Shell(): JSX.Element {
               </div>
             </Show>
 
+            <section class="relay-file-picker" classList={{ "is-empty": !officeFilePath() }}>
+              <div>
+                <p class="relay-kicker">対象ファイル</p>
+                <h2>{officeFilePath() ? fileNameFromPath(officeFilePath()) : "Officeファイルを選択"}</h2>
+                <p title={officeFilePath()}>{officeFilePath() || "編集する .xlsx / .xlsm / .docx / .pptx を選択してください。"}</p>
+              </div>
+              <button type="button" class="ra-button ra-button--secondary" onClick={chooseOfficeFile}>
+                選択
+              </button>
+            </section>
+
             <div class="relay-form-grid">
-              <label class="relay-field relay-field--wide">
-                <span>対象ファイル</span>
+              <label class="relay-field relay-field--wide relay-field--quiet">
+                <span>ファイルパス</span>
                 <input
                   value={officeFilePath()}
-                  onInput={(event) => setOfficeFilePath(event.currentTarget.value)}
+                  onInput={(event) => {
+                    setOfficeFilePath(event.currentTarget.value);
+                    setOfficeInspectResult(null);
+                    setOfficeApplyResult(null);
+                    setOfficePlan(null);
+                  }}
                   placeholder="C:/path/to/file.xlsx"
                 />
               </label>
@@ -399,11 +438,11 @@ export default function Shell(): JSX.Element {
             </div>
 
             <div class="relay-action-row">
-              <button type="button" class="ra-button ra-button--secondary" disabled={officeRunning()} onClick={planOfficeEdit}>
-                {officeRunning() ? "処理中" : "編集案を作成"}
+              <button type="button" class="ra-button" disabled={officeRunning() || !officeFilePath().trim() || !officeInstruction().trim()} onClick={planOfficeEdit}>
+                {officeRunning() ? "処理中" : "変更内容を確認"}
               </button>
-              <button type="button" class="ra-button" disabled={officeRunning() || !officePlan()} onClick={executeOfficePlan}>
-                バックアップして実行
+              <button type="button" class="ra-button ra-button--secondary" disabled={officeRunning() || !officePlan()} onClick={executeOfficePlan}>
+                バックアップを作成して適用
               </button>
             </div>
 
@@ -411,7 +450,7 @@ export default function Shell(): JSX.Element {
               <div class="relay-progress-panel" role="status" aria-live="polite">
                 <span class="relay-spinner" aria-hidden="true" />
                 <div>
-                  <strong>処理しています</strong>
+                  <strong>{officePhase() || "処理しています"}</strong>
                 </div>
               </div>
             </Show>
@@ -428,8 +467,8 @@ export default function Shell(): JSX.Element {
                 <section class="relay-result-block">
                   <div class="relay-result-header">
                     <div>
-                      <h2>編集案</h2>
-                      <p>{plan().summary || `${plan().commands.length}件のOfficeCLI操作`}</p>
+                      <h2>確認した変更内容</h2>
+                      <p>{plan().summary || `${plan().commands.length}件の変更操作`}</p>
                     </div>
                     <p>{plan().risk}</p>
                   </div>
@@ -447,7 +486,7 @@ export default function Shell(): JSX.Element {
               )}
             </Show>
 
-            <Show when={officeResult()}>
+            <Show when={officeApplyResult()}>
               {(result) => (
                 <section class="relay-result-block">
                   <div class="relay-result-header">
@@ -488,7 +527,7 @@ export default function Shell(): JSX.Element {
                   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runSearch();
                 }}
               />
-              <button type="button" class="ra-button relay-search-button" disabled={searching() || !workspaceReady()} onClick={runSearch}>
+              <button type="button" class="ra-button relay-search-button" disabled={searching() || !workspaceReady() || !searchQuery().trim()} onClick={runSearch}>
                 {searching() ? "検索中" : "検索"}
               </button>
             </div>
@@ -579,7 +618,14 @@ export default function Shell(): JSX.Element {
           <section class="relay-detail-panel">
             <p class="relay-kicker">Office</p>
             <h2>{officeFilePath() ? shortPath(officeFilePath()) : "ファイル未選択"}</h2>
-            <Show when={officePlan()} fallback={<p class="relay-hint">編集案を作成すると、実行内容がここに表示されます。</p>}>
+            <Show when={officeInspectResult()}>
+              {(result) => (
+                <div class="relay-mini-status" classList={{ "is-ok": result().ok, "is-danger": !result().ok }}>
+                  {result().ok ? "ファイル確認済み" : "ファイル確認に失敗"}
+                </div>
+              )}
+            </Show>
+            <Show when={officePlan()} fallback={<p class="relay-hint">変更内容を確認すると、実行内容がここに表示されます。</p>}>
               {(plan) => (
                 <div class="relay-plan-list">
                   <For each={plan().commands}>

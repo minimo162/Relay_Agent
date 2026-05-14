@@ -541,7 +541,7 @@ body a:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 3rem;
+  padding: 3.5rem;
   background: var(--ra-color-bg);
 }
 
@@ -779,7 +779,7 @@ body a:focus-visible {
 
 .relay-work-panel {
   display: grid;
-  gap: 1.65rem;
+  gap: 1.85rem;
   max-width: 1120px;
   margin: 0 auto;
 }
@@ -820,6 +820,44 @@ body a:focus-visible {
   color: var(--ra-color-text-muted);
   font-size: 0.8rem;
   font-weight: 700;
+}
+
+.relay-field--quiet {
+  margin-top: -0.4rem;
+}
+
+.relay-file-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.25rem;
+  border: 1px solid color-mix(in oklab, var(--ra-color-accent) 20%, var(--ra-color-border));
+  border-radius: var(--ra-radius);
+  background: color-mix(in oklab, var(--ra-color-surface) 88%, var(--ra-color-bg));
+  padding: 1.2rem 1.25rem;
+}
+
+.relay-file-picker.is-empty {
+  border-style: dashed;
+}
+
+.relay-file-picker h2,
+.relay-file-picker p {
+  margin: 0;
+}
+
+.relay-file-picker h2 {
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+
+.relay-file-picker p:not(.relay-kicker) {
+  margin-top: 0.35rem;
+  color: var(--ra-color-text-muted);
+  overflow-wrap: anywhere;
+  font-size: 0.84rem;
 }
 
 .relay-search-box textarea,
@@ -1086,6 +1124,26 @@ body a:focus-visible {
   font-size: 0.8rem;
 }
 
+.relay-mini-status {
+  width: fit-content;
+  border: 1px solid var(--ra-color-border);
+  border-radius: var(--ra-radius-pill);
+  padding: 0.24rem 0.6rem;
+  color: var(--ra-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.relay-mini-status.is-ok {
+  border-color: color-mix(in oklab, var(--ra-color-success) 32%, var(--ra-color-border));
+  color: var(--ra-color-success);
+}
+
+.relay-mini-status.is-danger {
+  border-color: color-mix(in oklab, var(--ra-color-danger) 32%, var(--ra-color-border));
+  color: var(--ra-color-danger);
+}
+
 .relay-step-list {
   display: grid;
   gap: 0.55rem;
@@ -1152,13 +1210,18 @@ body a:focus-visible {
   }
 
   .relay-workbench {
-    padding: 1rem;
+    padding: 1.1rem;
   }
 
   .relay-panel-heading,
   .relay-result-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .relay-file-picker {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
   }
 
   .relay-runtime-grid,

@@ -1,16 +1,15 @@
 /**
- * Tauri IPC bridge — provider diagnostics.
+ * Tauri IPC bridge for the Relay desktop workbench.
  *
- * Provider-mode execution does not use these commands. OpenCode calls
- * the OpenAI-compatible provider gateway directly and owns sessions, tools,
- * permissions, transcript state, and workspace execution.
+ * The current product surface uses these commands directly for workspace
+ * state, document search, OfficeCLI execution, and M365 Copilot CDP planning.
  *
  * Diagnostic commands (tauri_bridge.rs):
  *   warmup_copilot_bridge (optional browserSettings), get_relay_diagnostics,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
  * Legacy agent chat/session commands are intentionally not exported from this
- * frontend bridge. Provider-mode execution belongs to OpenCode.
+ * frontend bridge.
  *
  * Relay-owned agent events were removed with the hard-cut migration.
  */
@@ -84,12 +83,12 @@ export async function executeOfficeCliCommand(
   return invoke<RelayOfficeCommandResponse>("execute_officecli_command", { request });
 }
 
-/** Retry installed OpenCode provider setup. */
+/** Retry the historical OpenCode setup path. Not used by the current workbench. */
 export async function retryOpencodeSetup(): Promise<void> {
   return invoke<void>("retry_opencode_setup");
 }
 
-/** Open the prepared OpenCode Web app when available. */
+/** Open the historical OpenCode Web handoff when available. Not used by the current workbench. */
 export async function openOpencodeWeb(workspace?: string): Promise<void> {
   return invoke<void>("open_opencode_web", {
     workspace: workspace?.trim() || null,

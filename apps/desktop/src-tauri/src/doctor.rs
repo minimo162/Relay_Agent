@@ -1237,7 +1237,7 @@ pub async fn warmup_copilot_bridge_from_state(
         cdp_port,
         false,
         CopilotWarmupStage::EnsureServer,
-        "OpenCode provider gateway is still starting. Wait for setup to continue, or use Try Setup Again if setup stopped.",
+        "Copilot connection is not ready. Open Microsoft 365 Copilot in Edge and try again.",
         CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::EnsureServerFailed)),
     ))
 }
