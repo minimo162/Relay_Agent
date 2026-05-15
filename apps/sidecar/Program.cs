@@ -8,7 +8,7 @@ using Microsoft.Extensions.FileProviders;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseKestrel(options => options.AddServerHeader = false);
 
-var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.0";
+var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.1";
 var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);

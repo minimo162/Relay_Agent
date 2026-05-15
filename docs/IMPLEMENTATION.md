@@ -16446,3 +16446,38 @@ Result:
   if Relay adopts Agent Framework. It avoids bundling Python and aligns better
   with Windows enterprise deployment, while still keeping Linux support possible
   through self-contained .NET publishing.
+
+## 2026-05-16: Sidecar Copilot CDP Release Hardening
+
+Changes:
+
+- Moved the sidecar Copilot response extraction away from full-page body text
+  and toward the visible Copilot conversation feed.
+- Added prompt-aware reply extraction so repeated smoke prompts do not fall
+  back to sidebar or history deltas when the assistant returns the same text.
+- Added a short composer-settle wait after paste and adjusted contenteditable
+  input dispatch to avoid duplicate prompt text.
+- Bumped the Workbench and sidecar release version to `0.3.1`.
+
+Verification commands run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_COPILOT_CDP_PORT=9360 RELAY_LAUNCH_TOKEN=live-test dotnet run --configuration Release --project apps/sidecar/Relay.Sidecar.csproj
+curl -H "X-Relay-Token: live-test" http://127.0.0.1:<sidecar-port>/api/status
+node -e '<POST /v1/chat/completions exact-response smoke>'
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:publish:linux
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:publish:windows
+pnpm release:inventory
+```
+
+Result:
+
+- `pnpm check` passed, including hard-cut guard, Workbench typecheck/build,
+  sidecar release build, and sidecar smoke.
+- Live signed-in Edge/CDP on port `9360` accepted a sidecar
+  `/v1/chat/completions` exact-response request and returned only the expected
+  Copilot answer text.
+- Linux and Windows self-contained sidecar publish outputs were produced under
+  `dist/relay-agent-linux-x64` and `dist/relay-agent-win-x64`.

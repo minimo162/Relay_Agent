@@ -76,8 +76,12 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         await session.SendAsync("Runtime.enable", null, cancellationToken);
         await EnsureCopilotPageAsync(session, cancellationToken);
 
-        var baseline = await GetBodyTextAsync(session, cancellationToken);
+        var baseline = await GetConversationTextAsync(session, cancellationToken);
         var pasted = await PastePromptAsync(session, prompt, cancellationToken);
+        if (pasted < Math.Min(prompt.Length, 20))
+        {
+            pasted = await WaitForComposerLengthAsync(session, Math.Min(prompt.Length, 20), cancellationToken);
+        }
         if (pasted < Math.Min(prompt.Length, 20))
         {
             throw new InvalidOperationException($"Prompt did not reach Copilot composer (visible length {pasted}, expected ~{prompt.Length}).");
@@ -89,7 +93,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             throw new InvalidOperationException("Copilot send button was not found or was disabled.");
         }
 
-        return await WaitForReplyAsync(session, baseline, cancellationToken);
+        return await WaitForReplyAsync(session, baseline, prompt, cancellationToken);
     }
 
     private async Task<CdpTarget> ResolveCopilotTargetAsync(CancellationToken cancellationToken)
@@ -130,8 +134,33 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         }
     }
 
-    private static Task<string> GetBodyTextAsync(CdpSession session, CancellationToken cancellationToken) =>
-        session.EvaluateJsonAsync<string>("document.body ? document.body.innerText : ''", cancellationToken);
+    private static Task<string> GetConversationTextAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        const string script = """
+(() => {
+  const docs = [document, ...Array.from(document.querySelectorAll('iframe')).map(f => {
+    try { return f.contentDocument; } catch { return null; }
+  }).filter(Boolean)];
+  const selectors = ['[role="feed"]', '[aria-label="Chat conversation"]'];
+  let best = '';
+  for (const doc of docs) {
+    for (const selector of selectors) {
+      for (const el of Array.from(doc.querySelectorAll(selector))) {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        if (rect.width <= 20 || rect.height <= 20 || style.visibility === 'hidden' || style.display === 'none') continue;
+        const text = String(el.innerText || el.textContent || '').trim();
+        if ((text.includes('Copilot said:') || text.includes('You said:')) && text.length > best.length) {
+          best = text;
+        }
+      }
+    }
+  }
+  return best || (document.body ? document.body.innerText : '');
+})()
+""";
+        return session.EvaluateJsonAsync<string>(script, cancellationToken);
+    }
 
     private static Task<int> PastePromptAsync(CdpSession session, string prompt, CancellationToken cancellationToken)
     {
@@ -159,14 +188,52 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return String(el.value || '').length;
   }
+  el.textContent = '';
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
   const selection = el.ownerDocument.getSelection();
   const range = el.ownerDocument.createRange();
   range.selectNodeContents(el);
   selection.removeAllRanges();
   selection.addRange(range);
   el.ownerDocument.execCommand('insertText', false, text);
-  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   return String(el.innerText || el.textContent || '').length;
+})()
+""";
+        return session.EvaluateJsonAsync<int>(script, cancellationToken);
+    }
+
+    private static async Task<int> WaitForComposerLengthAsync(CdpSession session, int minLength, CancellationToken cancellationToken)
+    {
+        var best = 0;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            await Task.Delay(250, cancellationToken);
+            best = Math.Max(best, await GetComposerLengthAsync(session, cancellationToken));
+            if (best >= minLength) return best;
+        }
+        return best;
+    }
+
+    private static Task<int> GetComposerLengthAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        const string script = """
+(() => {
+  const docs = [document, ...Array.from(document.querySelectorAll('iframe')).map(f => {
+    try { return f.contentDocument; } catch { return null; }
+  }).filter(Boolean)];
+  let best = 0;
+  for (const doc of docs) {
+    const candidates = Array.from(doc.querySelectorAll('[role="textbox"], textarea, [contenteditable="true"]'));
+    for (const el of candidates) {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (rect.width <= 20 || rect.height <= 10 || style.visibility === 'hidden' || style.display === 'none') continue;
+      const len = String(('value' in el ? el.value : (el.innerText || el.textContent)) || '').trim().length;
+      best = Math.max(best, len);
+    }
+  }
+  return best;
 })()
 """;
         return session.EvaluateJsonAsync<int>(script, cancellationToken);
@@ -199,9 +266,11 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         return session.EvaluateJsonAsync<bool>(script, cancellationToken);
     }
 
-    private static async Task<string> WaitForReplyAsync(CdpSession session, string baseline, CancellationToken cancellationToken)
+    private static async Task<string> WaitForReplyAsync(CdpSession session, string baseline, string prompt, CancellationToken cancellationToken)
     {
         var normalizedBaseline = NormalizeVisibleText(baseline);
+        var baselineReply = ExtractLatestAssistantAnswer(baseline);
+        var baselineAssistantMarkers = CountAssistantMarkers(baseline);
         string best = "";
         var quietTicks = 0;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -210,19 +279,44 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         while (!timeout.IsCancellationRequested)
         {
             await Task.Delay(1200, timeout.Token);
-            var text = NormalizeVisibleText(await GetBodyTextAsync(session, timeout.Token));
+            var rawText = await GetConversationTextAsync(session, timeout.Token);
+            var text = NormalizeVisibleText(rawText);
             var delta = ExtractDelta(normalizedBaseline, text);
-            if (delta.Length > best.Length)
+            var promptReply = ExtractAssistantAnswerAfterPrompt(rawText, prompt);
+            if (promptReply.FoundPrompt && promptReply.FoundAssistantMarker && promptReply.Answer.Length == 0)
             {
-                best = delta;
+                quietTicks = 0;
+                continue;
+            }
+
+            var latestReply = ExtractLatestAssistantAnswer(rawText);
+            var currentAssistantMarkers = CountAssistantMarkers(rawText);
+            var hasNewAssistantTurn = currentAssistantMarkers > baselineAssistantMarkers;
+            var exactPromptAnswer = promptReply.Answer.Length > 0 ? promptReply.Answer : "";
+            if (hasNewAssistantTurn && latestReply.Length == 0 && exactPromptAnswer.Length == 0)
+            {
+                quietTicks = 0;
+                continue;
+            }
+
+            var candidate = exactPromptAnswer.Length > 0
+                ? exactPromptAnswer
+                : latestReply.Length > 0 &&
+                            (hasNewAssistantTurn || !latestReply.Equals(baselineReply, StringComparison.Ordinal))
+                ? latestReply
+                : hasNewAssistantTurn ? "" : delta;
+            if (candidate.Length == 0) continue;
+            if (candidate.Length > best.Length)
+            {
+                best = candidate;
                 quietTicks = 0;
             }
-            else if (best.Length > 20)
+            else if (best.Length > 0)
             {
                 quietTicks++;
             }
 
-            if (quietTicks >= 2 && best.Length > 20)
+            if (quietTicks >= 2 && best.Length > 0)
             {
                 return TrimCopilotNoise(best);
             }
@@ -251,6 +345,98 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             .ToArray();
         return string.Join("\n", lines).Trim();
     }
+
+    private static string ExtractLatestAssistantAnswer(string text)
+    {
+        var lines = text.Replace("\r", "\n").Split('\n').Select(line => line.Trim()).ToArray();
+        var markerIndex = Array.FindLastIndex(lines, line => line.Equals("Copilot said:", StringComparison.OrdinalIgnoreCase));
+        if (markerIndex < 0) return "";
+
+        var answer = new List<string>();
+        var started = false;
+        for (var index = markerIndex + 1; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            if (line.Equals("You said:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Message Copilot", StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+            if (line.Equals("Copilot", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("AI-generated content may be incorrect", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            if (line.Length == 0)
+            {
+                if (started) break;
+                continue;
+            }
+
+            started = true;
+            answer.Add(line);
+        }
+
+        return string.Join("\n", answer).Trim();
+    }
+
+    private static int CountAssistantMarkers(string text) =>
+        text.Replace("\r", "\n")
+            .Split('\n')
+            .Count(line => line.Trim().Equals("Copilot said:", StringComparison.OrdinalIgnoreCase));
+
+    private static PromptReply ExtractAssistantAnswerAfterPrompt(string text, string prompt)
+    {
+        var normalizedText = text.Replace("\r", "\n");
+        var promptIndex = normalizedText.LastIndexOf(prompt, StringComparison.Ordinal);
+        if (promptIndex < 0 && prompt.Length > 80)
+        {
+            promptIndex = normalizedText.LastIndexOf(prompt[..80], StringComparison.Ordinal);
+        }
+        if (promptIndex < 0) return new PromptReply(false, false, "");
+
+        var afterPrompt = normalizedText[(promptIndex + Math.Min(prompt.Length, normalizedText.Length - promptIndex))..];
+        var markerIndex = afterPrompt.IndexOf("Copilot said:", StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0) return new PromptReply(true, false, "");
+
+        var answer = ExtractLatestAssistantAnswer(afterPrompt[(markerIndex + "Copilot said:".Length)..]);
+        if (answer.Length == 0)
+        {
+            answer = ExtractAssistantAnswerBody(afterPrompt[(markerIndex + "Copilot said:".Length)..]);
+        }
+        return new PromptReply(true, true, answer);
+    }
+
+    private static string ExtractAssistantAnswerBody(string text)
+    {
+        var lines = text.Replace("\r", "\n").Split('\n').Select(line => line.Trim()).ToArray();
+        var answer = new List<string>();
+        var started = false;
+        foreach (var line in lines)
+        {
+            if (line.Equals("You said:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Message Copilot", StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+            if (line.Equals("Copilot", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("AI-generated content may be incorrect", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            if (line.Length == 0)
+            {
+                if (started) break;
+                continue;
+            }
+
+            started = true;
+            answer.Add(line);
+        }
+        return string.Join("\n", answer).Trim();
+    }
+
+    private sealed record PromptReply(bool FoundPrompt, bool FoundAssistantMarker, string Answer);
 }
 
 public sealed record CdpTarget(
