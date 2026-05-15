@@ -172,6 +172,24 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
 - The document-search TypeScript implementation has been copied into
   `apps/desktop/document-search-src/`, and the desktop bundle builder plus
   test module loader now use that Relay-owned source path.
+- Copilot structured-response waiting now treats complete Relay schema JSON as
+  a strong completion signal and promotes the Copilot composer Stop -> Send
+  button lifecycle to an explicit completion path. This restores the useful
+  AionUi-era button-state signal without reintroducing AionUi.
+- Document search now has a bounded reflection step before showing the fixed
+  snapshot. When the first local result set is dominated by weak
+  entity/context candidates, Copilot may return a validated
+  `RelayDocumentSearchReflection.v1` refinement and Relay runs one additional
+  local search with stricter concept terms.
+- Office editing uses `RelayOfficeEditPlan.v2`: Copilot returns only safe
+  semantic operations, while Relay injects the selected file path and compiles
+  OfficeCLI argv locally. Legacy Copilot-returned paths/argv are rejected.
+- Code patch planning uses `RelayCodePatchPlan.v2` and no longer asks Copilot
+  to echo the workspace path or raw instruction. Relay supplies the workspace
+  locally and validates edits only against collected context files.
+- Code context collection no longer includes README/docs merely because they
+  are project metadata. README/docs are included only when the instruction or
+  explicit target asks for documentation context.
 
 ## Remaining Hardening Tasks
 
@@ -189,6 +207,8 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
    uninstall behavior.
 6. Remove or archive remaining AionUi overlay scripts/tests once search source
    ownership has moved.
+7. Add an installed Windows E2E matrix for the new reflection path, Office v2
+   plan path, and CodePatchPlan v2 path against Microsoft 365 Copilot.
 
 ## Verification Gates
 

@@ -556,10 +556,23 @@ function assistantReplyHasStrongCompletionSignal(text) {
     return /<\/html>/i.test(cleaned);
   }
   if (assistantReplyLooksIncompleteRelayTool(cleaned)) return false;
+  if (assistantReplyHasCompleteRelaySchemaJson(cleaned)) return true;
   if (assistantReplyHasCompleteToolCallJson(cleaned)) return true;
   if (assistantReplyHasClosedFence(cleaned)) return true;
   if (assistantTextHasStructuredContent(cleaned) && cleaned.length >= 180) return true;
   return false;
+}
+
+function assistantReplyHasCompleteRelaySchemaJson(text) {
+  const cleaned = normalizeCopilotVisibleText(text).trim();
+  if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) return false;
+  if (!/"schemaVersion"\s*:\s*"Relay[^"]+"/u.test(cleaned)) return false;
+  try {
+    const parsed = JSON.parse(cleaned);
+    return Boolean(parsed && typeof parsed === "object" && /^Relay/u.test(String(parsed.schemaVersion || "")));
+  } catch {
+    return false;
+  }
 }
 
 function assistantReplyLooksNaturallyComplete(text) {
@@ -1360,6 +1373,9 @@ async function waitForDomResponse(
   let genStreak = 0;
   /** Consecutive polls where the composer is clearly back to idle send state. */
   let readySendStreak = 0;
+  /** A real Copilot generation usually flips Stop -> Send; use that lifecycle to avoid stale DOM waits. */
+  let stopSeenAfterSubmit = false;
+  let readySendSeenAfterStop = 0;
   /** Consecutive polls where only a weak/stale generating signal remains while completed-looking text is unchanged. */
   let weakGeneratingStable = 0;
   let weakGeneratingReply = "";
@@ -1414,9 +1430,23 @@ async function waitForDomResponse(
     } else {
       readySendStreak = 0;
     }
+    const stopSignal =
+      composerButtonState?.hasStopButton === true ||
+      composerButtonState?.hasStopVisualInDisabledSendButton === true ||
+      strongGeneratingSignal === true;
+    if (stopSignal) {
+      stopSeenAfterSubmit = true;
+      readySendSeenAfterStop = 0;
+    } else if (stopSeenAfterSubmit && composerIdleSignal) {
+      readySendSeenAfterStop++;
+    } else if (!composerIdleSignal) {
+      readySendSeenAfterStop = 0;
+    }
+    const buttonCompletionObserved = stopSeenAfterSubmit && readySendSeenAfterStop >= 2;
     const ignorePhantomStop =
-      strongGeneratingSignal !== true &&
-      (genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS || readySendStreak >= 2);
+      buttonCompletionObserved ||
+      (strongGeneratingSignal !== true &&
+        (genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS || readySendStreak >= 2));
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
     const reasoningDisclosurePlaceholder = replyIsOnlyReasoningDisclosurePlaceholder(reply);
     const weakGeneratingCandidate =
@@ -1484,6 +1514,22 @@ async function waitForDomResponse(
         return await finalize("stable_tool_json", toolJsonResolved);
       }
     }
+    if (
+      assistantReplyHasCompleteRelaySchemaJson(progressReply) &&
+      normalizeCopilotVisibleText(progressReply) !== baselineProgressText &&
+      !domExtractLooksLikeSubmittedPrompt(normalizeCopilotVisibleText(progressReply).length, submittedPromptLen)
+    ) {
+      const schemaJsonResolved = await resolveAssistantReplyForReturn(
+        session,
+        progressReply,
+        submittedPromptLen,
+        netCapture,
+      );
+      if (schemaJsonResolved != null && assistantReplyHasCompleteRelaySchemaJson(schemaJsonResolved)) {
+        console.error("[copilot:response] done (complete relay schema JSON) len=", schemaJsonResolved.length);
+        return await finalize("stable_schema_json", schemaJsonResolved);
+      }
+    }
     if (generating) quietGen = 0;
     else quietGen++;
     if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {
@@ -1519,6 +1565,9 @@ async function waitForDomResponse(
         streamingPlaceholderTail,
         genStreak,
         readySendStreak,
+        stopSeenAfterSubmit,
+        readySendSeenAfterStop,
+        buttonCompletionObserved,
         composerIdleSignal,
         streamed,
         stable,
@@ -1542,6 +1591,24 @@ async function waitForDomResponse(
       stable = 0;
       prev = len;
       continue;
+    }
+
+    if (
+      buttonCompletionObserved &&
+      !progressOnly &&
+      hasVisibleAssistantChat &&
+      !streamingPlaceholderTail &&
+      !reasoningDisclosurePlaceholder &&
+      len >= minDoneLen() &&
+      len > baselineLen &&
+      !domExtractLooksLikeSubmittedPrompt(len, submittedPromptLen) &&
+      (assistantReplyHasStrongCompletionSignal(reply) || assistantReplyLooksNaturallyComplete(reply))
+    ) {
+      const buttonResolved = await resolveAssistantReplyForReturn(session, reply, submittedPromptLen, netCapture);
+      if (buttonResolved != null) {
+        console.error("[copilot:response] done (button lifecycle complete) len=", buttonResolved.length);
+        return await finalize("button_lifecycle_complete", buttonResolved);
+      }
     }
 
     if (

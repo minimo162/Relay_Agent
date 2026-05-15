@@ -12,6 +12,7 @@ import {
   warmupCopilotBridge,
   type RelayCodeContextResponse,
   type RelayCodePatchApplyResponse,
+  type RelayDocumentSearchQueryPlanHints,
   type RelayDocumentSearchResponse,
   type RelayOfficeCommandResponse,
   type RelaySearchResultCard,
@@ -20,12 +21,14 @@ import {
 import {
   buildLocalDocumentSearchResultSummary,
   buildCodePatchPlanPrompt,
+  buildDocumentSearchReflectionPrompt,
   buildDocumentSearchPlanPrompt,
   buildDocumentSearchResultSummaryPrompt,
   buildOfficeEditPlanPrompt,
   candidateIdForResultIndex,
   officePlanToArgs,
   validateDocumentSearchPlanText,
+  validateDocumentSearchReflectionText,
   validateDocumentSearchResultSummaryText,
   validateCodePatchPlanText,
   validateOfficeEditPlanText,
@@ -39,7 +42,7 @@ import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { StatusToasts } from "../components/StatusToasts";
 
 type Mode = "search" | "office" | "code";
-type SearchPhase = "" | "planning" | "searching" | "organizing";
+type SearchPhase = "" | "planning" | "searching" | "reflecting" | "organizing";
 type CodePhase = "" | "context" | "planning" | "applying";
 type AgentTraceStatus = "running" | "done" | "error";
 type AgentTraceItem = {
@@ -178,6 +181,8 @@ export default function Shell(): JSX.Element {
         return 18;
       case "searching":
         return 62;
+      case "reflecting":
+        return 74;
       case "organizing":
         return 88;
       default:
@@ -355,6 +360,51 @@ export default function Shell(): JSX.Element {
     }
   };
 
+  const shouldReflectSearchResult = (cards: RelaySearchResultCard[]): boolean => {
+    const top = cards.slice(0, 12);
+    if (top.length === 0) return false;
+    const confirmed = top.filter((card) => ["content_confirmed", "concept_confirmed"].includes(card.evidenceState || "")).length;
+    const weak = top.filter((card) => ["concept_candidate", "entity_context_match", "filename_only", "generic_content_match", "partial_content_match"].includes(card.evidenceState || card.matchMode || "")).length;
+    return confirmed < Math.min(3, Math.ceil(top.length / 4)) && weak >= Math.ceil(top.length * 0.6);
+  };
+
+  const reflectSearchSnapshot = async (
+    query: string,
+    workspace: string,
+    snapshotId: string,
+    result: RelayDocumentSearchResponse,
+    plan: RelayDocumentSearchQueryPlanHints,
+  ) => {
+    const traceId = beginAgentStep("Copilot", "検索結果を点検");
+    setSearchPhase("reflecting");
+    setSearchStatus("検索結果の質を確認しています");
+    try {
+      await ensureCopilotReady();
+      const prompt = buildDocumentSearchReflectionPrompt({
+        rawQuery: query,
+        snapshotId,
+        workspacePath: workspace,
+        localSummary: result.summary,
+        coverageLabel: result.coverageLabel,
+        queryPlan: plan,
+        cards: result.cards,
+      });
+      const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
+      if (!response.ok) {
+        throw new Error(response.error || "Copilot から検索点検結果が返りませんでした。");
+      }
+      const validation = validateDocumentSearchReflectionText(response.responseText, query, snapshotId);
+      if (!validation.ok) {
+        throw new Error(`Copilot検索点検の検証に失敗しました: ${validation.errors.join(" / ")}`);
+      }
+      finishAgentStep(traceId, "done", validation.value.rationale);
+      return validation.value;
+    } catch (error) {
+      finishAgentStep(traceId, "error", friendlyErrorMessage(error));
+      throw error;
+    }
+  };
+
   const runSearch = async (refine = false) => {
     const query = searchQuery().trim();
     const workspace = workspacePath().trim();
@@ -385,7 +435,7 @@ export default function Shell(): JSX.Element {
       setSearchPhase("searching");
       setSearchStatus("ローカル検索を実行しています");
       const traceId = beginAgentStep("Relay", "ローカル検索を実行");
-      const result = await runRelayDocumentSearch({
+      let result = await runRelayDocumentSearch({
         query,
         workspacePath: workspace,
         intent: "find_files",
@@ -398,6 +448,41 @@ export default function Shell(): JSX.Element {
       finishAgentStep(traceId, result.ok ? "done" : "error", result.coverageLabel || result.summary);
       if (searchId !== searchSequence) return;
       const snapshotId = `snapshot-${Date.now().toString(36)}-${searchId}`;
+      let effectivePlan = plan;
+      if (result.ok && result.cards.length > 0 && shouldReflectSearchResult(result.cards)) {
+        try {
+          const reflection = await reflectSearchSnapshot(query, workspace, snapshotId, result, effectivePlan);
+          if (searchId !== searchSequence) return;
+          if (reflection.action === "refine" && reflection.refinedTerms.length > 0) {
+            effectivePlan = {
+              ...effectivePlan,
+              expandedTerms: [...new Set([...(effectivePlan.expandedTerms || []), ...reflection.refinedTerms])],
+              supportTerms: [...new Set([...(effectivePlan.supportTerms || []), ...reflection.supportTerms])],
+              demoteTerms: [...new Set([...(effectivePlan.demoteTerms || []), ...reflection.demoteTerms])],
+              summary: reflection.summary || effectivePlan.summary,
+            };
+            setSearchPhase("searching");
+            setSearchStatus("検索語を絞って再検索しています");
+            const refineTraceId = beginAgentStep("Relay", "追加検索を実行");
+            result = await runRelayDocumentSearch({
+              query,
+              workspacePath: workspace,
+              intent: "find_files",
+              thoroughness: "thorough",
+              evidence: "candidate",
+              maxResults: 120,
+              fileTypes: effectivePlan.fileTypeHints.length ? effectivePlan.fileTypeHints : ["any"],
+              queryPlanHints: effectivePlan,
+            });
+            finishAgentStep(refineTraceId, result.ok ? "done" : "error", result.coverageLabel || result.summary);
+          }
+        } catch (error) {
+          if (searchId !== searchSequence) return;
+          const message = friendlyErrorMessage(error);
+          setSearchWarning(`検索結果の点検だけ完了できませんでした。ローカル検索結果は表示しています。詳細: ${message}`);
+        }
+      }
+      if (searchId !== searchSequence) return;
       const localOrganizer = buildLocalDocumentSearchResultSummary({
         rawQuery: query,
         snapshotId,

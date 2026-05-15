@@ -480,6 +480,10 @@ fn collect_code_context_blocking(
         .clamp(1, CODE_CONTEXT_MAX_FILES);
     let tokens = tokenize_code_instruction(instruction);
     let explicit_targets = explicit_code_targets(&request);
+    let allow_document_context = instruction_requests_document_context(instruction)
+        || explicit_targets
+            .iter()
+            .any(|path| is_document_context_path(path));
     let mut scanned_files = 0_u32;
     let mut candidates = Vec::new();
     let explicit_target_set: HashSet<String> = explicit_targets
@@ -497,6 +501,7 @@ fn collect_code_context_blocking(
                     &tokens,
                     &explicit_target_set,
                     true,
+                    allow_document_context,
                 );
                 if let Some(candidate) = candidate {
                     candidates.push(candidate);
@@ -509,6 +514,7 @@ fn collect_code_context_blocking(
         &workspace,
         &tokens,
         &explicit_target_set,
+        allow_document_context,
         &mut candidates,
         &mut scanned_files,
     );
@@ -669,6 +675,7 @@ fn scan_code_candidates(
     dir: &Path,
     tokens: &[String],
     explicit_targets: &HashSet<String>,
+    allow_document_context: bool,
     candidates: &mut Vec<CodeCandidate>,
     scanned_files: &mut u32,
 ) {
@@ -691,6 +698,7 @@ fn scan_code_candidates(
                     &path,
                     tokens,
                     explicit_targets,
+                    allow_document_context,
                     candidates,
                     scanned_files,
                 );
@@ -701,9 +709,15 @@ fn scan_code_candidates(
             continue;
         }
         *scanned_files += 1;
-        if let Some(candidate) =
-            code_candidate_from_file(workspace, &path, None, tokens, explicit_targets, false)
-        {
+        if let Some(candidate) = code_candidate_from_file(
+            workspace,
+            &path,
+            None,
+            tokens,
+            explicit_targets,
+            false,
+            allow_document_context,
+        ) {
             candidates.push(candidate);
         }
     }
@@ -716,12 +730,16 @@ fn code_candidate_from_file(
     tokens: &[String],
     explicit_targets: &HashSet<String>,
     explicit: bool,
+    allow_document_context: bool,
 ) -> Option<CodeCandidate> {
     let metadata = fs::metadata(path).ok()?;
     if metadata.len() > CODE_CONTEXT_MAX_FILE_BYTES {
         return None;
     }
     let relative_path = known_relative_path.or_else(|| relative_display_path(workspace, path))?;
+    if !explicit && !allow_document_context && is_document_context_str(&relative_path) {
+        return None;
+    }
     let content = fs::read(path)
         .ok()
         .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
@@ -895,6 +913,34 @@ fn path_like_tokens(instruction: &str) -> Vec<String> {
                 && !PathBuf::from(value).is_absolute()
         })
         .collect()
+}
+
+fn instruction_requests_document_context(instruction: &str) -> bool {
+    let lower = instruction.to_lowercase();
+    lower.contains("readme")
+        || lower.contains("ドキュメント")
+        || lower.contains("文書")
+        || lower.contains("説明")
+        || lower.contains("setup")
+        || lower.contains("セットアップ")
+        || lower.contains("docs/")
+        || lower.contains("documentation")
+}
+
+fn is_document_context_path(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    is_document_context_str(&normalized)
+}
+
+fn is_document_context_str(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_lowercase();
+    let file_name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    file_name == "readme.md"
+        || file_name == "readme.mdx"
+        || normalized.starts_with("docs/")
+        || normalized.contains("/docs/")
+        || normalized.starts_with("documentation/")
+        || normalized.contains("/documentation/")
 }
 
 fn trim_code_path_suffix(value: &str) -> String {
@@ -1784,6 +1830,36 @@ mod tests {
 
         assert_eq!(response.files[0].relative_path, "README.md");
         assert!(response.files[0].content.contains("Old setup"));
+    }
+
+    #[test]
+    fn code_context_skips_readme_when_instruction_does_not_request_docs() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::write(
+            dir.path().join("README.md"),
+            "# Relay\n\nsrc feature details\n",
+        )
+        .expect("write readme");
+        fs::create_dir_all(dir.path().join("src")).expect("create src");
+        fs::write(
+            dir.path().join("src/main.ts"),
+            "export function feature() { return 'src feature'; }\n",
+        )
+        .expect("write main");
+
+        let response = collect_code_context_blocking(RelayCodeContextRequest {
+            workspace_path: dir.path().display().to_string(),
+            instruction: "src feature を修正して".to_string(),
+            target_paths: Vec::new(),
+            max_files: Some(4),
+        })
+        .expect("collect code context");
+
+        assert!(response
+            .files
+            .iter()
+            .all(|file| file.relative_path != "README.md"));
+        assert_eq!(response.files[0].relative_path, "src/main.ts");
     }
 
     #[test]

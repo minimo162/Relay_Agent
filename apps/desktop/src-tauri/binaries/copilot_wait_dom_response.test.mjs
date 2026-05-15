@@ -564,6 +564,20 @@ test("assistantReplyHasStrongCompletionSignal rejects input-first unbalanced too
   );
 });
 
+test("assistantReplyHasStrongCompletionSignal accepts complete Relay schema JSON", () => {
+  assert.equal(
+    assistantReplyHasStrongCompletionSignal(
+      JSON.stringify({
+        schemaVersion: "RelayOfficeEditPlan.v2",
+        risk: "medium",
+        operations: [],
+        summary: "変更なし",
+      }),
+    ),
+    true,
+  );
+});
+
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {
   assert.equal(
     normalizeProgressTextForUi(
@@ -1323,6 +1337,77 @@ test("waitForDomResponse treats a ready send button as idle when stale generatin
   assert.equal(response, finalReply);
   assert.equal(finalizationMode, "stable_resolved");
   assert.ok(pollIndex < 8);
+});
+
+test("waitForDomResponse finalizes when Copilot stop button returns to ready send", async () => {
+  const finalReply = "検索結果を整理しました。対象ファイルは 3 件です。";
+  const snapshots = [
+    {
+      generating: false,
+      strongGeneratingSignal: false,
+      composerButtonState: { hasReadySendButton: true },
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: true,
+      strongGeneratingSignal: true,
+      composerButtonState: { hasStopButton: true },
+      reply: "検索結果を整理しています。",
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: true,
+      strongGeneratingSignal: true,
+      composerButtonState: { hasStopButton: true },
+      reply: "検索結果を整理しています。",
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    },
+    ...Array.from({ length: 4 }, () => ({
+      generating: false,
+      strongGeneratingSignal: false,
+      composerButtonState: { hasReadySendButton: true },
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    })),
+  ];
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: finalReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 5_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.equal(finalizationMode, "button_lifecycle_complete");
 });
 
 test("waitForDomResponse does not ignore a structural stop-button generating signal", async () => {

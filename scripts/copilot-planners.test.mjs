@@ -144,6 +144,136 @@ test("result summary validator rejects raw path contracts", async () => {
   }
 });
 
+test("search reflection validator accepts refinement terms without paths", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const prompt = module.buildDocumentSearchReflectionPrompt({
+      rawQuery: "部品売上に関するファイルを探して",
+      snapshotId: "snapshot-test",
+      workspacePath: "H:\\shr1\\05_経理部",
+      localSummary: "候補があります。",
+      coverageLabel: "100件を確認しました。",
+      queryPlan: {
+        schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+        rawQuery: "部品売上に関するファイルを探して",
+        intent: "find_files",
+        evidence: "candidate",
+        thoroughness: "thorough",
+        expandedTerms: ["部品売上", "パーツ売上"],
+        supportTerms: ["内訳"],
+        demoteTerms: [],
+        fileTypeHints: ["any"],
+        timeScopeIntent: "balanced",
+      },
+      cards: [
+        {
+          title: "FY160-4Q_Mパーツ.xlsx",
+          path: "H:\\shr1\\FY160-4Q_Mパーツ.xlsx",
+          displayPath: "160期-4Q\\各社ファイル\\FY160-4Q_Mパーツ.xlsx",
+          fileType: "xlsx",
+          modifiedTime: "2026-04-10T00:00:00.000Z",
+          evidenceState: "concept_candidate",
+          matchMode: "filename",
+          score: 23,
+          warnings: [],
+        },
+      ],
+    });
+    assert.match(prompt, /document_search_reflection/);
+    assert.equal(prompt.includes("H:\\shr1\\FY160"), false);
+
+    const validation = module.validateDocumentSearchReflectionText(
+      JSON.stringify({
+        schemaVersion: "RelayDocumentSearchReflection.v1",
+        rawQuery: "部品売上に関するファイルを探して",
+        snapshotId: "snapshot-test",
+        action: "refine",
+        rationale: "パーツ名だけで売上概念が弱い候補が上位にあるため。",
+        refinedTerms: ["部品売上", "部品他売上", "補修部品売上"],
+        supportTerms: ["売上高", "内訳"],
+        demoteTerms: ["Mパーツ"],
+        summary: "部品と売上が同時に出る候補へ寄せます。",
+      }),
+      "部品売上に関するファイルを探して",
+      "snapshot-test",
+    );
+    assert.equal(validation.ok, true);
+    assert.equal(validation.value.action, "refine");
+  } finally {
+    cleanup();
+  }
+});
+
+test("office edit planner uses operation DSL and Relay compiles selected file path", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const prompt = module.buildOfficeEditPlanPrompt({
+      instruction: "Sheet1 のA1セルを赤くして",
+      filePath: "C:\\Users\\m242054\\Downloads\\Book2.xlsx",
+      outlineJson: JSON.stringify({ sheets: [{ name: "Sheet1" }] }),
+    });
+    assert.match(prompt, /RelayOfficeEditPlan\.v2/);
+    assert.match(prompt, /operations/);
+    assert.match(prompt, /Never output rawInstruction, filePath, commands, argv/);
+
+    const validation = module.validateOfficeEditPlanText(
+      JSON.stringify({
+        schemaVersion: "RelayOfficeEditPlan.v2",
+        risk: "medium",
+        operations: [
+          {
+            kind: "cell_format",
+            summary: "A1を赤くする",
+            sheet: "Sheet1",
+            range: "A1",
+            props: { fill: "FF0000" },
+          },
+        ],
+        summary: "Sheet1のA1を赤くします。",
+      }),
+      "Sheet1 のA1セルを赤くして",
+      "C:\\Users\\m242054\\Downloads\\Book2.xlsx",
+    );
+    assert.equal(validation.ok, true);
+    assert.deepEqual(validation.value.commands[0].argv, [
+      "set",
+      "C:\\Users\\m242054\\Downloads\\Book2.xlsx",
+      "/Sheet1/A1",
+      "--prop",
+      "fill=FF0000",
+      "--json",
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("office edit validator rejects legacy argv/path contracts", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const validation = module.validateOfficeEditPlanText(
+      JSON.stringify({
+        schemaVersion: "RelayOfficeEditPlan.v1",
+        rawInstruction: "Sheet1 のA1セルを赤くして",
+        filePath: "C:\\Users\\m242054\\Downloads\\Book2.xlsx",
+        risk: "medium",
+        commands: [
+          {
+            summary: "A1を赤くする",
+            argv: ["set", "C:\\Users\\m242054\\Downloads\\Book2.xlsx", "/Sheet1/A1", "--prop", "fill=FF0000", "--json"],
+          },
+        ],
+      }),
+      "Sheet1 のA1セルを赤くして",
+      "C:\\Users\\m242054\\Downloads\\Book2.xlsx",
+    );
+    assert.equal(validation.ok, false);
+    assert.match(validation.errors.join(" / "), /Unknown Office plan field: rawInstruction/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("code patch prompt uses context-relative paths only", async () => {
   const { module, cleanup } = await loadPlannerModule();
   try {
@@ -164,9 +294,10 @@ test("code patch prompt uses context-relative paths only", async () => {
       ],
     });
 
-    assert.match(prompt, /RelayCodePatchPlan\.v1/);
+    assert.match(prompt, /RelayCodePatchPlan\.v2/);
     assert.match(prompt, /README\.md/);
     assert.equal(prompt.includes('"path"'), false);
+    assert.match(prompt, /Never output rawInstruction, workspacePath/);
     assert.match(prompt, /Do not run code/);
   } finally {
     cleanup();
@@ -177,9 +308,7 @@ test("code patch validator accepts exact context file edits", async () => {
   const { module, cleanup } = await loadPlannerModule();
   try {
     const response = JSON.stringify({
-      schemaVersion: "RelayCodePatchPlan.v1",
-      rawInstruction: "README の見出しを更新して",
-      workspacePath: "/workspace/project",
+      schemaVersion: "RelayCodePatchPlan.v2",
       risk: "low",
       summary: "READMEの見出しを更新します。",
       edits: [
@@ -209,9 +338,7 @@ test("code patch validator rejects paths outside context", async () => {
   const { module, cleanup } = await loadPlannerModule();
   try {
     const response = JSON.stringify({
-      schemaVersion: "RelayCodePatchPlan.v1",
-      rawInstruction: "README の見出しを更新して",
-      workspacePath: "/workspace/project",
+      schemaVersion: "RelayCodePatchPlan.v2",
       risk: "low",
       summary: "READMEの見出しを更新します。",
       edits: [
@@ -232,6 +359,30 @@ test("code patch validator rejects paths outside context", async () => {
     );
     assert.equal(validation.ok, false);
     assert.match(validation.errors.join(" / "), /workspace-relative path/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("code patch validator rejects legacy workspace echo contracts", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const validation = module.validateCodePatchPlanText(
+      JSON.stringify({
+        schemaVersion: "RelayCodePatchPlan.v1",
+        rawInstruction: "README の見出しを更新して",
+        workspacePath: "/workspace/project",
+        risk: "low",
+        summary: "READMEの見出しを更新します。",
+        edits: [],
+        verificationCommands: [],
+      }),
+      "README の見出しを更新して",
+      "/workspace/project",
+      new Set(["README.md"]),
+    );
+    assert.equal(validation.ok, false);
+    assert.match(validation.errors.join(" / "), /Unknown code patch plan field: rawInstruction/);
   } finally {
     cleanup();
   }

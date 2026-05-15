@@ -22,6 +22,55 @@
 
 ## Milestone Log
 
+### 2026-05-15 Copilot/Relay safety contract hardening
+
+Implemented the next hardening slice for the dedicated Relay workbench:
+
+- Added `RelayDocumentSearchReflection.v1`. After the first local search, Relay
+  asks Copilot only whether the visible candidate facts are good enough or need
+  one stricter local refinement. The UI still shows one fixed final snapshot;
+  intermediate weak snapshots are not displayed as final results.
+- Added `RelayOfficeEditPlan.v2`. Copilot now returns semantic Office
+  operations only. Relay injects the selected file path and compiles OfficeCLI
+  argv locally, so invalid JSON from unescaped Windows paths and Copilot-owned
+  argv are removed from the Office edit path.
+- Added `RelayCodePatchPlan.v2`. Copilot no longer echoes the workspace path or
+  raw instruction in code patch plans. Relay keeps workspace authority locally
+  and validates edits against the collected context files.
+- Strengthened Copilot response waiting by treating complete Relay
+  `schemaVersion` JSON as a strong completion signal and by using the Copilot
+  composer Stop -> Send button lifecycle as an explicit completion path.
+- Changed code context collection so README/docs are not included as generic
+  project metadata. They are passed to Copilot only when the instruction or
+  explicit target asks for documentation context.
+- Bumped the desktop app and Tauri package version to `0.2.10`.
+
+Verification commands run locally:
+
+```bash
+node --test scripts/copilot-planners.test.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml code_context_skips_readme_when_instruction_does_not_request_docs
+pnpm --filter @relay-agent/desktop typecheck
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `node --test scripts/copilot-planners.test.mjs`: passed, 12 passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed, 51 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml code_context_skips_readme_when_instruction_does_not_request_docs`: passed, 1 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`: passed, 48 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-05-15 agent contract, OfficeCLI smoke lock fix, and Relay-owned search source
 
 Executed the remaining local portions of the agent-direction plan:

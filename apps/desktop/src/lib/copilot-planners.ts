@@ -2,8 +2,9 @@ import type { RelayCodeContextFile, RelayDocumentSearchQueryPlanHints, RelaySear
 
 const SEARCH_PLAN_SCHEMA_VERSION = "RelayDocumentSearchCopilotQueryPlan.v1";
 const SEARCH_RESULT_SCHEMA_VERSION = "RelayDocumentSearchCopilotResultSummary.v1";
-const OFFICE_PLAN_SCHEMA_VERSION = "RelayOfficeEditPlan.v1";
-const CODE_PATCH_SCHEMA_VERSION = "RelayCodePatchPlan.v1";
+const SEARCH_REFLECTION_SCHEMA_VERSION = "RelayDocumentSearchReflection.v1";
+const OFFICE_PLAN_SCHEMA_VERSION = "RelayOfficeEditPlan.v2";
+const CODE_PATCH_SCHEMA_VERSION = "RelayCodePatchPlan.v2";
 const AGENT_STEP_SCHEMA_VERSION = "RelayAgentStep.v1";
 
 const SEARCH_INTENTS = new Set(["find_files", "answer_with_evidence", "summarize_with_evidence", "inspect_file", "similar_documents"]);
@@ -12,8 +13,11 @@ const THOROUGHNESS = new Set(["quick", "thorough"]);
 const FILE_TYPES = new Set(["any", "txt", "md", "csv", "docx", "xlsx", "xlsm", "pptx", "pdf"]);
 const TIME_SCOPE_INTENTS = new Set(["latest_first", "historical_examples", "balanced", "explicit_period", "unknown"]);
 const OFFICE_RISK_LEVELS = new Set(["low", "medium", "high"]);
+const OFFICE_OPERATION_KINDS = new Set(["cell_format", "range_format", "cell_value", "inspect"]);
+const OFFICE_FORMAT_PROPS = new Set(["fill", "fontColor", "bold", "italic", "numberFormat"]);
 const CODE_RISK_LEVELS = new Set(["low", "medium", "high"]);
 const RESULT_CONFIDENCE_LEVELS = new Set(["high", "medium", "low"]);
+const SEARCH_REFLECTION_ACTIONS = new Set(["finalize", "refine"]);
 const AGENT_MODES = new Set(["document_search", "office_edit", "code"]);
 const AGENT_ACTIONS = new Set(["use_tool", "ask_user", "finish", "error"]);
 
@@ -47,11 +51,19 @@ export type RelayOfficePlanCommand = {
   argv: string[];
 };
 
+export type RelayOfficeEditOperation = {
+  kind: "cell_format" | "range_format" | "cell_value" | "inspect";
+  summary: string;
+  sheet?: string;
+  range?: string;
+  value?: string | number | boolean | null;
+  props?: Record<string, string | number | boolean>;
+};
+
 export type RelayOfficeEditPlan = {
-  schemaVersion: "RelayOfficeEditPlan.v1";
-  rawInstruction: string;
-  filePath: string;
+  schemaVersion: "RelayOfficeEditPlan.v2";
   risk: "low" | "medium" | "high";
+  operations: RelayOfficeEditOperation[];
   commands: RelayOfficePlanCommand[];
   summary?: string;
 };
@@ -64,9 +76,7 @@ export type RelayCodePatchPlanEdit = {
 };
 
 export type RelayCodePatchPlan = {
-  schemaVersion: "RelayCodePatchPlan.v1";
-  rawInstruction: string;
-  workspacePath: string;
+  schemaVersion: "RelayCodePatchPlan.v2";
   risk: "low" | "medium" | "high";
   summary: string;
   edits: RelayCodePatchPlanEdit[];
@@ -103,6 +113,18 @@ export type RelayDocumentSearchResultSummary = {
   summary: string;
   categories: RelayDocumentSearchResultCategory[];
   caveats: string[];
+};
+
+export type RelayDocumentSearchReflection = {
+  schemaVersion: "RelayDocumentSearchReflection.v1";
+  rawQuery: string;
+  snapshotId: string;
+  action: "finalize" | "refine";
+  rationale: string;
+  refinedTerms: string[];
+  supportTerms: string[];
+  demoteTerms: string[];
+  summary?: string;
 };
 
 export type PlannerValidation<T> =
@@ -256,6 +278,79 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
   ].join("\n");
 }
 
+export function buildDocumentSearchReflectionPrompt(params: {
+  rawQuery: string;
+  snapshotId: string;
+  workspacePath: string;
+  localSummary: string;
+  coverageLabel: string;
+  queryPlan: RelayDocumentSearchQueryPlanHints;
+  cards: RelaySearchResultCard[];
+}): string {
+  const cardFacts = params.cards.slice(0, 40).map((card, index) => ({
+    candidateId: candidateIdForResultIndex(index),
+    position: index + 1,
+    title: card.title,
+    displayPath: (card.displayPath || card.path).replaceAll("\\", "/"),
+    fileType: card.fileType || "",
+    modifiedTime: card.modifiedTime || "",
+    evidenceState: card.evidenceState || card.matchMode || "candidate",
+    score: typeof card.score === "number" ? card.score : null,
+    warnings: card.warnings.slice(0, 8),
+  }));
+  return [
+    "RELAY DOCUMENT SEARCH REFLECTION",
+    "Mode: document_search_reflection. This is not a chat-answer task.",
+    "Your only job is to decide whether Relay should accept this local search snapshot or run one more refined local search.",
+    "Do not call tools. Do not search Microsoft 365, SharePoint, the web, memory, plugins, or local files.",
+    "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
+    "Use this schema exactly:",
+    JSON.stringify({
+      schemaVersion: SEARCH_REFLECTION_SCHEMA_VERSION,
+      rawQuery: params.rawQuery,
+      snapshotId: params.snapshotId,
+      action: "finalize",
+      rationale: "short reason based only on the candidate facts",
+      refinedTerms: ["term to add only if action is refine"],
+      supportTerms: ["supporting term to add only if action is refine"],
+      demoteTerms: ["term to demote only if action is refine"],
+      summary: "short Japanese search-quality note",
+    }),
+    "Rules:",
+    `- schemaVersion must be ${SEARCH_REFLECTION_SCHEMA_VERSION}.`,
+    "- rawQuery must equal USER REQUEST DATA exactly.",
+    "- snapshotId must equal SNAPSHOT ID exactly.",
+    "- action must be finalize or refine.",
+    "- Choose refine only when the top candidates mostly match a nearby entity/name but do not confirm the user's compound concept.",
+    "- For compound concepts, preserve all required parts. Example: 部品売上 needs parts AND sales; パーツ alone is not enough.",
+    "- refinedTerms must add stricter concept terms, not broad generic words. Do not add company names unless the user asked for that company.",
+    "- supportTerms are allowed only as secondary workflow terms that should not outrank the core concept.",
+    "- demoteTerms should include misleading entity-only or copy/review words when visible in the candidates.",
+    "- Never output file paths or candidateIds. Relay will execute any refinement locally.",
+    "- Do not include markdown, prose outside JSON, tool calls, citations, or fields not shown in the schema.",
+    "SNAPSHOT ID:",
+    params.snapshotId,
+    "WORKSPACE:",
+    params.workspacePath,
+    "CURRENT QUERY PLAN:",
+    JSON.stringify({
+      expandedTerms: params.queryPlan.expandedTerms,
+      supportTerms: params.queryPlan.supportTerms,
+      demoteTerms: params.queryPlan.demoteTerms,
+      timeScopeIntent: params.queryPlan.timeScopeIntent,
+    }),
+    "LOCAL RELAY SUMMARY:",
+    params.localSummary,
+    "COVERAGE:",
+    params.coverageLabel,
+    "CANDIDATE FACTS:",
+    JSON.stringify(cardFacts),
+    "USER REQUEST DATA:",
+    JSON.stringify(params.rawQuery),
+    "Return the reflection JSON object now.",
+  ].join("\n");
+}
+
 export function buildOfficeEditPlanPrompt(params: {
   instruction: string;
   filePath: string;
@@ -265,35 +360,36 @@ export function buildOfficeEditPlanPrompt(params: {
   return [
     "RELAY OFFICE EDIT PLAN COMPILER",
     "Mode: office_edit_plan. This is not a chat-answer task.",
-    "Your only job is to translate the user's Office-file instruction into reviewed OfficeCLI argv arrays.",
+    "Your only job is to translate the user's Office-file instruction into a small JSON operation plan.",
     "Do not call tools. Do not edit files. Do not use Microsoft 365 built-in editing, SharePoint, web search, plugins, or local file tools.",
     "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
     "Use this schema exactly:",
     JSON.stringify({
       schemaVersion: OFFICE_PLAN_SCHEMA_VERSION,
-      rawInstruction: instruction,
-      filePath: params.filePath,
       risk: "medium",
-      commands: [
+      operations: [
         {
+          kind: "cell_format",
           summary: "short operation summary",
-          argv: ["view", params.filePath, "outline", "--json"],
+          sheet: "Sheet1",
+          range: "A1",
+          props: { fill: "FF0000" },
         },
       ],
       summary: "short plan summary",
     }),
     "Rules:",
     `- schemaVersion must be ${OFFICE_PLAN_SCHEMA_VERSION}.`,
-    "- rawInstruction must equal USER REQUEST DATA exactly.",
-    "- filePath must equal TARGET FILE exactly.",
-    "- commands must contain one to five OfficeCLI commands as argv arrays; do not include the officecli executable name.",
-    "- Every command argv must include TARGET FILE exactly once.",
-    "- Add --json to every command.",
+    "- operations must contain one to five safe operations.",
+    "- Supported operation kinds are cell_format, range_format, cell_value, and inspect.",
+    "- Never output rawInstruction, filePath, commands, argv, shell syntax, or the officecli executable name.",
+    "- Relay already knows TARGET FILE and will build OfficeCLI argv itself. Do not repeat any Windows path.",
     "- For Excel ranges, use a sheet-qualified path like \"/Sheet1/A1\". Use exact sheet names from OFFICE OUTLINE JSON.",
     "- If the user writes a spaced sheet name such as `Sheet 1` and the outline has a single close match such as `Sheet1`, use the exact outline name.",
-    "- For simple Excel cell color requests, prefer an argv like [\"set\", filePath, \"/Sheet1/A1\", \"--prop\", \"fill=FF0000\", \"--json\"].",
-    "- If the target sheet/range/object is ambiguous, return a safe inspection command such as [\"view\", filePath, \"outline\", \"--json\"] rather than guessing an edit.",
-    "- Do not include shell syntax, markdown, prose, command strings, PowerShell, Bash, VBA, or fields not shown in the schema.",
+    "- For simple Excel cell color requests, use kind cell_format with props.fill such as FF0000.",
+    "- For writing a simple cell value, use kind cell_value with sheet, range, and value.",
+    "- If the target sheet/range/object is ambiguous, return one inspect operation rather than guessing an edit.",
+    "- Do not include markdown, prose, PowerShell, Bash, VBA, local file content, or fields not shown in the schema.",
     "TARGET FILE:",
     params.filePath,
     "OFFICE OUTLINE JSON:",
@@ -328,8 +424,6 @@ export function buildCodePatchPlanPrompt(params: {
     "Use this schema exactly:",
     JSON.stringify({
       schemaVersion: CODE_PATCH_SCHEMA_VERSION,
-      rawInstruction: instruction,
-      workspacePath: params.workspacePath,
       risk: "medium",
       summary: "short Japanese summary of the proposed code change",
       edits: [
@@ -344,12 +438,11 @@ export function buildCodePatchPlanPrompt(params: {
     }),
     "Rules:",
     `- schemaVersion must be ${CODE_PATCH_SCHEMA_VERSION}.`,
-    "- rawInstruction must equal USER REQUEST DATA exactly.",
-    "- workspacePath must equal WORKSPACE exactly.",
+    "- Never output rawInstruction, workspacePath, absolute paths, or parent directory paths.",
     "- Use only files listed in CONTEXT FILES. Do not invent paths.",
     "- relativePath must exactly match one CONTEXT FILES relativePath.",
     "- Every oldString must be copied exactly from the corresponding CONTEXT FILES content and should be unique in that file.",
-    "- Do not use absolute paths, parent directory paths, shell commands, markdown, prose outside JSON, or fields not shown in the schema.",
+    "- Do not use shell commands, markdown, prose outside JSON, or fields not shown in the schema.",
     "- If the requested change cannot be done safely with the provided context, return edits: [] and explain the missing context in summary.",
     "- Keep edits small and reviewable. Prefer one to eight edits; never exceed eight edits.",
     "- verificationCommands are suggestions for the user only; Relay will not execute them automatically.",
@@ -434,10 +527,20 @@ export function validateDocumentSearchResultSummaryText(
   return validateDocumentSearchResultSummary(parsed.value, rawQuery, snapshotId, candidatePathById);
 }
 
-export function validateOfficeEditPlanText(text: string, rawInstruction: string, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
+export function validateDocumentSearchReflectionText(
+  text: string,
+  rawQuery: string,
+  snapshotId: string,
+): PlannerValidation<RelayDocumentSearchReflection> {
   const parsed = parseStrictJsonObject(text);
   if (!parsed.ok) return parsed;
-  return validateOfficeEditPlan(parsed.value, rawInstruction, filePath);
+  return validateDocumentSearchReflection(parsed.value, rawQuery, snapshotId);
+}
+
+export function validateOfficeEditPlanText(text: string, _rawInstruction: string, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
+  const parsed = parseStrictJsonObject(text);
+  if (!parsed.ok) return parsed;
+  return validateOfficeEditPlan(parsed.value, filePath);
 }
 
 export function validateCodePatchPlanText(
@@ -529,24 +632,63 @@ function validateDocumentSearchPlan(value: JsonRecord, rawQuery: string): Planne
   };
 }
 
-function validateOfficeEditPlan(value: JsonRecord, rawInstruction: string, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
+function validateOfficeEditPlan(value: JsonRecord, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
   const errors: string[] = [];
-  rejectUnknownFields(value, ["schemaVersion", "rawInstruction", "filePath", "risk", "commands", "summary"], errors, "Office plan");
+  rejectUnknownFields(value, ["schemaVersion", "risk", "operations", "summary"], errors, "Office plan");
   if (value.schemaVersion !== OFFICE_PLAN_SCHEMA_VERSION) errors.push(`schemaVersion must be ${OFFICE_PLAN_SCHEMA_VERSION}.`);
-  if (value.rawInstruction !== rawInstruction) errors.push("rawInstruction must exactly match the original user instruction.");
-  if (value.filePath !== filePath) errors.push("filePath must exactly match the selected file.");
   const risk = enumValue(value.risk, OFFICE_RISK_LEVELS, "risk", errors);
   const summary = value.summary === undefined ? undefined : stringValue(value.summary, "summary", 280, errors);
-  const commands = validateOfficeCommands(value.commands, filePath, errors);
+  const operations = validateOfficeOperations(value.operations, errors);
+  const commands = officeOperationsToCommands(operations, filePath, errors);
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
     value: {
       schemaVersion: OFFICE_PLAN_SCHEMA_VERSION,
-      rawInstruction,
-      filePath,
       risk: risk as RelayOfficeEditPlan["risk"],
+      operations,
       commands,
+      summary,
+    },
+  };
+}
+
+function validateDocumentSearchReflection(
+  value: JsonRecord,
+  rawQuery: string,
+  snapshotId: string,
+): PlannerValidation<RelayDocumentSearchReflection> {
+  const errors: string[] = [];
+  rejectUnknownFields(
+    value,
+    ["schemaVersion", "rawQuery", "snapshotId", "action", "rationale", "refinedTerms", "supportTerms", "demoteTerms", "summary"],
+    errors,
+    "search reflection",
+  );
+  if (value.schemaVersion !== SEARCH_REFLECTION_SCHEMA_VERSION) errors.push(`schemaVersion must be ${SEARCH_REFLECTION_SCHEMA_VERSION}.`);
+  if (value.rawQuery !== rawQuery) errors.push("rawQuery must exactly match the original user request.");
+  if (value.snapshotId !== snapshotId) errors.push("snapshotId must exactly match the Relay snapshot id.");
+  const action = enumValue(value.action, SEARCH_REFLECTION_ACTIONS, "action", errors);
+  const rationale = stringValue(value.rationale, "rationale", 280, errors);
+  const refinedTerms = stringArray(value.refinedTerms, "refinedTerms", 20, errors);
+  const supportTerms = stringArray(value.supportTerms, "supportTerms", 20, errors);
+  const demoteTerms = stringArray(value.demoteTerms, "demoteTerms", 20, errors);
+  const summary = value.summary === undefined ? undefined : stringValue(value.summary, "summary", 280, errors);
+  if (action === "finalize" && refinedTerms.length) {
+    errors.push("refinedTerms must be empty when action is finalize.");
+  }
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      schemaVersion: SEARCH_REFLECTION_SCHEMA_VERSION,
+      rawQuery,
+      snapshotId,
+      action: action as RelayDocumentSearchReflection["action"],
+      rationale,
+      refinedTerms,
+      supportTerms,
+      demoteTerms,
       summary,
     },
   };
@@ -554,20 +696,18 @@ function validateOfficeEditPlan(value: JsonRecord, rawInstruction: string, fileP
 
 function validateCodePatchPlan(
   value: JsonRecord,
-  rawInstruction: string,
-  workspacePath: string,
+  _rawInstruction: string,
+  _workspacePath: string,
   allowedRelativePaths: Set<string>,
 ): PlannerValidation<RelayCodePatchPlan> {
   const errors: string[] = [];
   rejectUnknownFields(
     value,
-    ["schemaVersion", "rawInstruction", "workspacePath", "risk", "summary", "edits", "verificationCommands"],
+    ["schemaVersion", "risk", "summary", "edits", "verificationCommands"],
     errors,
     "code patch plan",
   );
   if (value.schemaVersion !== CODE_PATCH_SCHEMA_VERSION) errors.push(`schemaVersion must be ${CODE_PATCH_SCHEMA_VERSION}.`);
-  if (value.rawInstruction !== rawInstruction) errors.push("rawInstruction must exactly match the original user instruction.");
-  if (value.workspacePath !== workspacePath) errors.push("workspacePath must exactly match the selected workspace.");
   const risk = enumValue(value.risk, CODE_RISK_LEVELS, "risk", errors);
   const summary = stringValue(value.summary, "summary", 420, errors);
   const edits = validateCodePatchEdits(value.edits, allowedRelativePaths, errors);
@@ -577,8 +717,6 @@ function validateCodePatchPlan(
     ok: true,
     value: {
       schemaVersion: CODE_PATCH_SCHEMA_VERSION,
-      rawInstruction,
-      workspacePath,
       risk: risk as RelayCodePatchPlan["risk"],
       summary,
       edits,
@@ -735,41 +873,142 @@ function exactCandidateIdArray(
   return out;
 }
 
-function validateOfficeCommands(value: unknown, filePath: string, errors: string[]): RelayOfficePlanCommand[] {
+function validateOfficeOperations(value: unknown, errors: string[]): RelayOfficeEditOperation[] {
   if (!Array.isArray(value)) {
-    errors.push("commands must be an array.");
+    errors.push("operations must be an array.");
     return [];
   }
-  if (value.length < 1 || value.length > 5) errors.push("commands must contain one to five entries.");
-  const commands: RelayOfficePlanCommand[] = [];
+  if (value.length < 1 || value.length > 5) errors.push("operations must contain one to five entries.");
+  const operations: RelayOfficeEditOperation[] = [];
   value.slice(0, 5).forEach((entry, index) => {
     if (!isRecord(entry)) {
-      errors.push(`commands[${index}] must be an object.`);
+      errors.push(`operations[${index}] must be an object.`);
       return;
     }
-    rejectUnknownFields(entry, ["summary", "argv"], errors, `commands[${index}]`);
-    const summary = stringValue(entry.summary, `commands[${index}].summary`, 160, errors);
-    if (!Array.isArray(entry.argv)) {
-      errors.push(`commands[${index}].argv must be an array.`);
-      return;
+    rejectUnknownFields(entry, ["kind", "summary", "sheet", "range", "value", "props"], errors, `operations[${index}]`);
+    const kind = enumValue(entry.kind, OFFICE_OPERATION_KINDS, `operations[${index}].kind`, errors) as RelayOfficeEditOperation["kind"];
+    const summary = stringValue(entry.summary, `operations[${index}].summary`, 160, errors);
+    const sheet = entry.sheet === undefined ? undefined : officeSheetName(entry.sheet, `operations[${index}].sheet`, errors);
+    const range = entry.range === undefined ? undefined : officeRangeValue(entry.range, `operations[${index}].range`, errors);
+    const props = entry.props === undefined ? undefined : officeProps(entry.props, `operations[${index}].props`, errors);
+    const value = entry.value === undefined ? undefined : officeScalarValue(entry.value, `operations[${index}].value`, errors);
+    if ((kind === "cell_format" || kind === "range_format") && (!sheet || !range || !props || Object.keys(props).length === 0)) {
+      errors.push(`operations[${index}] ${kind} requires sheet, range, and props.`);
     }
-    const argv = entry.argv.map((item, argIndex) => {
-      if (typeof item !== "string" || !item.trim()) {
-        errors.push(`commands[${index}].argv[${argIndex}] must be a non-empty string.`);
-        return "";
-      }
-      if (hasControlOrShellSyntax(item)) errors.push(`commands[${index}].argv[${argIndex}] contains forbidden shell syntax.`);
-      return item.trim();
-    }).filter(Boolean);
-    if (argv.length < 2 || argv.length > 30) errors.push(`commands[${index}].argv must contain 2 to 30 arguments.`);
-    if (/^officecli(?:\.exe)?$/iu.test(argv[0] || "")) errors.push(`commands[${index}].argv must not include the officecli executable.`);
-    if (!/^[a-z][a-z0-9_-]*$/iu.test(argv[0] || "")) errors.push(`commands[${index}].argv[0] must be an OfficeCLI verb.`);
-    const fileOccurrences = argv.filter((arg) => arg === filePath).length;
-    if (fileOccurrences !== 1) errors.push(`commands[${index}].argv must include the selected file path exactly once.`);
-    if (!argv.includes("--json")) argv.push("--json");
-    commands.push({ summary, argv });
+    if (kind === "cell_value" && (!sheet || !range || value === undefined)) {
+      errors.push(`operations[${index}] cell_value requires sheet, range, and value.`);
+    }
+    if (kind === "inspect" && (sheet || range || value !== undefined || props)) {
+      errors.push(`operations[${index}] inspect must not include sheet, range, value, or props.`);
+    }
+    if (summary && kind) {
+      operations.push({
+        kind,
+        summary,
+        ...(sheet ? { sheet } : {}),
+        ...(range ? { range } : {}),
+        ...(value !== undefined ? { value } : {}),
+        ...(props ? { props } : {}),
+      });
+    }
   });
-  return commands;
+  return operations;
+}
+
+function officeOperationsToCommands(
+  operations: RelayOfficeEditOperation[],
+  filePath: string,
+  errors: string[],
+): RelayOfficePlanCommand[] {
+  return operations.map((operation, index) => {
+    if (operation.kind === "inspect") {
+      return {
+        summary: operation.summary || "Officeファイルを確認",
+        argv: ["view", filePath, "outline", "--json"],
+      };
+    }
+    const target = `/${operation.sheet}/${operation.range}`;
+    if (operation.kind === "cell_value") {
+      return {
+        summary: operation.summary,
+        argv: ["set", filePath, target, "--value", String(operation.value ?? ""), "--json"],
+      };
+    }
+    const argv = ["set", filePath, target];
+    const props = operation.props || {};
+    for (const [key, value] of Object.entries(props)) {
+      argv.push("--prop", `${key}=${String(value)}`);
+    }
+    argv.push("--json");
+    if (argv.length <= 4) {
+      errors.push(`operations[${index}] did not produce any OfficeCLI property arguments.`);
+    }
+    return {
+      summary: operation.summary,
+      argv,
+    };
+  });
+}
+
+function officeSheetName(value: unknown, field: string, errors: string[]): string {
+  const sheet = stringValue(value, field, 120, errors);
+  if (/[\\/]/u.test(sheet)) errors.push(`${field} must not contain slashes.`);
+  return sheet;
+}
+
+function officeRangeValue(value: unknown, field: string, errors: string[]): string {
+  const range = stringValue(value, field, 80, errors).replace(/\s+/gu, "");
+  if (!/^[A-Z]{1,4}\d+(?::[A-Z]{1,4}\d+)?$/iu.test(range)) {
+    errors.push(`${field} must be an A1-style cell or range such as A1 or A1:B3.`);
+  }
+  return range.toUpperCase();
+}
+
+function officeScalarValue(value: unknown, field: string, errors: string[]): string | number | boolean | null {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (typeof value === "string" && hasControlCharacters(value)) errors.push(`${field} must not contain control characters.`);
+    if (typeof value === "string" && value.length > 4000) errors.push(`${field} must be 4000 characters or less.`);
+    return value;
+  }
+  errors.push(`${field} must be a string, number, boolean, or null.`);
+  return "";
+}
+
+function officeProps(value: unknown, field: string, errors: string[]): Record<string, string | number | boolean> {
+  if (!isRecord(value)) {
+    errors.push(`${field} must be an object.`);
+    return {};
+  }
+  const props: Record<string, string | number | boolean> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    if (!OFFICE_FORMAT_PROPS.has(key)) {
+      errors.push(`${field}.${key} is not a supported formatting property.`);
+      continue;
+    }
+    if (typeof rawValue !== "string" && typeof rawValue !== "number" && typeof rawValue !== "boolean") {
+      errors.push(`${field}.${key} must be a string, number, or boolean.`);
+      continue;
+    }
+    const normalized = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+    if (typeof normalized === "string") {
+      if (!normalized) {
+        errors.push(`${field}.${key} must not be empty.`);
+        continue;
+      }
+      if (hasControlOrShellSyntax(normalized)) errors.push(`${field}.${key} contains forbidden shell syntax.`);
+      if (key === "fill" || key === "fontColor") {
+        const color = normalized.replace(/^#/u, "").toUpperCase();
+        if (!/^[0-9A-F]{6}$/u.test(color)) {
+          errors.push(`${field}.${key} must be a 6-digit hex color.`);
+          continue;
+        }
+        props[key] = color;
+        continue;
+      }
+    }
+    props[key] = normalized;
+  }
+  return props;
 }
 
 function validateCodePatchEdits(
