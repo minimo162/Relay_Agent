@@ -79,6 +79,30 @@ function run(cmd, args, opts = {}) {
   }
 }
 
+function hasCommand(cmd) {
+  const r =
+    process.platform === "win32"
+      ? spawnSync("where", [cmd], { stdio: "ignore" })
+      : spawnSync("sh", ["-lc", `command -v ${cmd}`], { stdio: "ignore" });
+  return r.status === 0;
+}
+
+function extractArchive(archivePath, ext, extractDir) {
+  if (process.platform === "win32" && ext === "zip") {
+    const powershell = hasCommand("pwsh") ? "pwsh" : hasCommand("powershell") ? "powershell" : "";
+    if (powershell) {
+      run(powershell, [
+        "-NoProfile",
+        "-Command",
+        `Expand-Archive -LiteralPath ${JSON.stringify(archivePath)} -DestinationPath ${JSON.stringify(extractDir)} -Force`,
+      ]);
+      return;
+    }
+  }
+
+  run("tar", ["-xf", archivePath, "-C", extractDir]);
+}
+
 async function main() {
   const triple =
     process.env.TAURI_ENV_TARGET_TRIPLE?.trim() || hostTripleFromRustc();
@@ -106,7 +130,7 @@ async function main() {
     await download(url, archivePath);
     const extractDir = join(work, "extract");
     mkdirSync(extractDir, { recursive: true });
-    run("tar", ["-xf", archivePath, "-C", extractDir]);
+    extractArchive(archivePath, ext, extractDir);
 
     const nodeDir = join(extractDir, base);
     const srcNode =

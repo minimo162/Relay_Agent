@@ -94,6 +94,18 @@ function extractArchive(archivePath, ext, extractDir) {
     return;
   }
 
+  if (process.platform === "win32") {
+    const powershell = hasCommand("pwsh") ? "pwsh" : hasCommand("powershell") ? "powershell" : "";
+    if (powershell) {
+      run(powershell, [
+        "-NoProfile",
+        "-Command",
+        `Expand-Archive -LiteralPath ${JSON.stringify(archivePath)} -DestinationPath ${JSON.stringify(extractDir)} -Force`,
+      ]);
+      return;
+    }
+  }
+
   if (hasCommand("unzip")) {
     run("unzip", ["-q", archivePath, "-d", extractDir]);
     return;

@@ -143,20 +143,21 @@ jobs:
 
       - name: Prepare Tauri bundle prerequisites
         working-directory: apps/desktop
-        shell: bash
+        shell: pwsh
         run: |
-          for attempt in 1 2 3; do
-            if pnpm run prep:tauri-bundle; then
+          foreach ($attempt in 1..3) {
+            pnpm run prep:tauri-bundle
+            if ($LASTEXITCODE -eq 0) {
               exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "prep:tauri-bundle failed after $attempt attempts." >&2
+            }
+            if ($attempt -eq 3) {
+              Write-Error "prep:tauri-bundle failed after $attempt attempts."
               exit 1
-            fi
-            sleep_seconds=$((attempt * 15))
-            echo "prep:tauri-bundle failed on attempt $attempt; retrying in ${sleep_seconds}s..." >&2
-            sleep "$sleep_seconds"
-          done
+            }
+            $sleepSeconds = $attempt * 15
+            Write-Warning "prep:tauri-bundle failed on attempt $attempt; retrying in ${sleepSeconds}s..."
+            Start-Sleep -Seconds $sleepSeconds
+          }
 
       - name: Run Rust workspace tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
