@@ -175,6 +175,7 @@ export default function Shell(): JSX.Element {
     setWorkspacePath(selected);
     saveWorkspacePath(selected);
     await refreshState(true);
+    queueCopilotWarmup();
   };
 
   const chooseOfficeFile = async () => {
@@ -199,6 +200,7 @@ export default function Shell(): JSX.Element {
 
   let copilotWarmupPromise: Promise<void> | null = null;
   let copilotWarmupReadyAt = 0;
+  let copilotBackgroundWarmupQueued = false;
 
   const ensureCopilotReady = async () => {
     const now = Date.now();
@@ -220,6 +222,22 @@ export default function Shell(): JSX.Element {
     }
     await copilotWarmupPromise;
   };
+
+  const queueCopilotWarmup = () => {
+    if (!workspaceReady() || copilotBackgroundWarmupQueued) return;
+    if (copilotWarmupReadyAt > 0 && Date.now() - copilotWarmupReadyAt < 5 * 60 * 1000) return;
+    copilotBackgroundWarmupQueued = true;
+    window.setTimeout(() => {
+      copilotBackgroundWarmupQueued = false;
+      void ensureCopilotReady().catch((error) => {
+        console.debug("[Relay] Copilot background warmup skipped:", error);
+      });
+    }, 900);
+  };
+
+  onMount(() => {
+    window.setTimeout(queueCopilotWarmup, 1200);
+  });
 
   const compileSearchPlan = async (query: string, workspace: string) => {
     setSearchPhase("planning");
@@ -531,7 +549,9 @@ export default function Shell(): JSX.Element {
                   onInput={(event) => {
                     setOfficeInstruction(event.currentTarget.value);
                     setOfficePlan(null);
+                    queueCopilotWarmup();
                   }}
+                  onFocus={queueCopilotWarmup}
                   placeholder="例: Sheet1 の A1 を確認して、見出しを「売上」に変更して"
                 />
               </label>
@@ -621,7 +641,11 @@ export default function Shell(): JSX.Element {
               <textarea
                 rows="4"
                 value={searchQuery()}
-                onInput={(event) => setSearchQuery(event.currentTarget.value)}
+                onInput={(event) => {
+                  setSearchQuery(event.currentTarget.value);
+                  queueCopilotWarmup();
+                }}
+                onFocus={queueCopilotWarmup}
                 placeholder="例: 部品売上に関するファイルを探して"
                 onKeyDown={(event) => {
                   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runSearch();

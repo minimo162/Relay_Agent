@@ -15731,6 +15731,46 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-05-15 - Ripgrep sidecar resolution and Copilot timing hardening
+
+Fixed installed-app document search failing with `ripgrep was not found` even
+though the release bundle includes the `relay-rg` Tauri external sidecar. The
+document-search IPC now resolves ripgrep from `RELAY_RIPGREP_PATH`,
+`RELAY_BUNDLED_RIPGREP`, Tauri resource candidates, the executable sidecar
+directory, development `src-tauri/binaries`, and finally `PATH`.
+
+Reduced first-action Copilot latency by starting a best-effort background
+Copilot bridge warmup after the Relay UI has painted and again when the user
+focuses or types in the search / Office instruction fields. The foreground
+workflow still validates readiness before sending prompts.
+
+Also increased no-attachment Copilot paste/submit settling times. This keeps
+the fast inline paste path but avoids submitting immediately after Lexical
+accepts the prompt, which can briefly surface a Copilot-side send error before
+a retry succeeds.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+node --test apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`: passed, 38 passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs`: passed, 2 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

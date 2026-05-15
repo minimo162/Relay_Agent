@@ -9,9 +9,9 @@ test("getCopilotPromptTiming shortens the no-attachment fast path", () => {
     composerReadyDelayMs: 120,
     afterClearDelayMs: 40,
     afterRefocusDelayMs: 40,
-    postPasteDelayMs: 80,
-    sendButtonStableMs: 180,
-    submitConfirmDelayMs: 450,
+    postPasteDelayMs: 220,
+    sendButtonStableMs: 420,
+    submitConfirmDelayMs: 700,
   });
 });
 

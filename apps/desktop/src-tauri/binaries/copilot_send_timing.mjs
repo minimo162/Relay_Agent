@@ -5,8 +5,8 @@ export function getCopilotPromptTiming({ hadAttachments = false } = {}) {
     composerReadyDelayMs: withAttachments ? 420 : 120,
     afterClearDelayMs: withAttachments ? 120 : 40,
     afterRefocusDelayMs: withAttachments ? 120 : 40,
-    postPasteDelayMs: withAttachments ? 220 : 80,
-    sendButtonStableMs: withAttachments ? 750 : 180,
-    submitConfirmDelayMs: withAttachments ? 700 : 450,
+    postPasteDelayMs: withAttachments ? 220 : 220,
+    sendButtonStableMs: withAttachments ? 750 : 420,
+    submitConfirmDelayMs: withAttachments ? 700 : 700,
   };
 }

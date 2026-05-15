@@ -458,15 +458,27 @@ fn resolve_officecli_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn resolve_ripgrep_path(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("RELAY_RIPGREP_PATH") {
-        let path = PathBuf::from(path);
-        if executable_ok(&path, "--version") {
-            return Some(path);
+    for var_name in ["RELAY_RIPGREP_PATH", "RELAY_BUNDLED_RIPGREP"] {
+        if let Ok(path) = std::env::var(var_name) {
+            let path = PathBuf::from(path);
+            if executable_ok(&path, "--version") {
+                return Some(path);
+            }
         }
     }
     let mut candidates = Vec::new();
     if let Ok(resource_dir) = app.path().resource_dir() {
         candidates.push(resource_dir.join("relay-tools/ripgrep/rg.exe"));
+        candidates.push(resource_dir.join("relay-rg.exe"));
+        candidates.push(resource_dir.join("relay-rg"));
+        candidates.push(resource_dir.join("relay-rg-x86_64-pc-windows-msvc.exe"));
+        candidates.push(resource_dir.join("relay-rg-x86_64-unknown-linux-gnu"));
+    }
+    if let Some(sidecar_dir) = sidecar_base_dir() {
+        candidates.push(sidecar_dir.join("relay-rg.exe"));
+        candidates.push(sidecar_dir.join("relay-rg"));
+        candidates.push(sidecar_dir.join("relay-rg-x86_64-pc-windows-msvc.exe"));
+        candidates.push(sidecar_dir.join("relay-rg-x86_64-unknown-linux-gnu"));
     }
     if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
         let manifest_dir = PathBuf::from(manifest_dir);
@@ -476,6 +488,23 @@ fn resolve_ripgrep_path(app: &AppHandle) -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|path| executable_ok(path, "--version"))
+        .or_else(|| {
+            ["rg", "rg.exe"]
+                .into_iter()
+                .map(PathBuf::from)
+                .find(|path| executable_ok(path, "--version"))
+        })
+}
+
+fn sidecar_base_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let base = if exe_dir.ends_with("deps") {
+        exe_dir.parent().unwrap_or(exe_dir)
+    } else {
+        exe_dir
+    };
+    Some(base.to_path_buf())
 }
 
 fn executable_ok(path: &Path, arg: &str) -> bool {
