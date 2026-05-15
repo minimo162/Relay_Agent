@@ -143,3 +143,155 @@ test("result summary validator rejects raw path contracts", async () => {
     cleanup();
   }
 });
+
+test("code patch prompt uses context-relative paths only", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const prompt = module.buildCodePatchPlanPrompt({
+      instruction: "README の見出しを更新して",
+      workspacePath: "/workspace/project",
+      contextFiles: [
+        {
+          relativePath: "README.md",
+          language: "markdown",
+          sizeBytes: 24,
+          modifiedTime: null,
+          content: "# Old title\n",
+          truncated: false,
+          score: 100,
+          reasons: ["explicit target"],
+        },
+      ],
+    });
+
+    assert.match(prompt, /RelayCodePatchPlan\.v1/);
+    assert.match(prompt, /README\.md/);
+    assert.equal(prompt.includes('"path"'), false);
+    assert.match(prompt, /Do not run code/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("code patch validator accepts exact context file edits", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const response = JSON.stringify({
+      schemaVersion: "RelayCodePatchPlan.v1",
+      rawInstruction: "README の見出しを更新して",
+      workspacePath: "/workspace/project",
+      risk: "low",
+      summary: "READMEの見出しを更新します。",
+      edits: [
+        {
+          relativePath: "README.md",
+          oldString: "# Old title\n",
+          newString: "# New title\n",
+          summary: "見出しを更新",
+        },
+      ],
+      verificationCommands: ["pnpm typecheck"],
+    });
+    const validation = module.validateCodePatchPlanText(
+      response,
+      "README の見出しを更新して",
+      "/workspace/project",
+      new Set(["README.md"]),
+    );
+    assert.equal(validation.ok, true);
+    assert.equal(validation.value.edits[0].relativePath, "README.md");
+  } finally {
+    cleanup();
+  }
+});
+
+test("code patch validator rejects paths outside context", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const response = JSON.stringify({
+      schemaVersion: "RelayCodePatchPlan.v1",
+      rawInstruction: "README の見出しを更新して",
+      workspacePath: "/workspace/project",
+      risk: "low",
+      summary: "READMEの見出しを更新します。",
+      edits: [
+        {
+          relativePath: "../README.md",
+          oldString: "# Old title\n",
+          newString: "# New title\n",
+          summary: "見出しを更新",
+        },
+      ],
+      verificationCommands: [],
+    });
+    const validation = module.validateCodePatchPlanText(
+      response,
+      "README の見出しを更新して",
+      "/workspace/project",
+      new Set(["README.md"]),
+    );
+    assert.equal(validation.ok, false);
+    assert.match(validation.errors.join(" / "), /workspace-relative path/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("agent step prompt exposes only the current mode tools", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const prompt = module.buildAgentStepPrompt({
+      mode: "office_edit",
+      instruction: "Sheet1 の A1 を赤くして",
+      workspacePath: "H:\\shr1\\book.xlsx",
+      toolCatalog: module.RELAY_AGENT_TOOL_CATALOG,
+    });
+
+    assert.match(prompt, /RelayAgentStep\.v1/);
+    assert.match(prompt, /officecli/);
+    assert.equal(prompt.includes("relay_document_search"), false);
+    assert.equal(prompt.includes("apply_code_patch"), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("agent step validator accepts only allowed mode tools", async () => {
+  const { module, cleanup } = await loadPlannerModule();
+  try {
+    const valid = module.validateAgentStepText(
+      JSON.stringify({
+        schemaVersion: "RelayAgentStep.v1",
+        mode: "document_search",
+        rawInstruction: "部品売上に関するファイルを探して",
+        action: "use_tool",
+        toolName: "relay_document_search",
+        input: { query: "部品売上" },
+        rationale: "資料検索ツールで候補を探します。",
+      }),
+      "document_search",
+      "部品売上に関するファイルを探して",
+      new Set(["relay_document_search"]),
+    );
+    assert.equal(valid.ok, true);
+
+    const invalid = module.validateAgentStepText(
+      JSON.stringify({
+        schemaVersion: "RelayAgentStep.v1",
+        mode: "document_search",
+        rawInstruction: "部品売上に関するファイルを探して",
+        action: "use_tool",
+        toolName: "officecli",
+        input: {},
+        rationale: "Officeを編集します。",
+      }),
+      "document_search",
+      "部品売上に関するファイルを探して",
+      new Set(["relay_document_search"]),
+    );
+    assert.equal(invalid.ok, false);
+    assert.match(invalid.errors.join(" / "), /toolName must be one of/);
+  } finally {
+    cleanup();
+  }
+});

@@ -40,7 +40,7 @@ const moduleNames = [
 ];
 
 function modulePath(repoRoot, name) {
-  return resolve(repoRoot, "integrations/aionui/overlay/src/process/utils", `${name}.ts`);
+  return resolve(repoRoot, "apps/desktop/document-search-src", `${name}.ts`);
 }
 
 function rewriteLocalImports(output) {

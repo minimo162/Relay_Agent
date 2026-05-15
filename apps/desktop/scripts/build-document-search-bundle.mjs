@@ -7,7 +7,7 @@ import ts from "typescript";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "../../..");
-const sourceDir = resolve(repoRoot, "integrations/aionui/overlay/src/process/utils");
+const sourceDir = resolve(repoRoot, "apps/desktop/document-search-src");
 const outputRoot = resolve(repoRoot, "apps/desktop/src-tauri/resources/relay-document-search");
 const outputModules = resolve(outputRoot, "modules");
 const outputScripts = resolve(outputRoot, "scripts");

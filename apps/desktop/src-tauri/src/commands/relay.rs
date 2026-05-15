@@ -1,16 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value as JsonValue};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
+    RelayCodeContextFile, RelayCodeContextRequest, RelayCodeContextResponse,
+    RelayCodePatchApplyRequest, RelayCodePatchApplyResponse, RelayCodePatchEdit,
     RelayDocumentSearchEvidence, RelayDocumentSearchIntent, RelayDocumentSearchRequest,
     RelayDocumentSearchResponse, RelayDocumentSearchThoroughness, RelayOfficeCommandResponse,
     RelayOfficeExecuteRequest, RelayOfficeInspectRequest, RelaySearchResultCard,
@@ -22,6 +26,16 @@ const DOCUMENT_SEARCH_MIN_TIMEOUT_MS: u64 = 10_000;
 const DOCUMENT_SEARCH_MAX_TIMEOUT_MS: u64 = 900_000;
 const DOCUMENT_SEARCH_TEMP_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 const OFFICECLI_SMOKE_TIMEOUT_MS: u64 = 20_000;
+const OFFICECLI_SMOKE_RETRY_COUNT: usize = 3;
+const OFFICECLI_SMOKE_RETRY_SLEEP_MS: u64 = 250;
+const CODE_CONTEXT_DEFAULT_MAX_FILES: usize = 8;
+const CODE_CONTEXT_MAX_FILES: usize = 16;
+const CODE_CONTEXT_MAX_SCAN_FILES: u32 = 5_000;
+const CODE_CONTEXT_MAX_FILE_BYTES: u64 = 160_000;
+const CODE_CONTEXT_MAX_CONTENT_BYTES: usize = 20_000;
+const CODE_CONTEXT_TOTAL_CONTENT_BYTES: usize = 80_000;
+const CODE_PATCH_MAX_EDITS: usize = 12;
+const CODE_PATCH_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 static OFFICECLI_CAPABILITY_CACHE: OnceLock<Mutex<HashMap<String, OfficeCliCandidateCheck>>> =
     OnceLock::new();
 
@@ -398,6 +412,24 @@ pub fn execute_officecli_command(
     run_officecli(&app, args, backup)
 }
 
+#[tauri::command]
+pub async fn collect_code_context(
+    request: RelayCodeContextRequest,
+) -> Result<RelayCodeContextResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || collect_code_context_blocking(request))
+        .await
+        .map_err(|error| format!("code context task join failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn apply_code_patch(
+    request: RelayCodePatchApplyRequest,
+) -> Result<RelayCodePatchApplyResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || apply_code_patch_blocking(request))
+        .await
+        .map_err(|error| format!("code patch task join failed: {error}"))?
+}
+
 fn app_local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
@@ -418,6 +450,622 @@ fn normalize_existing_file(path: &str, label: &str) -> Result<PathBuf, String> {
         return Err(format!("{label} does not exist: {}", path.display()));
     }
     Ok(path)
+}
+
+#[derive(Debug)]
+struct CodeCandidate {
+    relative_path: String,
+    path: PathBuf,
+    size_bytes: u64,
+    modified_time: Option<String>,
+    score: i32,
+    reasons: Vec<String>,
+}
+
+fn collect_code_context_blocking(
+    request: RelayCodeContextRequest,
+) -> Result<RelayCodeContextResponse, String> {
+    let started = Instant::now();
+    let workspace = normalize_existing_dir(&request.workspace_path, "workspace")?;
+    let workspace = fs::canonicalize(&workspace)
+        .map_err(|error| format!("canonicalize workspace {}: {error}", workspace.display()))?;
+    let instruction = request.instruction.trim();
+    if instruction.is_empty() {
+        return Err("Code instruction is required.".to_string());
+    }
+    let max_files = request
+        .max_files
+        .map(|value| value as usize)
+        .unwrap_or(CODE_CONTEXT_DEFAULT_MAX_FILES)
+        .clamp(1, CODE_CONTEXT_MAX_FILES);
+    let tokens = tokenize_code_instruction(instruction);
+    let explicit_targets = explicit_code_targets(&request);
+    let mut scanned_files = 0_u32;
+    let mut candidates = Vec::new();
+    let explicit_target_set: HashSet<String> = explicit_targets
+        .iter()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    for target in explicit_targets {
+        if let Ok((path, relative_path)) = resolve_existing_workspace_file(&workspace, &target) {
+            if is_code_file(&path) {
+                let candidate = code_candidate_from_file(
+                    &workspace,
+                    &path,
+                    Some(relative_path),
+                    &tokens,
+                    &explicit_target_set,
+                    true,
+                );
+                if let Some(candidate) = candidate {
+                    candidates.push(candidate);
+                }
+            }
+        }
+    }
+    scan_code_candidates(
+        &workspace,
+        &workspace,
+        &tokens,
+        &explicit_target_set,
+        &mut candidates,
+        &mut scanned_files,
+    );
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+
+    let mut seen = HashSet::new();
+    let mut total_content_bytes = 0_usize;
+    let mut files = Vec::new();
+    for candidate in candidates {
+        if files.len() >= max_files || total_content_bytes >= CODE_CONTEXT_TOTAL_CONTENT_BYTES {
+            break;
+        }
+        if !seen.insert(candidate.relative_path.clone()) || candidate.score <= 0 {
+            continue;
+        }
+        let Some((content, truncated)) = read_code_context_content(&candidate.path) else {
+            continue;
+        };
+        let budget_left = CODE_CONTEXT_TOTAL_CONTENT_BYTES.saturating_sub(total_content_bytes);
+        if budget_left == 0 {
+            break;
+        }
+        let content = truncate_to_byte_boundary(&content, budget_left.min(content.len()));
+        total_content_bytes += content.len();
+        files.push(RelayCodeContextFile {
+            relative_path: candidate.relative_path,
+            language: language_for_path(&candidate.path),
+            size_bytes: candidate.size_bytes,
+            modified_time: candidate.modified_time,
+            content,
+            truncated: truncated || total_content_bytes >= CODE_CONTEXT_TOTAL_CONTENT_BYTES,
+            score: candidate.score,
+            reasons: candidate.reasons,
+        });
+    }
+
+    let summary = if files.is_empty() {
+        "変更案に使えるコードファイルを特定できませんでした。対象ファイル名や相対パスを指示に含めてください。".to_string()
+    } else {
+        format!(
+            "{}件のコードファイルを確認しました。Copilotにはこの範囲だけを渡します。",
+            files.len()
+        )
+    };
+    Ok(RelayCodeContextResponse {
+        ok: true,
+        workspace_path: workspace.display().to_string(),
+        summary,
+        files,
+        scanned_files,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        error: None,
+    })
+}
+
+fn apply_code_patch_blocking(
+    request: RelayCodePatchApplyRequest,
+) -> Result<RelayCodePatchApplyResponse, String> {
+    let started = Instant::now();
+    let workspace = normalize_existing_dir(&request.workspace_path, "workspace")?;
+    let workspace = fs::canonicalize(&workspace)
+        .map_err(|error| format!("canonicalize workspace {}: {error}", workspace.display()))?;
+    if request.edits.is_empty() {
+        return Err("At least one code edit is required.".to_string());
+    }
+    if request.edits.len() > CODE_PATCH_MAX_EDITS {
+        return Err(format!(
+            "Too many edits: maximum {CODE_PATCH_MAX_EDITS} edits are allowed per apply."
+        ));
+    }
+
+    let mut file_contents: HashMap<String, (PathBuf, String)> = HashMap::new();
+    for edit in &request.edits {
+        validate_code_patch_edit(edit)?;
+        let relative_path = safe_relative_path(&edit.relative_path)?;
+        let (path, normalized_relative_path) =
+            resolve_existing_workspace_file(&workspace, &relative_path)?;
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("read metadata for {normalized_relative_path}: {error}"))?;
+        if metadata.len() > CODE_PATCH_MAX_FILE_BYTES {
+            return Err(format!(
+                "{normalized_relative_path} is too large for safe exact-string editing."
+            ));
+        }
+        let entry = if let Some(entry) = file_contents.get_mut(&normalized_relative_path) {
+            entry
+        } else {
+            let content = fs::read_to_string(&path)
+                .map_err(|error| format!("read {normalized_relative_path}: {error}"))?;
+            file_contents.insert(normalized_relative_path.clone(), (path.clone(), content));
+            file_contents
+                .get_mut(&normalized_relative_path)
+                .expect("inserted code patch file")
+        };
+        let occurrences = entry.1.matches(&edit.old_string).count();
+        if occurrences != 1 {
+            return Err(format!(
+                "{} oldString must match exactly once; found {} occurrence(s).",
+                normalized_relative_path, occurrences
+            ));
+        }
+        entry.1 = entry.1.replacen(&edit.old_string, &edit.new_string, 1);
+    }
+
+    let mut changed_files: Vec<String> = file_contents.keys().cloned().collect();
+    changed_files.sort();
+    for relative_path in &changed_files {
+        if let Some((path, content)) = file_contents.get(relative_path) {
+            fs::write(path, content).map_err(|error| format!("write {relative_path}: {error}"))?;
+        }
+    }
+
+    let diff_stat = git_diff_for_paths(&workspace, &["diff", "--stat"], &changed_files);
+    let diff = git_diff_for_paths(&workspace, &["diff", "--"], &changed_files);
+    Ok(RelayCodePatchApplyResponse {
+        ok: true,
+        changed_files,
+        diff_stat,
+        diff,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        error: None,
+    })
+}
+
+fn validate_code_patch_edit(edit: &RelayCodePatchEdit) -> Result<(), String> {
+    if edit.relative_path.trim().is_empty() {
+        return Err("Code edit relativePath is required.".to_string());
+    }
+    if edit.old_string.is_empty() {
+        return Err(format!(
+            "{} oldString must not be empty.",
+            edit.relative_path.trim()
+        ));
+    }
+    if edit.old_string == edit.new_string {
+        return Err(format!(
+            "{} oldString and newString are identical.",
+            edit.relative_path.trim()
+        ));
+    }
+    if edit.old_string.contains('\0') || edit.new_string.contains('\0') {
+        return Err(format!(
+            "{} edit contains a NUL byte.",
+            edit.relative_path.trim()
+        ));
+    }
+    Ok(())
+}
+
+fn scan_code_candidates(
+    workspace: &Path,
+    dir: &Path,
+    tokens: &[String],
+    explicit_targets: &HashSet<String>,
+    candidates: &mut Vec<CodeCandidate>,
+    scanned_files: &mut u32,
+) {
+    if *scanned_files >= CODE_CONTEXT_MAX_SCAN_FILES {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *scanned_files >= CODE_CONTEXT_MAX_SCAN_FILES {
+            break;
+        }
+        let path = entry.path();
+        let file_name = entry.file_name();
+        if path.is_dir() {
+            if !is_ignored_code_dir(&file_name) {
+                scan_code_candidates(
+                    workspace,
+                    &path,
+                    tokens,
+                    explicit_targets,
+                    candidates,
+                    scanned_files,
+                );
+            }
+            continue;
+        }
+        if !path.is_file() || !is_code_file(&path) {
+            continue;
+        }
+        *scanned_files += 1;
+        if let Some(candidate) =
+            code_candidate_from_file(workspace, &path, None, tokens, explicit_targets, false)
+        {
+            candidates.push(candidate);
+        }
+    }
+}
+
+fn code_candidate_from_file(
+    workspace: &Path,
+    path: &Path,
+    known_relative_path: Option<String>,
+    tokens: &[String],
+    explicit_targets: &HashSet<String>,
+    explicit: bool,
+) -> Option<CodeCandidate> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() > CODE_CONTEXT_MAX_FILE_BYTES {
+        return None;
+    }
+    let relative_path = known_relative_path.or_else(|| relative_display_path(workspace, path))?;
+    let content = fs::read(path)
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        .unwrap_or_default();
+    let (score, reasons) =
+        score_code_candidate(&relative_path, &content, tokens, explicit_targets, explicit);
+    if score <= 0 {
+        return None;
+    }
+    Some(CodeCandidate {
+        relative_path,
+        path: path.to_path_buf(),
+        size_bytes: metadata.len(),
+        modified_time: metadata.modified().ok().map(system_time_iso),
+        score,
+        reasons,
+    })
+}
+
+fn score_code_candidate(
+    relative_path: &str,
+    content: &str,
+    tokens: &[String],
+    explicit_targets: &HashSet<String>,
+    explicit: bool,
+) -> (i32, Vec<String>) {
+    let mut score = 0_i32;
+    let mut reasons = Vec::new();
+    let lower_path = relative_path.to_lowercase();
+    let lower_content = content.to_lowercase();
+    if explicit || explicit_targets.contains(relative_path) {
+        score += 1000;
+        reasons.push("explicit target".to_string());
+    }
+    for token in tokens {
+        let token = token.to_lowercase();
+        if token.is_empty() {
+            continue;
+        }
+        if lower_path.contains(&token) {
+            score += 25;
+            reasons.push(format!("path matches `{token}`"));
+        }
+        if lower_content.contains(&token) {
+            score += 8;
+            reasons.push(format!("content matches `{token}`"));
+        }
+    }
+    if lower_path.ends_with("readme.md")
+        || lower_path.ends_with("package.json")
+        || lower_path.ends_with("cargo.toml")
+    {
+        score += 3;
+        reasons.push("project metadata".to_string());
+    }
+    if lower_path.contains("/src/")
+        || lower_path.starts_with("src/")
+        || lower_path.contains("apps/")
+    {
+        score += 2;
+        reasons.push("source tree".to_string());
+    }
+    reasons.sort();
+    reasons.dedup();
+    (score, reasons)
+}
+
+fn read_code_context_content(path: &Path) -> Option<(String, bool)> {
+    let bytes = fs::read(path).ok()?;
+    let content = String::from_utf8_lossy(&bytes).to_string();
+    if content.len() <= CODE_CONTEXT_MAX_CONTENT_BYTES {
+        return Some((content, false));
+    }
+    Some((
+        truncate_to_byte_boundary(&content, CODE_CONTEXT_MAX_CONTENT_BYTES),
+        true,
+    ))
+}
+
+fn truncate_to_byte_boundary(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
+}
+
+fn tokenize_code_instruction(instruction: &str) -> Vec<String> {
+    let mut tokens = HashSet::new();
+    let mut current = String::new();
+    for character in instruction.chars() {
+        if character.is_alphanumeric()
+            || matches!(character, '_' | '-' | '.' | '/' | '\\')
+            || is_cjk_character(character)
+        {
+            current.push(character);
+        } else {
+            push_code_token(&mut tokens, &current);
+            current.clear();
+        }
+    }
+    push_code_token(&mut tokens, &current);
+    let mut out: Vec<String> = tokens.into_iter().collect();
+    out.sort();
+    out.truncate(80);
+    out
+}
+
+fn push_code_token(tokens: &mut HashSet<String>, value: &str) {
+    let trimmed = value.trim_matches(|character: char| {
+        matches!(
+            character,
+            '"' | '\'' | '`' | '「' | '」' | '『' | '』' | '、' | '。'
+        )
+    });
+    if trimmed.is_empty() {
+        return;
+    }
+    let has_non_ascii = trimmed.chars().any(|character| !character.is_ascii());
+    if (!has_non_ascii && trimmed.len() < 3) || (has_non_ascii && trimmed.chars().count() < 2) {
+        return;
+    }
+    tokens.insert(trimmed.to_lowercase().replace('\\', "/"));
+}
+
+fn is_cjk_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3040..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff
+    )
+}
+
+fn explicit_code_targets(request: &RelayCodeContextRequest) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for value in request
+        .target_paths
+        .iter()
+        .cloned()
+        .chain(path_like_tokens(&request.instruction))
+    {
+        if let Ok(path) = safe_relative_path(&value) {
+            let key = path.to_string_lossy().replace('\\', "/");
+            if seen.insert(key) {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+fn path_like_tokens(instruction: &str) -> Vec<String> {
+    instruction
+        .split_whitespace()
+        .map(|value| {
+            let trimmed = value.trim_matches(|character: char| {
+                matches!(
+                    character,
+                    '"' | '\'' | '`' | '「' | '」' | '『' | '』' | '、' | '。' | ',' | ';'
+                )
+            });
+            trim_code_path_suffix(trimmed)
+        })
+        .filter(|value| {
+            (value.contains('/')
+                || value.contains('\\')
+                || code_extension_from_name(value).is_some())
+                && !PathBuf::from(value).is_absolute()
+        })
+        .collect()
+}
+
+fn trim_code_path_suffix(value: &str) -> String {
+    let lower = value.to_lowercase();
+    for extension in CODE_EXTENSIONS {
+        let marker = format!(".{extension}");
+        if let Some(index) = lower.find(&marker) {
+            return value[..index + marker.len()].to_string();
+        }
+    }
+    value.to_string()
+}
+
+fn safe_relative_path(value: &str) -> Result<PathBuf, String> {
+    let normalized = value.trim().replace('\\', "/");
+    if normalized.is_empty() {
+        return Err("relative path is required.".to_string());
+    }
+    if normalized.contains(':') {
+        return Err(format!(
+            "absolute or drive-qualified paths are not allowed: {normalized}"
+        ));
+    }
+    let path = PathBuf::from(&normalized);
+    if path.is_absolute() {
+        return Err(format!("absolute paths are not allowed: {normalized}"));
+    }
+    let mut safe = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => safe.push(value),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("path must stay inside the workspace: {normalized}"));
+            }
+        }
+    }
+    if safe.as_os_str().is_empty() {
+        return Err("relative path is required.".to_string());
+    }
+    Ok(safe)
+}
+
+fn resolve_existing_workspace_file(
+    workspace: &Path,
+    relative_path: &Path,
+) -> Result<(PathBuf, String), String> {
+    let relative_path = safe_relative_path(&relative_path.to_string_lossy())?;
+    let joined = workspace.join(&relative_path);
+    if !joined.is_file() {
+        return Err(format!(
+            "workspace file does not exist: {}",
+            relative_path.display()
+        ));
+    }
+    let canonical = fs::canonicalize(&joined)
+        .map_err(|error| format!("canonicalize {}: {error}", joined.display()))?;
+    if !canonical.starts_with(workspace) {
+        return Err(format!(
+            "path must stay inside the workspace: {}",
+            relative_path.display()
+        ));
+    }
+    Ok((
+        canonical,
+        relative_path.to_string_lossy().replace('\\', "/"),
+    ))
+}
+
+fn relative_display_path(workspace: &Path, path: &Path) -> Option<String> {
+    let canonical = fs::canonicalize(path).ok()?;
+    let relative = canonical.strip_prefix(workspace).ok()?;
+    Some(relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn is_ignored_code_dir(name: &OsStr) -> bool {
+    let name = name.to_string_lossy().to_lowercase();
+    matches!(
+        name.as_str(),
+        ".git"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | "coverage"
+            | ".next"
+            | ".turbo"
+            | ".svelte-kit"
+            | "out"
+            | "vendor"
+            | "__pycache__"
+    )
+}
+
+fn is_code_file(path: &Path) -> bool {
+    code_extension(path).is_some_and(|extension| CODE_EXTENSIONS.contains(&extension.as_str()))
+}
+
+const CODE_EXTENSIONS: &[&str] = &[
+    "tsx", "jsx", "mjs", "cjs", "json", "mdx", "scss", "html", "java", "kts", "cpp", "hpp", "yaml",
+    "toml", "ps1", "rs", "ts", "js", "md", "css", "htm", "py", "go", "kt", "cs", "c", "h", "yml",
+    "xml", "sh", "sql",
+];
+
+fn language_for_path(path: &Path) -> Option<String> {
+    Some(
+        match code_extension(path)?.as_str() {
+            "rs" => "rust",
+            "ts" => "typescript",
+            "tsx" => "tsx",
+            "js" | "mjs" | "cjs" => "javascript",
+            "jsx" => "jsx",
+            "json" => "json",
+            "md" | "mdx" => "markdown",
+            "css" => "css",
+            "scss" => "scss",
+            "html" | "htm" => "html",
+            "py" => "python",
+            "go" => "go",
+            "java" => "java",
+            "kt" | "kts" => "kotlin",
+            "cs" => "csharp",
+            "cpp" | "c" | "h" | "hpp" => "c-cpp",
+            "yml" | "yaml" => "yaml",
+            "toml" => "toml",
+            "xml" => "xml",
+            "sh" => "shell",
+            "ps1" => "powershell",
+            "sql" => "sql",
+            other => other,
+        }
+        .to_string(),
+    )
+}
+
+fn code_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .map(|value| value.to_lowercase())
+}
+
+fn code_extension_from_name(value: &str) -> Option<String> {
+    Path::new(value)
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|value| value.to_lowercase())
+}
+
+fn system_time_iso(time: std::time::SystemTime) -> String {
+    let datetime: DateTime<Utc> = time.into();
+    datetime.to_rfc3339()
+}
+
+fn git_diff_for_paths(workspace: &Path, args: &[&str], relative_paths: &[String]) -> String {
+    if relative_paths.is_empty() {
+        return String::new();
+    }
+    let mut command = Command::new("git");
+    command.arg("-C").arg(workspace).args(args);
+    if !args.contains(&"--") {
+        command.arg("--");
+    }
+    command.args(relative_paths).stdin(Stdio::null());
+    crate::windows_command::no_console_window(&mut command);
+    let Ok(output) = command.output() else {
+        return String::new();
+    };
+    if !output.status.success() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&output.stdout).to_string()
 }
 
 fn resolve_document_search_cli(app: &AppHandle) -> Option<PathBuf> {
@@ -597,31 +1245,72 @@ fn officecli_view_smoke_check(app: &AppHandle, officecli: &Path) -> Result<(), S
             temp_root.display()
         )
     })?;
-    let temp_file = tempfile::Builder::new()
-        .prefix("relay-officecli-smoke-")
-        .suffix(".xlsx")
-        .tempfile_in(&temp_root)
-        .map_err(|error| format!("create OfficeCLI smoke workbook tempfile: {error}"))?;
-    write_officecli_smoke_workbook(temp_file.path())?;
-    let temp_path = temp_file.path().display().to_string();
-    let mut command = Command::new(officecli);
-    command
-        .args(["view", temp_path.as_str(), "outline", "--json"])
-        .stdin(Stdio::null());
-    crate::windows_command::no_console_window(&mut command);
-    let output = run_command_with_timeout(
-        command,
-        Duration::from_millis(OFFICECLI_SMOKE_TIMEOUT_MS),
-        &temp_root,
-    )?;
-    if output.success && output.stdout.contains("\"success\"") {
-        return Ok(());
+    prune_old_files(&temp_root, Duration::from_secs(60 * 60), true);
+
+    let smoke_path = unique_officecli_smoke_path(&temp_root);
+    write_officecli_smoke_workbook(&smoke_path)?;
+    let smoke_arg = smoke_path.display().to_string();
+    let mut last_output: Option<RelayProcessOutput> = None;
+
+    for attempt in 1..=OFFICECLI_SMOKE_RETRY_COUNT {
+        let mut command = Command::new(officecli);
+        command
+            .args(["view", smoke_arg.as_str(), "outline", "--json"])
+            .stdin(Stdio::null());
+        crate::windows_command::no_console_window(&mut command);
+
+        let output = run_command_with_timeout(
+            command,
+            Duration::from_millis(OFFICECLI_SMOKE_TIMEOUT_MS),
+            &temp_root,
+        )?;
+        if output.success && output.stdout.contains("\"success\"") {
+            let _ = fs::remove_file(&smoke_path);
+            return Ok(());
+        }
+
+        let should_retry =
+            officecli_smoke_sharing_violation(&output) && attempt < OFFICECLI_SMOKE_RETRY_COUNT;
+        last_output = Some(output);
+        if should_retry {
+            thread::sleep(Duration::from_millis(OFFICECLI_SMOKE_RETRY_SLEEP_MS));
+        } else {
+            break;
+        }
     }
-    Err(format!(
-        "OfficeCLI view smoke test failed; stdout={}; stderr={}",
-        trim_for_error(&output.stdout),
-        trim_for_error(&output.stderr)
+
+    let _ = fs::remove_file(&smoke_path);
+    if let Some(output) = last_output {
+        if officecli_smoke_sharing_violation(&output) {
+            return Err(format!(
+                "OfficeCLI view smoke test failed because the smoke workbook stayed locked after {} attempts; stdout={}; stderr={}",
+                OFFICECLI_SMOKE_RETRY_COUNT,
+                trim_for_error(&output.stdout),
+                trim_for_error(&output.stderr)
+            ));
+        }
+        return Err(format!(
+            "OfficeCLI view smoke test failed; stdout={}; stderr={}",
+            trim_for_error(&output.stdout),
+            trim_for_error(&output.stderr)
+        ));
+    }
+
+    Err("OfficeCLI view smoke test failed without process output".to_string())
+}
+
+fn unique_officecli_smoke_path(temp_root: &Path) -> PathBuf {
+    temp_root.join(format!(
+        "relay-officecli-smoke-{}.xlsx",
+        uuid::Uuid::new_v4().simple()
     ))
+}
+
+fn officecli_smoke_sharing_violation(output: &RelayProcessOutput) -> bool {
+    let text = format!("{} {}", output.stdout, output.stderr).to_ascii_lowercase();
+    text.contains("being used by another process")
+        || text.contains("used by another process")
+        || text.contains("cannot access the file")
 }
 
 fn write_officecli_smoke_workbook(path: &Path) -> Result<(), String> {
@@ -987,9 +1676,12 @@ fn trim_for_error(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        officecli_failure_message, officecli_resolution_failure_message, parse_officecli_args,
-        split_command_words,
+        apply_code_patch_blocking, collect_code_context_blocking, officecli_failure_message,
+        officecli_resolution_failure_message, officecli_smoke_sharing_violation,
+        parse_officecli_args, safe_relative_path, split_command_words, unique_officecli_smoke_path,
     };
+    use crate::models::{RelayCodeContextRequest, RelayCodePatchApplyRequest, RelayCodePatchEdit};
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -1037,5 +1729,124 @@ mod tests {
         assert!(message.contains("was found"));
         assert!(message.contains("not ready"));
         assert!(message.contains("smoke test failed"));
+    }
+
+    #[test]
+    fn officecli_smoke_check_detects_file_lock_without_marking_missing() {
+        let output = super::RelayProcessOutput {
+            success: false,
+            stdout: r#"{ "success": false, "error": { "error": "The process cannot access the file 'C:\\Users\\m242054\\AppData\\Local\\com.relayagent.desktop\\officecli-smoke\\relay-officecli-smoke-8Uoknw.xlsx' because it is being used by another process." } }"#.to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+
+        assert!(officecli_smoke_sharing_violation(&output));
+    }
+
+    #[test]
+    fn officecli_smoke_path_is_closed_workbook_path() {
+        let root = PathBuf::from(r#"C:\Users\relay\AppData\Local\Relay Agent\officecli-smoke"#);
+        let path = unique_officecli_smoke_path(&root);
+
+        assert_eq!(path.parent(), Some(root.as_path()));
+        assert_eq!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("xlsx")
+        );
+        assert!(path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .starts_with("relay-officecli-smoke-"));
+    }
+
+    #[test]
+    fn code_relative_path_rejects_parent_escape() {
+        let error = safe_relative_path("../src/main.rs").expect_err("parent path should fail");
+        assert!(error.contains("inside the workspace"));
+    }
+
+    #[test]
+    fn code_context_prefers_explicit_target_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let readme = dir.path().join("README.md");
+        fs::write(&readme, "# Relay\n\nOld setup\n").expect("write readme");
+        fs::create_dir_all(dir.path().join("src")).expect("create src");
+        fs::write(dir.path().join("src/main.ts"), "console.log('other');\n").expect("write main");
+
+        let response = collect_code_context_blocking(RelayCodeContextRequest {
+            workspace_path: dir.path().display().to_string(),
+            instruction: "README.md の setup を更新して".to_string(),
+            target_paths: Vec::new(),
+            max_files: Some(4),
+        })
+        .expect("collect code context");
+
+        assert_eq!(response.files[0].relative_path, "README.md");
+        assert!(response.files[0].content.contains("Old setup"));
+    }
+
+    #[test]
+    fn code_context_trims_japanese_suffix_from_explicit_path() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("src")).expect("create src");
+        fs::write(
+            dir.path().join("src/main.ts"),
+            "export const title = 'old';\n",
+        )
+        .expect("write main");
+
+        let response = collect_code_context_blocking(RelayCodeContextRequest {
+            workspace_path: dir.path().display().to_string(),
+            instruction: "src/main.tsを更新して".to_string(),
+            target_paths: Vec::new(),
+            max_files: Some(4),
+        })
+        .expect("collect code context");
+
+        assert_eq!(response.files[0].relative_path, "src/main.ts");
+    }
+
+    #[test]
+    fn code_patch_replaces_unique_string() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::write(dir.path().join("README.md"), "# Old title\n").expect("write readme");
+
+        let response = apply_code_patch_blocking(RelayCodePatchApplyRequest {
+            workspace_path: dir.path().display().to_string(),
+            edits: vec![RelayCodePatchEdit {
+                relative_path: "README.md".to_string(),
+                old_string: "# Old title\n".to_string(),
+                new_string: "# New title\n".to_string(),
+                summary: "update title".to_string(),
+            }],
+        })
+        .expect("apply patch");
+
+        assert!(response.ok);
+        assert_eq!(response.changed_files, vec!["README.md"]);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("README.md")).expect("read readme"),
+            "# New title\n"
+        );
+    }
+
+    #[test]
+    fn code_patch_rejects_ambiguous_old_string() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::write(dir.path().join("README.md"), "same\nsame\n").expect("write readme");
+
+        let error = apply_code_patch_blocking(RelayCodePatchApplyRequest {
+            workspace_path: dir.path().display().to_string(),
+            edits: vec![RelayCodePatchEdit {
+                relative_path: "README.md".to_string(),
+                old_string: "same".to_string(),
+                new_string: "changed".to_string(),
+                summary: "ambiguous".to_string(),
+            }],
+        })
+        .expect_err("ambiguous edit should fail");
+
+        assert!(error.contains("exactly once"));
     }
 }

@@ -1,28 +1,31 @@
 # Relay Agent
 
-Relay Agent is a Windows desktop application for two focused workflows:
+Relay Agent is a Windows desktop application for three focused workflows:
 
 - find documents in local or shared folders;
-- inspect and edit Office files through OfficeCLI.
+- inspect and edit Office files through OfficeCLI;
+- make bounded code edits inside a selected workspace.
 
 The app uses Microsoft 365 Copilot as the planning and language layer when
-needed, but local file discovery, OfficeCLI execution, cache placement, and
-safety checks are owned by Relay Agent.
+needed, but local file discovery, OfficeCLI execution, code patch validation,
+cache placement, and safety checks are owned by Relay Agent.
 
 ## Current Product
 
 Relay Agent now ships as a dedicated Tauri + SolidJS desktop app. AionUi is no
 longer the user-facing shell or release target.
 
-The first visible screen is the Relay workbench with two task modes:
+The first visible screen is the Relay workbench with three task modes:
 
 - `資料を探す` — run Relay document search against a selected workspace folder.
 - `Officeファイルを編集する` — inspect or execute OfficeCLI operations against a
   selected Office file.
+- `コードを書く` — collect bounded local code context, ask Copilot for a strict
+  patch plan, and apply only validated exact-string replacements.
 
 The app does not open Edge or legacy OpenCode/AionUi surfaces during first
 paint. Copilot is connected directly through Edge CDP, on demand, when a search
-or Office edit needs a planning step.
+Office edit, or code edit needs a planning step.
 
 ## Document Search
 
@@ -68,20 +71,40 @@ planned change, then create a backup and apply it.
 Relay Agent does not mutate binary Office files through text tools, VBA, or
 Microsoft 365 built-in editing.
 
+## Code Writing
+
+Code edits are intentionally narrow. Relay Agent gathers a small set of
+workspace files, sends only those snippets to Copilot, and requires a
+`RelayCodePatchPlan.v1` JSON response.
+
+The desktop UI supports:
+
+- local code context collection from the selected workspace;
+- strict Copilot patch JSON with workspace-relative paths;
+- exact `oldString` / `newString` replacements only;
+- validation that each `oldString` matches exactly once before writing;
+- changed-file and git diff display after applying.
+
+Relay Agent does not let Copilot run shell commands or edit files directly in
+this mode.
+
 ## Architecture
 
 ```text
 Tauri + SolidJS desktop UI
-  owns the Relay workbench, workspace selection, result cards, Office steps
+  owns the Relay workbench, workspace selection, result cards, Office and code steps
 
 Rust IPC commands
-  expose document search, OfficeCLI inspection/execution, diagnostics
+  expose document search, OfficeCLI inspection/execution, code patching, diagnostics
 
 Relay document-search runner
   owns local search, ranking, bounded evidence packaging, and candidate facts
 
 OfficeCLI
   owns Word / Excel / PowerPoint inspection and mutation
+
+Relay code patcher
+  owns bounded code context collection and exact-string patch application
 
 M365 Copilot via Edge CDP
   optional planning and language layer; started on demand
@@ -167,4 +190,5 @@ Before `tauri build`, the desktop package prepares required sidecars/resources:
 - Do not add `office_search` as a model-facing tool.
 - Do not use arbitrary shell execution for Office mutation.
 - Do not store search caches in user-selected folders.
-- Keep the visible product focused on document search and Office file editing.
+- Keep the visible product focused on document search, Office file editing, and
+  bounded code edits.

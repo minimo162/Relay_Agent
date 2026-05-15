@@ -336,6 +336,72 @@ pub struct RelayOfficeCommandResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCodeContextRequest {
+    pub workspace_path: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub target_paths: Vec<String>,
+    #[serde(default)]
+    pub max_files: Option<u16>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCodeContextFile {
+    pub relative_path: String,
+    pub language: Option<String>,
+    pub size_bytes: u64,
+    pub modified_time: Option<String>,
+    pub content: String,
+    pub truncated: bool,
+    pub score: i32,
+    pub reasons: Vec<String>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCodeContextResponse {
+    pub ok: bool,
+    pub workspace_path: String,
+    pub summary: String,
+    pub files: Vec<RelayCodeContextFile>,
+    pub scanned_files: u32,
+    pub elapsed_ms: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCodePatchEdit {
+    pub relative_path: String,
+    pub old_string: String,
+    pub new_string: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCodePatchApplyRequest {
+    pub workspace_path: String,
+    pub edits: Vec<RelayCodePatchEdit>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCodePatchApplyResponse {
+    pub ok: bool,
+    pub changed_files: Vec<String>,
+    pub diff_stat: String,
+    pub diff: String,
+    pub elapsed_ms: u64,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CopilotWarmupStage {

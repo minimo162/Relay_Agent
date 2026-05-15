@@ -2,12 +2,16 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { For, Show, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import {
+  applyCodePatch,
   cdpSendPrompt,
+  collectCodeContext,
   executeOfficeCliCommand,
   getRelayWorkspaceState,
   inspectOfficeFile,
   runRelayDocumentSearch,
   warmupCopilotBridge,
+  type RelayCodeContextResponse,
+  type RelayCodePatchApplyResponse,
   type RelayDocumentSearchResponse,
   type RelayOfficeCommandResponse,
   type RelaySearchResultCard,
@@ -15,6 +19,7 @@ import {
 } from "../lib/ipc";
 import {
   buildLocalDocumentSearchResultSummary,
+  buildCodePatchPlanPrompt,
   buildDocumentSearchPlanPrompt,
   buildDocumentSearchResultSummaryPrompt,
   buildOfficeEditPlanPrompt,
@@ -22,7 +27,9 @@ import {
   officePlanToArgs,
   validateDocumentSearchPlanText,
   validateDocumentSearchResultSummaryText,
+  validateCodePatchPlanText,
   validateOfficeEditPlanText,
+  type RelayCodePatchPlan,
   type RelayDocumentSearchResultSummary,
   type RelayOfficeEditPlan,
 } from "../lib/copilot-planners";
@@ -31,8 +38,16 @@ import { showToast } from "../lib/status-toasts";
 import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { StatusToasts } from "../components/StatusToasts";
 
-type Mode = "search" | "office";
+type Mode = "search" | "office" | "code";
 type SearchPhase = "" | "planning" | "searching" | "organizing";
+type CodePhase = "" | "context" | "planning" | "applying";
+type AgentTraceStatus = "running" | "done" | "error";
+type AgentTraceItem = {
+  id: string;
+  label: string;
+  detail: string;
+  status: AgentTraceStatus;
+};
 type SearchSnapshot = {
   id: string;
   query: string;
@@ -133,6 +148,15 @@ export default function Shell(): JSX.Element {
   const [officeApplyResult, setOfficeApplyResult] = createSignal<RelayOfficeCommandResponse | null>(null);
   const [officeError, setOfficeError] = createSignal("");
 
+  const [codeInstruction, setCodeInstruction] = createSignal("");
+  const [codeRunning, setCodeRunning] = createSignal(false);
+  const [codePhase, setCodePhase] = createSignal<CodePhase>("");
+  const [codeContext, setCodeContext] = createSignal<RelayCodeContextResponse | null>(null);
+  const [codePlan, setCodePlan] = createSignal<RelayCodePatchPlan | null>(null);
+  const [codeApplyResult, setCodeApplyResult] = createSignal<RelayCodePatchApplyResponse | null>(null);
+  const [codeError, setCodeError] = createSignal("");
+  const [agentTrace, setAgentTrace] = createSignal<AgentTraceItem[]>([]);
+
   const workspaceReady = createMemo(() => workspacePath().trim().length > 0);
   const activeCard = createMemo(() => selectedCard() || searchSnapshot()?.result.cards[0] || null);
   const resultCards = createMemo(() => searchSnapshot()?.result.cards ?? []);
@@ -161,6 +185,24 @@ export default function Shell(): JSX.Element {
     }
   });
   let searchSequence = 0;
+  let agentTraceSequence = 0;
+
+  const resetAgentTrace = () => {
+    agentTraceSequence = 0;
+    setAgentTrace([]);
+  };
+
+  const beginAgentStep = (label: string, detail = "") => {
+    const id = `step-${++agentTraceSequence}`;
+    setAgentTrace((items) => [...items, { id, label, detail, status: "running" }]);
+    return id;
+  };
+
+  const finishAgentStep = (id: string, status: AgentTraceStatus, detail?: string) => {
+    setAgentTrace((items) => items.map((item) => item.id === id
+      ? { ...item, status, detail: detail ?? item.detail }
+      : item));
+  };
 
   const refreshState = async (showSuccess = false) => {
     setStateLoading(true);
@@ -251,19 +293,26 @@ export default function Shell(): JSX.Element {
   });
 
   const compileSearchPlan = async (query: string, workspace: string) => {
+    const traceId = beginAgentStep("Copilot", "検索語を整理");
     setSearchPhase("planning");
     setSearchStatus("Copilotで検索語を整理しています");
-    await ensureCopilotReady();
-    const prompt = buildDocumentSearchPlanPrompt({ userQuery: query, workspacePath: workspace });
-    const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
-    if (!response.ok) {
-      throw new Error(response.error || "Copilot から検索計画が返りませんでした。");
+    try {
+      await ensureCopilotReady();
+      const prompt = buildDocumentSearchPlanPrompt({ userQuery: query, workspacePath: workspace });
+      const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
+      if (!response.ok) {
+        throw new Error(response.error || "Copilot から検索計画が返りませんでした。");
+      }
+      const validation = validateDocumentSearchPlanText(response.responseText, query);
+      if (!validation.ok) {
+        throw new Error(`Copilot検索計画の検証に失敗しました: ${validation.errors.join(" / ")}`);
+      }
+      finishAgentStep(traceId, "done", validation.value.summary || "検索語を確定");
+      return validation.value;
+    } catch (error) {
+      finishAgentStep(traceId, "error", friendlyErrorMessage(error));
+      throw error;
     }
-    const validation = validateDocumentSearchPlanText(response.responseText, query);
-    if (!validation.ok) {
-      throw new Error(`Copilot検索計画の検証に失敗しました: ${validation.errors.join(" / ")}`);
-    }
-    return validation.value;
   };
 
   const organizeSearchSnapshot = async (
@@ -272,31 +321,38 @@ export default function Shell(): JSX.Element {
     snapshotId: string,
     result: RelayDocumentSearchResponse,
   ): Promise<RelayDocumentSearchResultSummary> => {
+    const traceId = beginAgentStep("Copilot", "検索結果を整理");
     setSearchPhase("organizing");
     setSearchStatus("Copilotで結果を整理しています");
-    await ensureCopilotReady();
-    const prompt = buildDocumentSearchResultSummaryPrompt({
-      rawQuery: query,
-      snapshotId,
-      workspacePath: workspace,
-      localSummary: result.summary,
-      coverageLabel: result.coverageLabel,
-      cards: result.cards,
-    });
-    const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
-    if (!response.ok) {
-      throw new Error(response.error || "Copilot から検索結果の整理が返りませんでした。");
+    try {
+      await ensureCopilotReady();
+      const prompt = buildDocumentSearchResultSummaryPrompt({
+        rawQuery: query,
+        snapshotId,
+        workspacePath: workspace,
+        localSummary: result.summary,
+        coverageLabel: result.coverageLabel,
+        cards: result.cards,
+      });
+      const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
+      if (!response.ok) {
+        throw new Error(response.error || "Copilot から検索結果の整理が返りませんでした。");
+      }
+      const validation = validateDocumentSearchResultSummaryText(
+        response.responseText,
+        query,
+        snapshotId,
+        candidatePathById(result.cards),
+      );
+      if (!validation.ok) {
+        throw new Error(`Copilot検索結果整理の検証に失敗しました: ${validation.errors.join(" / ")}`);
+      }
+      finishAgentStep(traceId, "done", validation.value.summary);
+      return validation.value;
+    } catch (error) {
+      finishAgentStep(traceId, "error", friendlyErrorMessage(error));
+      throw error;
     }
-    const validation = validateDocumentSearchResultSummaryText(
-      response.responseText,
-      query,
-      snapshotId,
-      candidatePathById(result.cards),
-    );
-    if (!validation.ok) {
-      throw new Error(`Copilot検索結果整理の検証に失敗しました: ${validation.errors.join(" / ")}`);
-    }
-    return validation.value;
   };
 
   const runSearch = async (refine = false) => {
@@ -321,12 +377,14 @@ export default function Shell(): JSX.Element {
     setSearchWarning("");
     setSearchStatus("");
     setSearchPhase("");
+    resetAgentTrace();
     const searchId = ++searchSequence;
     try {
       const plan = await compileSearchPlan(query, workspace);
       if (searchId !== searchSequence) return;
       setSearchPhase("searching");
       setSearchStatus("ローカル検索を実行しています");
+      const traceId = beginAgentStep("Relay", "ローカル検索を実行");
       const result = await runRelayDocumentSearch({
         query,
         workspacePath: workspace,
@@ -337,6 +395,7 @@ export default function Shell(): JSX.Element {
         fileTypes: plan.fileTypeHints.length ? plan.fileTypeHints : ["any"],
         queryPlanHints: plan,
       });
+      finishAgentStep(traceId, result.ok ? "done" : "error", result.coverageLabel || result.summary);
       if (searchId !== searchSequence) return;
       const snapshotId = `snapshot-${Date.now().toString(36)}-${searchId}`;
       const localOrganizer = buildLocalDocumentSearchResultSummary({
@@ -400,7 +459,9 @@ export default function Shell(): JSX.Element {
       throw new Error("Officeファイルを選択してください。");
     }
     setOfficePhase("ファイルを確認しています");
+    const traceId = beginAgentStep("Relay", "Officeファイルを確認");
     const result = await inspectOfficeFile({ filePath });
+    finishAgentStep(traceId, result.ok ? "done" : "error", result.ok ? "アウトラインを取得" : result.error || result.stderr);
     setOfficeInspectResult(result);
     if (!result.ok) {
       throw new Error(result.stderr || result.error || "OfficeCLI outline failed.");
@@ -420,22 +481,30 @@ export default function Shell(): JSX.Element {
     setOfficeError("");
     setOfficePlan(null);
     setOfficeApplyResult(null);
+    resetAgentTrace();
     try {
       const outline = await inspectOffice();
+      const traceId = beginAgentStep("Copilot", "編集内容をOfficeCLI操作へ変換");
       setOfficePhase("Copilotで変更内容を整理しています");
-      await ensureCopilotReady();
-      const prompt = buildOfficeEditPlanPrompt({
-        instruction,
-        filePath,
-        outlineJson: outline.stdout || outline.stderr || "",
-      });
-      const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
-      if (!response.ok) throw new Error(response.error || "Copilot からOffice編集計画が返りませんでした。");
-      const validation = validateOfficeEditPlanText(response.responseText, instruction, filePath);
-      if (!validation.ok) {
-        throw new Error(`Copilot Office編集計画の検証に失敗しました: ${validation.errors.join(" / ")}`);
+      try {
+        await ensureCopilotReady();
+        const prompt = buildOfficeEditPlanPrompt({
+          instruction,
+          filePath,
+          outlineJson: outline.stdout || outline.stderr || "",
+        });
+        const response = await cdpSendPrompt({ prompt, waitResponseSecs: 75 });
+        if (!response.ok) throw new Error(response.error || "Copilot からOffice編集計画が返りませんでした。");
+        const validation = validateOfficeEditPlanText(response.responseText, instruction, filePath);
+        if (!validation.ok) {
+          throw new Error(`Copilot Office編集計画の検証に失敗しました: ${validation.errors.join(" / ")}`);
+        }
+        setOfficePlan(validation.value);
+        finishAgentStep(traceId, "done", validation.value.summary || `${validation.value.commands.length}件の操作`);
+      } catch (error) {
+        finishAgentStep(traceId, "error", friendlyErrorMessage(error));
+        throw error;
       }
-      setOfficePlan(validation.value);
       showToast({ tone: "ok", message: "変更内容を確認しました" });
     } catch (error) {
       const message = friendlyErrorMessage(error);
@@ -461,11 +530,13 @@ export default function Shell(): JSX.Element {
     try {
       let lastResult: RelayOfficeCommandResponse | null = null;
       for (const [index, command] of plan.commands.entries()) {
+        const traceId = beginAgentStep("Relay", command.summary || "OfficeCLIを実行");
         const result = await executeOfficeCliCommand({
           filePath,
           officecliArgs: officePlanToArgs(command),
           createBackup: index === 0,
         });
+        finishAgentStep(traceId, result.ok ? "done" : "error", result.ok ? "適用済み" : result.error || result.stderr);
         lastResult = result;
         setOfficeApplyResult(result);
         if (!result.ok) {
@@ -485,6 +556,116 @@ export default function Shell(): JSX.Element {
       setOfficeRunning(false);
       setOfficePhase("");
       void refreshState(false);
+    }
+  };
+
+  const createCodePlan = async () => {
+    const workspace = workspacePath().trim();
+    const instruction = codeInstruction().trim();
+    if (!workspace) {
+      showToast({ tone: "danger", message: "先にワークスペースを選択してください" });
+      return;
+    }
+    if (!instruction) {
+      showToast({ tone: "danger", message: "変更したい内容を入力してください" });
+      return;
+    }
+    setCodeRunning(true);
+    setCodePhase("context");
+    setCodeError("");
+    setCodeContext(null);
+    setCodePlan(null);
+    setCodeApplyResult(null);
+    resetAgentTrace();
+    try {
+      const contextTraceId = beginAgentStep("Relay", "コード文脈を収集");
+      const context = await collectCodeContext({
+        workspacePath: workspace,
+        instruction,
+        targetPaths: [],
+        maxFiles: 8,
+      });
+      finishAgentStep(contextTraceId, context.ok ? "done" : "error", context.summary || context.error || undefined);
+      setCodeContext(context);
+      if (!context.ok || context.files.length === 0) {
+        throw new Error(context.error || context.summary || "変更案に使えるコードファイルを確認できませんでした。");
+      }
+      setCodePhase("planning");
+      const planTraceId = beginAgentStep("Copilot", "コード変更案を作成");
+      let nextPlan: RelayCodePatchPlan | null = null;
+      try {
+        await ensureCopilotReady();
+        const prompt = buildCodePatchPlanPrompt({
+          instruction,
+          workspacePath: workspace,
+          contextFiles: context.files,
+        });
+        const response = await cdpSendPrompt({ prompt, waitResponseSecs: 90 });
+        if (!response.ok) throw new Error(response.error || "Copilot からコード変更案が返りませんでした。");
+        const validation = validateCodePatchPlanText(
+          response.responseText,
+          instruction,
+          workspace,
+          new Set(context.files.map((file) => file.relativePath)),
+        );
+        if (!validation.ok) {
+          throw new Error(`Copilotコード変更案の検証に失敗しました: ${validation.errors.join(" / ")}`);
+        }
+        nextPlan = validation.value;
+        setCodePlan(nextPlan);
+        finishAgentStep(planTraceId, "done", nextPlan.summary);
+      } catch (error) {
+        finishAgentStep(planTraceId, "error", friendlyErrorMessage(error));
+        throw error;
+      }
+      if (!nextPlan) throw new Error("Copilot からコード変更案が返りませんでした。");
+      showToast({
+        tone: nextPlan.edits.length ? "ok" : "warn",
+        message: nextPlan.edits.length ? "コード変更案を作成しました" : "安全に変更できる案はありませんでした",
+        detail: nextPlan.summary,
+      });
+    } catch (error) {
+      const message = friendlyErrorMessage(error);
+      setCodeError(message);
+      showToast({ tone: "danger", message: "コード変更案を作成できませんでした", detail: message });
+    } finally {
+      setCodeRunning(false);
+      setCodePhase("");
+    }
+  };
+
+  const applyCodePlan = async () => {
+    const workspace = workspacePath().trim();
+    const plan = codePlan();
+    if (!workspace || !plan || plan.edits.length === 0) {
+      showToast({ tone: "danger", message: "先にコード変更案を作成してください" });
+      return;
+    }
+    setCodeRunning(true);
+    setCodePhase("applying");
+    setCodeError("");
+    setCodeApplyResult(null);
+    try {
+      const traceId = beginAgentStep("Relay", "コード差分を適用");
+      const result = await applyCodePatch({
+        workspacePath: workspace,
+        edits: plan.edits,
+      });
+      finishAgentStep(traceId, result.ok ? "done" : "error", result.ok ? result.changedFiles.join(", ") : result.error || undefined);
+      setCodeApplyResult(result);
+      if (!result.ok) throw new Error(result.error || "コード差分の適用に失敗しました。");
+      showToast({
+        tone: "ok",
+        message: "コード差分を適用しました",
+        detail: result.changedFiles.join(", "),
+      });
+    } catch (error) {
+      const message = friendlyErrorMessage(error);
+      setCodeError(message);
+      showToast({ tone: "danger", message: "コード差分を適用できませんでした", detail: message });
+    } finally {
+      setCodeRunning(false);
+      setCodePhase("");
     }
   };
 
@@ -522,6 +703,13 @@ export default function Shell(): JSX.Element {
           >
             Officeファイルを編集する
           </button>
+          <button
+            type="button"
+            classList={{ "is-active": mode() === "code" }}
+            onClick={() => setMode("code")}
+          >
+            コードを書く
+          </button>
         </div>
 
         <div class="relay-workspace-pill">
@@ -537,6 +725,145 @@ export default function Shell(): JSX.Element {
 
       <section class="relay-workbench">
         <Show when={mode() === "search"} fallback={
+          <Show when={mode() === "office"} fallback={
+            <section class="relay-work-panel">
+              <div class="relay-panel-heading">
+                <div>
+                  <p class="relay-kicker">Code</p>
+                  <h1>コードを書く</h1>
+                </div>
+              </div>
+
+              <Show when={!workspaceReady()}>
+                <div class="relay-state-panel relay-state-panel--warning">
+                  <strong>ワークスペースを選択してください</strong>
+                  <p>コード変更は選択したフォルダの内側だけに適用されます。</p>
+                </div>
+              </Show>
+
+              <label class="relay-field relay-field--wide">
+                <span>変更したい内容</span>
+                <textarea
+                  rows="7"
+                  value={codeInstruction()}
+                  onInput={(event) => {
+                    setCodeInstruction(event.currentTarget.value);
+                    setCodePlan(null);
+                    setCodeApplyResult(null);
+                    queueCopilotWarmup();
+                  }}
+                  onFocus={queueCopilotWarmup}
+                  placeholder="例: README のセットアップ手順を今の仕様に合わせて更新して"
+                />
+              </label>
+
+              <div class="relay-action-row">
+                <button type="button" class="ra-button" disabled={codeRunning() || !workspaceReady() || !codeInstruction().trim()} onClick={createCodePlan}>
+                  {codeRunning() && codePhase() !== "applying" ? "作成中" : "変更案を作成"}
+                </button>
+                <button type="button" class="ra-button ra-button--secondary" disabled={codeRunning() || !codePlan() || codePlan()?.edits.length === 0} onClick={applyCodePlan}>
+                  差分を適用
+                </button>
+              </div>
+
+              <Show when={codeRunning()}>
+                <div class="relay-progress-panel" role="status" aria-live="polite">
+                  <span class="relay-spinner" aria-hidden="true" />
+                  <div>
+                    <strong>
+                      {codePhase() === "context"
+                        ? "コード文脈を確認しています"
+                        : codePhase() === "planning"
+                          ? "Copilotで変更案を作成しています"
+                          : "差分を適用しています"}
+                    </strong>
+                  </div>
+                </div>
+              </Show>
+
+              <Show when={codeError() && !codeRunning()}>
+                <div class="relay-state-panel relay-state-panel--danger">
+                  <strong>完了できませんでした</strong>
+                  <p>{codeError()}</p>
+                </div>
+              </Show>
+
+              <Show when={codeContext()}>
+                {(context) => (
+                  <section class="relay-result-block">
+                    <div class="relay-result-header">
+                      <div>
+                        <h2>確認したコード</h2>
+                        <p>{context().summary}</p>
+                      </div>
+                      <p>{context().files.length}件 · {context().elapsedMs}ms</p>
+                    </div>
+                    <div class="relay-plan-list">
+                      <For each={context().files}>
+                        {(file) => (
+                          <div class="relay-plan-item">
+                            <strong>{file.relativePath}</strong>
+                            <code>{file.language || "text"} · {file.score} · {file.truncated ? "一部のみ" : "全文"}</code>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </section>
+                )}
+              </Show>
+
+              <Show when={codePlan()}>
+                {(plan) => (
+                  <section class="relay-result-block">
+                    <div class="relay-result-header">
+                      <div>
+                        <h2>変更案</h2>
+                        <p>{plan().summary}</p>
+                      </div>
+                      <p>{plan().risk}</p>
+                    </div>
+                    <Show when={plan().edits.length === 0}>
+                      <div class="relay-state-panel">
+                        <strong>適用できる差分はありません</strong>
+                        <p>対象ファイル名や変更箇所をもう少し具体的に入力してください。</p>
+                      </div>
+                    </Show>
+                    <div class="relay-plan-list">
+                      <For each={plan().edits}>
+                        {(edit) => (
+                          <div class="relay-plan-item">
+                            <strong>{edit.relativePath}</strong>
+                            <span>{edit.summary}</span>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                    <Show when={plan().verificationCommands.length}>
+                      <div class="relay-plan-strip">
+                        <span>確認コマンド候補</span>
+                        <small>{plan().verificationCommands.join(" / ")}</small>
+                      </div>
+                    </Show>
+                  </section>
+                )}
+              </Show>
+
+              <Show when={codeApplyResult()}>
+                {(result) => (
+                  <section class="relay-result-block">
+                    <div class="relay-result-header">
+                      <h2>適用結果</h2>
+                      <p class={statusTone(result().ok)}>{result().ok ? "成功" : "失敗"} · {result().elapsedMs}ms</p>
+                    </div>
+                    <Show when={result().changedFiles.length}>
+                      <p class="relay-hint">{result().changedFiles.join(", ")}</p>
+                    </Show>
+                    <pre>{result().diff || result().diffStat || result().error || "No diff"}</pre>
+                  </section>
+                )}
+              </Show>
+            </section>
+          }>
           <section class="relay-work-panel">
             <div class="relay-panel-heading">
               <div>
@@ -595,10 +922,10 @@ export default function Shell(): JSX.Element {
 
             <div class="relay-action-row">
               <button type="button" class="ra-button" disabled={officeRunning() || !officeFilePath().trim() || !officeInstruction().trim()} onClick={planOfficeEdit}>
-                {officeRunning() ? "処理中" : "変更内容を確認"}
+                {officeRunning() ? "処理中" : "変更を確認"}
               </button>
               <button type="button" class="ra-button ra-button--secondary" disabled={officeRunning() || !officePlan()} onClick={executeOfficePlan}>
-                バックアップを作成して適用
+                変更を適用
               </button>
             </div>
 
@@ -657,6 +984,7 @@ export default function Shell(): JSX.Element {
               )}
             </Show>
           </section>
+          </Show>
         }>
           <section class="relay-work-panel">
             <div class="relay-panel-heading">
@@ -804,6 +1132,29 @@ export default function Shell(): JSX.Element {
 
       <aside class="relay-detail">
         <Show when={mode() === "search"} fallback={
+          <Show when={mode() === "office"} fallback={
+            <section class="relay-detail-panel">
+              <p class="relay-kicker">Code</p>
+              <h2>{workspacePath() ? shortPath(workspacePath()) : "ワークスペース未選択"}</h2>
+              <Show when={codePlan()} fallback={<p class="relay-hint">変更案を作成すると、編集対象と差分がここに表示されます。</p>}>
+                {(plan) => (
+                  <div class="relay-plan-list">
+                    <For each={plan().edits}>
+                      {(edit) => (
+                        <div class="relay-plan-item">
+                          <strong>{edit.relativePath}</strong>
+                          <code>{edit.summary}</code>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </Show>
+              <Show when={codeApplyResult()?.diffStat}>
+                <pre>{codeApplyResult()?.diffStat}</pre>
+              </Show>
+            </section>
+          }>
           <section class="relay-detail-panel">
             <p class="relay-kicker">Office</p>
             <h2>{officeFilePath() ? shortPath(officeFilePath()) : "ファイル未選択"}</h2>
@@ -829,6 +1180,7 @@ export default function Shell(): JSX.Element {
               )}
             </Show>
           </section>
+          </Show>
         }>
           <section class="relay-detail-panel">
             <p class="relay-kicker">Candidate</p>
@@ -858,6 +1210,28 @@ export default function Shell(): JSX.Element {
                 </>
               )}
             </Show>
+          </section>
+        </Show>
+        <Show when={agentTrace().length}>
+          <section class="relay-detail-panel relay-agent-trace-panel">
+            <p class="relay-kicker">Flow</p>
+            <div class="relay-agent-trace">
+              <For each={agentTrace()}>
+                {(item) => (
+                  <div class="relay-agent-step" classList={{
+                    "is-running": item.status === "running",
+                    "is-done": item.status === "done",
+                    "is-error": item.status === "error",
+                  }}>
+                    <span aria-hidden="true" />
+                    <div>
+                      <strong>{item.label}</strong>
+                      <p>{item.detail}</p>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
           </section>
         </Show>
       </aside>

@@ -86,6 +86,8 @@ pub fn run() {
             commands::relay::run_relay_document_search,
             commands::relay::inspect_office_file,
             commands::relay::execute_officecli_command,
+            commands::relay::collect_code_context,
+            commands::relay::apply_code_patch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

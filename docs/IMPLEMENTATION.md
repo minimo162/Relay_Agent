@@ -3,8 +3,9 @@
 ## Status
 
 - Current phase: Relay_Agent is a dedicated Relay desktop application for
-  document search and OfficeCLI-backed Office file operations. AionUi overlay
-  work is historical reference code, not the product shell.
+  document search, OfficeCLI-backed Office file operations, and bounded code
+  edits. AionUi overlay work is historical reference code, not the product
+  shell.
 - Repository state: pnpm workspace, Relay SolidJS workbench, Tauri v2 shell,
   Rust-source IPC contracts with generated TS bindings, shared doctor service,
   deterministic provider/diagnostic coverage, app-local document-search
@@ -20,6 +21,112 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-15 agent contract, OfficeCLI smoke lock fix, and Relay-owned search source
+
+Executed the remaining local portions of the agent-direction plan:
+
+- Added `RelayAgentStep.v1` prompt/validation helpers. Copilot can describe a
+  next step only as strict JSON, and validation scopes tool names to the
+  selected UI mode.
+- Added a concise Flow trace in the desktop workbench for Copilot planning and
+  Relay execution across document search, Office editing, and code editing.
+- Reworked the desktop workbench CSS toward a quieter whitespace-forward layout
+  and simplified the Office buttons to `変更を確認` and `変更を適用`.
+- Fixed the OfficeCLI readiness smoke check so the generated workbook is a
+  unique app-local `.xlsx` path that is closed before OfficeCLI reads it. The
+  check now retries transient sharing violations, prunes stale smoke files, and
+  reports remaining lock failures as readiness/smoke failures instead of
+  missing-tool errors.
+- Copied the document-search TypeScript implementation into
+  `apps/desktop/document-search-src/`. The desktop bundle builder and the test
+  module loader now use that Relay-owned source path.
+- Bumped the desktop app and Tauri package version to `0.2.9`.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/desktop prep:tauri-bundle
+node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-bridge.test.mjs
+node --test scripts/relay-document-search-index-db.test.mjs
+node --test scripts/copilot-planners.test.mjs
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `pnpm --filter @relay-agent/desktop prep:tauri-bundle`: passed.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/relay-document-search-bridge.test.mjs`: passed, 10 passed.
+- `node --test scripts/relay-document-search-index-db.test.mjs`: passed, 10 passed.
+- `node --test scripts/copilot-planners.test.mjs`: passed, 8 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`: passed, 47 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+Windows installed-app validation, screenshots, and remaining AionUi-overlay
+archival are still tracked in `PLANS.md` because they require a Windows runner
+or a separate cleanup milestone.
+
+### 2026-05-15 agentic direction and minimal UX planning update
+
+Updated `PLANS.md` to shift the next direction from fixed per-mode pipelines
+toward a bounded local business agent:
+
+- Copilot becomes the manager for intent understanding, tool choice,
+  observation review, and final synthesis.
+- Relay remains the only execution harness. It owns schema validation,
+  permissions, local tool execution, backups, diffs, approvals, and trace logs.
+- The planned common loop is
+  `Copilot step -> Relay tool -> observation -> Copilot step`, with hard step
+  limits and no fallback execution after validation failure.
+- The planned tool catalog uses progressive disclosure: a small initial catalog
+  plus detailed schemas only for the selected tool.
+- Added the Windows OfficeCLI smoke-test lock failure to the hardening plan.
+  The current reported failure shows Relay's smoke workbook can remain locked
+  while OfficeCLI tries to read it. The fix must use a unique app-local file
+  path with closed handles before launch, retry transient sharing violations,
+  clean stale smoke files, and avoid misclassifying smoke-harness failures as
+  OfficeCLI unavailability.
+- Added a minimal professional UI/UX redesign task for the agent direction.
+  The target is a whitespace-forward workbench with one task composer, concise
+  step status, explicit write approvals, collapsible trace details, and no
+  nonessential explanatory or runtime controls.
+
+### 2026-05-15 bounded code-writing mode
+
+Added the third Relay desktop workflow, `コードを書く`, without reintroducing a
+user-facing OpenCode/OpenWork session. The mode follows the same Copilot/Relay
+split as search and Office:
+
+- Relay collects a bounded local code context from the selected workspace,
+  preferring explicit relative paths and scoring filename/content matches.
+- Copilot receives only that context and must return
+  `RelayCodePatchPlan.v1` JSON with workspace-relative paths and exact
+  `oldString` / `newString` replacements.
+- Relay validates the JSON contract, rejects paths outside the provided
+  context, rejects parent/absolute paths, and applies only replacements whose
+  `oldString` matches exactly once in the current file.
+- The UI shows the checked files, proposed edits, optional verification command
+  suggestions, changed files, and git diff output. Relay does not execute shell
+  commands automatically from the code mode.
+
+Verification run so far:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `node --test scripts/copilot-planners.test.mjs` — pass, 6 passed.
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml commands::relay --lib` — pass, 9 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — pass, 45 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check` — pass.
+- `git diff --check` — pass.
+- `pnpm check` — pass.
 
 ### 2026-05-15 compound concept confirmation and OfficeCLI resolution
 

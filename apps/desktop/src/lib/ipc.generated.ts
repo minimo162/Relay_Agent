@@ -198,6 +198,55 @@ export interface RelayOfficeCommandResponse {
   error?: string | null;
 }
 
+export interface RelayCodeContextRequest {
+  workspacePath: string;
+  instruction: string;
+  targetPaths: string[];
+  maxFiles?: number | null;
+}
+
+export interface RelayCodeContextFile {
+  relativePath: string;
+  language?: string | null;
+  sizeBytes: number;
+  modifiedTime?: string | null;
+  content: string;
+  truncated: boolean;
+  score: number;
+  reasons: string[];
+}
+
+export interface RelayCodeContextResponse {
+  ok: boolean;
+  workspacePath: string;
+  summary: string;
+  files: RelayCodeContextFile[];
+  scannedFiles: number;
+  elapsedMs: number;
+  error?: string | null;
+}
+
+export interface RelayCodePatchEdit {
+  relativePath: string;
+  oldString: string;
+  newString: string;
+  summary: string;
+}
+
+export interface RelayCodePatchApplyRequest {
+  workspacePath: string;
+  edits: RelayCodePatchEdit[];
+}
+
+export interface RelayCodePatchApplyResponse {
+  ok: boolean;
+  changedFiles: string[];
+  diffStat: string;
+  diff: string;
+  elapsedMs: number;
+  error?: string | null;
+}
+
 export type CopilotWarmupStage =
   | "ensure_server"
   | "health_check"

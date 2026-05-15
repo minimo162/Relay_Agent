@@ -1,8 +1,10 @@
-import type { RelayDocumentSearchQueryPlanHints, RelaySearchResultCard } from "./ipc";
+import type { RelayCodeContextFile, RelayDocumentSearchQueryPlanHints, RelaySearchResultCard } from "./ipc";
 
 const SEARCH_PLAN_SCHEMA_VERSION = "RelayDocumentSearchCopilotQueryPlan.v1";
 const SEARCH_RESULT_SCHEMA_VERSION = "RelayDocumentSearchCopilotResultSummary.v1";
 const OFFICE_PLAN_SCHEMA_VERSION = "RelayOfficeEditPlan.v1";
+const CODE_PATCH_SCHEMA_VERSION = "RelayCodePatchPlan.v1";
+const AGENT_STEP_SCHEMA_VERSION = "RelayAgentStep.v1";
 
 const SEARCH_INTENTS = new Set(["find_files", "answer_with_evidence", "summarize_with_evidence", "inspect_file", "similar_documents"]);
 const EVIDENCE_MODES = new Set(["none", "candidate", "required"]);
@@ -10,7 +12,33 @@ const THOROUGHNESS = new Set(["quick", "thorough"]);
 const FILE_TYPES = new Set(["any", "txt", "md", "csv", "docx", "xlsx", "xlsm", "pptx", "pdf"]);
 const TIME_SCOPE_INTENTS = new Set(["latest_first", "historical_examples", "balanced", "explicit_period", "unknown"]);
 const OFFICE_RISK_LEVELS = new Set(["low", "medium", "high"]);
+const CODE_RISK_LEVELS = new Set(["low", "medium", "high"]);
 const RESULT_CONFIDENCE_LEVELS = new Set(["high", "medium", "low"]);
+const AGENT_MODES = new Set(["document_search", "office_edit", "code"]);
+const AGENT_ACTIONS = new Set(["use_tool", "ask_user", "finish", "error"]);
+
+export const RELAY_AGENT_TOOL_CATALOG = [
+  {
+    name: "relay_document_search",
+    mode: "document_search",
+    description: "Search local workspace documents using Relay-managed ripgrep, metadata, and safe content extraction.",
+  },
+  {
+    name: "officecli",
+    mode: "office_edit",
+    description: "Inspect or edit a selected Office file with argv-only OfficeCLI commands. Relay creates backups before edits.",
+  },
+  {
+    name: "collect_code_context",
+    mode: "code",
+    description: "Collect bounded workspace-relative source files relevant to a coding instruction.",
+  },
+  {
+    name: "apply_code_patch",
+    mode: "code",
+    description: "Apply reviewed exact string replacements to workspace-relative source files.",
+  },
+] as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -26,6 +54,38 @@ export type RelayOfficeEditPlan = {
   risk: "low" | "medium" | "high";
   commands: RelayOfficePlanCommand[];
   summary?: string;
+};
+
+export type RelayCodePatchPlanEdit = {
+  relativePath: string;
+  oldString: string;
+  newString: string;
+  summary: string;
+};
+
+export type RelayCodePatchPlan = {
+  schemaVersion: "RelayCodePatchPlan.v1";
+  rawInstruction: string;
+  workspacePath: string;
+  risk: "low" | "medium" | "high";
+  summary: string;
+  edits: RelayCodePatchPlanEdit[];
+  verificationCommands: string[];
+};
+
+export type RelayAgentMode = "document_search" | "office_edit" | "code";
+export type RelayAgentAction = "use_tool" | "ask_user" | "finish" | "error";
+export type RelayAgentToolName = (typeof RELAY_AGENT_TOOL_CATALOG)[number]["name"];
+
+export type RelayAgentStep = {
+  schemaVersion: "RelayAgentStep.v1";
+  mode: RelayAgentMode;
+  rawInstruction: string;
+  action: RelayAgentAction;
+  toolName?: RelayAgentToolName;
+  input?: JsonRecord;
+  rationale: string;
+  userMessage?: string;
 };
 
 export type RelayDocumentSearchResultCategory = {
@@ -244,6 +304,119 @@ export function buildOfficeEditPlanPrompt(params: {
   ].join("\n");
 }
 
+export function buildCodePatchPlanPrompt(params: {
+  instruction: string;
+  workspacePath: string;
+  contextFiles: RelayCodeContextFile[];
+}): string {
+  const instruction = params.instruction.trim();
+  const files = params.contextFiles.slice(0, 12).map((file) => ({
+    relativePath: file.relativePath,
+    language: file.language || "",
+    truncated: file.truncated,
+    score: file.score,
+    reasons: file.reasons.slice(0, 6),
+    content: file.content,
+  }));
+  return [
+    "RELAY CODE PATCH PLAN COMPILER",
+    "Mode: code_patch_plan. This is not a chat-answer task.",
+    "Your only job is to produce a JSON patch plan using exact string replacements against the provided local context.",
+    "Do not call tools. Do not search Microsoft 365, SharePoint, the web, memory, plugins, or local files.",
+    "Do not run code, tests, shell commands, package managers, or formatters.",
+    "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
+    "Use this schema exactly:",
+    JSON.stringify({
+      schemaVersion: CODE_PATCH_SCHEMA_VERSION,
+      rawInstruction: instruction,
+      workspacePath: params.workspacePath,
+      risk: "medium",
+      summary: "short Japanese summary of the proposed code change",
+      edits: [
+        {
+          relativePath: files[0]?.relativePath || "relative/path.ts",
+          oldString: "exact text copied from the file content",
+          newString: "replacement text",
+          summary: "short edit summary",
+        },
+      ],
+      verificationCommands: ["pnpm typecheck"],
+    }),
+    "Rules:",
+    `- schemaVersion must be ${CODE_PATCH_SCHEMA_VERSION}.`,
+    "- rawInstruction must equal USER REQUEST DATA exactly.",
+    "- workspacePath must equal WORKSPACE exactly.",
+    "- Use only files listed in CONTEXT FILES. Do not invent paths.",
+    "- relativePath must exactly match one CONTEXT FILES relativePath.",
+    "- Every oldString must be copied exactly from the corresponding CONTEXT FILES content and should be unique in that file.",
+    "- Do not use absolute paths, parent directory paths, shell commands, markdown, prose outside JSON, or fields not shown in the schema.",
+    "- If the requested change cannot be done safely with the provided context, return edits: [] and explain the missing context in summary.",
+    "- Keep edits small and reviewable. Prefer one to eight edits; never exceed eight edits.",
+    "- verificationCommands are suggestions for the user only; Relay will not execute them automatically.",
+    "WORKSPACE:",
+    params.workspacePath,
+    "CONTEXT FILES:",
+    JSON.stringify(files),
+    "USER REQUEST DATA:",
+    JSON.stringify(instruction),
+    "Return the code patch plan JSON object now.",
+  ].join("\n");
+}
+
+export function buildAgentStepPrompt(params: {
+  mode: RelayAgentMode;
+  instruction: string;
+  workspacePath: string;
+  toolCatalog: readonly { name: string; mode: string; description: string }[];
+  observation?: string;
+}): string {
+  const instruction = params.instruction.trim();
+  const tools = params.toolCatalog
+    .filter((tool) => tool.mode === params.mode)
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+    }));
+  return [
+    "RELAY AGENT STEP PLANNER",
+    "Mode: agent_step. This is not a chat-answer task.",
+    "Copilot decides the next safe step; Relay executes the selected tool and validates every result.",
+    "Do not call tools yourself. Do not search Microsoft 365, SharePoint, the web, memory, plugins, or local files.",
+    "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
+    "Use this schema exactly:",
+    JSON.stringify({
+      schemaVersion: AGENT_STEP_SCHEMA_VERSION,
+      mode: params.mode,
+      rawInstruction: instruction,
+      action: "use_tool",
+      toolName: tools[0]?.name || "relay_document_search",
+      input: {},
+      rationale: "short reason for the next step",
+      userMessage: "short Japanese message only when action is ask_user, finish, or error",
+    }),
+    "Rules:",
+    `- schemaVersion must be ${AGENT_STEP_SCHEMA_VERSION}.`,
+    "- mode must equal MODE exactly.",
+    "- rawInstruction must equal USER REQUEST DATA exactly.",
+    "- action must be use_tool, ask_user, finish, or error.",
+    "- When action is use_tool, toolName must be one of TOOL CATALOG names and input must be a JSON object.",
+    "- When action is ask_user, finish, or error, do not include tool calls or executable instructions.",
+    "- Relay will ignore any tool, file path, or command not represented in this JSON object and allowed by the current UI mode.",
+    "- Do not include markdown, prose outside JSON, OpenAI tool_calls, recipient_name, shell commands, or fields not shown in the schema.",
+    "MODE:",
+    params.mode,
+    "WORKSPACE:",
+    params.workspacePath,
+    "TOOL CATALOG:",
+    JSON.stringify(tools),
+    "OBSERVATION:",
+    params.observation?.slice(0, 6000) || "(none)",
+    "USER REQUEST DATA:",
+    JSON.stringify(instruction),
+    "Return the Relay agent step JSON object now.",
+  ].join("\n");
+}
+
 export function validateDocumentSearchPlanText(text: string, rawQuery: string): PlannerValidation<RelayDocumentSearchQueryPlanHints> {
   const parsed = parseStrictJsonObject(text);
   if (!parsed.ok) return parsed;
@@ -265,6 +438,28 @@ export function validateOfficeEditPlanText(text: string, rawInstruction: string,
   const parsed = parseStrictJsonObject(text);
   if (!parsed.ok) return parsed;
   return validateOfficeEditPlan(parsed.value, rawInstruction, filePath);
+}
+
+export function validateCodePatchPlanText(
+  text: string,
+  rawInstruction: string,
+  workspacePath: string,
+  allowedRelativePaths: Set<string>,
+): PlannerValidation<RelayCodePatchPlan> {
+  const parsed = parseStrictJsonObject(text);
+  if (!parsed.ok) return parsed;
+  return validateCodePatchPlan(parsed.value, rawInstruction, workspacePath, allowedRelativePaths);
+}
+
+export function validateAgentStepText(
+  text: string,
+  expectedMode: RelayAgentMode,
+  rawInstruction: string,
+  allowedTools: Set<string>,
+): PlannerValidation<RelayAgentStep> {
+  const parsed = parseStrictJsonObject(text);
+  if (!parsed.ok) return parsed;
+  return validateAgentStep(parsed.value, expectedMode, rawInstruction, allowedTools);
 }
 
 export function officePlanToArgs(command: RelayOfficePlanCommand): string {
@@ -357,6 +552,41 @@ function validateOfficeEditPlan(value: JsonRecord, rawInstruction: string, fileP
   };
 }
 
+function validateCodePatchPlan(
+  value: JsonRecord,
+  rawInstruction: string,
+  workspacePath: string,
+  allowedRelativePaths: Set<string>,
+): PlannerValidation<RelayCodePatchPlan> {
+  const errors: string[] = [];
+  rejectUnknownFields(
+    value,
+    ["schemaVersion", "rawInstruction", "workspacePath", "risk", "summary", "edits", "verificationCommands"],
+    errors,
+    "code patch plan",
+  );
+  if (value.schemaVersion !== CODE_PATCH_SCHEMA_VERSION) errors.push(`schemaVersion must be ${CODE_PATCH_SCHEMA_VERSION}.`);
+  if (value.rawInstruction !== rawInstruction) errors.push("rawInstruction must exactly match the original user instruction.");
+  if (value.workspacePath !== workspacePath) errors.push("workspacePath must exactly match the selected workspace.");
+  const risk = enumValue(value.risk, CODE_RISK_LEVELS, "risk", errors);
+  const summary = stringValue(value.summary, "summary", 420, errors);
+  const edits = validateCodePatchEdits(value.edits, allowedRelativePaths, errors);
+  const verificationCommands = validateVerificationCommands(value.verificationCommands, errors);
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      schemaVersion: CODE_PATCH_SCHEMA_VERSION,
+      rawInstruction,
+      workspacePath,
+      risk: risk as RelayCodePatchPlan["risk"],
+      summary,
+      edits,
+      verificationCommands,
+    },
+  };
+}
+
 function validateDocumentSearchResultSummary(
   value: JsonRecord,
   rawQuery: string,
@@ -381,6 +611,55 @@ function validateDocumentSearchResultSummary(
       summary,
       categories,
       caveats,
+    },
+  };
+}
+
+function validateAgentStep(
+  value: JsonRecord,
+  expectedMode: RelayAgentMode,
+  rawInstruction: string,
+  allowedTools: Set<string>,
+): PlannerValidation<RelayAgentStep> {
+  const errors: string[] = [];
+  rejectUnknownFields(value, ["schemaVersion", "mode", "rawInstruction", "action", "toolName", "input", "rationale", "userMessage"], errors, "agent step");
+  if (value.schemaVersion !== AGENT_STEP_SCHEMA_VERSION) errors.push(`schemaVersion must be ${AGENT_STEP_SCHEMA_VERSION}.`);
+  if (value.rawInstruction !== rawInstruction) errors.push("rawInstruction must exactly match the original user instruction.");
+  const mode = enumValue(value.mode, AGENT_MODES, "mode", errors) as RelayAgentMode;
+  if (mode && mode !== expectedMode) errors.push(`mode must be ${expectedMode}.`);
+  const action = enumValue(value.action, AGENT_ACTIONS, "action", errors) as RelayAgentAction;
+  const rationale = stringValue(value.rationale, "rationale", 280, errors);
+  const userMessage = value.userMessage === undefined ? undefined : stringValue(value.userMessage, "userMessage", 280, errors);
+  let toolName: RelayAgentToolName | undefined;
+  let input: JsonRecord | undefined;
+  if (action === "use_tool") {
+    if (typeof value.toolName !== "string" || !allowedTools.has(value.toolName)) {
+      errors.push(`toolName must be one of: ${[...allowedTools].join(", ")}.`);
+    } else {
+      toolName = value.toolName as RelayAgentToolName;
+    }
+    if (value.input !== undefined && !isRecord(value.input)) {
+      errors.push("input must be a JSON object when provided.");
+    } else if (isRecord(value.input)) {
+      input = value.input;
+    } else {
+      input = {};
+    }
+  } else if (value.toolName !== undefined || value.input !== undefined) {
+    errors.push("toolName and input are only allowed when action is use_tool.");
+  }
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      schemaVersion: AGENT_STEP_SCHEMA_VERSION,
+      mode: expectedMode,
+      rawInstruction,
+      action,
+      ...(toolName ? { toolName } : {}),
+      ...(input ? { input } : {}),
+      rationale,
+      ...(userMessage ? { userMessage } : {}),
     },
   };
 }
@@ -493,6 +772,62 @@ function validateOfficeCommands(value: unknown, filePath: string, errors: string
   return commands;
 }
 
+function validateCodePatchEdits(
+  value: unknown,
+  allowedRelativePaths: Set<string>,
+  errors: string[],
+): RelayCodePatchPlanEdit[] {
+  if (!Array.isArray(value)) {
+    errors.push("edits must be an array.");
+    return [];
+  }
+  if (value.length > 8) errors.push("edits may contain at most eight entries.");
+  const edits: RelayCodePatchPlanEdit[] = [];
+  value.slice(0, 8).forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      errors.push(`edits[${index}] must be an object.`);
+      return;
+    }
+    rejectUnknownFields(entry, ["relativePath", "oldString", "newString", "summary"], errors, `edits[${index}]`);
+    const relativePath = stringValue(entry.relativePath, `edits[${index}].relativePath`, 260, errors).replaceAll("\\", "/");
+    const oldString = stringValueAllowNewlines(entry.oldString, `edits[${index}].oldString`, 24000, errors);
+    const newString = stringValueAllowNewlines(entry.newString, `edits[${index}].newString`, 36000, errors);
+    const summary = stringValue(entry.summary, `edits[${index}].summary`, 180, errors);
+    if (relativePath.startsWith("/") || /^[a-z]:/iu.test(relativePath) || relativePath.split("/").includes("..")) {
+      errors.push(`edits[${index}].relativePath must be a workspace-relative path.`);
+    }
+    if (!allowedRelativePaths.has(relativePath)) {
+      errors.push(`edits[${index}].relativePath was not provided in the local context: ${relativePath}`);
+    }
+    if (!oldString) errors.push(`edits[${index}].oldString must not be empty.`);
+    if (oldString && oldString === newString) errors.push(`edits[${index}].oldString and newString must differ.`);
+    if (relativePath && oldString && summary) {
+      edits.push({ relativePath, oldString, newString, summary });
+    }
+  });
+  return edits;
+}
+
+function validateVerificationCommands(value: unknown, errors: string[]): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push("verificationCommands must be an array.");
+    return [];
+  }
+  if (value.length > 5) errors.push("verificationCommands may contain at most five entries.");
+  const commands: string[] = [];
+  for (const [index, item] of value.slice(0, 5).entries()) {
+    const command = stringValue(item, `verificationCommands[${index}]`, 160, errors);
+    if (!command) continue;
+    if (hasDangerousVerificationCommand(command)) {
+      errors.push(`verificationCommands[${index}] contains a destructive or shell-control pattern.`);
+      continue;
+    }
+    commands.push(command);
+  }
+  return commands;
+}
+
 function rejectUnknownFields(value: JsonRecord, allowed: string[], errors: string[], label: string): void {
   const allowedSet = new Set(allowed);
   for (const field of Object.keys(value)) {
@@ -554,12 +889,28 @@ function stringValue(value: unknown, field: string, maxLength: number, errors: s
   return value.trim().slice(0, maxLength);
 }
 
+function stringValueAllowNewlines(value: unknown, field: string, maxLength: number, errors: string[]): string {
+  if (typeof value !== "string") {
+    errors.push(`${field} must be a string.`);
+    return "";
+  }
+  if (/[\u0000\u007f]/u.test(value)) errors.push(`${field} must not contain NUL or delete control characters.`);
+  return value.slice(0, maxLength);
+}
+
 function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function hasControlOrShellSyntax(value: string): boolean {
   return /[\u0000-\u001f\u007f;&|<>`]/u.test(value);
+}
+
+function hasDangerousVerificationCommand(value: string): boolean {
+  return /[;&|<>`]/u.test(value)
+    || /\b(rm|del|erase|format|shutdown)\b/iu.test(value)
+    || /\bgit\s+(reset|clean|push)\b/iu.test(value)
+    || /\b--force\b/iu.test(value);
 }
 
 function isRecord(value: unknown): value is JsonRecord {

@@ -23,6 +23,12 @@ import type {
   CdpPromptResult as GeneratedCdpPromptResult,
   CdpSendPromptRequest as GeneratedCdpSendPromptRequest,
   ConnectCdpRequest as GeneratedConnectCdpRequest,
+  RelayCodeContextFile as GeneratedRelayCodeContextFile,
+  RelayCodeContextRequest as GeneratedRelayCodeContextRequest,
+  RelayCodeContextResponse as GeneratedRelayCodeContextResponse,
+  RelayCodePatchApplyRequest as GeneratedRelayCodePatchApplyRequest,
+  RelayCodePatchApplyResponse as GeneratedRelayCodePatchApplyResponse,
+  RelayCodePatchEdit as GeneratedRelayCodePatchEdit,
   RelayDocumentSearchRequest as GeneratedRelayDocumentSearchRequest,
   RelayDocumentSearchResponse as GeneratedRelayDocumentSearchResponse,
   RelayDocumentSearchQueryPlanHints as GeneratedRelayDocumentSearchQueryPlanHints,
@@ -50,6 +56,12 @@ export type RelaySearchResultCard = GeneratedRelaySearchResultCard;
 export type RelayOfficeInspectRequest = GeneratedRelayOfficeInspectRequest;
 export type RelayOfficeExecuteRequest = GeneratedRelayOfficeExecuteRequest;
 export type RelayOfficeCommandResponse = GeneratedRelayOfficeCommandResponse;
+export type RelayCodeContextRequest = GeneratedRelayCodeContextRequest;
+export type RelayCodeContextFile = GeneratedRelayCodeContextFile;
+export type RelayCodeContextResponse = GeneratedRelayCodeContextResponse;
+export type RelayCodePatchEdit = GeneratedRelayCodePatchEdit;
+export type RelayCodePatchApplyRequest = GeneratedRelayCodePatchApplyRequest;
+export type RelayCodePatchApplyResponse = GeneratedRelayCodePatchApplyResponse;
 
 /* ============================================================
    Diagnostic Tauri commands
@@ -83,6 +95,18 @@ export async function executeOfficeCliCommand(
   request: RelayOfficeExecuteRequest,
 ): Promise<RelayOfficeCommandResponse> {
   return invoke<RelayOfficeCommandResponse>("execute_officecli_command", { request });
+}
+
+export async function collectCodeContext(
+  request: RelayCodeContextRequest,
+): Promise<RelayCodeContextResponse> {
+  return invoke<RelayCodeContextResponse>("collect_code_context", { request });
+}
+
+export async function applyCodePatch(
+  request: RelayCodePatchApplyRequest,
+): Promise<RelayCodePatchApplyResponse> {
+  return invoke<RelayCodePatchApplyResponse>("apply_code_patch", { request });
 }
 
 /** Retry the historical OpenCode setup path. Not used by the current workbench. */

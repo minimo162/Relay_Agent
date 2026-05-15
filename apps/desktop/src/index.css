@@ -591,9 +591,9 @@ body a:focus-visible {
 }
 
 .relay-mode-switch {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   justify-self: center;
-  width: min(100%, 30rem);
+  width: min(100%, 38rem);
   padding: 0.25rem;
   border: 1px solid var(--ra-color-border);
   border-radius: var(--ra-radius);
@@ -1039,6 +1039,11 @@ body a:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.relay-plan-item span {
+  color: var(--ra-color-text-muted);
+  overflow-wrap: anywhere;
+}
+
 .relay-plan-item code {
   color: var(--ra-color-text-muted);
   font-family: var(--ra-font-mono);
@@ -1251,6 +1256,118 @@ body a:focus-visible {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
   margin-top: 1rem;
+}
+
+/* Relay Agent product shell — the app now has three focused workflows, so the
+ * main canvas carries the space and the cards stay quiet. */
+.relay-topbar {
+  padding: 1rem clamp(1.25rem, 3vw, 2.5rem);
+  background: color-mix(in oklab, var(--ra-color-bg) 72%, var(--ra-color-surface));
+}
+
+.relay-workbench {
+  padding: clamp(2rem, 5vw, 5.5rem);
+}
+
+.relay-work-panel {
+  max-width: 980px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  gap: 2rem;
+}
+
+.relay-panel-heading h1 {
+  font-size: clamp(1.55rem, 2vw, 2rem);
+  font-weight: 700;
+}
+
+.relay-result-block,
+.relay-state-panel,
+.relay-progress-panel,
+.relay-file-picker,
+.relay-detail-panel {
+  border-color: color-mix(in oklab, var(--ra-color-border) 84%, var(--ra-color-bg));
+  box-shadow: none;
+}
+
+.relay-result-block,
+.relay-state-panel,
+.relay-progress-panel {
+  padding: clamp(1.15rem, 2.2vw, 1.75rem);
+}
+
+.relay-search-box {
+  gap: 1.25rem;
+}
+
+.relay-search-box textarea,
+.relay-field input,
+.relay-field textarea {
+  padding: 1rem 1.1rem;
+  background: color-mix(in oklab, var(--ra-color-surface) 94%, var(--ra-color-bg));
+}
+
+.relay-result-list {
+  gap: 0.75rem;
+}
+
+.relay-result-card {
+  padding: 1rem 1.1rem;
+}
+
+.relay-detail {
+  background: color-mix(in oklab, var(--ra-color-bg) 82%, var(--ra-color-surface));
+}
+
+.relay-agent-trace-panel {
+  margin-top: 1rem;
+}
+
+.relay-agent-trace {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.relay-agent-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: flex-start;
+}
+
+.relay-agent-step > span {
+  width: 0.58rem;
+  height: 0.58rem;
+  margin-top: 0.33rem;
+  border-radius: var(--ra-radius-pill);
+  background: var(--ra-color-text-subtle);
+}
+
+.relay-agent-step.is-running > span {
+  background: var(--ra-color-accent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--ra-color-accent) 14%, transparent);
+}
+
+.relay-agent-step.is-done > span {
+  background: var(--ra-color-success);
+}
+
+.relay-agent-step.is-error > span {
+  background: var(--ra-color-danger);
+}
+
+.relay-agent-step strong,
+.relay-agent-step p {
+  margin: 0;
+}
+
+.relay-agent-step p {
+  margin-top: 0.14rem;
+  color: var(--ra-color-text-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1180px) {

@@ -4,11 +4,13 @@ use ts_rs::TS;
 
 use crate::models::{
     BrowserAutomationSettings, CopilotBridgeFailureInfo, CopilotRepairStageFailureCount,
-    CopilotRepairStageStats, OpenWorkSetupSnapshot, RelayDiagnostics, RelayDocumentSearchEvidence,
-    RelayDocumentSearchIntent, RelayDocumentSearchQueryPlanHints, RelayDocumentSearchRequest,
-    RelayDocumentSearchResponse, RelayDocumentSearchThoroughness,
-    RelayDocumentSearchTimeScopeIntent, RelayOfficeCommandResponse, RelayOfficeExecuteRequest,
-    RelayOfficeInspectRequest, RelaySearchResultCard, RelayWorkspaceState,
+    CopilotRepairStageStats, OpenWorkSetupSnapshot, RelayCodeContextFile, RelayCodeContextRequest,
+    RelayCodeContextResponse, RelayCodePatchApplyRequest, RelayCodePatchApplyResponse,
+    RelayCodePatchEdit, RelayDiagnostics, RelayDocumentSearchEvidence, RelayDocumentSearchIntent,
+    RelayDocumentSearchQueryPlanHints, RelayDocumentSearchRequest, RelayDocumentSearchResponse,
+    RelayDocumentSearchThoroughness, RelayDocumentSearchTimeScopeIntent,
+    RelayOfficeCommandResponse, RelayOfficeExecuteRequest, RelayOfficeInspectRequest,
+    RelaySearchResultCard, RelayWorkspaceState,
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, ConnectCdpRequest,
@@ -38,6 +40,12 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<RelayOfficeInspectRequest>(),
         decl::<RelayOfficeExecuteRequest>(),
         decl::<RelayOfficeCommandResponse>(),
+        decl::<RelayCodeContextRequest>(),
+        decl::<RelayCodeContextFile>(),
+        decl::<RelayCodeContextResponse>(),
+        decl::<RelayCodePatchEdit>(),
+        decl::<RelayCodePatchApplyRequest>(),
+        decl::<RelayCodePatchApplyResponse>(),
         decl::<CopilotWarmupStage>(),
         decl::<CopilotWarmupFailureCode>(),
         decl::<CopilotWarmupResult>(),
