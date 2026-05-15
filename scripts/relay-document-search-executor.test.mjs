@@ -599,11 +599,13 @@ test("executeRelayDocumentSearch ranks compound parts-sales files above generic 
   const fsCheckDir = resolve(workspace, "160期-1Q", "連結決算", "03FSチェック", "仕向地別営業利益用データ");
   const workDir = resolve(workspace, "160期-1Q", "連結決算", "02CFS-合算,ADJ,精算表", "Work");
   const filingDir = resolve(workspace, "160期-4Q", "ファイリング", "⑥有価証券報告書", "①【企業の概況】");
+  const humanCapitalDir = resolve(workspace, "160期-4Q", "ファイリング", "⑥有価証券報告書", "④【提出会社の状況】", "人的資本");
   const originalDir = resolve(workspace, "160期-1Q", "各社ファイル", "オリジナル");
   const partsDir = resolve(workspace, "160期-1Q", "連結決算", "03FSチェック", "PLチェック");
   mkdirSync(fsCheckDir, { recursive: true });
   mkdirSync(workDir, { recursive: true });
   mkdirSync(filingDir, { recursive: true });
+  mkdirSync(humanCapitalDir, { recursive: true });
   mkdirSync(originalDir, { recursive: true });
   mkdirSync(partsDir, { recursive: true });
   writeFileSync(
@@ -620,7 +622,11 @@ test("executeRelayDocumentSearch ranks compound parts-sales files above generic 
   );
   writeFileSync(
     resolve(originalDir, "FY160-1Q_Mパーツ.xlsx"),
-    minimalXlsxWithStrings(["パーツ", "売上高", "販売実績"]),
+    minimalXlsxWithStrings(["Mパーツ", "会社名", "売上高"]),
+  );
+  writeFileSync(
+    resolve(humanCapitalDir, "FY160_人的資本情報_16_サンプルパーツ.xlsx"),
+    minimalXlsxWithStrings(["人的資本", "従業員", "サンプルパーツ", "売上高"]),
   );
   writeFileSync(
     resolve(partsDir, "FY160-1Q PL速報依頼(パーツ).xlsx"),
@@ -678,13 +684,14 @@ test("executeRelayDocumentSearch ranks compound parts-sales files above generic 
     const names = result.results.map((candidate) => candidate.display_name);
     assert.equal(result.status, "ok");
     assert.equal(names[0], "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx");
-    assert.deepEqual(new Set(names.slice(1, 3)), new Set([
-      "FY160-1Q PL速報依頼(パーツ).xlsx",
-      "FY160-1Q_Mパーツ.xlsx",
-    ]));
+    assert.equal(names[1], "FY160-1Q PL速報依頼(パーツ).xlsx");
     assert.equal(names.some((name) => name === "FY160-1Q_連結売上高.xlsx"), false);
     assert.equal(names.some((name) => name.includes("売上消去")), false);
     assert.equal(names.some((name) => name === "連結売上高集計用.xlsx"), false);
+    const companyNameCandidate = result.results.find((candidate) => candidate.display_name === "FY160-1Q_Mパーツ.xlsx");
+    assert.notEqual(companyNameCandidate?.evidence_state, "concept_confirmed");
+    const humanCapitalCandidate = result.results.find((candidate) => candidate.display_name.includes("人的資本情報"));
+    assert.notEqual(humanCapitalCandidate?.evidence_state, "concept_confirmed");
     assert.equal(result.results[0].evidence_state, "concept_confirmed");
     assert.ok(result.results[0].score_breakdown.explanationCodes.some((code) => code.includes("semantic_direct:parts_sales")));
     assert.equal(result.queryPlan.normalizedTerms.includes("売上"), false);

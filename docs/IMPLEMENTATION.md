@@ -21,6 +21,40 @@
 
 ## Milestone Log
 
+### 2026-05-15 compound concept confirmation and OfficeCLI resolution
+
+Implemented the follow-up repair for compound business searches and OfficeCLI
+availability:
+
+- Direct business phrases such as `部品売上`, `部品他売上`, and `パーツ売上`
+  remain high-confidence evidence.
+- Loose combinations such as a company/entity name containing `パーツ` plus a
+  generic `売上高` field are now recall candidates only. They are not treated
+  as `concept_confirmed` and do not overrank confirmed concept files when
+  confirmed files exist.
+- Added `concept_candidate` and `entity_context_match` evidence states for the
+  UI and Copilot result organizer.
+- Updated the Copilot organizer prompt so those weaker states must be described
+  as candidates rather than confirmed relevance.
+- Expanded OfficeCLI resolution to packaged resources, sidecar resource
+  locations, user-local tool cache, development cache, and PATH. Missing tools
+  and "found but not runnable" tools now produce different messages.
+- Advanced the desktop package, Tauri config, and Cargo package version to
+  `0.2.8` for the installer release containing this follow-up.
+
+Verification run so far:
+
+- `node --test scripts/relay-document-search-executor.test.mjs --test-name-pattern "ranks compound parts-sales"` — pass, 36 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml commands::relay --lib` — pass, 4 passed.
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/copilot-planners.test.mjs scripts/relay-document-search-executor.test.mjs` — pass, 45 passed.
+- `node --test apps/desktop/scripts/officecli_bootstrap.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs apps/desktop/scripts/aionui_relay_launch.test.mjs` — pass, 21 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — pass, 40 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check` — pass.
+- `git diff --check` — pass.
+- `pnpm check` — pass.
+
 ### 2026-05-15 compound search precision and OfficeCLI runtime guard
 
 Tightened document-search ranking for compound business concepts such as

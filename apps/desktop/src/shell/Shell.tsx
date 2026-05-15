@@ -56,6 +56,8 @@ function cardEvidenceLabel(card: RelaySearchResultCard): string {
   const evidence = card.evidenceState || card.matchMode || "";
   const labels: Record<string, string> = {
     concept_confirmed: "概念一致を確認",
+    concept_candidate: "概念候補",
+    entity_context_match: "名称文脈の候補",
     content_confirmed: "内容から確認",
     partial_content_match: "部分一致",
     generic_content_match: "汎用一致",

@@ -78,6 +78,16 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   to expand the natural-language query into validated search terms, then after
   local search to summarize and dynamically categorize only the returned
   evidence pack/candidate facts.
+- Compound business searches now distinguish direct concept evidence from
+  loose hybrid matches. For example, `部品売上` requires direct phrases such
+  as `部品売上` / `部品他売上` / `パーツ売上` or equivalent content evidence
+  before a candidate is treated as concept-confirmed; company/entity-name
+  matches remain recall candidates and are not allowed to overrank confirmed
+  business-concept files.
+- OfficeCLI resolution now checks packaged resources, sidecar locations,
+  user-local caches, dev caches, and PATH separately, and reports whether the
+  tool is missing or present but not runnable instead of collapsing both cases
+  into a generic not-found error.
 - The search UI shows one fixed snapshot per search. It does not stream partial
   result lists or silently update displayed results after Copilot result
   organization completes. Additional exploration is an explicit

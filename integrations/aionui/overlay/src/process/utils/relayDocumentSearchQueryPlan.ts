@@ -284,6 +284,9 @@ const PARTS_SALES_DIRECT_TERMS = [
   '部品他売上',
   'パーツ売上',
   '部販',
+  '部品販売',
+  '部品収益',
+  '補修部品販売',
   '販社 パーツ',
   '補修部品売上',
   'サービス部品売上',
@@ -291,7 +294,9 @@ const PARTS_SALES_DIRECT_TERMS = [
   'スペアパーツ売上',
   'parts sales',
   'spare parts sales',
+  'service parts sales',
   'service parts revenue',
+  'aftermarket parts revenue',
   'aftermarket parts sales',
 ];
 
@@ -324,6 +329,8 @@ const PARTS_SALES_SUPPORT_TERMS = [
   '実績',
   '計画',
   '見込',
+  '予実',
+  '差異',
   '分析',
   '内訳',
   '明細',

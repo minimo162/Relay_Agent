@@ -357,6 +357,12 @@ function evidenceLabel(evidenceState: string): string {
   switch (evidenceState) {
     case 'filename_only':
       return 'ファイル名候補';
+    case 'concept_confirmed':
+      return '概念一致を確認';
+    case 'concept_candidate':
+      return '概念候補';
+    case 'entity_context_match':
+      return '名称文脈の候補';
     case 'content_confirmed':
       return '中身を確認済み';
     case 'content_backed':

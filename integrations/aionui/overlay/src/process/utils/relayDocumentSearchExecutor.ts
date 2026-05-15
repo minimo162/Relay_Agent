@@ -288,6 +288,7 @@ type RankedCandidate = {
   filenameIndexMatch?: RelayDocumentSearchFilenameIndexMatch;
   contentEvidence?: ContentEvidence;
   semanticAllowed?: boolean;
+  semanticConfirmed?: boolean;
 };
 
 type SemanticConceptMatchStrength =
@@ -301,9 +302,11 @@ type SemanticConceptMatchStrength =
 
 type SemanticConceptMatchResult = {
   matched: boolean;
+  confirmed: boolean;
   strength: SemanticConceptMatchStrength;
   reasons: string[];
   score: number;
+  entityContext: boolean;
 };
 
 type RelayDocumentSearchCandidateBucket =
@@ -878,6 +881,27 @@ function normalizedFileHaystack(file: FileMetadata): string {
   return `${normalizeRelaySearchText(file.name)} ${normalizeRelaySearchText(file.displayPath)}`;
 }
 
+const SEMANTIC_ENTITY_CONTEXT_TERMS = [
+  '人的資本',
+  '従業員',
+  '人員',
+  '役員',
+  '所在地',
+  '会社の状況',
+  '提出会社',
+  '関係会社の状況',
+  'コーポレートガバナンス',
+  'ガバナンス',
+  '会社概要',
+  '会社情報',
+  'jbu',
+];
+
+function fileHasSemanticEntityContext(file: FileMetadata): boolean {
+  const haystack = normalizedFileHaystack(file);
+  return SEMANTIC_ENTITY_CONTEXT_TERMS.some((term) => haystack.includes(normalizeRelaySearchText(term)));
+}
+
 function matchedSemanticTerms(text: string, terms: string[]): string[] {
   const normalized = normalizeRelaySearchText(text);
   return terms.filter((term) => term && normalized.includes(term));
@@ -935,16 +959,25 @@ function semanticTermsContainAny(matchedTerms: string[], requiredTerms: string[]
   );
 }
 
+function semanticTermsContainDirectPhrase(matchedTerms: string[], directTerms: string[]): boolean {
+  return directTerms.some((required) =>
+    matchedTerms.some((matched) => matched === required || matched.includes(required)),
+  );
+}
+
 function semanticConceptMatchForCandidate(
   file: FileMetadata,
   evidence: ContentEvidence | undefined,
   queryPlan: RelayDocumentSearchQueryPlanV1,
 ): SemanticConceptMatchResult {
+  const entityContext = fileHasSemanticEntityContext(file);
   if (!queryPlan.semanticConceptGroups.length) {
-    return { matched: true, strength: 'none', reasons: [], score: 0 };
+    return { matched: true, confirmed: true, strength: 'none', reasons: [], score: 0, entityContext };
   }
 
   const haystack = normalizedFileHaystack(file);
+  const nameHaystack = normalizeRelaySearchText(file.name);
+  const pathHaystack = normalizeRelaySearchText(file.displayPath);
   const haystackMatches = [
     ...queryPlan.semanticConceptGroups.flatMap((group) => [
       ...matchedSemanticTerms(haystack, group.directTerms),
@@ -955,64 +988,98 @@ function semanticConceptMatchForCandidate(
   const allEvidenceTerms = contentEvidenceMatchedTerms(evidence);
   let best: SemanticConceptMatchResult = {
     matched: false,
+    confirmed: false,
     strength: 'none',
     reasons: [],
     score: 0,
+    entityContext,
   };
   const take = (candidate: SemanticConceptMatchResult) => {
     if (!candidate.matched) return;
-    if (candidate.score > best.score) best = candidate;
+    if (candidate.score > best.score || (candidate.score === best.score && candidate.confirmed && !best.confirmed)) {
+      best = candidate;
+    }
   };
 
   for (const group of queryPlan.semanticConceptGroups) {
-    const nameDirectMatches = matchedSemanticTerms(normalizeRelaySearchText(file.name), group.directTerms);
-    const pathDirectMatches = matchedSemanticTerms(normalizeRelaySearchText(file.displayPath), group.directTerms)
+    const nameDirectMatches = matchedSemanticTerms(nameHaystack, group.directTerms);
+    const pathDirectMatches = matchedSemanticTerms(pathHaystack, group.directTerms)
       .filter((term) => !nameDirectMatches.includes(term));
     const directMatches = [...nameDirectMatches, ...pathDirectMatches];
     if (directMatches.length) {
       const strongNameDirect = nameDirectMatches.some((term) => /売上|sales|revenue/iu.test(term));
       take({
         matched: true,
+        confirmed: true,
         strength: 'filename_direct',
         reasons: directMatches.map((term) => `semantic_direct:${group.source}:${term}`),
         score: (strongNameDirect ? 52 : nameDirectMatches.length ? 40 : 28) + Math.min(12, directMatches.length * 4),
+        entityContext,
       });
     }
 
-    const allOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(haystack, termGroup));
-    if (allOfAnyMatches.every((matches) => matches.length > 0)) {
+    const nameAllOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(nameHaystack, termGroup));
+    const pathAllOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(pathHaystack, termGroup));
+    const haystackAllOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(haystack, termGroup));
+    if (nameAllOfAnyMatches.every((matches) => matches.length > 0)) {
       take({
         matched: true,
+        confirmed: true,
         strength: 'filename_compound',
-        reasons: [`semantic_compound:${group.source}`],
-        score: 24,
+        reasons: [`semantic_compound:${group.source}:filename`],
+        score: 30,
+        entityContext,
+      });
+    } else if (pathAllOfAnyMatches.every((matches) => matches.length > 0)) {
+      take({
+        matched: true,
+        confirmed: false,
+        strength: 'filename_compound',
+        reasons: [`semantic_compound:${group.source}:path_only`],
+        score: entityContext ? 4 : 12,
+        entityContext,
+      });
+    } else if (haystackAllOfAnyMatches.every((matches) => matches.length > 0)) {
+      take({
+        matched: true,
+        confirmed: false,
+        strength: 'filename_compound',
+        reasons: [`semantic_compound:${group.source}:cross_path`],
+        score: entityContext ? 3 : 8,
+        entityContext,
       });
     }
 
     for (const anchorTerms of anchorTermGroups) {
-      if (semanticTermsContainAny(anchorTerms, group.directTerms)) {
+      if (semanticTermsContainDirectPhrase(anchorTerms, group.directTerms)) {
         take({
           matched: true,
+          confirmed: true,
           strength: 'content_direct',
           reasons: [`semantic_content_direct:${group.source}`],
-          score: 45,
+          score: 54,
+          entityContext,
         });
       }
       if (group.allOfAny.every((termGroup) => semanticTermsContainAny(anchorTerms, termGroup))) {
         take({
           matched: true,
+          confirmed: false,
           strength: 'content_compound',
-          reasons: [`semantic_content_compound:${group.source}`],
-          score: 26,
+          reasons: [`semantic_content_compound:${group.source}:candidate`],
+          score: entityContext ? 8 : 16,
+          entityContext,
         });
       }
       const combined = [...new Set([...haystackMatches, ...anchorTerms])];
       if (group.allOfAny.every((termGroup) => semanticTermsContainAny(combined, termGroup))) {
         take({
           matched: true,
+          confirmed: false,
           strength: 'hybrid_compound',
           reasons: [`semantic_hybrid_compound:${group.source}`],
-          score: 18,
+          score: entityContext ? 2 : 6,
+          entityContext,
         });
       }
     }
@@ -1020,9 +1087,11 @@ function semanticConceptMatchForCandidate(
     if (semanticTermsContainAny([...haystackMatches, ...allEvidenceTerms], [...group.directTerms, ...group.allOfAny.flat()])) {
       take({
         matched: false,
+        confirmed: false,
         strength: 'partial',
         reasons: [`semantic_partial:${group.source}`],
         score: 0,
+        entityContext,
       });
     }
   }
@@ -1034,13 +1103,15 @@ function semanticScoreForCandidate(
   file: FileMetadata,
   queryPlan: RelayDocumentSearchQueryPlanV1,
   evidence?: ContentEvidence,
-): { required: boolean; allowed: boolean; score: number; reasons: string[] } {
+): { required: boolean; allowed: boolean; confirmed: boolean; entityContext: boolean; score: number; reasons: string[] } {
   const required = queryPlan.semanticConceptGroups.length > 0;
   if (!required) {
     const demoteMatches = matchedSemanticTerms(normalizedFileHaystack(file), queryPlan.demoteTerms);
     return {
       required: false,
       allowed: true,
+      confirmed: true,
+      entityContext: fileHasSemanticEntityContext(file),
       score: -(demoteMatches.length * 4),
       reasons: demoteMatches.map((term) => `demote:${term}`),
     };
@@ -1055,10 +1126,18 @@ function semanticScoreForCandidate(
     for (const group of queryPlan.semanticConceptGroups) {
       const supportMatches = matchedSemanticTerms(haystack, [...queryPlan.supportOnlyTerms, ...group.supportTerms]);
       if (supportMatches.length) {
-        score += Math.min(4, supportMatches.length);
+        score += conceptMatch.confirmed ? Math.min(4, supportMatches.length) : Math.min(1, supportMatches.length);
         reasons.push(...supportMatches.slice(0, 4).map((term) => `semantic_support:${term}`));
       }
     }
+  }
+
+  if (allowed && !conceptMatch.confirmed) {
+    reasons.push(`semantic_unconfirmed:${conceptMatch.strength}`);
+  }
+  if (allowed && conceptMatch.entityContext && !conceptMatch.confirmed) {
+    score -= 12;
+    reasons.push('semantic_entity_context_demote');
   }
 
   const demoteMatches = matchedSemanticTerms(haystack, queryPlan.demoteTerms);
@@ -1068,7 +1147,14 @@ function semanticScoreForCandidate(
   }
 
   if (!allowed) reasons.push('semantic_gate:missing_required_concept');
-  return { required, allowed, score, reasons };
+  return {
+    required,
+    allowed,
+    confirmed: conceptMatch.confirmed,
+    entityContext: conceptMatch.entityContext,
+    score,
+    reasons,
+  };
 }
 
 function semanticContentScanEligible(file: FileMetadata, queryPlan: RelayDocumentSearchQueryPlanV1): boolean {
@@ -1227,7 +1313,9 @@ function evidenceStateForCandidate(
   if (!candidate.contentEvidence) return 'filename_only';
   if (!queryPlan.semanticConceptGroups.length) return 'content_confirmed';
   const semanticMatch = semanticConceptMatchForCandidate(candidate.file, candidate.contentEvidence, queryPlan);
-  if (semanticMatch.matched) return 'concept_confirmed';
+  if (semanticMatch.matched && semanticMatch.confirmed) return 'concept_confirmed';
+  if (semanticMatch.matched && semanticMatch.entityContext) return 'entity_context_match';
+  if (semanticMatch.matched) return 'concept_candidate';
   return contentEvidenceMatchedTerms(candidate.contentEvidence).length ? 'partial_content_match' : 'generic_content_match';
 }
 
@@ -4136,11 +4224,19 @@ export async function executeRelayDocumentSearch(
       const pathComponent = scoreFromReasons(filenameScore.reasons, 'path:', 2);
       const termComponent = scoreFromReasons(filenameScore.reasons, 'term:', 1);
       const folderRoleScore = folderRoleScoreForCandidate(file);
-      const contentComponent = evidence?.source === 'sqlite_fts' ? 0 : evidence?.score ?? 0;
+      const rawContentComponent = evidence?.source === 'sqlite_fts' ? 0 : evidence?.score ?? 0;
+      const semanticRequiresConfirmation = relayQueryPlan.semanticConceptGroups.length > 0;
+      const contentComponent = semanticRequiresConfirmation && !semanticScore.confirmed
+        ? Math.min(2, rawContentComponent)
+        : rawContentComponent;
       const indexDbComponent = evidence?.source === 'sqlite_fts'
-        ? evidence.score
+        ? semanticRequiresConfirmation && !semanticScore.confirmed
+          ? Math.min(2, evidence.score)
+          : evidence.score
         : evidence
-          ? indexDbSearchProbe.scoresByFileId.get(file.fileId) ?? 0
+          ? semanticRequiresConfirmation && !semanticScore.confirmed
+            ? Math.min(2, indexDbSearchProbe.scoresByFileId.get(file.fileId) ?? 0)
+            : indexDbSearchProbe.scoresByFileId.get(file.fileId) ?? 0
           : 0;
       const indexDbUncappedScore = evidence?.source === 'sqlite_fts'
         ? evidence.uncappedScore ?? evidence.score
@@ -4184,6 +4280,7 @@ export async function executeRelayDocumentSearch(
         filenameIndexMatch: indexedMatch,
         contentEvidence: evidence,
         semanticAllowed: semanticScore.allowed,
+        semanticConfirmed: semanticScore.confirmed,
       };
     })
     .filter((candidate) =>
@@ -4198,7 +4295,12 @@ export async function executeRelayDocumentSearch(
         candidate.userMemoryBoost > 0
       )
     );
-  const rankedAll = withRrfHybridScores(rankedCandidates).sort(candidateComparator);
+  const semanticConfirmedAvailable = relayQueryPlan.semanticConceptGroups.length > 0 &&
+    rankedCandidates.some((candidate) => candidate.semanticConfirmed);
+  const preferredRankedCandidates = semanticConfirmedAvailable
+    ? rankedCandidates.filter((candidate) => candidate.semanticConfirmed || candidate.userMemoryBoost > 0)
+    : rankedCandidates;
+  const rankedAll = withRrfHybridScores(preferredRankedCandidates).sort(candidateComparator);
   userMemory.diagnostics.boostedFileCount = rankedAll.filter((candidate) => candidate.userMemoryBoost > 0).length;
   const groupedRanked = groupRelayDocumentSearchCandidates(rankedAll);
   const diversity = diversifyRankedCandidates(groupedRanked.candidates, maxResults);

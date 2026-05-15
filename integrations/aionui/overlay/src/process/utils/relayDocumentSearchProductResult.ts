@@ -17,6 +17,8 @@ export type RelayDocumentSearchMatchMode = 'filename' | 'content' | 'hybrid' | '
 export type RelayDocumentSearchEvidenceState =
   | 'filename_only'
   | 'concept_confirmed'
+  | 'concept_candidate'
+  | 'entity_context_match'
   | 'partial_content_match'
   | 'generic_content_match'
   | 'content_confirmed'

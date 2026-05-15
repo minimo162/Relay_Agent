@@ -22,7 +22,20 @@ const DOCUMENT_SEARCH_MIN_TIMEOUT_MS: u64 = 10_000;
 const DOCUMENT_SEARCH_MAX_TIMEOUT_MS: u64 = 900_000;
 const DOCUMENT_SEARCH_TEMP_MAX_AGE_SECS: u64 = 24 * 60 * 60;
 const OFFICECLI_SMOKE_TIMEOUT_MS: u64 = 20_000;
-static OFFICECLI_CAPABILITY_CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+static OFFICECLI_CAPABILITY_CACHE: OnceLock<Mutex<HashMap<String, OfficeCliCandidateCheck>>> =
+    OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct OfficeCliCandidateCheck {
+    ok: bool,
+    reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct OfficeCliResolution {
+    path: Option<PathBuf>,
+    message: String,
+}
 
 #[tauri::command]
 pub fn get_relay_workspace_state(
@@ -38,7 +51,7 @@ pub fn get_relay_workspace_state(
         .map_err(|error| format!("create office backup dir: {error}"))?;
 
     let document_search_script = resolve_document_search_cli(&app);
-    let officecli = resolve_officecli_path(&app);
+    let officecli = resolve_officecli(&app);
     let ripgrep = resolve_ripgrep_path(&app);
 
     Ok(RelayWorkspaceState {
@@ -64,12 +77,12 @@ pub fn get_relay_workspace_state(
             }
             (_, _, None) => "ripgrep was not found for local document search.".to_string(),
         },
-        officecli_available: officecli.is_some(),
-        officecli_path: officecli.as_ref().map(|path| path.display().to_string()),
-        officecli_message: officecli
+        officecli_available: officecli.path.is_some(),
+        officecli_path: officecli
+            .path
             .as_ref()
-            .map(|path| format!("OfficeCLI is ready at {}.", path.display()))
-            .unwrap_or_else(|| "OfficeCLI was not found in bundled resources or PATH.".to_string()),
+            .map(|path| path.display().to_string()),
+        officecli_message: officecli.message,
         ripgrep_available: ripgrep.is_some(),
         ripgrep_path: ripgrep.map(|path| path.display().to_string()),
     })
@@ -428,17 +441,48 @@ fn resolve_document_search_cli(app: &AppHandle) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-fn resolve_officecli_path(app: &AppHandle) -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("RELAY_OFFICECLI_PATH") {
-        let path = PathBuf::from(path);
-        if officecli_capability_ok(app, &path) {
-            return Some(path);
+fn resolve_officecli(app: &AppHandle) -> OfficeCliResolution {
+    let mut failures: Vec<(PathBuf, String)> = Vec::new();
+    let mut missing: Vec<PathBuf> = Vec::new();
+    for path in officecli_candidate_paths(app) {
+        let check = officecli_capability_check(app, &path);
+        if check.ok {
+            return OfficeCliResolution {
+                path: Some(path.clone()),
+                message: format!("OfficeCLI is ready at {}.", path.display()),
+            };
+        }
+        if officecli_candidate_can_exist_as_file(&path) && !path.is_file() {
+            missing.push(path);
+        } else {
+            failures.push((path, check.reason));
         }
     }
+
+    let message = officecli_resolution_failure_message(&failures, missing.len());
+    OfficeCliResolution {
+        path: None,
+        message,
+    }
+}
+
+fn officecli_candidate_paths(app: &AppHandle) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
+    if let Ok(path) = std::env::var("RELAY_OFFICECLI_PATH") {
+        candidates.push(PathBuf::from(path));
+    }
     if let Ok(resource_dir) = app.path().resource_dir() {
         candidates.push(resource_dir.join("relay-tools/officecli/officecli.exe"));
         candidates.push(resource_dir.join("binaries/relay-officecli-win-x64.exe"));
+        candidates.push(resource_dir.join("officecli.exe"));
+    }
+    if let Ok(app_local) = app_local_data_dir(app) {
+        candidates.push(app_local.join("tools/officecli/1.0.92/officecli.exe"));
+    }
+    if let Some(sidecar_dir) = sidecar_base_dir() {
+        candidates.push(sidecar_dir.join("resources/relay-tools/officecli/officecli.exe"));
+        candidates.push(sidecar_dir.join("relay-tools/officecli/officecli.exe"));
+        candidates.push(sidecar_dir.join("binaries/relay-officecli-win-x64.exe"));
     }
     if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
         let manifest_dir = PathBuf::from(manifest_dir);
@@ -447,44 +491,89 @@ fn resolve_officecli_path(app: &AppHandle) -> Option<PathBuf> {
             manifest_dir.join("binaries/.relay-officecli-download-cache/1.0.92/officecli.exe"),
         );
     }
-    if let Some(found) = candidates
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        candidates
+            .push(PathBuf::from(home).join(".relay-agent/tools/officecli/1.0.92/officecli.exe"));
+    }
+    candidates.extend(
+        ["officecli", "officecli.exe"]
+            .into_iter()
+            .map(PathBuf::from),
+    );
+
+    let mut seen = std::collections::HashSet::new();
+    candidates
         .into_iter()
-        .find(|path| officecli_capability_ok(app, path))
-    {
-        return Some(found);
-    }
-    for name in ["officecli", "officecli.exe"] {
-        let path = PathBuf::from(name);
-        if officecli_capability_ok(app, &path) {
-            return Some(path);
-        }
-    }
-    None
+        .filter(|path| {
+            let key = path.display().to_string();
+            seen.insert(key)
+        })
+        .collect()
 }
 
-fn officecli_capability_ok(app: &AppHandle, path: &Path) -> bool {
+fn officecli_candidate_can_exist_as_file(path: &Path) -> bool {
+    path.is_absolute()
+        || path
+            .parent()
+            .is_some_and(|parent| !parent.as_os_str().is_empty())
+}
+
+fn officecli_resolution_failure_message(
+    failures: &[(PathBuf, String)],
+    missing_count: usize,
+) -> String {
+    if let Some((path, reason)) = failures.first() {
+        return format!(
+            "OfficeCLI was found at {}, but it is not ready: {reason}",
+            path.display()
+        );
+    }
+    if missing_count > 0 {
+        return format!(
+            "OfficeCLI was not found in bundled resources, the user-local tool cache, or PATH (checked {missing_count} packaged/cache path(s))."
+        );
+    }
+    "OfficeCLI was not found in bundled resources, the user-local tool cache, or PATH.".to_string()
+}
+
+fn officecli_capability_check(app: &AppHandle, path: &Path) -> OfficeCliCandidateCheck {
     if !executable_ok(path, "--version") {
-        return false;
+        return OfficeCliCandidateCheck {
+            ok: false,
+            reason: "the executable did not run successfully with --version".to_string(),
+        };
     }
     if std::env::var("RELAY_OFFICECLI_SKIP_CAPABILITY_CHECK")
         .ok()
         .as_deref()
         == Some("1")
     {
-        return true;
+        return OfficeCliCandidateCheck {
+            ok: true,
+            reason: "capability check skipped".to_string(),
+        };
     }
     let cache_key = officecli_capability_cache_key(path);
     let cache = OFFICECLI_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(guard) = cache.lock() {
         if let Some(value) = guard.get(&cache_key) {
-            return *value;
+            return value.clone();
         }
     }
-    let ok = officecli_view_smoke_ok(app, path);
+    let check = match officecli_view_smoke_check(app, path) {
+        Ok(()) => OfficeCliCandidateCheck {
+            ok: true,
+            reason: "view smoke test passed".to_string(),
+        },
+        Err(error) => OfficeCliCandidateCheck {
+            ok: false,
+            reason: error,
+        },
+    };
     if let Ok(mut guard) = cache.lock() {
-        guard.insert(cache_key, ok);
+        guard.insert(cache_key, check.clone());
     }
-    ok
+    check
 }
 
 fn officecli_capability_cache_key(path: &Path) -> String {
@@ -498,35 +587,41 @@ fn officecli_capability_cache_key(path: &Path) -> String {
     format!("{}|{}|{}", path.display(), size, modified)
 }
 
-fn officecli_view_smoke_ok(app: &AppHandle, officecli: &Path) -> bool {
+fn officecli_view_smoke_check(app: &AppHandle, officecli: &Path) -> Result<(), String> {
     let temp_root = app_local_data_dir(app)
         .unwrap_or_else(|_| std::env::temp_dir().join("Relay Agent"))
         .join("officecli-smoke");
-    if fs::create_dir_all(&temp_root).is_err() {
-        return false;
-    }
-    let Ok(temp_file) = tempfile::Builder::new()
+    fs::create_dir_all(&temp_root).map_err(|error| {
+        format!(
+            "create OfficeCLI smoke directory at {}: {error}",
+            temp_root.display()
+        )
+    })?;
+    let temp_file = tempfile::Builder::new()
         .prefix("relay-officecli-smoke-")
         .suffix(".xlsx")
         .tempfile_in(&temp_root)
-    else {
-        return false;
-    };
-    if write_officecli_smoke_workbook(temp_file.path()).is_err() {
-        return false;
-    }
+        .map_err(|error| format!("create OfficeCLI smoke workbook tempfile: {error}"))?;
+    write_officecli_smoke_workbook(temp_file.path())?;
     let temp_path = temp_file.path().display().to_string();
     let mut command = Command::new(officecli);
     command
         .args(["view", temp_path.as_str(), "outline", "--json"])
         .stdin(Stdio::null());
     crate::windows_command::no_console_window(&mut command);
-    run_command_with_timeout(
+    let output = run_command_with_timeout(
         command,
         Duration::from_millis(OFFICECLI_SMOKE_TIMEOUT_MS),
         &temp_root,
-    )
-    .is_ok_and(|output| output.success && output.stdout.contains("\"success\""))
+    )?;
+    if output.success && output.stdout.contains("\"success\"") {
+        return Ok(());
+    }
+    Err(format!(
+        "OfficeCLI view smoke test failed; stdout={}; stderr={}",
+        trim_for_error(&output.stdout),
+        trim_for_error(&output.stderr)
+    ))
 }
 
 fn write_officecli_smoke_workbook(path: &Path) -> Result<(), String> {
@@ -638,8 +733,8 @@ fn run_officecli(
     backup_path: Option<PathBuf>,
 ) -> Result<RelayOfficeCommandResponse, String> {
     let started = Instant::now();
-    let officecli = resolve_officecli_path(app)
-        .ok_or_else(|| "OfficeCLI was not found in bundled resources or PATH.".to_string())?;
+    let resolution = resolve_officecli(app);
+    let officecli = resolution.path.ok_or_else(|| resolution.message.clone())?;
     let mut command = Command::new(&officecli);
     command.args(&args).stdin(Stdio::null());
     crate::windows_command::no_console_window(&mut command);
@@ -891,7 +986,11 @@ fn trim_for_error(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{officecli_failure_message, parse_officecli_args, split_command_words};
+    use super::{
+        officecli_failure_message, officecli_resolution_failure_message, parse_officecli_args,
+        split_command_words,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn officecli_parser_preserves_windows_backslashes_inside_quotes() {
@@ -923,5 +1022,20 @@ mod tests {
 
         assert!(message.contains("runtime dependency"));
         assert!(message.contains("OfficeCLI"));
+    }
+
+    #[test]
+    fn officecli_resolution_message_distinguishes_failed_candidate_from_missing_tool() {
+        let message = officecli_resolution_failure_message(
+            &[(
+                PathBuf::from(r#"C:\Relay Agent\resources\relay-tools\officecli\officecli.exe"#),
+                "OfficeCLI view smoke test failed".to_string(),
+            )],
+            4,
+        );
+
+        assert!(message.contains("was found"));
+        assert!(message.contains("not ready"));
+        assert!(message.contains("smoke test failed"));
     }
 }

@@ -65,6 +65,9 @@ export function buildLocalDocumentSearchResultSummary(params: {
   if (params.cards.some((card) => (card.evidenceState || card.matchMode) === "filename_only")) {
     caveats.add("一部または全部の候補はファイル名・パスからの推定で、内容確認は未完了です。");
   }
+  if (params.cards.some((card) => ["concept_candidate", "entity_context_match"].includes(card.evidenceState || ""))) {
+    caveats.add("一部の候補は名称や周辺文脈からの推定で、目的の業務概念そのものは未確定です。");
+  }
   return {
     schemaVersion: SEARCH_RESULT_SCHEMA_VERSION,
     rawQuery: params.rawQuery,
@@ -108,6 +111,7 @@ export function buildDocumentSearchPlanPrompt(params: {
     "- thoroughness must be thorough.",
     "- expandedTerms should include direct synonyms, abbreviations, Japanese variants, English variants, and business aliases that can stand on their own.",
     "- For compound business concepts, keep the user's core concept intact. Example: 部品売上 means parts AND sales, not generic sales alone.",
+    "- Do not add terms that are only company names, department names, or owner names unless the user explicitly asks for that entity.",
     "- supportTerms should include workflow or workpaper terms that improve recall only after the core concept is present.",
     "- demoteTerms should include output/review/backup terms only when those are likely copies rather than source files.",
     "- fileTypeHints may include any, txt, md, csv, docx, xlsx, xlsm, pptx, pdf. Use any unless the user clearly narrows file type.",
@@ -174,7 +178,7 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
     "- Never output file paths. The app will map candidateIds back to local paths.",
     "- A candidateId may appear in at most one category.",
     "- Use at most eight categories and keep labels short.",
-    "- If the evidenceState is filename_only, partial_content_match, or generic_content_match, call it a candidate and do not state that the document content proves relevance.",
+    "- If the evidenceState is filename_only, concept_candidate, entity_context_match, partial_content_match, or generic_content_match, call it a candidate and do not state that the document content proves relevance.",
     "- Do not include markdown, prose outside JSON, tool calls, citations, or fields not shown in the schema.",
     "SNAPSHOT ID:",
     params.snapshotId,
