@@ -96,6 +96,10 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   gating: direct aliases rank highest, component matches must include both the
   parts concept and the sales concept, and support/workflow terms can only
   boost already relevant candidates.
+- Copilot prompt delivery now tolerates Microsoft 365 composer DOM changes:
+  Relay reads prompt text from nested textbox/value/lexical candidates, waits
+  longer before submit, and proceeds when the send button is ready even if the
+  composer text cannot be read back through CDP.
 
 ## Remaining Hardening Tasks
 

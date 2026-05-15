@@ -2,11 +2,11 @@ export function getCopilotPromptTiming({ hadAttachments = false } = {}) {
   const withAttachments = hadAttachments === true;
   return {
     fastInline: !withAttachments,
-    composerReadyDelayMs: withAttachments ? 420 : 120,
+    composerReadyDelayMs: withAttachments ? 520 : 240,
     afterClearDelayMs: withAttachments ? 120 : 40,
-    afterRefocusDelayMs: withAttachments ? 120 : 40,
-    postPasteDelayMs: withAttachments ? 220 : 220,
-    sendButtonStableMs: withAttachments ? 750 : 420,
-    submitConfirmDelayMs: withAttachments ? 700 : 700,
+    afterRefocusDelayMs: withAttachments ? 160 : 90,
+    postPasteDelayMs: withAttachments ? 360 : 420,
+    sendButtonStableMs: withAttachments ? 900 : 700,
+    submitConfirmDelayMs: withAttachments ? 900 : 950,
   };
 }

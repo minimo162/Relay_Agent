@@ -21,6 +21,42 @@
 
 ## Milestone Log
 
+### 2026-05-15 Copilot composer visibility and send timing hardening
+
+Fixed a Copilot send failure where Relay pasted the prompt into the Microsoft
+365 Copilot composer but then rejected the send because the DOM length probe
+reported `visible length 0`. The bridge now measures composer content through
+multiple Microsoft 365 editor shapes: direct `value`, `innerText`,
+`textContent`, nested textarea/input/textbox/contenteditable/Lexical nodes, the
+active composer element, and same-origin frames. This keeps the validation tied
+to the real composer without assuming one fixed DOM shape.
+
+The paste path now waits longer for Microsoft 365 to settle after insertion. If
+the composer text is still not readable but the send button is ready, Relay
+continues with a guarded assumed length instead of failing before submit. The
+submit confirmation path also preserves that assumed composer length so a
+successful send is not misclassified as an empty-composer failure.
+
+The no-attachment and attachment send timing profiles were both made less
+aggressive. This addresses the case where the prompt is visible but Copilot has
+not yet enabled or stabilized the composer/send controls.
+
+The desktop package, Tauri config, and Cargo package version were advanced to
+`0.2.6` for the installer release that contains this fix.
+
+Verification:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.mjs` — pass.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js` — pass.
+- `node --test apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs` — pass, 2 passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_server.test.mjs` — pass, 77 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml copilot_server --lib` — pass, 8 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — pass, 38 passed.
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `git diff --check` — pass.
+- `pnpm check` — pass.
+
 ### 2026-05-15 Copilot organizer ID contract and compound query ranking
 
 Fixed the document-search failure where Copilot could return raw Windows paths

@@ -1702,6 +1702,122 @@ var COMPOSER_DOM_HELPERS = `
     const inner = root.querySelector('[contenteditable="true"]');
     return __raVis(inner) ? inner : root;
   }
+  function __raCleanComposerText(raw) {
+    return String(raw || "")
+      .replace(new RegExp(String.fromCharCode(0x200b), "g"), "")
+      .replace(new RegExp(String.fromCharCode(0xfeff), "g"), "")
+      .trim();
+  }
+  function __raComposerTextLength(el) {
+    if (!el) return 0;
+    let best = "";
+    function consider(raw) {
+      const text = __raCleanComposerText(raw);
+      if (text.length > best.length) best = text;
+    }
+    try {
+      if (typeof el.value === "string") consider(el.value);
+    } catch (_) {}
+    try {
+      consider(el.innerText);
+    } catch (_) {}
+    try {
+      consider(el.textContent);
+    } catch (_) {}
+    try {
+      const descendants = el.querySelectorAll
+        ? el.querySelectorAll('textarea,input,[contenteditable="true"],[role="textbox"],[data-lexical-text="true"],[data-lexical-editor="true"]')
+        : [];
+      for (let i = 0; i < descendants.length && i < 80; i++) {
+        const node = descendants[i];
+        try {
+          if (typeof node.value === "string") consider(node.value);
+        } catch (_) {}
+        try {
+          consider(node.innerText);
+        } catch (_) {}
+        try {
+          consider(node.textContent);
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return best.length;
+  }
+  function __raLooksLikeComposerInput(el) {
+    if (!el || el.nodeType !== 1) return false;
+    try {
+      const tag = String(el.tagName || "").toLowerCase();
+      if (tag === "textarea") return true;
+      if (tag === "input") {
+        const type = String(el.getAttribute("type") || "text").toLowerCase();
+        return ["", "text", "search"].includes(type);
+      }
+      if (el.getAttribute("contenteditable") === "true") return true;
+      if (el.getAttribute("role") === "textbox") return true;
+      if (el.getAttribute("data-lexical-editor") === "true") return true;
+      if (__raComposerLabelHints(el)) return true;
+    } catch (_) {}
+    return false;
+  }
+  function __raComposerVisibleLength() {
+    const candidates = [];
+    function push(el, trusted) {
+      if (el && __raVis(el) && (trusted || __raLooksLikeComposerInput(el))) candidates.push(el);
+    }
+    try {
+      push(__raFindComposerEditable(), true);
+    } catch (_) {}
+    function collect(doc, depth) {
+      if (!doc || depth > 8) return;
+      try {
+        push(doc.activeElement, false);
+      } catch (_) {}
+      try {
+        const scope = doc.querySelector("main") || doc.querySelector('[role="main"]') || doc.body || doc.documentElement;
+        const selectors = [
+          "#m365-chat-editor-target-element",
+          '[data-lexical-editor="true"]',
+          '[role="textbox"][aria-label*="メッセージ"]',
+          '[role="textbox"][aria-label*="Send a message"]',
+          '[role="textbox"][aria-label*="Copilot"]',
+          'textarea',
+          'input[type="text"]',
+          'input:not([type])',
+          'div[role="textbox"][contenteditable="true"]',
+          '[contenteditable="true"]'
+        ];
+        for (let si = 0; si < selectors.length; si++) {
+          let nodes = [];
+          try {
+            nodes = scope ? scope.querySelectorAll(selectors[si]) : [];
+          } catch (_) {
+            nodes = [];
+          }
+          for (let i = 0; i < nodes.length && i < 20; i++) push(nodes[i], true);
+        }
+      } catch (_) {}
+      let frames = [];
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        frames = [];
+      }
+      for (let i = 0; i < frames.length; i++) {
+        try {
+          collect(frames[i].contentDocument, depth + 1);
+        } catch (_) {}
+      }
+    }
+    try {
+      collect(document, 0);
+    } catch (_) {}
+    let best = 0;
+    for (let i = 0; i < candidates.length; i++) {
+      const len = __raComposerTextLength(candidates[i]);
+      if (len > best) best = len;
+    }
+    return best;
+  }
   function __raWalkFindComposerLabeled(root, depth) {
     if (!root || depth > 18) return null;
     if (root.nodeType === 1) {
@@ -2209,14 +2325,7 @@ async function waitForComposer(session) {
 async function getComposerTextLength(session) {
   const r = await session.evaluate(`(() => {
     ${COMPOSER_DOM_HELPERS}
-    function lenOf(el) {
-      if (!el) return 0;
-      const raw = el.innerText || el.textContent || '';
-      const t = raw.replace(new RegExp(String.fromCharCode(0x200b), 'g'), '');
-      return t.trim().length;
-    }
-    const el = __raFindComposerEditable();
-    return lenOf(el);
+    return __raComposerVisibleLength();
   })()`).catch(() => ({ value: 0 }));
   return Number(r.value) || 0;
 }
@@ -2297,12 +2406,6 @@ async function pasteViaSyncBrowserExecCommand(session, text) {
   const res = await session.evaluate(
     `((fullText) => {
       ${COMPOSER_DOM_HELPERS}
-      function lenOf(el) {
-        if (!el) return 0;
-        const raw = el.innerText || el.textContent || "";
-        const t = raw.replace(new RegExp(String.fromCharCode(0x200b), "g"), "");
-        return t.trim().length;
-      }
       const el = __raFindComposerEditable();
       if (!el) return { ok: false, reason: "no_composer", visibleLen: 0 };
       el.focus();
@@ -2326,12 +2429,12 @@ async function pasteViaSyncBrowserExecCommand(session, text) {
         try {
           if (doc.execCommand("insertText", false, slice)) execTrue++;
         } catch (e) {
-          return { ok: false, reason: String(e && e.message ? e.message : e), visibleLen: lenOf(el), execTrue };
+          return { ok: false, reason: String(e && e.message ? e.message : e), visibleLen: __raComposerVisibleLength(), execTrue };
         }
       }
       return {
         ok: true,
-        visibleLen: lenOf(el),
+        visibleLen: __raComposerVisibleLength(),
         codeUnits: units.length,
         execTrue,
       };
@@ -2727,6 +2830,13 @@ async function pastePromptRaw(session, text, options = {}) {
   }
 
   if (text.length >= 20 && !pasteLooksComplete(len, text.length)) {
+    len = await waitForComposerPasteSettle(session, text.length, {
+      maxPollMs: 1600,
+      fallbackMs: 650,
+    });
+  }
+
+  if (text.length >= 20 && !pasteLooksComplete(len, text.length)) {
     const hint = errInsert ? ` CDP insertText error: ${errInsert.message}` : "";
     const floorLong = Math.min(2200, Math.floor(text.length * 0.045));
     if (text.length > 8000 && len >= 700 && len >= floorLong) {
@@ -2736,6 +2846,15 @@ async function pastePromptRaw(session, text, options = {}) {
         "floorLong=",
         floorLong,
       );
+    } else if ((await findSendButtonCenter(session).catch(() => ({ ok: false }))).ok) {
+      const assumedLen = minComposerThresholdForSubmit(text.length);
+      console.error(
+        "[copilot:paste] composer text is not readable but send button is ready; continuing with assumed_len=",
+        assumedLen,
+        "observed_len=",
+        len,
+      );
+      len = assumedLen;
     } else {
       throw new Error(
         `Prompt did not reach Copilot composer (visible length ${len}, expected ~${text.length}).${hint}`
@@ -3017,7 +3136,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     }
   }
 
-  const lenBefore = await getComposerTextLength(session);
+  const lenBefore = Math.max(await getComposerTextLength(session), composerReadyLen);
 
   // Prefer keyboard submit first (fewer brittle send-button selectors / layout deps).
   console.error("[copilot:submit] trying keyboard (Enter)");
@@ -3289,14 +3408,7 @@ async function assertCopilotPageResponsive(session, logPrefix) {
 function copilotDomComposerLenAndGeneratingExpression() {
   return `(() => {
     ${COMPOSER_DOM_HELPERS}
-    function lenOf(el) {
-      if (!el) return 0;
-      const raw = el.innerText || el.textContent || "";
-      const t = raw.replace(new RegExp(String.fromCharCode(0x200b), "g"), "");
-      return t.trim().length;
-    }
-    const cEl = __raFindComposerEditable();
-    const len = lenOf(cEl);
+    const len = __raComposerVisibleLength();
     const generating = ${copilotDomGeneratingIifeExpression()};
     return { len, generating };
   })()`;
