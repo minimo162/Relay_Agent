@@ -21,6 +21,30 @@
 
 ## Milestone Log
 
+### 2026-05-15 CDP page-target WebSocket repair
+
+Fixed a Copilot send failure reported as
+`CDP Runtime.evaluate: {"code":-32601,"message":"'Runtime.evaluate' wasn't found"}`.
+The failure was caused by resolving a Copilot page WebSocket URL through
+`/json/version`, which returns the browser-level `/devtools/browser/...`
+target. Browser targets support `Target.*` commands but not page runtime
+evaluation, so `Runtime.evaluate` failed before Relay could send the search or
+Office prompt.
+
+Relay now preserves the `/devtools/page/...` WebSocket target selected from
+`/json/list` and only normalizes loopback host aliases such as `0.0.0.0`,
+`0.0.36.6`, `localhost`, and `127.0.0.1` to the active debug host. Browser-level
+WebSocket resolution remains limited to browser-scoped commands such as
+`Target.createTarget`. Navigation of an existing blank tab also uses the same
+normalization before connecting.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib` — pass, 7 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `pnpm check` — pass.
+
 ### 2026-05-14 Stable two-layer document search snapshots
 
 Implemented the final document-search direction: no desktop FTS cutover, no

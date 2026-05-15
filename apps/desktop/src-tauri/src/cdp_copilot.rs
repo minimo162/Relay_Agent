@@ -987,7 +987,8 @@ async fn debug_url_matches_relay_profile(debug_url: &str) -> bool {
 }
 
 async fn navigate_page_to_copilot(debug_url: &str, page: &PageInfo) -> Result<PageInfo> {
-    let page_ctx = Ctx::connect(&page.ws_url).await?;
+    let page_ws_url = normalize_cdp_ws_url(debug_url, &page.ws_url);
+    let page_ctx = Ctx::connect(&page_ws_url).await?;
     let mut last_titles = Vec::new();
     for target_url in COPILOT_NAVIGATION_URLS {
         let result = page_ctx
@@ -1299,59 +1300,60 @@ async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
         .as_str()
         .context("missing webSocketDebuggerUrl")?
         .to_string();
-    // Windows may return ws://0.0.36.6/… (IPv4-mapped ::1) or, in some
-    // Edge builds, ws://0.0.0.0:port/… — neither should be used as-is.
-    let url = url.replace("ws://0.0.36.6:", "ws://127.0.0.1:");
-    let url = url.replace("ws://0.0.36.6/", "ws://127.0.0.1/");
-    let url = url.replace("ws://0.0.0.0:", "ws://127.0.0.1:");
-    let url = url.replace("ws://0.0.0.0/", "ws://127.0.0.1/");
-    Ok(url)
+    Ok(normalize_cdp_ws_url(debug_url, &url))
+}
+
+fn cdp_debug_target_host(debug: &str) -> String {
+    let debug_base = debug.trim_end_matches('/');
+    debug_base
+        .strip_prefix("http://")
+        .or_else(|| debug_base.strip_prefix("https://"))
+        .unwrap_or(debug_base)
+        .to_string()
+}
+
+fn cdp_ws_host_is_loopback_alias(host_port: &str) -> bool {
+    if host_port.starts_with("[::1]") {
+        return true;
+    }
+    let host = host_port
+        .rsplit_once('@')
+        .map_or(host_port, |(_, host)| host)
+        .trim_matches(['[', ']'])
+        .split(':')
+        .next()
+        .unwrap_or(host_port)
+        .to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "0.0.36.6" | "::1"
+    )
+}
+
+fn normalize_cdp_ws_url(debug: &str, ws: &str) -> String {
+    let Some((scheme, rest)) = ws
+        .strip_prefix("ws://")
+        .map(|rest| ("ws://", rest))
+        .or_else(|| ws.strip_prefix("wss://").map(|rest| ("wss://", rest)))
+    else {
+        return ws.to_string();
+    };
+
+    let Some((host_port, path)) = rest.split_once('/') else {
+        return ws.to_string();
+    };
+
+    if !cdp_ws_host_is_loopback_alias(host_port) {
+        return ws.to_string();
+    }
+
+    format!("{scheme}{}/{}", cdp_debug_target_host(debug), path)
 }
 
 /// Resolve the actual WebSocket URL for CDP communication.
 /// Handles localhost, 127.0.0.1, 0.0.0.0, and Windows IPv4-mapped `::1` (0.0.36.6) normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
-    let debug_base = debug.trim_end_matches('/');
-    let target_host = debug_base
-        .strip_prefix("http://")
-        .or_else(|| debug_base.strip_prefix("https://"))
-        .unwrap_or(debug_base);
-
-    // If the WS URL already uses a routable (non-loopback) host, use it as-is
-    if ws.starts_with("ws://")
-        && !ws.contains("localhost")
-        && !ws.contains("127.0.0.1")
-        && !ws.contains("0.0.36.6")
-        && !ws.contains("0.0.0.0")
-    {
-        return Ok(ws.into());
-    }
-
-    // Must use a full URL (scheme + host); `127.0.0.1:port` alone is invalid for HTTP clients.
-    let r = cdp_http_client()
-        .get(format!("{debug_base}/json/version"))
-        .send()
-        .await
-        .context("/json/version")?;
-    let v: Value = r.json().await.context("/json/version JSON")?;
-    let url = v["webSocketDebuggerUrl"]
-        .as_str()
-        .context("missing webSocketDebuggerUrl")?
-        .to_string();
-
-    // Force all loopback addresses to the target host:
-    //   ws://localhost/…       -> ws://{target_host}/…
-    //   ws://127.0.0.1/…       -> ws://{target_host}/…
-    //   ws://0.0.36.6/…        -> ws://{target_host}/… (Windows IPv4-mapped ::1)
-    //   ws://0.0.36.6:port/…   -> ws://127.0.0.1:port/… (keep port; target_host may include its own port)
-    //   ws://0.0.0.0/…         -> ws://{target_host}/…
-    //   ws://0.0.0.0:port/…    -> ws://127.0.0.1:port/…
-    let url = url.replace("ws://0.0.36.6:", "ws://127.0.0.1:");
-    let url = url.replace("ws://0.0.0.0:", "ws://127.0.0.1:");
-    let url = url.replace("ws://localhost/", &format!("ws://{target_host}/"));
-    let url = url.replace("ws://127.0.0.1/", &format!("ws://{target_host}/"));
-    let url = url.replace("ws://0.0.36.6/", &format!("ws://{target_host}/"));
-    Ok(url.replace("ws://0.0.0.0/", &format!("ws://{target_host}/")))
+    Ok(normalize_cdp_ws_url(debug, ws))
 }
 
 #[cfg(test)]
@@ -1401,6 +1403,28 @@ mod tests {
         assert!(!args.contains(&"--remote-debugging-port".to_string()));
         assert!(!args.contains(&"0".to_string()));
         assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+    }
+
+    #[test]
+    fn normalize_cdp_ws_url_preserves_page_target_path() {
+        let out = normalize_cdp_ws_url(
+            "http://127.0.0.1:54321",
+            "ws://0.0.0.0:54321/devtools/page/page-target-1",
+        );
+
+        assert_eq!(out, "ws://127.0.0.1:54321/devtools/page/page-target-1");
+        assert!(out.contains("/devtools/page/"));
+        assert!(!out.contains("/devtools/browser/"));
+    }
+
+    #[test]
+    fn normalize_cdp_ws_url_keeps_non_loopback_host() {
+        let out = normalize_cdp_ws_url(
+            "http://127.0.0.1:54321",
+            "ws://192.0.2.10:54321/devtools/page/page-target-1",
+        );
+
+        assert_eq!(out, "ws://192.0.2.10:54321/devtools/page/page-target-1");
     }
 
     #[test]
