@@ -14,6 +14,7 @@ var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);
 var copilot = CopilotTransportFactory.FromEnvironment();
 var tools = new ToolReadiness(copilot);
+var agentRunner = new RelayAgentRunner(copilot, new RelayToolExecutor(options.DataDirectory));
 
 var app = builder.Build();
 app.UseForwardedHeaders(new ForwardedHeadersOptions
@@ -110,15 +111,51 @@ app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellati
     events.Add(RunEvent.Status("Copilot に計画を依頼します", "Relay はツール実行だけを担当し、Copilot の判断結果を検証します。"));
     try
     {
-        var reply = await copilot.SendAsync(BuildRelayPrompt(request), cancellationToken);
-        events.Add(RunEvent.Final("Copilot から応答を取得しました", reply));
+        var result = await agentRunner.RunAsync(request, run.RunId, cancellationToken);
+        events.AddRange(result.Events);
+        return await Finish(run, result.Status, events, cancellationToken, result.PendingApproval);
     }
     catch (Exception ex)
     {
         events.Add(RunEvent.Error("Copilot transport failed", ex.Message));
         return await Finish(run, "failed", events, cancellationToken);
     }
-    return await Finish(run, "completed", events, cancellationToken);
+});
+
+app.MapGet("/api/runs/{runId}", async (string runId, CancellationToken cancellationToken) =>
+{
+    var run = await ledger.LoadAsync(runId, cancellationToken);
+    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(run);
+});
+
+app.MapGet("/api/runs/{runId}/events", async (HttpContext context, string runId, CancellationToken cancellationToken) =>
+{
+    var run = await ledger.LoadAsync(runId, cancellationToken);
+    if (run is null)
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        await context.Response.WriteAsJsonAsync(new ErrorResponse("Run not found."), cancellationToken);
+        return;
+    }
+
+    context.Response.ContentType = "text/event-stream; charset=utf-8";
+    foreach (var runEvent in run.Events)
+    {
+        await context.Response.WriteAsync($"event: {runEvent.Type}\n", cancellationToken);
+        await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Default)}\n\n", cancellationToken);
+        await context.Response.Body.FlushAsync(cancellationToken);
+    }
+});
+
+app.MapPost("/api/runs/{runId}/approve", async (string runId, CancellationToken cancellationToken) =>
+{
+    var run = await ledger.LoadAsync(runId, cancellationToken);
+    if (run is null) return Results.NotFound(new ErrorResponse("Run not found."));
+    if (run.PendingApproval is null) return Results.BadRequest(new ErrorResponse("Run is not waiting for approval."));
+
+    var result = await agentRunner.ApproveAsync(run, cancellationToken);
+    var events = run.Events.Concat(result.Events).ToList();
+    return await Finish(run, result.Status, events, cancellationToken, result.PendingApproval);
 });
 
 app.MapGet("/v1/models", () => Results.Json(new
@@ -157,6 +194,12 @@ if (Directory.Exists(staticRoot))
 {
     app.MapFallback(async context =>
     {
+        if (context.Request.Path.StartsWithSegments("/assets") ||
+            context.Request.Path.Value?.EndsWith('/') == true)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
         var index = Path.Combine(staticRoot, "index.html");
         context.Response.ContentType = "text/html; charset=utf-8";
         await context.Response.SendFileAsync(index);
@@ -177,28 +220,18 @@ Console.WriteLine(JsonSerializer.Serialize(new
 
 await app.RunAsync();
 
-async Task<IResult> Finish(RunRecord run, string status, List<RunEvent> events, CancellationToken cancellationToken)
+async Task<IResult> Finish(RunRecord run, string status, List<RunEvent> events, CancellationToken cancellationToken, PendingApproval? pendingApproval = null)
 {
     run = run with
     {
         Status = status,
-        CompletedAt = DateTimeOffset.UtcNow,
+        CompletedAt = status is "completed" or "failed" or "cancelled" ? DateTimeOffset.UtcNow : null,
         Events = events,
+        PendingApproval = pendingApproval,
     };
     await ledger.AppendAsync(run, cancellationToken);
-    return Results.Json(new RunResponse(run.RunId, status, events));
+    return Results.Json(new RunResponse(run.RunId, status, events, pendingApproval));
 }
-
-static string BuildRelayPrompt(RunRequest request) =>
-    string.Join("\n", [
-        "RELAY AGENT RUN",
-        "You are the planning and synthesis brain. Relay executes local tools.",
-        "Do not claim local execution unless Relay observations prove it.",
-        "Return a concise Japanese answer for the user request.",
-        $"WORKSPACE: {request.Workspace}",
-        "USER REQUEST:",
-        request.Instruction,
-    ]);
 
 static bool RequiresToken(HttpRequest request)
 {
@@ -318,6 +351,7 @@ public sealed class ToolReadiness(ICopilotTransport copilot)
 public sealed class RunLedger(string dataDirectory)
 {
     private readonly string _runDirectory = Path.Combine(dataDirectory, "runs");
+    private readonly string _eventDirectory = Path.Combine(dataDirectory, "run-events");
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     public async Task AppendAsync(RunRecord run, CancellationToken cancellationToken)
@@ -328,17 +362,32 @@ public sealed class RunLedger(string dataDirectory)
         {
             var path = Path.Combine(_runDirectory, $"{run.RunId}.json");
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(run, JsonOptions.Default), cancellationToken);
+            Directory.CreateDirectory(_eventDirectory);
+            var eventPath = Path.Combine(_eventDirectory, $"{run.RunId}.jsonl");
+            var existing = File.Exists(eventPath) ? await File.ReadAllLinesAsync(eventPath, cancellationToken) : [];
+            var previousCount = existing.Length;
+            var nextEvents = run.Events.Skip(previousCount)
+                .Select(runEvent => JsonSerializer.Serialize(runEvent, JsonOptions.Default));
+            await File.AppendAllLinesAsync(eventPath, nextEvents, cancellationToken);
         }
         finally
         {
             _lock.Release();
         }
     }
+
+    public async Task<RunRecord?> LoadAsync(string runId, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(_runDirectory, $"{runId}.json");
+        if (!File.Exists(path)) return null;
+        var text = await File.ReadAllTextAsync(path, cancellationToken);
+        return JsonSerializer.Deserialize<RunRecord>(text, JsonOptions.Default);
+    }
 }
 
 public sealed record RunRequest(string Instruction, string Workspace);
 
-public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events);
+public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events, PendingApproval? PendingApproval = null);
 
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
 
@@ -353,6 +402,7 @@ public sealed record RunEvent(
 {
     public static RunEvent Status(string message, string? detail = null) => new("status", message, detail);
     public static RunEvent Tool(string message, string? detail = null) => new("tool", message, detail);
+    public static RunEvent Approval(string message, string? detail = null) => new("approval", message, detail);
     public static RunEvent Error(string message, string? detail = null) => new("error", message, detail);
     public static RunEvent Final(string message, string? detail = null) => new("final", message, detail);
 }
@@ -363,7 +413,8 @@ public sealed record RunRecord(
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt,
     RunRequest Request,
-    IReadOnlyList<RunEvent> Events)
+    IReadOnlyList<RunEvent> Events,
+    PendingApproval? PendingApproval = null)
 {
     public static RunRecord Start(RunRequest request) =>
         new($"run-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{RandomNumberGenerator.GetHexString(6).ToLowerInvariant()}",

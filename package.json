@@ -6,11 +6,13 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:golden-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "agent:golden-smoke": "node scripts/agent-golden-smoke.mjs",
     "build": "pnpm --filter @relay-agent/workbench build && node scripts/prepare-sidecar-assets.mjs",
     "dev": "pnpm build && dotnet run --project apps/sidecar/Relay.Sidecar.csproj",
     "sidecar:build": "dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release",
     "sidecar:smoke": "node scripts/sidecar-smoke.mjs",
+    "sidecar:security-smoke": "node scripts/sidecar-security-smoke.mjs",
     "sidecar:publish:linux": "dotnet publish apps/sidecar/Relay.Sidecar.csproj --configuration Release --runtime linux-x64 --self-contained true --output dist/relay-agent-linux-x64",
     "sidecar:publish:windows": "dotnet publish apps/sidecar/Relay.Sidecar.csproj --configuration Release --runtime win-x64 --self-contained true --output dist/relay-agent-win-x64",
     "release:inventory": "node scripts/release/collect-inventory.mjs",

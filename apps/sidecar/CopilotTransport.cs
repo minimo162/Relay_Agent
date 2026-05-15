@@ -15,10 +15,16 @@ public static class CopilotTransportFactory
     public static ICopilotTransport FromEnvironment()
     {
         var mock = Environment.GetEnvironmentVariable("RELAY_COPILOT_MOCK_RESPONSE");
+        var mockResponses = Environment.GetEnvironmentVariable("RELAY_COPILOT_MOCK_RESPONSES_JSON");
         var allowMock = Environment.GetEnvironmentVariable("RELAY_ALLOW_MOCK_COPILOT") == "1";
+        if (allowMock && !string.IsNullOrWhiteSpace(mockResponses))
+        {
+            var responses = JsonSerializer.Deserialize<List<string>>(mockResponses, JsonOptions.Default) ?? [];
+            return new MockCopilotTransport(responses.Count > 0 ? responses : [""]);
+        }
         if (allowMock && !string.IsNullOrWhiteSpace(mock))
         {
-            return new MockCopilotTransport(mock);
+            return new MockCopilotTransport([mock]);
         }
 
         var portText = Environment.GetEnvironmentVariable("RELAY_COPILOT_CDP_PORT");
@@ -37,13 +43,18 @@ public sealed class MissingCopilotTransport(string reason) : ICopilotTransport
         throw new InvalidOperationException(reason);
 }
 
-public sealed class MockCopilotTransport(string response) : ICopilotTransport
+public sealed class MockCopilotTransport(IReadOnlyList<string> responses) : ICopilotTransport
 {
+    private int _index;
+
     public Task<ReadinessCheck> CheckAsync(CancellationToken cancellationToken) =>
         Task.FromResult(new ReadinessCheck("copilot-cdp", true, "mock Copilot transport enabled for explicit test run."));
 
-    public Task<string> SendAsync(string prompt, CancellationToken cancellationToken) =>
-        Task.FromResult(response);
+    public Task<string> SendAsync(string prompt, CancellationToken cancellationToken)
+    {
+        var index = Math.Min(Interlocked.Increment(ref _index) - 1, responses.Count - 1);
+        return Task.FromResult(responses[index]);
+    }
 }
 
 public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport

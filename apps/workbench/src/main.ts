@@ -19,8 +19,16 @@ type RunEvent = {
 
 type RunResponse = {
   runId: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "approval_required";
   events: RunEvent[];
+  pendingApproval?: {
+    approvalId: string;
+    toolCall: {
+      id: string;
+      tool: string;
+      args: Record<string, unknown>;
+    };
+  } | null;
 };
 
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
@@ -57,6 +65,7 @@ app.innerHTML = `
         <span id="run-id"></span>
       </div>
       <ol id="events" class="events"></ol>
+      <div id="approval" class="approval-panel" hidden></div>
     </section>
 
     <details class="details">
@@ -72,6 +81,7 @@ const instructionEl = document.querySelector<HTMLTextAreaElement>("#instruction"
 const sendEl = document.querySelector<HTMLButtonElement>("#send")!;
 const refreshEl = document.querySelector<HTMLButtonElement>("#refresh")!;
 const eventsEl = document.querySelector<HTMLOListElement>("#events")!;
+const approvalEl = document.querySelector<HTMLElement>("#approval")!;
 const rawEl = document.querySelector<HTMLPreElement>("#raw")!;
 const runIdEl = document.querySelector<HTMLElement>("#run-id")!;
 
@@ -97,6 +107,26 @@ function renderEvents(events: readonly RunEvent[]): void {
       return item;
     }),
   );
+}
+
+function renderApproval(result: RunResponse): void {
+  approvalEl.replaceChildren();
+  approvalEl.hidden = true;
+  if (!result.pendingApproval) return;
+
+  approvalEl.hidden = false;
+  const title = document.createElement("strong");
+  title.textContent = "実行前に確認してください";
+  const detail = document.createElement("pre");
+  detail.textContent = JSON.stringify(result.pendingApproval.toolCall, null, 2);
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  const approve = document.createElement("button");
+  approve.className = "primary-button";
+  approve.textContent = "実行";
+  approve.addEventListener("click", () => void approveRun(result.runId));
+  actions.append(approve);
+  approvalEl.append(title, detail, actions);
 }
 
 async function refreshStatus(): Promise<void> {
@@ -129,11 +159,36 @@ async function runTask(): Promise<void> {
     const result = (await response.json()) as RunResponse;
     runIdEl.textContent = result.runId;
     renderEvents(result.events);
+    renderApproval(result);
     rawEl.textContent = JSON.stringify(result, null, 2);
   } catch (error) {
     renderEvents([{
       type: "error",
       message: "完了できませんでした",
+      detail: error instanceof Error ? error.message : String(error),
+    }]);
+  } finally {
+    sendEl.disabled = false;
+  }
+}
+
+async function approveRun(runId: string): Promise<void> {
+  sendEl.disabled = true;
+  approvalEl.hidden = true;
+  try {
+    const response = await fetch(api(`/api/runs/${encodeURIComponent(runId)}/approve`), {
+      method: "POST",
+      headers: token ? { "X-Relay-Token": token } : {},
+    });
+    const result = (await response.json()) as RunResponse;
+    runIdEl.textContent = result.runId;
+    renderEvents(result.events);
+    renderApproval(result);
+    rawEl.textContent = JSON.stringify(result, null, 2);
+  } catch (error) {
+    renderEvents([{
+      type: "error",
+      message: "承認後の実行に失敗しました",
       detail: error instanceof Error ? error.message : String(error),
     }]);
   } finally {

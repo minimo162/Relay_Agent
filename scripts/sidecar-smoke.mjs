@@ -14,7 +14,7 @@ const env = {
   RELAY_DATA_DIR: dataDir,
   RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
   RELAY_ALLOW_MOCK_COPILOT: "1",
-  RELAY_COPILOT_MOCK_RESPONSE: "mock Copilot response from sidecar transport",
+  RELAY_COPILOT_MOCK_RESPONSE: JSON.stringify({ action: "final", answer: "mock Copilot response from sidecar transport" }),
 };
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -68,7 +68,7 @@ try {
   });
   if (!completion.ok) throw new Error(`completion endpoint failed: ${completion.status}`);
   const completionJson = await completion.json();
-  if (completionJson.choices?.[0]?.message?.content !== "mock Copilot response from sidecar transport") {
+  if (completionJson.choices?.[0]?.message?.content !== JSON.stringify({ action: "final", answer: "mock Copilot response from sidecar transport" })) {
     throw new Error(`unexpected completion response: ${JSON.stringify(completionJson)}`);
   }
 
@@ -91,6 +91,9 @@ try {
   }
   if (runJson.status !== "completed") {
     throw new Error(`run did not complete through mock Copilot transport: ${JSON.stringify(runJson)}`);
+  }
+  if (!runJson.events.some((event) => event.type === "final" && event.detail === "mock Copilot response from sidecar transport")) {
+    throw new Error(`run did not return final mock answer: ${JSON.stringify(runJson)}`);
   }
   console.log("[sidecar-smoke] ok");
 } finally {

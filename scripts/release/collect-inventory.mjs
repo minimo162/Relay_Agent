@@ -6,6 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "../..");
 const outDir = resolve(root, "dist/release");
 const inventoryPath = resolve(outDir, "relay-release-inventory.json");
+const sbomPath = resolve(outDir, "relay-sbom.json");
 const inputs = [
   "apps/sidecar/Relay.Sidecar.csproj",
   "apps/workbench/package.json",
@@ -42,6 +43,32 @@ const inventory = {
   files,
 };
 
+const rootPackage = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const workbenchPackage = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.json"), "utf8"));
+const sidecarProject = readFileSync(resolve(root, "apps/sidecar/Relay.Sidecar.csproj"), "utf8");
+const dotnetPackages = [...sidecarProject.matchAll(/<PackageReference\s+Include="([^"]+)"\s+Version="([^"]+)"/g)]
+  .map((match) => ({ type: "nuget", name: match[1], version: match[2] }));
+
+const sbom = {
+  schemaVersion: "RelaySbom.v1",
+  generatedAt: inventory.generatedAt,
+  formatNote: "SBOM-style release inventory. Full CycloneDX/SPDX export is a future gate.",
+  packageManager: rootPackage.packageManager,
+  components: [
+    ...Object.entries(rootPackage.devDependencies ?? {}).map(([name, version]) => ({ type: "npm-dev", name, version })),
+    ...Object.entries(workbenchPackage.devDependencies ?? {}).map(([name, version]) => ({ type: "npm-dev", name, version })),
+    ...dotnetPackages,
+    { type: "dotnet", name: "Relay.Sidecar", version: sidecarProject.match(/<Version>([^<]+)<\/Version>/)?.[1] ?? "unknown" },
+  ],
+  bundledBinaries: [
+    { name: "Relay.Sidecar", source: "self-contained dotnet publish" },
+  ],
+  intentionallyExcludedRuntimeFamilies: inventory.excludedLegacyActivePaths,
+  fileHashes: files,
+};
+
 mkdirSync(outDir, { recursive: true });
 writeFileSync(inventoryPath, JSON.stringify(inventory, null, 2));
+writeFileSync(sbomPath, JSON.stringify(sbom, null, 2));
 console.log(`Wrote ${relative(root, inventoryPath)}`);
+console.log(`Wrote ${relative(root, sbomPath)}`);

@@ -289,6 +289,163 @@ Microsoft Agent Framework, AG-UI, ASP.NET Core, and established agent tools.
   allow; otherwise fail readiness visibly with installation guidance. Do not
   silently fall back to slower or weaker implementations.
 
+## 2026-05-16 Web-Researched Requirements Addendum
+
+The following requirements are added after reviewing current Microsoft Agent
+Framework, AG-UI, Edge DevTools Protocol, MCP, OWASP LLM security, and SBOM
+guidance. These are product requirements, not optional polish.
+
+Reference anchors:
+
+- Microsoft Agent Framework human-in-the-loop approval docs:
+  `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`
+- Microsoft Agent Framework 1.0 announcement:
+  `https://devblogs.microsoft.com/agent-framework/microsoft-agent-framework-version-1-0/`
+- Microsoft Agent Framework durable execution docs:
+  `https://learn.microsoft.com/en-us/azure/durable-task/sdks/durable-agents-microsoft-agent-framework`
+- Microsoft Agent Framework + AG-UI demo:
+  `https://devblogs.microsoft.com/agent-framework/ag-ui-multi-agent-workflow-demo/`
+- AG-UI protocol overview:
+  `https://docs.ag-ui.com/introduction`
+- Microsoft Edge DevTools Protocol docs:
+  `https://learn.microsoft.com/en-us/microsoft-edge/devtools/protocol/`
+- ASP.NET Core host filtering docs:
+  `https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/host-filtering`
+- Microsoft Agent Framework MCP guidance:
+  `https://learn.microsoft.com/en-us/agent-framework/agents/tools/local-mcp-tools`
+- MCP client/security best-practice docs:
+  `https://modelcontextprotocol.io/docs/develop/clients/client-best-practices`
+  and
+  `https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices`
+- OWASP LLM06 Excessive Agency:
+  `https://genai.owasp.org/llmrisk/llm062025-excessive-agency/`
+- OpenAI prompt-injection safety overview:
+  `https://openai.com/safety/prompt-injections/`
+- NIST SBOM guidance:
+  `https://www.nist.gov/itl/executive-order-14028-improving-nations-cybersecurity/software-security-supply-chains-software-1`
+
+### Agent harness and event protocol requirements
+
+- Adopt Microsoft Agent Framework in the .NET sidecar as the production harness
+  for the generic agent loop. The sidecar may keep its
+  `/v1/chat/completions` Copilot transport, but the run lifecycle should be
+  owned by Agent Framework sessions, tools, middleware, and approvals rather
+  than by one-off HTTP handlers.
+- Implement the human-in-the-loop contract as a loop, not as a single callback:
+  after each agent run, Relay must inspect whether the framework returned a
+  user-input / approval request; if so, the UI must pause the run, present the
+  approval, and resume the same session only after approve/reject.
+- Use AG-UI-compatible Server-Sent Events for the Workbench run stream unless
+  a specific .NET support gap blocks it. Required event classes:
+  `run_started`, `text_delta`, `tool_call_started`, `tool_call_completed`,
+  `approval_requested`, `approval_resolved`, `artifact_created`, `error`,
+  `cancelled`, and `completed`.
+- Keep the visible UI minimal, but preserve enough typed event metadata for
+  replay, support export, and evaluation. Do not create a second proprietary
+  event stream for the same run.
+- Treat MAF durable execution as an architectural reference, not an Azure
+  dependency. Relay should implement local durable-equivalent behavior first:
+  append-only run ledger, checkpointed session state, pause/resume,
+  cancellation, terminal states, and retention/TTL cleanup in user-local data.
+
+### Governance, security, and prompt-injection requirements
+
+- Enforce action-layer governance before every tool execution. Relay must
+  evaluate tool name, arguments, workspace scope, write/mutation status,
+  approval state, rate limits, and policy before execution. Copilot prompts are
+  not a security boundary.
+- Minimize agency by default:
+  - expose only the generic tools required for the task;
+  - keep unrestricted shell absent from the default catalog;
+  - require explicit approval for all writes, Office mutations, external
+    network access, and future shell execution;
+  - fail closed when tool selection or arguments are invalid.
+- Treat all file contents, tool outputs, MCP/tool descriptions, and Copilot
+  responses as untrusted data. They may be summarized or inspected, but they
+  must never be allowed to change Relay policy, enable tools, bypass approval,
+  change workspace scope, or alter system instructions.
+- Add an explicit prompt-injection test corpus:
+  local documents that instruct the agent to ignore policy, leak paths, enable
+  shell, edit unrelated files, or exfiltrate content must not change Relay's
+  execution policy.
+- Add sensitive-data controls:
+  support bundles redact or clearly flag local paths and omit document content
+  by default; logs store tool metadata and bounded snippets only unless the
+  user explicitly opts into full-content export.
+- Strengthen localhost web security:
+  keep loopback binding; require the launch token on APIs and event streams;
+  validate `Host` and `Origin`; reject unauthenticated API calls; disable
+  directory listing; and serve only the built static bundle.
+
+### Tool discovery, MCP, and external tool requirements
+
+- Keep the initial production catalog small: `rg_files`, `rg_search`, `read`,
+  `officecli`, `edit`, `write`, `ask_user`, and `final`.
+- Add progressive tool discovery only when the catalog grows beyond the small
+  always-on set. If adopted, expose a stable meta-tool such as `search_tools`
+  and inject full schemas only for selected tool families. Do not churn the
+  whole tool list every turn.
+- MCP is not part of the first production tool surface. If later adopted:
+  - allow only trusted, local, explicitly configured MCP servers by default;
+  - never auto-install or auto-connect remote MCP servers;
+  - log and audit every server, tool list, schema change, and tool call;
+  - treat sessions as state handles, not authentication;
+  - apply the same Relay approval and workspace policy to MCP tool calls as to
+    built-in tools.
+- Do not expose programmatic/code-mode tool calling until Relay has a sandbox
+  design. The MCP guidance shows why code-mode can reduce token usage, but it
+  requires a real sandbox and must not become an implicit unrestricted shell.
+
+### Copilot CDP reliability requirements
+
+- Treat Edge CDP as a browser automation transport, not a stable Microsoft 365
+  Copilot product API. Every release must include a live canary or manually
+  recorded validation showing:
+  - Copilot tab discovery or creation;
+  - prompt paste reaches the composer;
+  - send action succeeds;
+  - stop/send button lifecycle or feed update is observed;
+  - response extraction returns only the assistant answer, not sidebar/history
+    chrome.
+- Add DOM-contract regression fixtures from successful live sessions. The
+  sidecar should keep selector candidates versioned and tested against saved
+  feed/composer snippets so future Copilot DOM changes fail in CI before
+  release when possible.
+- Add visible CDP failure classes:
+  `edge_not_running`, `cdp_unreachable`, `copilot_not_signed_in`,
+  `composer_not_ready`, `prompt_not_pasted`, `send_unavailable`,
+  `response_timeout`, and `response_parse_failed`.
+- Start Edge/Copilot lazily and independently from Workbench first paint, but
+  prewarm as soon as the user focuses the composer or starts a run. The UI must
+  show `Copilot 接続中` rather than appearing frozen.
+
+### Evaluation and release-readiness requirements
+
+- Add a golden evaluation suite for the unified agent runner. Minimum cases:
+  - file search chooses `rg_files`/`rg_search`/`read` and does not use
+    Microsoft 365 built-in search;
+  - Office inspection uses `officecli view` and Office mutation pauses for
+    approval before execution;
+  - code editing reads relevant files and proposes exact validated edits;
+  - invalid tool names or invalid arguments stop visibly;
+  - prompt-injected file content cannot change policy;
+  - repeated Copilot answer text does not cause stale response extraction.
+- Evaluate tool calls on correctness, argument validity, intent alignment,
+  dependency ordering, failure handling, and traceability. These criteria must
+  be captured in machine-readable test output, not only manual notes.
+- Add release canaries:
+  - mock Copilot path for deterministic CI;
+  - live signed-in Copilot CDP path when a signed-in Edge session is available;
+  - OfficeCLI smoke on each packaged platform where OfficeCLI is supported;
+  - ripgrep smoke from packaged resources and PATH.
+- Generate a release SBOM or SBOM-style inventory in addition to the current
+  release inventory. It must include direct dependencies, bundled binaries,
+  hashes, versions, license/source notes, and an explicit list of intentionally
+  excluded legacy runtimes.
+- Make `docs/IMPLEMENTATION.md` record each requirement-level verification
+  command and result. A task is not complete until the artifact or test output
+  exists.
+
 ## Unified Workbench UX Plan
 
 The integrated UX should feel like a quiet professional workbench, not a
@@ -569,26 +726,58 @@ must be deleted or archived when the hard cutover reaches parity.
      observations.
    - Stop on validation failure; do not route to old search, Office, or code
      runners as fallback.
-5. Migrate all capabilities onto the common agent runner:
+5. Implement the Agent Framework runner, approval loop, and governance layer:
+   - Replace the current one-shot `/api/runs` placeholder flow with a bounded
+     Agent Framework session loop that uses the sidecar Copilot transport.
+   - Add Agent Framework tool wrappers for the generic Relay tools.
+   - Add middleware/policy checks for allowed tools, workspace scope, mutation
+     approval, rate limits, and audit logging.
+   - Implement framework approval-request handling as a pause/resume flow in
+     the same run session.
+   - Stream run events to the Workbench through the AG-UI-compatible event
+     envelope.
+6. Add durable local run state:
+   - Append every user message, Copilot step, tool call, observation,
+     approval, artifact, error, and final answer to a run ledger under
+     user-local Relay data.
+   - Support cancellation and terminal states.
+   - On restart, display incomplete runs as recoverable history, not active
+     hidden work.
+   - Add retention/TTL cleanup for stale ledgers, temp files, and support
+     bundles.
+7. Migrate all capabilities onto the common agent runner:
    - File discovery/search through `rg_files`, `rg_search`, and `read`.
    - Office inspection/editing through `officecli` semantic operations and
      Relay-compiled commands.
    - Code inspection/editing through `rg_*`, `read`, `edit`, and `write`.
    - Remove the old per-mode runners after parity, not leave them callable.
-6. Replace packaging:
+8. Add Copilot CDP reliability hardening:
+   - Version and test composer/feed selectors against saved DOM fixtures.
+   - Add failure classes for Edge/CDP/Copilot readiness and prompt delivery.
+   - Keep live signed-in CDP canary scripts for release validation.
+   - Ensure response extraction never returns sidebar, history, suggestion, or
+     empty assistant-turn text as the model answer.
+9. Add security and prompt-injection regression tests:
+   - Add fixture documents that attempt to override Relay policy.
+   - Prove untrusted file/tool output cannot enable tools, bypass approvals,
+     expand workspace scope, or alter system instructions.
+   - Prove support bundle export redacts or omits sensitive content by default.
+10. Replace packaging:
    - Remove Tauri release workflow as an active release path.
    - Package the .NET sidecar and static web assets for Windows and Linux.
    - Provide launchers that start the sidecar, open the localhost workbench,
      and shut down cleanly.
    - Keep all app data, cache, logs, and temp files in user-local Relay
      directories.
-7. Delete active obsolete code:
+   - Generate SBOM/SBOM-style release inventory with hashes, versions,
+     licenses/source notes, and intentionally excluded legacy runtimes.
+11. Delete active obsolete code:
    - Remove AionUi overlay code, OpenCode/OpenWork provider gateway code,
      Tauri shell/IPC/resources/workflows, and old high-level workflow runners
      once the new path is wired.
    - Archive historical docs only when useful; do not keep active package
      scripts or tests that exercise removed runtime paths.
-8. Verify the hard cutover:
+12. Verify the hard cutover:
    - Playwright screenshots for the browser-hosted workbench at desktop and
      narrow widths: empty, running, result, approval, error.
    - Linux and Windows E2E for startup, browser launch, Copilot connection,
@@ -607,7 +796,10 @@ must be deleted or archived when the hard cutover reaches parity.
      paths are removed.
    - Failure-path tests proving invalid Copilot/tool output stops with visible
      errors and does not invoke fallback execution.
-9. Complete the Relay rebranding cleanup:
+   - Golden agent evaluations for tool choice correctness, argument validity,
+     intent alignment, dependency ordering, failure handling, traceability, and
+     prompt-injection resistance.
+13. Complete the Relay rebranding cleanup:
    - Rename Relay-owned archive prompt files currently named
      `docs/archive/CODEX_PROMPT_*.md` / `docs/archive/codex_*.md` to
      `RELAY_PROMPT_*.md` / `relay_*.md`, preserving history in Git rather than
@@ -622,7 +814,7 @@ must be deleted or archived when the hard cutover reaches parity.
      about third-party behavior.
    - Add a verification note showing the remaining `codex` / `Codex` matches
      are only upstream references or intentionally archived historical wording.
-10. Add a corporate-compliance packaging review:
+14. Add a corporate-compliance packaging review:
    - Inventory every installer resource, executable, npm package, generated
      file, config directory, environment variable, and runtime process name that
      contains `codex`, `Codex`, OpenAI, OpenCode, or OpenWork terminology.
@@ -638,7 +830,7 @@ must be deleted or archived when the hard cutover reaches parity.
      artifacts.
    - Add a release verification artifact that lists remaining matches and their
      classification, plus the reason each one is acceptable for installation.
-11. Evaluate Ollama as an optional approved local utility, without making it a
+15. Evaluate Ollama as an optional approved local utility, without making it a
    second agent brain:
    - Confirm which Ollama capabilities are approved for use in the corporate
      environment: local REST API, OpenAI-compatible endpoints, structured
@@ -660,10 +852,35 @@ must be deleted or archived when the hard cutover reaches parity.
 
 ## Verification Gates
 
-- `pnpm --filter @relay-agent/desktop typecheck`
-- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
 - `pnpm check`
-- `pnpm --filter @relay-agent/desktop prep:tauri-bundle`
+- `pnpm release:inventory`
+- Workbench visual smoke: browser-hosted local UI screenshots for empty,
+  running, approval, completed, and error states.
+- Sidecar security smoke:
+  - loopback-only binding;
+  - launch token required;
+  - Host/Origin rejection;
+  - unauthenticated API/event-stream rejection;
+  - static directory listing unavailable.
+- Agent runner golden evaluations:
+  - correct tool family chosen;
+  - arguments valid and workspace-scoped;
+  - mutation pauses for approval;
+  - invalid Copilot output stops visibly;
+  - prompt-injected file/tool content cannot change policy.
+- CDP reliability gates:
+  - mock Copilot path for CI;
+  - live signed-in Edge/CDP exact-response canary when available;
+  - saved DOM fixture tests for composer/feed extraction.
+- Tool readiness gates:
+  - packaged ripgrep smoke;
+  - OfficeCLI `view outline --json` smoke where OfficeCLI is supported;
+  - OfficeCLI smoke file cleanup and retry on transient sharing violations.
+- Release supply-chain gates:
+  - sidecar Windows/Linux self-contained publish;
+  - release inventory;
+  - SBOM/SBOM-style dependency and binary inventory;
+  - legacy runtime exclusion inventory.
 - .NET Agent Framework sidecar smoke, if adopted:
   - local mock `/v1/chat/completions` returns expected agent response;
   - live `copilot_server.js` -> Edge CDP -> M365 Copilot returns expected

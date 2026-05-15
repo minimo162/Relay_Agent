@@ -26,6 +26,102 @@
 
 ## Milestone Log
 
+### 2026-05-16 web-researched requirements addendum
+
+Updated `PLANS.md` with additional requirements after reviewing current public
+guidance and reference designs:
+
+- Microsoft Agent Framework human-in-the-loop approvals: Relay must inspect
+  and resume approval requests as a loop, not treat approval as a one-shot UI
+  callback.
+- Microsoft Agent Framework 1.0 / durable workflow guidance: Relay should move
+  the active runner into the .NET Agent Framework sidecar, while implementing
+  local durable-equivalent run ledgers, checkpoints, pause/resume,
+  cancellation, and retention instead of depending on Azure hosting.
+- AG-UI guidance: the Workbench should use an AG-UI-compatible event stream for
+  runs and avoid maintaining a parallel proprietary stream for the same
+  lifecycle.
+- OWASP LLM / prompt-injection guidance: Relay must enforce action-layer
+  governance, treat file/tool/model content as untrusted data, minimize agency,
+  require approval for high-impact actions, and add prompt-injection fixtures.
+- MCP guidance: MCP is not part of the first production tool surface. If added
+  later, it must be trusted/local/explicit, audited, progressively discovered,
+  and governed by the same Relay tool policy.
+- Edge DevTools Protocol guidance: CDP remains browser automation, not a stable
+  M365 Copilot product API. Release readiness now requires canaries and DOM
+  fixture tests for composer/feed extraction.
+- NIST SBOM guidance: release requirements now include SBOM/SBOM-style
+  inventory beyond the current release inventory.
+- Microsoft multi-agent reference architecture: golden evaluations now require
+  tool-choice correctness, argument validity, intent alignment, dependency
+  ordering, failure handling, and traceability.
+
+Sources reviewed:
+
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`
+- `https://devblogs.microsoft.com/agent-framework/microsoft-agent-framework-version-1-0/`
+- `https://learn.microsoft.com/en-us/azure/durable-task/sdks/durable-agents-microsoft-agent-framework`
+- `https://docs.ag-ui.com/introduction`
+- `https://devblogs.microsoft.com/agent-framework/ag-ui-multi-agent-workflow-demo/`
+- `https://learn.microsoft.com/en-us/microsoft-edge/devtools/protocol/`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/local-mcp-tools`
+- `https://modelcontextprotocol.io/docs/develop/clients/client-best-practices`
+- `https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices`
+- `https://genai.owasp.org/llmrisk/llm062025-excessive-agency/`
+- `https://openai.com/safety/prompt-injections/`
+- `https://www.nist.gov/itl/executive-order-14028-improving-nations-cybersecurity/software-security-supply-chains-software-1`
+- `https://microsoft.github.io/multi-agent-reference-architecture/docs/evaluation/ToolCall.html`
+
+Verification:
+
+- Documentation-only planning update; no runtime tests run.
+
+### 2026-05-16 generic runner, approvals, and release gates
+
+Implemented the first executable slice of the web-researched requirements:
+
+- Added a bounded sidecar agent runner that asks Copilot for one strict JSON
+  next action at a time and validates the result before execution.
+- Added a generic local tool executor for `rg_files`, `rg_search`, `read`,
+  `officecli`, `edit`, `write`, and `ask_user`.
+- Enforced workspace containment, unknown-tool rejection, required argument
+  checks, size limits for direct reads, exact-once edit validation, and
+  approval-before-mutation for `officecli`, `edit`, and `write`.
+- Treats `officecli view` as read-only, while OfficeCLI mutations, exact edits,
+  and writes require approval.
+- Creates user-local backup files and `RelayBackupManifest.v1` manifests before
+  mutating existing Office/code/text files.
+- Added pending approval persistence and `/api/runs/{runId}/approve` so write
+  tools pause and resume through the same run record.
+- Added `/api/runs/{runId}` and `/api/runs/{runId}/events` for replayable
+  run state and event-stream style consumption.
+- Extended the Workbench to render approval cards and execute approved pending
+  operations.
+- Added append-only `.jsonl` event artifacts alongside the run snapshot in
+  user-local Relay data.
+- Strengthened static serving so asset directory paths do not fall through to
+  the SPA fallback.
+- Added golden smoke coverage for Copilot tool choice, `rg_files` execution,
+  approval-required write behavior, approval execution, and final synthesis.
+- Added sidecar security smoke coverage for launch token, Host rejection,
+  Origin rejection, and static directory listing/fallback rejection.
+- Extended the release inventory script to emit `relay-sbom.json`, an
+  SBOM-style dependency/binary inventory with hashes and excluded legacy
+  runtime families.
+- Added the new golden/security/inventory gates to root `pnpm check`.
+
+Verification command run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+```
+
+Result:
+
+- Passed. Covered hard-cut guard, Workbench typecheck/build, sidecar Release
+  build, sidecar smoke, agent golden smoke, sidecar security smoke, and release
+  inventory/SBOM generation.
+
 ### 2026-05-16 unified workbench architecture and UX plan
 
 Updated `PLANS.md` to capture the current product direction:
