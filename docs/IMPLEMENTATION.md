@@ -26,6 +26,61 @@
 
 ## Milestone Log
 
+### 2026-05-16 OfficeCLI optional readiness hardening
+
+Implemented the OfficeCLI readiness fix for the unified sidecar Workbench:
+
+- Added a sidecar `ToolResolver` for `ripgrep` and `officecli`.
+- `ripgrep` remains required for the generic local tool catalog.
+- `officecli` is now an optional capability for overall readiness, so a
+  missing or failed OfficeCLI install no longer puts the whole Workbench into
+  `Limited` when Copilot and required tools are ready.
+- OfficeCLI execution now uses the same resolver as readiness and fails at the
+  Office tool boundary with a clear missing-tool detail when OfficeCLI is not
+  available.
+- OfficeCLI readiness now checks `--version` and, when a candidate exists, a
+  real `view <smoke.xlsx> outline --json` smoke workbook created in Relay's
+  user-local data directory.
+- The smoke workbook path is unique, closed before OfficeCLI is launched,
+  retried on transient sharing violations, and pruned best-effort.
+- Windows release packaging now copies the bundled OfficeCLI binary into
+  `relay-tools/officecli/officecli.exe`, and the release inventory can include
+  bundled tool files when a publish output is present.
+- The Workbench readiness pill shows `Ready` based on required checks and
+  keeps optional OfficeCLI failures in the collapsed details/tooltip.
+- Strengthened the Copilot sidecar path while validating the readiness fix:
+  placeholder final answers such as `Japanese answer` are rejected instead of
+  being shown as successful completions, CDP prompt insertion uses
+  `Input.insertText`, and fresh Copilot target creation is available only when
+  explicitly requested with `RELAY_COPILOT_FRESH_TARGET=1`.
+
+Verification commands run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:smoke
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+```
+
+Results:
+
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release`:
+  passed.
+- `pnpm sidecar:smoke`: passed and confirmed OfficeCLI is reported as an
+  optional readiness check.
+- `pnpm check`: passed.
+- `pnpm workbench:ux-e2e`: passed. Reported `search=216ms` and
+  `approval=110ms`.
+
+Live Copilot note:
+
+- `RELAY_LIVE_COPILOT_CDP_PORT=9360 pnpm workbench:live-copilot-e2e` was run
+  during validation. It confirmed the readiness pill now reaches `Ready` even
+  when OfficeCLI is missing, but the live run still failed later on Copilot
+  plan validity / send-state behavior. That is not an OfficeCLI readiness
+  blocker, and remains a separate Copilot CDP robustness issue.
+
 ### 2026-05-16 web-researched requirements addendum
 
 Updated `PLANS.md` with additional requirements after reviewing current public

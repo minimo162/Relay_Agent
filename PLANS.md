@@ -135,6 +135,10 @@ The next architecture target is a **generic Relay Workbench**:
   is still open. Smoke workbooks must be written to a unique app-local path,
   closed before launching OfficeCLI, retried briefly on transient sharing
   violations, and cleaned up after the check.
+- OfficeCLI is an optional capability for overall agent readiness. Missing or
+  failed OfficeCLI must not put the whole Workbench into `Limited` when
+  Copilot and required search/tool execution are ready. Office tasks still fail
+  clearly at execution time if OfficeCLI cannot be resolved or pass smoke.
 - Code editing: M365 Copilot may inspect through `rg_files`, `rg_search`, and
   `read`, then propose validated exact-string replacements through `edit` or
   new-file writes through `write`. Relay validates workspace-relative paths,

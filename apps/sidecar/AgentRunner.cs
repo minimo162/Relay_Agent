@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -21,6 +20,11 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
 
             if (plan.Action == "final")
             {
+                if (IsPlaceholderFinalAnswer(plan.Answer))
+                {
+                    events.Add(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
+                    return new AgentRunResult("failed", events, null);
+                }
                 events.Add(RunEvent.Final("完了しました", plan.Answer ?? ""));
                 return new AgentRunResult("completed", events, null);
             }
@@ -109,6 +113,9 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "Allowed tool names: rg_files, rg_search, read, officecli, edit, write, ask_user.",
             "Rules:",
             "- Do not copy placeholder text from these instructions.",
+            "- Never answer with placeholder text such as `Japanese answer`, `answer`, or `final answer`.",
+            "- If the user's request can be satisfied without tools, return action=\"final\" with the real user-facing answer immediately.",
+            "- If the user requested an exact phrase or exact JSON answer, put that exact requested content in `answer`.",
             "- Relay executes tools locally. You do not execute or claim execution.",
             "- Use rg_files or rg_search before read unless the exact file path is already known.",
             "- Use read for exact files only.",
@@ -123,9 +130,15 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             JsonSerializer.Serialize(observations, JsonOptions.Default),
             "Return the next JSON object now.",
         ]);
+
+    private static bool IsPlaceholderFinalAnswer(string? answer)
+    {
+        var normalized = (answer ?? "").Trim().Trim('"').ToLowerInvariant();
+        return normalized is "" or "answer" or "final answer" or "japanese answer" or "your actual concise answer to the user";
+    }
 }
 
-public sealed class RelayToolExecutor(string dataDirectory)
+public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolResolver)
 {
     private static readonly HashSet<string> ReadTools = ["rg_files", "rg_search", "read", "ask_user"];
     private static readonly HashSet<string> WriteTools = ["officecli", "edit", "write"];
@@ -202,14 +215,20 @@ public sealed class RelayToolExecutor(string dataDirectory)
         }
     }
 
-    private static async Task<ToolObservation> RgFilesAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    private async Task<ToolObservation> RgFilesAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
+        var rg = toolResolver.ResolveRipgrep();
+        if (!rg.Available || string.IsNullOrWhiteSpace(rg.ExecutablePath))
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, rg.Detail);
+        }
+
         var contains = GetString(call.Args, "contains");
         var glob = GetString(call.Args, "glob");
         var limit = GetInt(call.Args, "limit") ?? 50;
         var args = new List<string> { "--files" };
         if (!string.IsNullOrWhiteSpace(glob)) args.AddRange(["-g", glob]);
-        var result = await RunProcessAsync("rg", args, workspace, cancellationToken);
+        var result = await RunProcessAsync(rg.ExecutablePath, args, workspace, cancellationToken);
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
 
         var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -219,14 +238,20 @@ public sealed class RelayToolExecutor(string dataDirectory)
         return ToolObservation.Ok(call.Id, call.Tool, $"{lines.Length} file candidates", lines);
     }
 
-    private static async Task<ToolObservation> RgSearchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    private async Task<ToolObservation> RgSearchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
+        var rg = toolResolver.ResolveRipgrep();
+        if (!rg.Available || string.IsNullOrWhiteSpace(rg.ExecutablePath))
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, rg.Detail);
+        }
+
         var pattern = GetString(call.Args, "pattern") ?? "";
         var glob = GetString(call.Args, "glob");
         var limit = GetInt(call.Args, "limit") ?? 80;
         var args = new List<string> { "--line-number", "--color", "never", "--fixed-strings", pattern };
         if (!string.IsNullOrWhiteSpace(glob)) args.InsertRange(0, ["-g", glob]);
-        var result = await RunProcessAsync("rg", args, workspace, cancellationToken, allowExitOne: true);
+        var result = await RunProcessAsync(rg.ExecutablePath, args, workspace, cancellationToken, allowExitOne: true);
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
         var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Take(Math.Clamp(limit, 1, 200))
@@ -253,6 +278,12 @@ public sealed class RelayToolExecutor(string dataDirectory)
 
     private async Task<ToolObservation> OfficeCliAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
+        var officeCli = toolResolver.ResolveOfficeCli();
+        if (!officeCli.Available || string.IsNullOrWhiteSpace(officeCli.ExecutablePath))
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, $"OfficeCLI is not available: {officeCli.Detail}");
+        }
+
         var filePath = ResolveWorkspacePath(workspace, GetString(call.Args, "filePath") ?? "");
         var operation = GetString(call.Args, "operation") ?? "view";
         var command = GetString(call.Args, "command") ?? "outline";
@@ -264,7 +295,7 @@ public sealed class RelayToolExecutor(string dataDirectory)
         var args = operation == "view"
             ? new List<string> { "view", filePath, command, "--json" }
             : [operation, filePath, command, "--json"];
-        var result = await RunProcessAsync("officecli", args, workspace, cancellationToken);
+        var result = await RunProcessAsync(officeCli.ExecutablePath, args, workspace, cancellationToken);
         return result.Success
             ? ToolObservation.Ok(call.Id, call.Tool, backupPath is null ? "OfficeCLI completed" : $"OfficeCLI completed; backup={backupPath}", Truncate(result.Output, 12000))
             : ToolObservation.Fail(call.Id, call.Tool, result.Output);
@@ -383,21 +414,7 @@ public sealed class RelayToolExecutor(string dataDirectory)
         CancellationToken cancellationToken,
         bool allowExitOne = false)
     {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo
-        {
-            FileName = fileName,
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
-        process.Start();
-        var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        var success = process.ExitCode == 0 || (allowExitOne && process.ExitCode == 1);
-        return new ProcessResult(success, string.Join("\n", [stdout, stderr]).Trim());
+        return await RelayProcess.RunAsync(fileName, args, workingDirectory, cancellationToken, allowExitOne);
     }
 }
 

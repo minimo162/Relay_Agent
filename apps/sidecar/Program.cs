@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,8 +12,9 @@ var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);
 var copilot = CopilotTransportFactory.FromEnvironment();
-var tools = new ToolReadiness(copilot);
-var agentRunner = new RelayAgentRunner(copilot, new RelayToolExecutor(options.DataDirectory));
+var toolResolver = new ToolResolver(options.DataDirectory);
+var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
+var agentRunner = new RelayAgentRunner(copilot, new RelayToolExecutor(options.DataDirectory, toolResolver));
 
 var app = builder.Build();
 app.UseForwardedHeaders(new ForwardedHeadersOptions
@@ -68,7 +68,7 @@ app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
     return Results.Json(new StatusResponse(
         App: "Relay Agent",
         Version: version,
-        Ready: checks.All(check => check.Ready),
+        Ready: checks.Where(check => check.Required).All(check => check.Ready),
         Checks: checks));
 });
 
@@ -92,19 +92,20 @@ app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellati
         return await Finish(run, "failed", events, cancellationToken);
     }
 
-    events.Add(RunEvent.Status("準備状態を確認しています", "Copilot、ripgrep、OfficeCLI、workspace access を確認しています。"));
+    events.Add(RunEvent.Status("準備状態を確認しています", "Copilot、ripgrep、workspace access を確認しています。OfficeCLI は Office 操作時だけ必要です。"));
     var checks = await tools.CheckAllAsync(cancellationToken);
     foreach (var check in checks)
     {
-        events.Add(RunEvent.Tool(check.Name, check.Ready ? "ready" : check.Detail));
+        var requiredLabel = check.Required ? "required" : "optional";
+        events.Add(RunEvent.Tool(check.Name, check.Ready ? $"ready ({requiredLabel})" : $"{check.Detail} ({requiredLabel})"));
     }
 
-    var copilotReady = checks.FirstOrDefault(check => check.Name == "copilot-cdp")?.Ready == true;
-    if (!copilotReady)
+    var requiredFailures = checks.Where(check => check.Required && !check.Ready).ToArray();
+    if (requiredFailures.Length > 0)
     {
         events.Add(RunEvent.Error(
-            "Copilot transport is not ready",
-            "M365 Copilot via Edge CDP が未設定です。Relay はローカル実行にフォールバックしません。"));
+            "必須ツールが未準備です",
+            string.Join("\n", requiredFailures.Select(check => $"{check.Name}: {check.Detail}"))));
         return await Finish(run, "failed", events, cancellationToken);
     }
 
@@ -310,42 +311,17 @@ public sealed record RelayOptions(
     }
 }
 
-public sealed class ToolReadiness(ICopilotTransport copilot)
+public sealed class ToolReadiness(ICopilotTransport copilot, ToolResolver resolver, string dataDirectory)
 {
     public async Task<IReadOnlyList<ReadinessCheck>> CheckAllAsync(CancellationToken cancellationToken)
     {
         var checks = new List<ReadinessCheck>
         {
-            CheckExecutable("ripgrep", "rg", "--version"),
-            CheckExecutable("officecli", "officecli", "--version"),
+            await ToolReadinessChecks.CheckExecutableAsync(resolver.ResolveRipgrep(), ["--version"], AppContext.BaseDirectory, cancellationToken),
+            await ToolReadinessChecks.CheckOfficeCliAsync(resolver.ResolveOfficeCli(), dataDirectory, cancellationToken),
             await copilot.CheckAsync(cancellationToken),
         };
         return checks;
-    }
-
-    private static ReadinessCheck CheckExecutable(string name, string fileName, string argument)
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = fileName,
-                ArgumentList = { argument },
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
-            if (process is null) return new ReadinessCheck(name, false, $"{fileName} could not start.");
-            if (!process.WaitForExit(5000))
-            {
-                process.Kill(entireProcessTree: true);
-                return new ReadinessCheck(name, false, $"{fileName} timed out.");
-            }
-            return new ReadinessCheck(name, process.ExitCode == 0, process.ExitCode == 0 ? "ready" : $"{fileName} exited {process.ExitCode}.");
-        }
-        catch (Exception ex)
-        {
-            return new ReadinessCheck(name, false, ex.Message);
-        }
     }
 }
 
@@ -392,7 +368,7 @@ public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunE
 
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
 
-public sealed record ReadinessCheck(string Name, bool Ready, string Detail);
+public sealed record ReadinessCheck(string Name, bool Ready, string Detail, bool Required = true);
 
 public sealed record ErrorResponse(string Error);
 

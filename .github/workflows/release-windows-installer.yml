@@ -89,7 +89,21 @@ jobs:
             --runtime "${{ matrix.rid }}" \
             --self-contained true \
             --output "dist/relay-agent-${{ matrix.rid }}"
-          pnpm release:inventory
+
+      - name: Bundle OfficeCLI on Windows
+        if: matrix.rid == 'win-x64'
+        shell: pwsh
+        run: |
+          $source = "apps/desktop/src-tauri/binaries/relay-officecli-win-x64.exe"
+          if (!(Test-Path $source)) {
+            throw "Bundled OfficeCLI source was not found: $source"
+          }
+          $target = "dist/relay-agent-${{ matrix.rid }}/relay-tools/officecli"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item $source "$target/officecli.exe" -Force
+
+      - name: Collect release inventory
+        run: pnpm release:inventory
 
       - name: Create zip asset
         if: matrix.archive == 'zip'

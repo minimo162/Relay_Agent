@@ -8,6 +8,7 @@ type StatusResponse = {
     name: string;
     ready: boolean;
     detail: string;
+    required?: boolean;
   }>;
 };
 
@@ -136,15 +137,21 @@ async function refreshStatus(): Promise<void> {
   if (!response.ok) throw new Error(`Status failed: ${response.status}`);
   const status = (await response.json()) as StatusResponse;
   const copilotReady = status.checks.some((check) => check.name === "copilot-cdp" && check.ready);
+  const optionalFailures = status.checks.filter((check) => check.required === false && !check.ready);
   if (status.ready) {
     readinessEl.textContent = "Ready";
     readinessEl.dataset.ready = "true";
+    readinessEl.title = optionalFailures.length > 0
+      ? `Optional capability unavailable: ${optionalFailures.map((check) => check.name).join(", ")}`
+      : "";
   } else if (copilotReady) {
     readinessEl.textContent = "Limited";
     readinessEl.dataset.ready = "partial";
+    readinessEl.title = "Some required local execution capability is unavailable.";
   } else {
     readinessEl.textContent = "Not ready";
     readinessEl.dataset.ready = "false";
+    readinessEl.title = "Copilot transport is not available.";
   }
   rawEl.textContent = JSON.stringify(status, null, 2);
 }

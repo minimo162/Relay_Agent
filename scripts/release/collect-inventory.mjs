@@ -11,6 +11,8 @@ const inputs = [
   "apps/sidecar/Relay.Sidecar.csproj",
   "apps/workbench/package.json",
   "apps/workbench/dist",
+  "dist/relay-agent-win-x64/relay-tools",
+  "dist/relay-agent-linux-x64/relay-tools",
 ];
 
 function walk(path) {
@@ -62,6 +64,7 @@ const sbom = {
   ],
   bundledBinaries: [
     { name: "Relay.Sidecar", source: "self-contained dotnet publish" },
+    { name: "officecli", source: "Windows release bundle when dist/relay-agent-win-x64/relay-tools/officecli/officecli.exe is present", optional: true },
   ],
   intentionallyExcludedRuntimeFamilies: inventory.excludedLegacyActivePaths,
   fileHashes: files,

@@ -82,42 +82,67 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 
     public async Task<string> SendAsync(string prompt, CancellationToken cancellationToken)
     {
+        var closeWhenDone = Environment.GetEnvironmentVariable("RELAY_COPILOT_FRESH_TARGET") == "1";
         var target = await ResolveCopilotTargetAsync(cancellationToken);
         await using var session = await CdpSession.ConnectAsync(target.WebSocketDebuggerUrl, cancellationToken);
-        await session.SendAsync("Runtime.enable", null, cancellationToken);
-        await EnsureCopilotPageAsync(session, cancellationToken);
-
-        var baseline = await GetConversationTextAsync(session, cancellationToken);
-        var pasted = await PastePromptAsync(session, prompt, cancellationToken);
-        if (pasted < Math.Min(prompt.Length, 20))
+        try
         {
-            pasted = await WaitForComposerLengthAsync(session, Math.Min(prompt.Length, 20), cancellationToken);
-        }
-        if (pasted < Math.Min(prompt.Length, 20))
-        {
-            throw new InvalidOperationException($"Prompt did not reach Copilot composer (visible length {pasted}, expected ~{prompt.Length}).");
-        }
+            await session.SendAsync("Runtime.enable", null, cancellationToken);
+            await EnsureCopilotPageAsync(session, cancellationToken);
 
-        var sent = await ClickSendAsync(session, cancellationToken);
-        if (!sent)
-        {
-            throw new InvalidOperationException("Copilot send button was not found or was disabled.");
-        }
+            var baseline = await GetConversationTextAsync(session, cancellationToken);
+            var pasted = await InsertPromptAsync(session, prompt, cancellationToken);
+            if (pasted < Math.Min(prompt.Length, 20))
+            {
+                pasted = await PastePromptAsync(session, prompt, cancellationToken);
+            }
+            if (pasted < Math.Min(prompt.Length, 20))
+            {
+                pasted = await WaitForComposerLengthAsync(session, Math.Min(prompt.Length, 20), cancellationToken);
+            }
+            if (pasted < Math.Min(prompt.Length, 20))
+            {
+                throw new InvalidOperationException($"Prompt did not reach Copilot composer (visible length {pasted}, expected ~{prompt.Length}).");
+            }
 
-        return await WaitForReplyAsync(session, baseline, prompt, cancellationToken);
+            var sent = await ClickSendAsync(session, cancellationToken);
+            if (!sent)
+            {
+                throw new InvalidOperationException("Copilot send button was not found or was disabled.");
+            }
+
+            return await WaitForReplyAsync(session, baseline, prompt, cancellationToken);
+        }
+        finally
+        {
+            if (closeWhenDone)
+            {
+                await TryCloseTargetAsync(session, target.Id);
+            }
+        }
     }
 
     private async Task<CdpTarget> ResolveCopilotTargetAsync(CancellationToken cancellationToken)
     {
+        if (Environment.GetEnvironmentVariable("RELAY_COPILOT_FRESH_TARGET") == "1")
+        {
+            return await CreateCopilotTargetAsync(cancellationToken);
+        }
+
         var targets = await GetTargetsAsync(cancellationToken);
         var target = targets.FirstOrDefault(IsCopilotTarget);
         if (target is not null) return target;
 
+        return await CreateCopilotTargetAsync(cancellationToken);
+    }
+
+    private async Task<CdpTarget> CreateCopilotTargetAsync(CancellationToken cancellationToken)
+    {
         var createUrl = $"http://127.0.0.1:{port}/json/new?{Uri.EscapeDataString("https://m365.cloud.microsoft/chat")}";
-        using var response = await _http.GetAsync(createUrl, cancellationToken);
+        using var response = await _http.SendAsync(new HttpRequestMessage(HttpMethod.Put, createUrl), cancellationToken);
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        target = JsonSerializer.Deserialize<CdpTarget>(body, JsonOptions.Default);
+        var target = JsonSerializer.Deserialize<CdpTarget>(body, JsonOptions.Default);
         if (target?.WebSocketDebuggerUrl is null)
         {
             throw new InvalidOperationException("Edge CDP did not create a Copilot target.");
@@ -138,10 +163,45 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 
     private static async Task EnsureCopilotPageAsync(CdpSession session, CancellationToken cancellationToken)
     {
-        var ready = await session.EvaluateJsonAsync<bool>("document.readyState === 'complete' || document.readyState === 'interactive'", cancellationToken);
-        if (!ready)
+        for (var attempt = 0; attempt < 120; attempt++)
         {
-            await Task.Delay(1000, cancellationToken);
+            var ready = await session.EvaluateJsonAsync<bool>("document.readyState === 'complete' || document.readyState === 'interactive'", cancellationToken);
+            var composerReady = await HasVisibleComposerAsync(session, cancellationToken);
+            if (ready && composerReady) return;
+            await Task.Delay(500, cancellationToken);
+        }
+    }
+
+    private static Task<bool> HasVisibleComposerAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        const string script = """
+(() => {
+  const docs = [document, ...Array.from(document.querySelectorAll('iframe')).map(f => {
+    try { return f.contentDocument; } catch { return null; }
+  }).filter(Boolean)];
+  for (const doc of docs) {
+    const candidates = Array.from(doc.querySelectorAll('[role="textbox"], textarea, [contenteditable="true"]'));
+    for (const el of candidates) {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (rect.width > 20 && rect.height > 10 && style.visibility !== 'hidden' && style.display !== 'none') return true;
+    }
+  }
+  return false;
+})()
+""";
+        return session.EvaluateJsonAsync<bool>(script, cancellationToken);
+    }
+
+    private static async Task TryCloseTargetAsync(CdpSession session, string targetId)
+    {
+        try
+        {
+            await session.SendAsync("Target.closeTarget", new { targetId }, CancellationToken.None);
+        }
+        catch
+        {
+            // Closing the temporary Copilot tab is best-effort.
         }
     }
 
@@ -214,6 +274,46 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         return session.EvaluateJsonAsync<int>(script, cancellationToken);
     }
 
+    private static async Task<int> InsertPromptAsync(CdpSession session, string prompt, CancellationToken cancellationToken)
+    {
+        var focused = await FocusAndClearComposerAsync(session, cancellationToken);
+        if (!focused) return 0;
+        await session.SendAsync("Input.insertText", new { text = prompt }, cancellationToken);
+        return await WaitForComposerLengthAsync(session, Math.Min(prompt.Length, 20), cancellationToken);
+    }
+
+    private static Task<bool> FocusAndClearComposerAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        const string script = """
+(() => {
+  const docs = [document, ...Array.from(document.querySelectorAll('iframe')).map(f => {
+    try { return f.contentDocument; } catch { return null; }
+  }).filter(Boolean)];
+  const candidates = [];
+  for (const doc of docs) {
+    candidates.push(...doc.querySelectorAll('[role="textbox"], textarea, [contenteditable="true"]'));
+  }
+  const el = candidates.find(x => {
+    const rect = x.getBoundingClientRect();
+    const style = getComputedStyle(x);
+    return rect.width > 20 && rect.height > 10 && style.visibility !== 'hidden' && style.display !== 'none';
+  });
+  if (!el) return false;
+  el.focus();
+  if ('value' in el) {
+    el.value = '';
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+  el.textContent = '';
+  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+  return true;
+})()
+""";
+        return session.EvaluateJsonAsync<bool>(script, cancellationToken);
+    }
+
     private static async Task<int> WaitForComposerLengthAsync(CdpSession session, int minLength, CancellationToken cancellationToken)
     {
         var best = 0;
@@ -250,7 +350,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         return session.EvaluateJsonAsync<int>(script, cancellationToken);
     }
 
-    private static Task<bool> ClickSendAsync(CdpSession session, CancellationToken cancellationToken)
+    private static async Task<bool> ClickSendAsync(CdpSession session, CancellationToken cancellationToken)
     {
         const string script = """
 (() => {
@@ -274,7 +374,12 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
   return false;
 })()
 """;
-        return session.EvaluateJsonAsync<bool>(script, cancellationToken);
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (await session.EvaluateJsonAsync<bool>(script, cancellationToken)) return true;
+            await Task.Delay(250, cancellationToken);
+        }
+        return false;
     }
 
     private static async Task<string> WaitForReplyAsync(CdpSession session, string baseline, string prompt, CancellationToken cancellationToken)

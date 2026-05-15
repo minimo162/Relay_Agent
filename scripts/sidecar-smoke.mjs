@@ -45,8 +45,13 @@ async function waitForStatus() {
 try {
   const status = await waitForStatus();
   if (status.app !== "Relay Agent") throw new Error(`unexpected status app: ${status.app}`);
+  if (status.ready !== true) throw new Error(`required readiness was not green: ${JSON.stringify(status)}`);
   if (!status.checks.some((check) => check.name === "copilot-cdp" && check.ready === true)) {
     throw new Error(`mock Copilot readiness was not reported: ${JSON.stringify(status)}`);
+  }
+  const officeCli = status.checks.find((check) => check.name === "officecli");
+  if (!officeCli || officeCli.required !== false) {
+    throw new Error(`OfficeCLI readiness must be optional: ${JSON.stringify(status)}`);
   }
 
   const models = await fetch(`http://127.0.0.1:${port}/v1/models?token=${encodeURIComponent(token)}`, {
