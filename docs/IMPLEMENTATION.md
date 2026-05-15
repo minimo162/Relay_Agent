@@ -217,6 +217,16 @@ Result:
 
 - Passed. Reported `elapsed=6897ms`, `readiness=Limited`, `cdp=9360`.
 
+Release workflow follow-up:
+
+- The first release workflow attempt for this commit failed in `pnpm check`
+  because GitHub runners did not have `rg` installed, while the local machine
+  did. `rg_files` is part of the active generic tool catalog and the golden
+  smoke now exercises it, so CI/release environments must install ripgrep
+  explicitly.
+- Added ripgrep installation to the Linux CI workflow and to both Linux and
+  Windows release jobs before `pnpm check`.
+
 ### 2026-05-16 unified workbench architecture and UX plan
 
 Updated `PLANS.md` to capture the current product direction:

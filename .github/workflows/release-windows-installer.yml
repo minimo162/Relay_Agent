@@ -52,6 +52,15 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install ripgrep on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Install ripgrep on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install ripgrep -y --no-progress
+
       - name: Resolve release metadata
         id: release_meta
         shell: bash
