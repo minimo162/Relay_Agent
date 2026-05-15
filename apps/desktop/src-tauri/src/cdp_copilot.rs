@@ -145,6 +145,48 @@ pub async fn resolve_cdp_attachment_port(preferred: u16) -> u16 {
 
 /* ── Edge auto-launch ────────────────────────────────────────── */
 
+fn dedicated_edge_launch_args(debug_port: u16, profile_dir: &std::path::Path) -> Vec<String> {
+    // Do not pass a Copilot URL on the command line: Node `copilot_server.js` avoids that
+    // so cold CDP does not race with `Target.createTarget` and open duplicate m365 tabs.
+    // `connect_copilot_page` navigates the first tab to Copilot via `Page.navigate`.
+    //
+    // Keep switches that take values in `--flag=value` form. Edge can treat a
+    // separate bare `0` argument as a page address, which opens `http://0.0.0.0/`.
+    // `about:blank` is the only page target passed during launch.
+    let mut args = vec![
+        format!("--remote-debugging-port={debug_port}"),
+        // Chromium 111+ restricts DevTools/WebSocket origins without this; Edge needs it for CDP clients.
+        "--remote-allow-origins=*".to_string(),
+        format!("--user-data-dir={}", profile_dir.to_string_lossy()),
+        "--no-first-run".to_string(),
+        "--no-default-browser-check".to_string(),
+        "--disable-infobars".to_string(),
+        "--disable-hang-monitor".to_string(),
+        "--disable-restore-session-state".to_string(),
+        "--disable-gpu".to_string(),
+        "--disable-gpu-compositing".to_string(),
+    ];
+
+    // `--no-sandbox` is omitted on Windows/macOS: Microsoft Edge reports it as unsupported there; keep on Linux (and optional override).
+    if cfg!(target_os = "linux")
+        || std::env::var("RELAY_EDGE_FORCE_NO_SANDBOX").as_deref() == Ok("1")
+    {
+        args.push("--no-sandbox".to_string());
+    }
+    // `--disable-site-isolation-trials` is unsupported on Windows Edge (warning); keep on Linux only (matches Node).
+    if cfg!(target_os = "linux") {
+        args.push("--disable-site-isolation-trials".to_string());
+    }
+    args.extend([
+        "--disable-breakpad".to_string(),
+        "--disable-crashpad".to_string(),
+        "--disable-features=RendererCodeIntegrity,EdgeEnclave,VbsEnclave".to_string(),
+        "about:blank".to_string(),
+    ]);
+
+    args
+}
+
 /// Launch a dedicated Edge instance for CDP control.
 /// Uses a separate user-data-dir so it doesn't conflict with
 /// the user's personal browser.
@@ -160,40 +202,8 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
         debug_port, profile_dir
     );
 
-    // Do not pass a Copilot URL on the command line: Node `copilot_server.js` avoids that
-    // so cold CDP does not race with `Target.createTarget` and open duplicate m365 tabs.
-    // `connect_copilot_page` navigates the first tab to Copilot via `Page.navigate`.
-    // Use flags to avoid VBS/Code Integrity issues (error 577) on Windows corporate environments.
-    // `--no-sandbox` is omitted on Windows/macOS: Microsoft Edge reports it as unsupported there; keep on Linux (and optional override).
     let mut cmd = std::process::Command::new(&edge_path);
-    cmd.arg("--remote-debugging-port")
-        .arg(debug_port.to_string())
-        // Chromium 111+ restricts DevTools/WebSocket origins without this; Edge needs it for CDP clients.
-        .arg("--remote-allow-origins=*")
-        .arg(format!("--user-data-dir={}", profile_dir.to_str().unwrap()))
-        .args([
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-infobars",
-            "--disable-hang-monitor",
-            "--disable-restore-session-state",
-            "--disable-gpu",
-            "--disable-gpu-compositing",
-        ]);
-    if cfg!(target_os = "linux")
-        || std::env::var("RELAY_EDGE_FORCE_NO_SANDBOX").as_deref() == Ok("1")
-    {
-        cmd.arg("--no-sandbox");
-    }
-    // `--disable-site-isolation-trials` is unsupported on Windows Edge (warning); keep on Linux only (matches Node).
-    if cfg!(target_os = "linux") {
-        cmd.arg("--disable-site-isolation-trials");
-    }
-    cmd.args([
-        "--disable-breakpad",
-        "--disable-crashpad",
-        "--disable-features=RendererCodeIntegrity,EdgeEnclave,VbsEnclave",
-    ]);
+    cmd.args(dedicated_edge_launch_args(debug_port, &profile_dir));
     crate::windows_command::no_console_window(&mut cmd);
 
     let child = cmd
@@ -1289,14 +1299,17 @@ async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
         .as_str()
         .context("missing webSocketDebuggerUrl")?
         .to_string();
-    // Windows may return ws://0.0.36.6/… or ws://0.0.36.6:port/… (IPv4-mapped ::1) — normalize.
+    // Windows may return ws://0.0.36.6/… (IPv4-mapped ::1) or, in some
+    // Edge builds, ws://0.0.0.0:port/… — neither should be used as-is.
     let url = url.replace("ws://0.0.36.6:", "ws://127.0.0.1:");
     let url = url.replace("ws://0.0.36.6/", "ws://127.0.0.1/");
+    let url = url.replace("ws://0.0.0.0:", "ws://127.0.0.1:");
+    let url = url.replace("ws://0.0.0.0/", "ws://127.0.0.1/");
     Ok(url)
 }
 
 /// Resolve the actual WebSocket URL for CDP communication.
-/// Handles localhost, 127.0.0.1, and Windows IPv4-mapped `::1` (0.0.36.6) normalization.
+/// Handles localhost, 127.0.0.1, 0.0.0.0, and Windows IPv4-mapped `::1` (0.0.36.6) normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     let debug_base = debug.trim_end_matches('/');
     let target_host = debug_base
@@ -1309,6 +1322,7 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
         && !ws.contains("localhost")
         && !ws.contains("127.0.0.1")
         && !ws.contains("0.0.36.6")
+        && !ws.contains("0.0.0.0")
     {
         return Ok(ws.into());
     }
@@ -1330,10 +1344,14 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     //   ws://127.0.0.1/…       -> ws://{target_host}/…
     //   ws://0.0.36.6/…        -> ws://{target_host}/… (Windows IPv4-mapped ::1)
     //   ws://0.0.36.6:port/…   -> ws://127.0.0.1:port/… (keep port; target_host may include its own port)
+    //   ws://0.0.0.0/…         -> ws://{target_host}/…
+    //   ws://0.0.0.0:port/…    -> ws://127.0.0.1:port/…
     let url = url.replace("ws://0.0.36.6:", "ws://127.0.0.1:");
+    let url = url.replace("ws://0.0.0.0:", "ws://127.0.0.1:");
     let url = url.replace("ws://localhost/", &format!("ws://{target_host}/"));
     let url = url.replace("ws://127.0.0.1/", &format!("ws://{target_host}/"));
-    Ok(url.replace("ws://0.0.36.6/", &format!("ws://{target_host}/")))
+    let url = url.replace("ws://0.0.36.6/", &format!("ws://{target_host}/"));
+    Ok(url.replace("ws://0.0.0.0/", &format!("ws://{target_host}/")))
 }
 
 #[cfg(test)]
@@ -1372,6 +1390,17 @@ mod tests {
 
         assert!(!is_browser_error_page(&page));
         assert!(is_copilot_page_candidate(&page));
+    }
+
+    #[test]
+    fn dedicated_edge_launch_args_do_not_make_zero_a_page_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = dedicated_edge_launch_args(0, dir.path());
+
+        assert!(args.contains(&"--remote-debugging-port=0".to_string()));
+        assert!(!args.contains(&"--remote-debugging-port".to_string()));
+        assert!(!args.contains(&"0".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
     }
 
     #[test]

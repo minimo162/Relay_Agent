@@ -15640,6 +15640,37 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-05-15 - Edge launch zero URL fix
+
+Fixed a Windows Edge launch bug where the dedicated Copilot CDP browser could
+open `http://0.0.0.0/` and show a DNS error. Relay was passing
+`--remote-debugging-port` and `0` as separate process arguments. Some Edge
+launch paths treat the bare `0` as a page target, so the browser navigated to
+the IPv4 unspecified address.
+
+Relay now emits `--remote-debugging-port=0` as a single argument and explicitly
+uses `about:blank` as the only initial page target. CDP WebSocket URL
+normalization also treats `ws://0.0.0.0/...` like other loopback aliases and
+rewrites it to a usable local endpoint.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib`: passed, 5 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`
