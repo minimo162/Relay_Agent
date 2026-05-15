@@ -248,15 +248,29 @@ pub enum RelayDocumentSearchTimeScopeIntent {
 #[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct RelayDocumentSearchCoreConceptHint {
+    pub label: String,
+    pub direct_terms: Vec<String>,
+    pub required_term_groups: Vec<Vec<String>>,
+    pub entity_risk_terms: Vec<String>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct RelayDocumentSearchQueryPlanHints {
     pub schema_version: String,
     pub raw_query: String,
     pub intent: RelayDocumentSearchIntent,
     pub evidence: RelayDocumentSearchEvidence,
     pub thoroughness: RelayDocumentSearchThoroughness,
+    #[serde(default)]
+    pub core_concepts: Vec<RelayDocumentSearchCoreConceptHint>,
     pub expanded_terms: Vec<String>,
     pub support_terms: Vec<String>,
     pub demote_terms: Vec<String>,
+    #[serde(default)]
+    pub entity_risk_terms: Vec<String>,
     pub file_type_hints: Vec<String>,
     pub time_scope_intent: Option<RelayDocumentSearchTimeScopeIntent>,
     pub summary: Option<String>,

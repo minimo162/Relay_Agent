@@ -127,15 +127,24 @@ export type RelayDocumentSearchTimeScopeIntent =
   | "explicit_period"
   | "unknown";
 
+export interface RelayDocumentSearchCoreConceptHint {
+  label: string;
+  directTerms: string[];
+  requiredTermGroups: string[][];
+  entityRiskTerms: string[];
+}
+
 export interface RelayDocumentSearchQueryPlanHints {
   schemaVersion: string;
   rawQuery: string;
   intent: RelayDocumentSearchIntent;
   evidence: RelayDocumentSearchEvidence;
   thoroughness: RelayDocumentSearchThoroughness;
+  coreConcepts: RelayDocumentSearchCoreConceptHint[];
   expandedTerms: string[];
   supportTerms: string[];
   demoteTerms: string[];
+  entityRiskTerms: string[];
   fileTypeHints: string[];
   timeScopeIntent?: RelayDocumentSearchTimeScopeIntent | null;
   summary?: string | null;

@@ -120,14 +120,21 @@ server.tool(
     evidence: z.enum(['none', 'candidate', 'required']).optional().describe('Evidence requirement.'),
     queryPlanHints: z
       .object({
-        schemaVersion: z.literal('RelayDocumentSearchCopilotQueryPlan.v1'),
+        schemaVersion: z.enum(['RelayDocumentSearchCopilotQueryPlan.v1', 'RelayDocumentSearchCopilotQueryPlan.v3']),
         rawQuery: z.string().min(1).max(2000),
         intent: z.enum(['find_files', 'answer_with_evidence', 'summarize_with_evidence', 'inspect_file', 'similar_documents']),
         evidence: z.enum(['none', 'candidate', 'required']),
         thoroughness: z.enum(['quick', 'thorough']),
+        coreConcepts: z.array(z.object({
+          label: z.string().min(1).max(80),
+          directTerms: z.array(z.string().min(1).max(80)).max(24),
+          requiredTermGroups: z.array(z.array(z.string().min(1).max(80)).max(16)).max(8),
+          entityRiskTerms: z.array(z.string().min(1).max(80)).max(24),
+        })).max(8).optional(),
         expandedTerms: z.array(z.string().min(1).max(80)).max(40),
         supportTerms: z.array(z.string().min(1).max(80)).max(40),
         demoteTerms: z.array(z.string().min(1).max(80)).max(40),
+        entityRiskTerms: z.array(z.string().min(1).max(80)).max(40).optional(),
         fileTypeHints: z.array(z.enum(['any', 'txt', 'md', 'csv', 'docx', 'xlsx', 'xlsm', 'pptx', 'pdf'])).max(10),
         timeScopeIntent: z
           .enum(['latest_first', 'historical_examples', 'balanced', 'explicit_period', 'unknown'])

@@ -649,11 +649,19 @@ test("executeRelayDocumentSearch ranks compound parts-sales files above generic 
         evidence: "candidate",
         maxResults: 10,
         queryPlanHints: {
-          schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+          schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v3",
           rawQuery: "部品売上に関するファイルを探して",
           intent: "find_files",
           evidence: "candidate",
           thoroughness: "thorough",
+          coreConcepts: [
+            {
+              label: "部品売上",
+              directTerms: ["部品売上", "部品他売上", "パーツ売上", "parts sales"],
+              requiredTermGroups: [["部品", "パーツ", "補修部品", "parts"], ["売上", "売上高", "販売実績", "sales", "revenue"]],
+              entityRiskTerms: ["会社名", "各社ファイル"],
+            },
+          ],
           expandedTerms: [
             "部品売上",
             "パーツ売上",
@@ -667,6 +675,7 @@ test("executeRelayDocumentSearch ranks compound parts-sales files above generic 
           ],
           supportTerms: ["実績", "内訳", "明細", "集計"],
           demoteTerms: ["最終版", "バックアップ", "コピー"],
+          entityRiskTerms: ["会社名", "各社ファイル"],
           fileTypeHints: ["any"],
           timeScopeIntent: "balanced",
           summary: "部品売上の表現揺れを補う",
@@ -693,7 +702,9 @@ test("executeRelayDocumentSearch ranks compound parts-sales files above generic 
     const humanCapitalCandidate = result.results.find((candidate) => candidate.display_name.includes("人的資本情報"));
     assert.notEqual(humanCapitalCandidate?.evidence_state, "concept_confirmed");
     assert.equal(result.results[0].evidence_state, "concept_confirmed");
-    assert.ok(result.results[0].score_breakdown.explanationCodes.some((code) => code.includes("semantic_direct:parts_sales")));
+    assert.ok(
+      result.results[0].score_breakdown.explanationCodes.some((code) => /^semantic_direct:(parts_sales|copilot_)/u.test(code)),
+    );
     assert.equal(result.queryPlan.normalizedTerms.includes("売上"), false);
     assert.equal(result.queryPlan.normalizedTerms.includes("売上高"), false);
   } finally {

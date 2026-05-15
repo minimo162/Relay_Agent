@@ -1,10 +1,10 @@
 import type { RelayCodeContextFile, RelayDocumentSearchQueryPlanHints, RelaySearchResultCard } from "./ipc";
 
-const SEARCH_PLAN_SCHEMA_VERSION = "RelayDocumentSearchCopilotQueryPlan.v1";
+const SEARCH_PLAN_SCHEMA_VERSION = "RelayDocumentSearchCopilotQueryPlan.v3";
 const SEARCH_RESULT_SCHEMA_VERSION = "RelayDocumentSearchCopilotResultSummary.v1";
 const SEARCH_REFLECTION_SCHEMA_VERSION = "RelayDocumentSearchReflection.v1";
-const OFFICE_PLAN_SCHEMA_VERSION = "RelayOfficeEditPlan.v2";
-const CODE_PATCH_SCHEMA_VERSION = "RelayCodePatchPlan.v2";
+const OFFICE_PLAN_SCHEMA_VERSION = "RelayOfficeEditPlan.v3";
+const CODE_PATCH_SCHEMA_VERSION = "RelayCodePatchPlan.v3";
 const AGENT_STEP_SCHEMA_VERSION = "RelayAgentStep.v1";
 
 const SEARCH_INTENTS = new Set(["find_files", "answer_with_evidence", "summarize_with_evidence", "inspect_file", "similar_documents"]);
@@ -61,10 +61,11 @@ export type RelayOfficeEditOperation = {
 };
 
 export type RelayOfficeEditPlan = {
-  schemaVersion: "RelayOfficeEditPlan.v2";
+  schemaVersion: "RelayOfficeEditPlan.v3";
   risk: "low" | "medium" | "high";
   operations: RelayOfficeEditOperation[];
   commands: RelayOfficePlanCommand[];
+  ambiguities: string[];
   summary?: string;
 };
 
@@ -76,11 +77,12 @@ export type RelayCodePatchPlanEdit = {
 };
 
 export type RelayCodePatchPlan = {
-  schemaVersion: "RelayCodePatchPlan.v2";
+  schemaVersion: "RelayCodePatchPlan.v3";
   risk: "low" | "medium" | "high";
   summary: string;
   edits: RelayCodePatchPlanEdit[];
   verificationCommands: string[];
+  doneCriteria: string[];
 };
 
 export type RelayAgentMode = "document_search" | "office_edit" | "code";
@@ -96,6 +98,13 @@ export type RelayAgentStep = {
   input?: JsonRecord;
   rationale: string;
   userMessage?: string;
+};
+
+export type RelayDocumentSearchCoreConcept = {
+  label: string;
+  directTerms: string[];
+  requiredTermGroups: string[][];
+  entityRiskTerms: string[];
 };
 
 export type RelayDocumentSearchResultCategory = {
@@ -178,9 +187,18 @@ export function buildDocumentSearchPlanPrompt(params: {
       intent: "find_files",
       evidence: "candidate",
       thoroughness: "thorough",
+      coreConcepts: [
+        {
+          label: "business concept",
+          directTerms: ["compound term that directly names the concept"],
+          requiredTermGroups: [["terms for required part A"], ["terms for required part B"]],
+          entityRiskTerms: ["nearby company, department, owner, or entity-name terms that should not prove the concept alone"],
+        },
+      ],
       expandedTerms: ["term or synonym"],
       supportTerms: ["supporting workflow term"],
       demoteTerms: ["output/review/backup term to avoid overranking"],
+      entityRiskTerms: ["company or entity-name term that should be demoted when it appears without the full concept"],
       fileTypeHints: ["any"],
       timeScopeIntent: "balanced",
       summary: "short reason for the expansion",
@@ -191,6 +209,10 @@ export function buildDocumentSearchPlanPrompt(params: {
     "- intent must be find_files for this UI mode.",
     "- evidence must be candidate.",
     "- thoroughness must be thorough.",
+    "- coreConcepts must describe the user's actual business concept, not broad generic words.",
+    "- For compound business concepts, put each required dimension in requiredTermGroups. Example: 部品売上 has one group for 部品/パーツ/補修部品 and one group for 売上/売上高/revenue.",
+    "- directTerms are phrases that prove the whole concept by themselves, such as 部品売上 or parts sales.",
+    "- entityRiskTerms are terms that may be company, department, person, or owner names. They can help avoid false positives but must not become search targets by themselves.",
     "- expandedTerms should include direct synonyms, abbreviations, Japanese variants, English variants, and business aliases that can stand on their own.",
     "- For compound business concepts, keep the user's core concept intact. Example: 部品売上 means parts AND sales, not generic sales alone.",
     "- Do not add terms that are only company names, department names, or owner names unless the user explicitly asks for that entity.",
@@ -200,8 +222,8 @@ export function buildDocumentSearchPlanPrompt(params: {
     "- timeScopeIntent must be latest_first, historical_examples, balanced, explicit_period, or unknown.",
     "- Do not include roots, path, recipient_name, tool_calls, tool_uses, glob patterns, bash commands, or any field not shown in the schema.",
     "Examples:",
-    "- 部品売上 -> expandedTerms can include 部品売上, 部品他売上, パーツ売上, 部販, 補修部品売上, parts sales, service parts revenue; supportTerms can include 国内DL, 実績データ, 内訳, 明細.",
-    "- キャッシュフロー計算書 -> expandedTerms can include キャッシュフロー, CFS, CF, 連結CF, 連結CFS; supportTerms can include 精算表, 合算, ADJ.",
+    "- 部品売上 -> coreConcepts should require parts terms AND sales terms; expandedTerms can include 部品売上, 部品他売上, パーツ売上, 部販, 補修部品売上, parts sales, service parts revenue; supportTerms can include 国内DL, 実績データ, 内訳, 明細.",
+    "- キャッシュフロー計算書 -> coreConcepts can use direct terms キャッシュフロー計算書, キャッシュフロー, CFS, 連結CFS; supportTerms can include 精算表, 合算, ADJ.",
     `Relay-selected workspace context (do not rewrite it): ${params.workspacePath}`,
     "USER REQUEST DATA:",
     JSON.stringify(userQuery),
@@ -334,9 +356,11 @@ export function buildDocumentSearchReflectionPrompt(params: {
     params.workspacePath,
     "CURRENT QUERY PLAN:",
     JSON.stringify({
+      coreConcepts: params.queryPlan.coreConcepts,
       expandedTerms: params.queryPlan.expandedTerms,
       supportTerms: params.queryPlan.supportTerms,
       demoteTerms: params.queryPlan.demoteTerms,
+      entityRiskTerms: params.queryPlan.entityRiskTerms,
       timeScopeIntent: params.queryPlan.timeScopeIntent,
     }),
     "LOCAL RELAY SUMMARY:",
@@ -376,12 +400,14 @@ export function buildOfficeEditPlanPrompt(params: {
           props: { fill: "FF0000" },
         },
       ],
+      ambiguities: [],
       summary: "short plan summary",
     }),
     "Rules:",
     `- schemaVersion must be ${OFFICE_PLAN_SCHEMA_VERSION}.`,
     "- operations must contain one to five safe operations.",
     "- Supported operation kinds are cell_format, range_format, cell_value, and inspect.",
+    "- If anything is ambiguous, put a short item in ambiguities and prefer one inspect operation instead of guessing an edit.",
     "- Never output rawInstruction, filePath, commands, argv, shell syntax, or the officecli executable name.",
     "- Relay already knows TARGET FILE and will build OfficeCLI argv itself. Do not repeat any Windows path.",
     "- For Excel ranges, use a sheet-qualified path like \"/Sheet1/A1\". Use exact sheet names from OFFICE OUTLINE JSON.",
@@ -435,6 +461,7 @@ export function buildCodePatchPlanPrompt(params: {
         },
       ],
       verificationCommands: ["pnpm typecheck"],
+      doneCriteria: ["observable criterion that proves the requested change is complete"],
     }),
     "Rules:",
     `- schemaVersion must be ${CODE_PATCH_SCHEMA_VERSION}.`,
@@ -446,6 +473,7 @@ export function buildCodePatchPlanPrompt(params: {
     "- If the requested change cannot be done safely with the provided context, return edits: [] and explain the missing context in summary.",
     "- Keep edits small and reviewable. Prefer one to eight edits; never exceed eight edits.",
     "- verificationCommands are suggestions for the user only; Relay will not execute them automatically.",
+    "- doneCriteria should be concrete and tied to the user's requested behavior.",
     "WORKSPACE:",
     params.workspacePath,
     "CONTEXT FILES:",
@@ -592,9 +620,11 @@ function validateDocumentSearchPlan(value: JsonRecord, rawQuery: string): Planne
     "intent",
     "evidence",
     "thoroughness",
+    "coreConcepts",
     "expandedTerms",
     "supportTerms",
     "demoteTerms",
+    "entityRiskTerms",
     "fileTypeHints",
     "timeScopeIntent",
     "summary",
@@ -607,6 +637,8 @@ function validateDocumentSearchPlan(value: JsonRecord, rawQuery: string): Planne
   const expandedTerms = stringArray(value.expandedTerms, "expandedTerms", 40, errors);
   const supportTerms = stringArray(value.supportTerms, "supportTerms", 40, errors);
   const demoteTerms = stringArray(value.demoteTerms, "demoteTerms", 40, errors);
+  const entityRiskTerms = stringArray(value.entityRiskTerms ?? [], "entityRiskTerms", 40, errors);
+  const coreConcepts = validateSearchCoreConcepts(value.coreConcepts, errors);
   const fileTypeHints = enumArray(value.fileTypeHints, FILE_TYPES, "fileTypeHints", 10, errors);
   const timeScopeIntent = value.timeScopeIntent === undefined ? undefined : enumValue(value.timeScopeIntent, TIME_SCOPE_INTENTS, "timeScopeIntent", errors);
   const summary = value.summary === undefined ? undefined : stringValue(value.summary, "summary", 280, errors);
@@ -622,9 +654,11 @@ function validateDocumentSearchPlan(value: JsonRecord, rawQuery: string): Planne
       intent: "find_files",
       evidence: "candidate",
       thoroughness: "thorough",
+      coreConcepts,
       expandedTerms,
       supportTerms,
       demoteTerms,
+      entityRiskTerms,
       fileTypeHints: fileTypeHints.length ? fileTypeHints : ["any"],
       timeScopeIntent: (timeScopeIntent || "unknown") as RelayDocumentSearchQueryPlanHints["timeScopeIntent"],
       summary,
@@ -632,13 +666,51 @@ function validateDocumentSearchPlan(value: JsonRecord, rawQuery: string): Planne
   };
 }
 
+function validateSearchCoreConcepts(value: unknown, errors: string[]): RelayDocumentSearchCoreConcept[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push("coreConcepts must be an array.");
+    return [];
+  }
+  if (value.length > 8) errors.push("coreConcepts may contain at most eight entries.");
+  const concepts: RelayDocumentSearchCoreConcept[] = [];
+  value.slice(0, 8).forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      errors.push(`coreConcepts[${index}] must be an object.`);
+      return;
+    }
+    rejectUnknownFields(
+      entry,
+      ["label", "directTerms", "requiredTermGroups", "entityRiskTerms"],
+      errors,
+      `coreConcepts[${index}]`,
+    );
+    const label = stringValue(entry.label, `coreConcepts[${index}].label`, 80, errors);
+    const directTerms = stringArray(entry.directTerms ?? [], `coreConcepts[${index}].directTerms`, 24, errors);
+    const requiredTermGroups = stringArrayArray(
+      entry.requiredTermGroups ?? [],
+      `coreConcepts[${index}].requiredTermGroups`,
+      8,
+      16,
+      errors,
+    );
+    const entityRiskTerms = stringArray(entry.entityRiskTerms ?? [], `coreConcepts[${index}].entityRiskTerms`, 24, errors);
+    if (!directTerms.length && requiredTermGroups.length < 2) {
+      errors.push(`coreConcepts[${index}] must include directTerms or at least two requiredTermGroups.`);
+    }
+    if (label) concepts.push({ label, directTerms, requiredTermGroups, entityRiskTerms });
+  });
+  return concepts;
+}
+
 function validateOfficeEditPlan(value: JsonRecord, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
   const errors: string[] = [];
-  rejectUnknownFields(value, ["schemaVersion", "risk", "operations", "summary"], errors, "Office plan");
+  rejectUnknownFields(value, ["schemaVersion", "risk", "operations", "ambiguities", "summary"], errors, "Office plan");
   if (value.schemaVersion !== OFFICE_PLAN_SCHEMA_VERSION) errors.push(`schemaVersion must be ${OFFICE_PLAN_SCHEMA_VERSION}.`);
   const risk = enumValue(value.risk, OFFICE_RISK_LEVELS, "risk", errors);
   const summary = value.summary === undefined ? undefined : stringValue(value.summary, "summary", 280, errors);
   const operations = validateOfficeOperations(value.operations, errors);
+  const ambiguities = stringArray(value.ambiguities ?? [], "ambiguities", 8, errors);
   const commands = officeOperationsToCommands(operations, filePath, errors);
   if (errors.length) return { ok: false, errors };
   return {
@@ -648,6 +720,7 @@ function validateOfficeEditPlan(value: JsonRecord, filePath: string): PlannerVal
       risk: risk as RelayOfficeEditPlan["risk"],
       operations,
       commands,
+      ambiguities,
       summary,
     },
   };
@@ -703,7 +776,7 @@ function validateCodePatchPlan(
   const errors: string[] = [];
   rejectUnknownFields(
     value,
-    ["schemaVersion", "risk", "summary", "edits", "verificationCommands"],
+    ["schemaVersion", "risk", "summary", "edits", "verificationCommands", "doneCriteria"],
     errors,
     "code patch plan",
   );
@@ -712,6 +785,7 @@ function validateCodePatchPlan(
   const summary = stringValue(value.summary, "summary", 420, errors);
   const edits = validateCodePatchEdits(value.edits, allowedRelativePaths, errors);
   const verificationCommands = validateVerificationCommands(value.verificationCommands, errors);
+  const doneCriteria = stringArray(value.doneCriteria ?? [], "doneCriteria", 8, errors);
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
@@ -721,6 +795,7 @@ function validateCodePatchPlan(
       summary,
       edits,
       verificationCommands,
+      doneCriteria,
     },
   };
 }
@@ -1117,6 +1192,23 @@ function stringArray(value: unknown, field: string, maxItems: number, errors: st
     out.add(trimmed.slice(0, 80));
   }
   return [...out];
+}
+
+function stringArrayArray(
+  value: unknown,
+  field: string,
+  maxGroups: number,
+  maxItemsPerGroup: number,
+  errors: string[],
+): string[][] {
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be an array of string arrays.`);
+    return [];
+  }
+  if (value.length > maxGroups) errors.push(`${field} may contain at most ${maxGroups} groups.`);
+  return value.slice(0, maxGroups)
+    .map((group, index) => stringArray(group, `${field}[${index}]`, maxItemsPerGroup, errors))
+    .filter((group) => group.length > 0);
 }
 
 function stringValue(value: unknown, field: string, maxLength: number, errors: string[]): string {

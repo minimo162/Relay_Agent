@@ -894,12 +894,23 @@ const SEMANTIC_ENTITY_CONTEXT_TERMS = [
   'ガバナンス',
   '会社概要',
   '会社情報',
+  '会社名',
+  '各社ファイル',
+  '会社別',
   'jbu',
 ];
 
-function fileHasSemanticEntityContext(file: FileMetadata): boolean {
+function fileHasSemanticEntityContext(
+  file: FileMetadata,
+  queryPlan?: RelayDocumentSearchQueryPlanV1,
+): boolean {
   const haystack = normalizedFileHaystack(file);
-  return SEMANTIC_ENTITY_CONTEXT_TERMS.some((term) => haystack.includes(normalizeRelaySearchText(term)));
+  const dynamicTerms = [
+    ...(queryPlan?.semanticEntityRiskTerms ?? []),
+    ...((queryPlan?.semanticConceptGroups ?? []).flatMap((group) => group.entityRiskTerms)),
+  ];
+  return [...SEMANTIC_ENTITY_CONTEXT_TERMS, ...dynamicTerms]
+    .some((term) => haystack.includes(normalizeRelaySearchText(term)));
 }
 
 function matchedSemanticTerms(text: string, terms: string[]): string[] {
@@ -970,7 +981,7 @@ function semanticConceptMatchForCandidate(
   evidence: ContentEvidence | undefined,
   queryPlan: RelayDocumentSearchQueryPlanV1,
 ): SemanticConceptMatchResult {
-  const entityContext = fileHasSemanticEntityContext(file);
+  const entityContext = fileHasSemanticEntityContext(file, queryPlan);
   if (!queryPlan.semanticConceptGroups.length) {
     return { matched: true, confirmed: true, strength: 'none', reasons: [], score: 0, entityContext };
   }
@@ -1111,7 +1122,7 @@ function semanticScoreForCandidate(
       required: false,
       allowed: true,
       confirmed: true,
-      entityContext: fileHasSemanticEntityContext(file),
+      entityContext: fileHasSemanticEntityContext(file, queryPlan),
       score: -(demoteMatches.length * 4),
       reasons: demoteMatches.map((term) => `demote:${term}`),
     };

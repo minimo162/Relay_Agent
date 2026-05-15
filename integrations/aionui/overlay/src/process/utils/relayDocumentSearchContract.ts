@@ -88,15 +88,28 @@ export type RelayDocumentSearchFileType =
   | 'pptx'
   | 'pdf';
 
+export type RelayDocumentSearchCopilotQueryPlanSchemaVersion =
+  | 'RelayDocumentSearchCopilotQueryPlan.v1'
+  | 'RelayDocumentSearchCopilotQueryPlan.v3';
+
+export type RelayDocumentSearchCoreConceptHintV1 = {
+  label: string;
+  directTerms: string[];
+  requiredTermGroups: string[][];
+  entityRiskTerms: string[];
+};
+
 export type RelayDocumentSearchCopilotQueryPlanHintsV1 = {
-  schemaVersion: 'RelayDocumentSearchCopilotQueryPlan.v1';
+  schemaVersion: RelayDocumentSearchCopilotQueryPlanSchemaVersion;
   rawQuery: string;
   intent: RelayDocumentSearchIntent;
   evidence: RelayDocumentSearchEvidenceMode;
   thoroughness: RelayDocumentSearchThoroughness;
+  coreConcepts: RelayDocumentSearchCoreConceptHintV1[];
   expandedTerms: string[];
   supportTerms: string[];
   demoteTerms: string[];
+  entityRiskTerms: string[];
   fileTypeHints: RelayDocumentSearchFileType[];
   timeScopeIntent?: RelayDocumentSearchTimeScopeIntent;
   summary?: string;
@@ -342,6 +355,63 @@ function normalizeQueryPlanFileTypes(value: unknown, errors: string[]): RelayDoc
   return normalized.size > 0 ? [...normalized] : ['any'];
 }
 
+function normalizeQueryPlanTermGroups(
+  value: unknown,
+  field: string,
+  errors: string[],
+  maxGroups: number,
+  maxItemsPerGroup: number,
+): string[][] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push(`queryPlanHints.${field} must be an array of string arrays`);
+    return [];
+  }
+  if (value.length > maxGroups) errors.push(`queryPlanHints.${field} may contain at most ${maxGroups} groups`);
+  return value.slice(0, maxGroups)
+    .map((group, index) => normalizeQueryPlanTerms(group, `${field}[${index}]`, errors, maxItemsPerGroup))
+    .filter((group) => group.length > 0);
+}
+
+function normalizeQueryPlanCoreConcepts(
+  value: unknown,
+  errors: string[],
+): RelayDocumentSearchCoreConceptHintV1[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push('queryPlanHints.coreConcepts must be an array');
+    return [];
+  }
+  if (value.length > 8) errors.push('queryPlanHints.coreConcepts may contain at most 8 entries');
+  const out: RelayDocumentSearchCoreConceptHintV1[] = [];
+  value.slice(0, 8).forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      errors.push(`queryPlanHints.coreConcepts[${index}] must be an object`);
+      return;
+    }
+    const allowedFields = new Set(['label', 'directTerms', 'requiredTermGroups', 'entityRiskTerms']);
+    for (const field of Object.keys(entry)) {
+      if (!allowedFields.has(field)) errors.push(`Unknown queryPlanHints.coreConcepts[${index}] field: ${field}`);
+    }
+    const label = typeof entry.label === 'string' ? entry.label.trim().slice(0, 80) : '';
+    if (!label) errors.push(`queryPlanHints.coreConcepts[${index}].label is required`);
+    const directTerms = normalizeQueryPlanTerms(entry.directTerms, `coreConcepts[${index}].directTerms`, errors, 24);
+    const requiredTermGroups = normalizeQueryPlanTermGroups(
+      entry.requiredTermGroups,
+      `coreConcepts[${index}].requiredTermGroups`,
+      errors,
+      8,
+      16,
+    );
+    const entityRiskTerms = normalizeQueryPlanTerms(entry.entityRiskTerms, `coreConcepts[${index}].entityRiskTerms`, errors, 24);
+    if (!directTerms.length && requiredTermGroups.length < 2) {
+      errors.push(`queryPlanHints.coreConcepts[${index}] must include directTerms or at least two requiredTermGroups`);
+    }
+    if (label) out.push({ label, directTerms, requiredTermGroups, entityRiskTerms });
+  });
+  return out;
+}
+
 function normalizeQueryPlanHints(
   value: unknown,
   query: string,
@@ -358,9 +428,11 @@ function normalizeQueryPlanHints(
     'intent',
     'evidence',
     'thoroughness',
+    'coreConcepts',
     'expandedTerms',
     'supportTerms',
     'demoteTerms',
+    'entityRiskTerms',
     'fileTypeHints',
     'timeScopeIntent',
     'summary',
@@ -368,8 +440,11 @@ function normalizeQueryPlanHints(
   for (const field of Object.keys(value)) {
     if (!allowedFields.has(field)) errors.push(`Unknown queryPlanHints field: ${field}`);
   }
-  if (value.schemaVersion !== 'RelayDocumentSearchCopilotQueryPlan.v1') {
-    errors.push('queryPlanHints.schemaVersion must be RelayDocumentSearchCopilotQueryPlan.v1');
+  if (
+    value.schemaVersion !== 'RelayDocumentSearchCopilotQueryPlan.v1' &&
+    value.schemaVersion !== 'RelayDocumentSearchCopilotQueryPlan.v3'
+  ) {
+    errors.push('queryPlanHints.schemaVersion must be RelayDocumentSearchCopilotQueryPlan.v1 or RelayDocumentSearchCopilotQueryPlan.v3');
   }
   const rawQuery = typeof value.rawQuery === 'string' ? value.rawQuery : '';
   if (!rawQuery) errors.push('queryPlanHints.rawQuery is required');
@@ -379,9 +454,11 @@ function normalizeQueryPlanHints(
   const intent = normalizeQueryPlanEnum(value.intent, INTENTS, 'find_files', 'intent', errors);
   const evidence = normalizeQueryPlanEnum(value.evidence, EVIDENCE_MODES, 'candidate', 'evidence', errors);
   const thoroughness = normalizeQueryPlanEnum(value.thoroughness, THOROUGHNESS, 'quick', 'thoroughness', errors);
+  const coreConcepts = normalizeQueryPlanCoreConcepts(value.coreConcepts, errors);
   const expandedTerms = normalizeQueryPlanTerms(value.expandedTerms, 'expandedTerms', errors);
   const supportTerms = normalizeQueryPlanTerms(value.supportTerms, 'supportTerms', errors);
   const demoteTerms = normalizeQueryPlanTerms(value.demoteTerms, 'demoteTerms', errors);
+  const entityRiskTerms = normalizeQueryPlanTerms(value.entityRiskTerms, 'entityRiskTerms', errors);
   const fileTypeHints = normalizeQueryPlanFileTypes(value.fileTypeHints, errors);
   const timeScopeIntent = value.timeScopeIntent === undefined
     ? undefined
@@ -391,14 +468,18 @@ function normalizeQueryPlanHints(
     errors.push('queryPlanHints.summary must be a string');
   }
   return {
-    schemaVersion: 'RelayDocumentSearchCopilotQueryPlan.v1',
+    schemaVersion: value.schemaVersion === 'RelayDocumentSearchCopilotQueryPlan.v3'
+      ? 'RelayDocumentSearchCopilotQueryPlan.v3'
+      : 'RelayDocumentSearchCopilotQueryPlan.v1',
     rawQuery,
     intent,
     evidence,
     thoroughness,
+    coreConcepts,
     expandedTerms,
     supportTerms,
     demoteTerms,
+    entityRiskTerms,
     fileTypeHints,
     ...(timeScopeIntent ? { timeScopeIntent } : {}),
     ...(summary ? { summary } : {}),
@@ -622,22 +703,24 @@ export const relayDocumentSearchOpenAiToolSchema = {
           type: 'object',
           additionalProperties: false,
           description:
-            'Optional Copilot-filled RelayDocumentSearchCopilotQueryPlan.v1 hints. Relay validates this and still owns execution.',
+            'Optional Copilot-filled RelayDocumentSearchCopilotQueryPlan hints. Relay validates this and still owns execution.',
           required: [
             'schemaVersion',
             'rawQuery',
             'intent',
             'evidence',
             'thoroughness',
+            'coreConcepts',
             'expandedTerms',
             'supportTerms',
             'demoteTerms',
+            'entityRiskTerms',
             'fileTypeHints',
           ],
           properties: {
             schemaVersion: {
               type: 'string',
-              enum: ['RelayDocumentSearchCopilotQueryPlan.v1'],
+              enum: ['RelayDocumentSearchCopilotQueryPlan.v1', 'RelayDocumentSearchCopilotQueryPlan.v3'],
             },
             rawQuery: {
               type: 'string',
@@ -656,6 +739,37 @@ export const relayDocumentSearchOpenAiToolSchema = {
               type: 'string',
               enum: THOROUGHNESS,
             },
+            coreConcepts: {
+              type: 'array',
+              maxItems: 8,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['label', 'directTerms', 'requiredTermGroups', 'entityRiskTerms'],
+                properties: {
+                  label: { type: 'string', minLength: 1, maxLength: 80 },
+                  directTerms: {
+                    type: 'array',
+                    maxItems: 24,
+                    items: { type: 'string', minLength: 1, maxLength: 80 },
+                  },
+                  requiredTermGroups: {
+                    type: 'array',
+                    maxItems: 8,
+                    items: {
+                      type: 'array',
+                      maxItems: 16,
+                      items: { type: 'string', minLength: 1, maxLength: 80 },
+                    },
+                  },
+                  entityRiskTerms: {
+                    type: 'array',
+                    maxItems: 24,
+                    items: { type: 'string', minLength: 1, maxLength: 80 },
+                  },
+                },
+              },
+            },
             expandedTerms: {
               type: 'array',
               maxItems: 40,
@@ -667,6 +781,11 @@ export const relayDocumentSearchOpenAiToolSchema = {
               items: { type: 'string', minLength: 1, maxLength: 80 },
             },
             demoteTerms: {
+              type: 'array',
+              maxItems: 40,
+              items: { type: 'string', minLength: 1, maxLength: 80 },
+            },
+            entityRiskTerms: {
               type: 'array',
               maxItems: 40,
               items: { type: 'string', minLength: 1, maxLength: 80 },

@@ -85,9 +85,9 @@ test("Relay document search OpenAI schema exposes only model-owned request field
   ]);
   assert.equal(schema.function.parameters.properties.maxResults.maximum, 300);
   assert.equal(schema.function.parameters.properties.roots.maxItems, 16);
-  assert.equal(
-    schema.function.parameters.properties.queryPlanHints.properties.schemaVersion.enum[0],
-    "RelayDocumentSearchCopilotQueryPlan.v1",
+  assert.deepEqual(
+    schema.function.parameters.properties.queryPlanHints.properties.schemaVersion.enum,
+    ["RelayDocumentSearchCopilotQueryPlan.v1", "RelayDocumentSearchCopilotQueryPlan.v3"],
   );
   assert.deepEqual(schema.function.parameters.properties.queryPlanHints.properties.timeScopeIntent.enum, [
     "latest_first",
@@ -109,14 +109,23 @@ test("Relay document search request validator rejects Relay-controlled fields", 
     maxResults: 80,
     evidence: "required",
     queryPlanHints: {
-      schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+      schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v3",
       rawQuery: "160連結 キャッシュフロー",
       intent: "answer_with_evidence",
       evidence: "required",
       thoroughness: "thorough",
+      coreConcepts: [
+        {
+          label: "キャッシュフロー計算書",
+          directTerms: ["キャッシュフロー", "CFS"],
+          requiredTermGroups: [],
+          entityRiskTerms: [],
+        },
+      ],
       expandedTerms: ["キャッシュフロー", "CFS"],
       supportTerms: ["精算表"],
       demoteTerms: ["ファイリング"],
+      entityRiskTerms: [],
       fileTypeHints: ["xlsx"],
       timeScopeIntent: "latest_first",
       summary: "CFS候補を広く拾う。",
@@ -140,9 +149,11 @@ test("Relay document search request validator rejects Relay-controlled fields", 
       evidence: "candidate",
       thoroughness: "quick",
       roots: ["H:/not/allowed"],
+      coreConcepts: [],
       expandedTerms: ["cash flow"],
       supportTerms: [],
       demoteTerms: [],
+      entityRiskTerms: [],
       fileTypeHints: ["any"],
     },
   });

@@ -26,6 +26,7 @@ export type RelayDocumentSearchQueryPlanV1 = {
   normalizedTerms: string[];
   supportOnlyTerms: string[];
   semanticConceptGroups: RelayDocumentSearchSemanticConceptGroupV1[];
+  semanticEntityRiskTerms: string[];
   synonymExpansions: Array<{ source: string; terms: string[] }>;
   copilotHintSummary?: string;
   periodHints: string[];
@@ -46,6 +47,7 @@ export type RelayDocumentSearchSemanticConceptGroupV1 = {
   allOfAny: string[][];
   recallTerms: string[];
   standaloneBlockedTerms: string[];
+  entityRiskTerms: string[];
   supportTerms: string[];
 };
 
@@ -375,9 +377,37 @@ function semanticConceptGroupsForRequest(
         ...PARTS_SALES_PART_TERMS,
       ]),
       standaloneBlockedTerms: normalizeTermList(PARTS_SALES_SALES_TERMS),
+      entityRiskTerms: [],
       supportTerms: normalizeTermList(PARTS_SALES_SUPPORT_TERMS),
     },
   ];
+}
+
+function semanticConceptGroupsFromCopilotHints(
+  request: RelayDocumentSearchRequestV1,
+): RelayDocumentSearchSemanticConceptGroupV1[] {
+  const groups: RelayDocumentSearchSemanticConceptGroupV1[] = [];
+  for (const [index, concept] of (request.queryPlanHints?.coreConcepts ?? []).entries()) {
+    const directTerms = normalizeTermList(concept.directTerms);
+    const allOfAny = concept.requiredTermGroups
+      .map((group) => normalizeTermList(group))
+      .filter((group) => group.length > 0);
+    if (!directTerms.length && allOfAny.length < 2) continue;
+    const sourceLabel = normalizeRelaySearchText(concept.label).replace(/\s+/gu, '_') || `concept_${index + 1}`;
+    groups.push({
+      source: `copilot_${sourceLabel}`,
+      directTerms,
+      allOfAny,
+      recallTerms: normalizeTermList([
+        ...directTerms,
+        ...allOfAny.flat(),
+      ]),
+      standaloneBlockedTerms: normalizeTermList(concept.entityRiskTerms),
+      entityRiskTerms: normalizeTermList(concept.entityRiskTerms),
+      supportTerms: normalizeTermList(request.queryPlanHints?.supportTerms ?? []),
+    });
+  }
+  return groups;
 }
 
 function recencyPreference(query: string): RelayDocumentSearchQueryPlanV1['recencyPreference'] {
@@ -461,6 +491,21 @@ export function buildRelayDocumentSearchQueryPlan(
   }
   const copilotHintTerms = new Set<string>();
   if (request.queryPlanHints) {
+    for (const concept of request.queryPlanHints.coreConcepts ?? []) {
+      for (const term of concept.directTerms) {
+        addTerm(terms, term);
+        addTerm(copilotHintTerms, term);
+      }
+      for (const group of concept.requiredTermGroups) {
+        for (const term of group) {
+          addTerm(terms, term);
+          addTerm(copilotHintTerms, term);
+        }
+      }
+      for (const term of concept.entityRiskTerms) {
+        addTerm(copilotHintTerms, term);
+      }
+    }
     for (const term of request.queryPlanHints.expandedTerms) {
       addTerm(terms, term);
       addTerm(copilotHintTerms, term);
@@ -476,12 +521,18 @@ export function buildRelayDocumentSearchQueryPlan(
 
   const periods = periodHints(request.query);
   for (const hint of periods) addTerm(terms, hint);
-  const semanticConceptGroups = semanticConceptGroupsForRequest(request.query, terms, copilotHintTerms);
+  const semanticConceptGroups = [
+    ...semanticConceptGroupsFromCopilotHints(request),
+    ...semanticConceptGroupsForRequest(request.query, terms, copilotHintTerms),
+  ];
+  const semanticEntityRiskTerms = new Set<string>();
+  for (const term of request.queryPlanHints?.entityRiskTerms ?? []) addTerm(semanticEntityRiskTerms, term);
   const blockedStandaloneTerms = new Set<string>();
   for (const group of semanticConceptGroups) {
     for (const term of group.directTerms) addTerm(terms, term);
     for (const term of group.recallTerms) addTerm(terms, term);
     for (const term of group.standaloneBlockedTerms) addTerm(blockedStandaloneTerms, term);
+    for (const term of group.entityRiskTerms) addTerm(semanticEntityRiskTerms, term);
     for (const term of group.supportTerms) addTerm(supportOnlyTerms, term);
   }
   for (const term of blockedStandaloneTerms) terms.delete(term);
@@ -506,6 +557,7 @@ export function buildRelayDocumentSearchQueryPlan(
     normalizedTerms: [...terms],
     supportOnlyTerms: [...supportOnlyTerms],
     semanticConceptGroups,
+    semanticEntityRiskTerms: [...semanticEntityRiskTerms],
     synonymExpansions,
     ...(request.queryPlanHints?.summary ? { copilotHintSummary: request.queryPlanHints.summary } : {}),
     periodHints: periods,

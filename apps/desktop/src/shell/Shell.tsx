@@ -44,6 +44,7 @@ import { StatusToasts } from "../components/StatusToasts";
 type Mode = "search" | "office" | "code";
 type SearchPhase = "" | "planning" | "searching" | "reflecting" | "organizing";
 type CodePhase = "" | "context" | "planning" | "applying";
+type AgentRunPhase = "idle" | "understanding" | "planning" | "executing" | "observing" | "reflecting" | "finalizing" | "failed";
 type AgentTraceStatus = "running" | "done" | "error";
 type AgentTraceItem = {
   id: string;
@@ -159,6 +160,7 @@ export default function Shell(): JSX.Element {
   const [codeApplyResult, setCodeApplyResult] = createSignal<RelayCodePatchApplyResponse | null>(null);
   const [codeError, setCodeError] = createSignal("");
   const [agentTrace, setAgentTrace] = createSignal<AgentTraceItem[]>([]);
+  const [agentRunPhase, setAgentRunPhase] = createSignal<AgentRunPhase>("idle");
 
   const workspaceReady = createMemo(() => workspacePath().trim().length > 0);
   const activeCard = createMemo(() => selectedCard() || searchSnapshot()?.result.cards[0] || null);
@@ -195,6 +197,7 @@ export default function Shell(): JSX.Element {
   const resetAgentTrace = () => {
     agentTraceSequence = 0;
     setAgentTrace([]);
+    setAgentRunPhase("understanding");
   };
 
   const beginAgentStep = (label: string, detail = "") => {
@@ -299,6 +302,7 @@ export default function Shell(): JSX.Element {
 
   const compileSearchPlan = async (query: string, workspace: string) => {
     const traceId = beginAgentStep("Copilot", "検索語を整理");
+    setAgentRunPhase("planning");
     setSearchPhase("planning");
     setSearchStatus("Copilotで検索語を整理しています");
     try {
@@ -327,6 +331,7 @@ export default function Shell(): JSX.Element {
     result: RelayDocumentSearchResponse,
   ): Promise<RelayDocumentSearchResultSummary> => {
     const traceId = beginAgentStep("Copilot", "検索結果を整理");
+    setAgentRunPhase("finalizing");
     setSearchPhase("organizing");
     setSearchStatus("Copilotで結果を整理しています");
     try {
@@ -376,6 +381,7 @@ export default function Shell(): JSX.Element {
     plan: RelayDocumentSearchQueryPlanHints,
   ) => {
     const traceId = beginAgentStep("Copilot", "検索結果を点検");
+    setAgentRunPhase("reflecting");
     setSearchPhase("reflecting");
     setSearchStatus("検索結果の質を確認しています");
     try {
@@ -432,6 +438,7 @@ export default function Shell(): JSX.Element {
     try {
       const plan = await compileSearchPlan(query, workspace);
       if (searchId !== searchSequence) return;
+      setAgentRunPhase("executing");
       setSearchPhase("searching");
       setSearchStatus("ローカル検索を実行しています");
       const traceId = beginAgentStep("Relay", "ローカル検索を実行");
@@ -505,6 +512,7 @@ export default function Shell(): JSX.Element {
         detail: localOrganizer.summary,
       });
       if (!result.ok || result.cards.length === 0) return;
+      setAgentRunPhase("finalizing");
       try {
         const organizer = await organizeSearchSnapshot(query, workspace, snapshotId, result);
         if (searchId !== searchSequence) return;
@@ -526,11 +534,13 @@ export default function Shell(): JSX.Element {
     } catch (error) {
       if (searchId !== searchSequence) return;
       const message = friendlyErrorMessage(error);
+      setAgentRunPhase("failed");
       setSearchError(message);
       showToast({ tone: "danger", message: "検索に失敗しました", detail: message });
     } finally {
       if (searchId === searchSequence) {
         setSearching(false);
+        if (agentRunPhase() !== "failed") setAgentRunPhase("idle");
         setSearchStatus("");
         setSearchPhase("");
         void refreshState(false);
@@ -567,6 +577,7 @@ export default function Shell(): JSX.Element {
     setOfficePlan(null);
     setOfficeApplyResult(null);
     resetAgentTrace();
+    setAgentRunPhase("planning");
     try {
       const outline = await inspectOffice();
       const traceId = beginAgentStep("Copilot", "編集内容をOfficeCLI操作へ変換");
@@ -593,10 +604,12 @@ export default function Shell(): JSX.Element {
       showToast({ tone: "ok", message: "変更内容を確認しました" });
     } catch (error) {
       const message = friendlyErrorMessage(error);
+      setAgentRunPhase("failed");
       setOfficeError(message);
       showToast({ tone: "danger", message: "変更内容を確認できませんでした", detail: message });
     } finally {
       setOfficeRunning(false);
+      if (agentRunPhase() !== "failed") setAgentRunPhase("idle");
       setOfficePhase("");
       void refreshState(false);
     }
@@ -610,6 +623,7 @@ export default function Shell(): JSX.Element {
       return;
     }
     setOfficeRunning(true);
+    setAgentRunPhase("executing");
     setOfficePhase("バックアップを作成して適用しています");
     setOfficeError("");
     try {
@@ -635,10 +649,12 @@ export default function Shell(): JSX.Element {
       });
     } catch (error) {
       const message = friendlyErrorMessage(error);
+      setAgentRunPhase("failed");
       setOfficeError(message);
       showToast({ tone: "danger", message: "Office編集に失敗しました", detail: message });
     } finally {
       setOfficeRunning(false);
+      if (agentRunPhase() !== "failed") setAgentRunPhase("idle");
       setOfficePhase("");
       void refreshState(false);
     }
@@ -662,8 +678,10 @@ export default function Shell(): JSX.Element {
     setCodePlan(null);
     setCodeApplyResult(null);
     resetAgentTrace();
+    setAgentRunPhase("planning");
     try {
       const contextTraceId = beginAgentStep("Relay", "コード文脈を収集");
+      setAgentRunPhase("observing");
       const context = await collectCodeContext({
         workspacePath: workspace,
         instruction,
@@ -676,6 +694,7 @@ export default function Shell(): JSX.Element {
         throw new Error(context.error || context.summary || "変更案に使えるコードファイルを確認できませんでした。");
       }
       setCodePhase("planning");
+      setAgentRunPhase("planning");
       const planTraceId = beginAgentStep("Copilot", "コード変更案を作成");
       let nextPlan: RelayCodePatchPlan | null = null;
       try {
@@ -711,10 +730,12 @@ export default function Shell(): JSX.Element {
       });
     } catch (error) {
       const message = friendlyErrorMessage(error);
+      setAgentRunPhase("failed");
       setCodeError(message);
       showToast({ tone: "danger", message: "コード変更案を作成できませんでした", detail: message });
     } finally {
       setCodeRunning(false);
+      if (agentRunPhase() !== "failed") setAgentRunPhase("idle");
       setCodePhase("");
     }
   };
@@ -727,6 +748,7 @@ export default function Shell(): JSX.Element {
       return;
     }
     setCodeRunning(true);
+    setAgentRunPhase("executing");
     setCodePhase("applying");
     setCodeError("");
     setCodeApplyResult(null);
@@ -746,10 +768,12 @@ export default function Shell(): JSX.Element {
       });
     } catch (error) {
       const message = friendlyErrorMessage(error);
+      setAgentRunPhase("failed");
       setCodeError(message);
       showToast({ tone: "danger", message: "コード差分を適用できませんでした", detail: message });
     } finally {
       setCodeRunning(false);
+      if (agentRunPhase() !== "failed") setAgentRunPhase("idle");
       setCodePhase("");
     }
   };
@@ -929,6 +953,12 @@ export default function Shell(): JSX.Element {
                         <small>{plan().verificationCommands.join(" / ")}</small>
                       </div>
                     </Show>
+                    <Show when={plan().doneCriteria.length}>
+                      <div class="relay-plan-strip">
+                        <span>完了条件</span>
+                        <small>{plan().doneCriteria.join(" / ")}</small>
+                      </div>
+                    </Show>
                   </section>
                 )}
               </Show>
@@ -1040,19 +1070,25 @@ export default function Shell(): JSX.Element {
                     </div>
                     <p>{plan().risk}</p>
                   </div>
-                  <div class="relay-plan-list">
-                    <For each={plan().commands}>
-                      {(command) => (
-                        <div class="relay-plan-item">
-                          <strong>{command.summary}</strong>
-                          <code>{officePlanToArgs(command)}</code>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </section>
-              )}
-            </Show>
+                    <div class="relay-plan-list">
+                      <For each={plan().operations}>
+                        {(operation) => (
+                          <div class="relay-plan-item">
+                            <strong>{operation.summary}</strong>
+                            <code>{operation.kind}{operation.sheet && operation.range ? ` · ${operation.sheet}!${operation.range}` : ""}</code>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                    <Show when={plan().ambiguities.length}>
+                      <div class="relay-plan-strip">
+                        <span>確認が必要な点</span>
+                        <small>{plan().ambiguities.join(" / ")}</small>
+                      </div>
+                    </Show>
+                  </section>
+                )}
+              </Show>
 
             <Show when={officeApplyResult()}>
               {(result) => (

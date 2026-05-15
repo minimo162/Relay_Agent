@@ -155,7 +155,7 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   just `--version`, before enabling Office workflows.
 - The desktop UI now includes `コードを書く`. Relay collects a bounded set of
   local code files, sends only that context to Copilot, validates a strict
-  `RelayCodePatchPlan.v1` JSON response, and applies only unique exact-string
+  `RelayCodePatchPlan.v3` JSON response, and applies only unique exact-string
   replacements inside the workspace.
 - The frontend planner module now defines and validates `RelayAgentStep.v1`.
   Copilot can describe the next step only through a mode-scoped JSON contract,
@@ -181,15 +181,35 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   entity/context candidates, Copilot may return a validated
   `RelayDocumentSearchReflection.v1` refinement and Relay runs one additional
   local search with stricter concept terms.
-- Office editing uses `RelayOfficeEditPlan.v2`: Copilot returns only safe
+- Office editing uses `RelayOfficeEditPlan.v3`: Copilot returns only safe
   semantic operations, while Relay injects the selected file path and compiles
   OfficeCLI argv locally. Legacy Copilot-returned paths/argv are rejected.
-- Code patch planning uses `RelayCodePatchPlan.v2` and no longer asks Copilot
+- Code patch planning uses `RelayCodePatchPlan.v3` and no longer asks Copilot
   to echo the workspace path or raw instruction. Relay supplies the workspace
   locally and validates edits only against collected context files.
 - Code context collection no longer includes README/docs merely because they
   are project metadata. README/docs are included only when the instruction or
   explicit target asks for documentation context.
+- Document search query planning now uses `RelayDocumentSearchCopilotQueryPlan.v3`.
+  Copilot may define core concepts, required term groups, and entity-risk terms,
+  but Relay validates the JSON and owns all search execution, scoring, and
+  entity-context demotion. This keeps compound concepts such as `部品売上`
+  anchored to both dimensions instead of overranking company-name or folder-name
+  matches such as `Mパーツ`.
+- Document-search reflection and result organization consume the v3 concept
+  hints and candidate IDs only. Copilot can refine or group the local evidence
+  pack, but it cannot introduce paths, files, or unsupported classifications.
+- Office editing now accepts `RelayOfficeEditPlan.v3`, including explicit
+  ambiguity notes. The UI presents semantic operations instead of raw OfficeCLI
+  argv, and Relay still compiles and executes the concrete OfficeCLI command
+  locally only after user approval.
+- Code editing now accepts `RelayCodePatchPlan.v3`, including done criteria
+  for the user-visible review. Relay still applies only validated exact-string
+  patches inside the workspace.
+- Search, Office, and Code workflows now share a simple agent phase model
+  (`understanding`, `planning`, `executing`, `observing`, `reflecting`,
+  `finalizing`, `failed`) so the UI can show one concise workflow state without
+  exposing internal harness noise.
 
 ## Remaining Hardening Tasks
 
@@ -207,8 +227,8 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
    uninstall behavior.
 6. Remove or archive remaining AionUi overlay scripts/tests once search source
    ownership has moved.
-7. Add an installed Windows E2E matrix for the new reflection path, Office v2
-   plan path, and CodePatchPlan v2 path against Microsoft 365 Copilot.
+7. Add an installed Windows E2E matrix for the reflection path, Office v3 plan
+   path, and CodePatchPlan v3 path against Microsoft 365 Copilot.
 
 ## Verification Gates
 

@@ -154,14 +154,23 @@ test("search reflection validator accepts refinement terms without paths", async
       localSummary: "候補があります。",
       coverageLabel: "100件を確認しました。",
       queryPlan: {
-        schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+        schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v3",
         rawQuery: "部品売上に関するファイルを探して",
         intent: "find_files",
         evidence: "candidate",
         thoroughness: "thorough",
+        coreConcepts: [
+          {
+            label: "部品売上",
+            directTerms: ["部品売上", "パーツ売上"],
+            requiredTermGroups: [["部品", "パーツ"], ["売上", "売上高"]],
+            entityRiskTerms: ["会社名"],
+          },
+        ],
         expandedTerms: ["部品売上", "パーツ売上"],
         supportTerms: ["内訳"],
         demoteTerms: [],
+        entityRiskTerms: ["会社名"],
         fileTypeHints: ["any"],
         timeScopeIntent: "balanced",
       },
@@ -212,13 +221,13 @@ test("office edit planner uses operation DSL and Relay compiles selected file pa
       filePath: "C:\\Users\\m242054\\Downloads\\Book2.xlsx",
       outlineJson: JSON.stringify({ sheets: [{ name: "Sheet1" }] }),
     });
-    assert.match(prompt, /RelayOfficeEditPlan\.v2/);
+    assert.match(prompt, /RelayOfficeEditPlan\.v3/);
     assert.match(prompt, /operations/);
     assert.match(prompt, /Never output rawInstruction, filePath, commands, argv/);
 
     const validation = module.validateOfficeEditPlanText(
       JSON.stringify({
-        schemaVersion: "RelayOfficeEditPlan.v2",
+        schemaVersion: "RelayOfficeEditPlan.v3",
         risk: "medium",
         operations: [
           {
@@ -229,6 +238,7 @@ test("office edit planner uses operation DSL and Relay compiles selected file pa
             props: { fill: "FF0000" },
           },
         ],
+        ambiguities: [],
         summary: "Sheet1のA1を赤くします。",
       }),
       "Sheet1 のA1セルを赤くして",
@@ -294,7 +304,7 @@ test("code patch prompt uses context-relative paths only", async () => {
       ],
     });
 
-    assert.match(prompt, /RelayCodePatchPlan\.v2/);
+    assert.match(prompt, /RelayCodePatchPlan\.v3/);
     assert.match(prompt, /README\.md/);
     assert.equal(prompt.includes('"path"'), false);
     assert.match(prompt, /Never output rawInstruction, workspacePath/);
@@ -308,7 +318,7 @@ test("code patch validator accepts exact context file edits", async () => {
   const { module, cleanup } = await loadPlannerModule();
   try {
     const response = JSON.stringify({
-      schemaVersion: "RelayCodePatchPlan.v2",
+      schemaVersion: "RelayCodePatchPlan.v3",
       risk: "low",
       summary: "READMEの見出しを更新します。",
       edits: [
@@ -320,6 +330,7 @@ test("code patch validator accepts exact context file edits", async () => {
         },
       ],
       verificationCommands: ["pnpm typecheck"],
+      doneCriteria: ["READMEの見出しが新しい文言になる"],
     });
     const validation = module.validateCodePatchPlanText(
       response,
@@ -338,7 +349,7 @@ test("code patch validator rejects paths outside context", async () => {
   const { module, cleanup } = await loadPlannerModule();
   try {
     const response = JSON.stringify({
-      schemaVersion: "RelayCodePatchPlan.v2",
+      schemaVersion: "RelayCodePatchPlan.v3",
       risk: "low",
       summary: "READMEの見出しを更新します。",
       edits: [
@@ -350,6 +361,7 @@ test("code patch validator rejects paths outside context", async () => {
         },
       ],
       verificationCommands: [],
+      doneCriteria: ["READMEの見出しが更新される"],
     });
     const validation = module.validateCodePatchPlanText(
       response,

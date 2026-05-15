@@ -22,6 +22,61 @@
 
 ## Milestone Log
 
+### 2026-05-15 Agentic v3 contracts for search, Office, and code
+
+Implemented the next agentic contract slice while keeping Relay as the only
+local executor:
+
+- Upgraded document-search query planning to
+  `RelayDocumentSearchCopilotQueryPlan.v3`. Copilot can now provide validated
+  core concepts, required term groups, and entity-risk terms; Relay keeps
+  ownership of all filesystem search, content inspection, scoring, and
+  candidate demotion.
+- Strengthened compound business search ranking. Direct concept aliases and
+  all-required-dimension matches can be concept-confirmed; entity/context-only
+  matches such as company names or generic `各社ファイル` paths remain lower
+  confidence candidates.
+- Propagated v3 concept hints through reflection, local query planning, the
+  document-search executor, Rust IPC models, generated frontend IPC bindings,
+  and the current AionUi overlay compatibility copy.
+- Upgraded Office planning to `RelayOfficeEditPlan.v3`. Copilot may describe
+  semantic operations and ambiguities, while Relay still injects the selected
+  file path and compiles OfficeCLI argv locally after user approval.
+- Upgraded code planning to `RelayCodePatchPlan.v3`, including explicit done
+  criteria for review. Relay still applies only validated exact-string edits
+  inside the selected workspace.
+- Added a shared frontend agent phase model for search, Office, and code so
+  the workbench can show concise workflow progress across understanding,
+  planning, execution, reflection, finalization, and failure.
+
+Verification commands run locally:
+
+```bash
+node --test scripts/copilot-planners.test.mjs
+node --test scripts/relay-document-search-contract.test.mjs
+node --test scripts/relay-document-search-query-plan.test.mjs
+node --test scripts/relay-document-search-executor.test.mjs
+pnpm --filter @relay-agent/desktop typecheck
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `node --test scripts/copilot-planners.test.mjs`: passed, 12 passed.
+- `node --test scripts/relay-document-search-contract.test.mjs`: passed, 5 passed.
+- `node --test scripts/relay-document-search-query-plan.test.mjs`: passed, 6 passed.
+- `node --test scripts/relay-document-search-executor.test.mjs`: passed, 36 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`: passed, 48 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-05-15 Copilot/Relay safety contract hardening
 
 Implemented the next hardening slice for the dedicated Relay workbench:
