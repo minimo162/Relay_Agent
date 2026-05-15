@@ -21,6 +21,50 @@
 
 ## Milestone Log
 
+### 2026-05-15 compound search precision and OfficeCLI runtime guard
+
+Tightened document-search ranking for compound business concepts such as
+`部品売上`. Copilot can still expand the user's natural-language request, but
+Relay now removes broad standalone sales terms from the recall set for
+parts-sales queries and requires concept coverage before ranking a candidate as
+confirmed. Direct aliases such as `部品他売上`, `パーツ売上`, `部販`, and
+English parts-sales terms rank highest. Candidates that only contain generic
+`売上` or consolidation sales wording are no longer allowed to outrank direct
+parts or parts-sales files.
+
+Content evidence now has more precise states: `concept_confirmed`,
+`partial_content_match`, `generic_content_match`, and `filename_only`. The
+post-search Copilot organizer may summarize `content_confirmed` and
+`concept_confirmed` as confirmed evidence, but must treat partial, generic, and
+filename-only hits as candidates.
+
+Updated bundled OfficeCLI from `v1.0.76` to `v1.0.92` and aligned the desktop
+manifest, launch helpers, and tests to the upstream Windows x64 artifact and
+checksum. Relay now validates OfficeCLI candidates with a real
+`view <smoke.xlsx> outline --json` smoke test before marking Office workflows
+ready. This catches cases where `officecli --version` works but the actual
+Office read/edit command fails because runtime dependencies such as
+`System.Private.Xml` are missing. Runtime dependency failures now produce an
+actionable OfficeCLI error message.
+
+The desktop package, Tauri config, and Cargo package version were advanced to
+`0.2.7` for the installer release that contains this fix.
+
+Verification:
+
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/copilot-planners.test.mjs` — pass, 9 passed.
+- `node --test scripts/relay-document-search-executor.test.mjs` — pass, 36 passed.
+- `node --test scripts/relay-document-search-query-plan.test.mjs scripts/copilot-planners.test.mjs scripts/relay-document-search-executor.test.mjs` — pass, 45 passed.
+- `node --test apps/desktop/scripts/officecli_bootstrap.test.mjs apps/desktop/scripts/aionui_relay_manifest.test.mjs apps/desktop/scripts/aionui_relay_launch.test.mjs` — pass, 21 passed.
+- `node --check apps/desktop/scripts/fetch-bundled-officecli.mjs` — pass.
+- `pnpm --filter @relay-agent/desktop prep:bundled-officecli` — pass, refreshed bundled OfficeCLI v1.0.92.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml commands::relay` — pass, 3 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `git diff --check` — pass.
+- `pnpm check` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — pass, 39 passed.
+
 ### 2026-05-15 Copilot composer visibility and send timing hardening
 
 Fixed a Copilot send failure where Relay pasted the prompt into the Microsoft

@@ -16,6 +16,9 @@ export const RELAY_DOCUMENT_SEARCH_RANKING_VERSION = 'relay-deterministic-ranker
 export type RelayDocumentSearchMatchMode = 'filename' | 'content' | 'hybrid' | 'table' | 'similar';
 export type RelayDocumentSearchEvidenceState =
   | 'filename_only'
+  | 'concept_confirmed'
+  | 'partial_content_match'
+  | 'generic_content_match'
   | 'content_confirmed'
   | 'content_backed'
   | 'table_backed'
@@ -475,7 +478,12 @@ function previewState(input: RelayDocumentSearchProductResultInput): RelayDocume
   if (includesAny(input.warnings, ['content_reader_unavailable', 'unsupported_content_reader'])) {
     return 'preview_unavailable';
   }
-  if (input.anchors.length > 0 || input.evidenceState === 'content_confirmed' || input.evidenceState === 'content_backed') {
+  if (
+    input.anchors.length > 0 ||
+    input.evidenceState === 'concept_confirmed' ||
+    input.evidenceState === 'content_confirmed' ||
+    input.evidenceState === 'content_backed'
+  ) {
     return 'preview_ready';
   }
   return 'preview_pending';

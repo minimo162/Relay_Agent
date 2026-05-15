@@ -54,7 +54,7 @@ test("AionUi launch env always passes Relay seed and prepends cached OfficeCLI w
   const env = aionuiLaunchEnv({
     platform: "win32",
     seedFile: "C:/Users/example/.relay-agent/aionui-provider-seed.json",
-    officeCliPath: "C:/Users/example/.relay-agent/tools/officecli/1.0.76/officecli.exe",
+    officeCliPath: "C:/Users/example/.relay-agent/tools/officecli/1.0.92/officecli.exe",
     baseEnv: {
       PATH: "C:/Windows/System32",
     },
@@ -62,8 +62,8 @@ test("AionUi launch env always passes Relay seed and prepends cached OfficeCLI w
   });
 
   assert.equal(env.RELAY_AIONUI_PROVIDER_SEED_FILE, "C:/Users/example/.relay-agent/aionui-provider-seed.json");
-  assert.equal(env.RELAY_OFFICECLI_PATH, "C:/Users/example/.relay-agent/tools/officecli/1.0.76/officecli.exe");
-  assert.match(env.PATH, /^C:\/Users\/example\/\.relay-agent\/tools\/officecli\/1\.0\.76;/);
+  assert.equal(env.RELAY_OFFICECLI_PATH, "C:/Users/example/.relay-agent/tools/officecli/1.0.92/officecli.exe");
+  assert.match(env.PATH, /^C:\/Users\/example\/\.relay-agent\/tools\/officecli\/1\.0\.92;/);
 });
 
 test("AionUi launch env records expected OfficeCLI path when it has not been downloaded yet", () => {
@@ -100,14 +100,14 @@ test("OfficeCLI bootstrap downloads and reports verified Windows artifact for la
     platform: "win32",
     download: async () => ({
       reused: false,
-      path: "C:/Users/example/.relay-agent/tools/officecli/1.0.76/officecli.exe",
+      path: "C:/Users/example/.relay-agent/tools/officecli/1.0.92/officecli.exe",
       sha256: "a".repeat(64),
       size: 1234,
     }),
   });
 
   assert.equal(result.status, "ready-downloaded");
-  assert.equal(result.path, "C:/Users/example/.relay-agent/tools/officecli/1.0.76/officecli.exe");
+  assert.equal(result.path, "C:/Users/example/.relay-agent/tools/officecli/1.0.92/officecli.exe");
   assert.equal(result.sha256, "a".repeat(64));
   assert.equal(result.size, 1234);
 });

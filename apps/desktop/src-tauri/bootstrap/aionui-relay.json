@@ -20,9 +20,9 @@
     "officeCli": {
       "name": "OfficeCLI",
       "repository": "https://github.com/iOfficeAI/OfficeCLI",
-      "version": "1.0.76",
-      "tag": "v1.0.76",
-      "commit": "958717ea25351b8920a3d8313d46e08b24b9c95b",
+      "version": "1.0.92",
+      "tag": "v1.0.92",
+      "commit": "f4b87533dc48fdfa8f9ce53e8331422f6a53f054",
       "license": "Apache-2.0",
       "installMode": "relay-bundled-portable-with-user-local-fallback",
       "artifacts": {
@@ -30,16 +30,16 @@
           "name": "officecli-win-x64.exe",
           "kind": "binary",
           "format": "exe",
-          "url": "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe",
-          "sha256": "f9e4895505858ab813e133d4d1f9f01004c7b4b08397408487f534caf9e2ec58",
-          "size": 30433916,
+          "url": "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.92/officecli-win-x64.exe",
+          "sha256": "ce5e4926dcfc766e467e92b207786822150a28930700f98334e10fe16ddc054a",
+          "size": 30777980,
           "entrypoint": "officecli.exe"
         }
       },
       "notes": [
         "Relay bundles the pinned OfficeCLI executable in the installer and prepends that directory to the AionUi child-process PATH.",
         "Relay may reuse a verified user-local fallback cache, but does not use the upstream PowerShell or shell install scripts in the product first-run path.",
-        "The SHA256 value is cross-checked against the upstream OfficeCLI v1.0.76 SHA256SUMS release asset."
+        "The SHA256 value is cross-checked against the upstream OfficeCLI v1.0.92 SHA256SUMS release asset."
       ]
     }
   },

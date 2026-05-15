@@ -173,6 +173,7 @@ import {
   RELAY_DOCUMENT_SEARCH_SCORE_BREAKDOWN_CONTRACT,
   RELAY_DOCUMENT_SEARCH_RANKING_VERSION,
   buildRelayDocumentSearchProductResult,
+  type RelayDocumentSearchEvidenceState,
   type RelayDocumentSearchScoreBreakdown,
   type RelayDocumentSearchSourceIndex,
 } from './relayDocumentSearchProductResult';
@@ -287,6 +288,22 @@ type RankedCandidate = {
   filenameIndexMatch?: RelayDocumentSearchFilenameIndexMatch;
   contentEvidence?: ContentEvidence;
   semanticAllowed?: boolean;
+};
+
+type SemanticConceptMatchStrength =
+  | 'none'
+  | 'filename_direct'
+  | 'filename_compound'
+  | 'content_direct'
+  | 'content_compound'
+  | 'hybrid_compound'
+  | 'partial';
+
+type SemanticConceptMatchResult = {
+  matched: boolean;
+  strength: SemanticConceptMatchStrength;
+  reasons: string[];
+  score: number;
 };
 
 type RelayDocumentSearchCandidateBucket =
@@ -882,22 +899,135 @@ function contentEvidenceMatchedTerms(evidence: ContentEvidence | undefined): str
   return [...terms];
 }
 
+function contentEvidenceAnchorTermGroups(evidence: ContentEvidence | undefined): string[][] {
+  if (!evidence) return [];
+  const groups: string[][] = [];
+  const tableRowGroups = new Map<string, Set<string>>();
+  for (const anchor of evidence.anchors) {
+    const matchedTerms = (anchor as { matchedTerms?: unknown }).matchedTerms;
+    if (!Array.isArray(matchedTerms)) continue;
+    const terms = new Set<string>();
+    for (const term of matchedTerms) {
+      if (typeof term === 'string') {
+        const normalized = normalizeRelaySearchText(term);
+        if (normalized) terms.add(normalized);
+      }
+    }
+    if (!terms.size) continue;
+    groups.push([...terms]);
+    const tableId = typeof anchor.table_id === 'string' ? anchor.table_id : '';
+    const sheetName = typeof anchor.sheet_name === 'string' ? anchor.sheet_name : '';
+    const row = typeof anchor.row === 'number' || typeof anchor.row === 'string' ? String(anchor.row) : '';
+    if (tableId || (sheetName && row)) {
+      const key = `${tableId}|${sheetName}|${row}`;
+      const current = tableRowGroups.get(key) ?? new Set<string>();
+      for (const term of terms) current.add(term);
+      tableRowGroups.set(key, current);
+    }
+  }
+  groups.push(...[...tableRowGroups.values()].map((terms) => [...terms]));
+  return groups;
+}
+
 function semanticTermsContainAny(matchedTerms: string[], requiredTerms: string[]): boolean {
   return requiredTerms.some((required) =>
     matchedTerms.some((matched) => matched === required || matched.includes(required) || required.includes(matched)),
   );
 }
 
-function contentEvidenceMatchesSemanticGroup(
+function semanticConceptMatchForCandidate(
+  file: FileMetadata,
   evidence: ContentEvidence | undefined,
   queryPlan: RelayDocumentSearchQueryPlanV1,
-): boolean {
-  const matchedTerms = contentEvidenceMatchedTerms(evidence);
-  if (!matchedTerms.length) return false;
-  return queryPlan.semanticConceptGroups.some((group) =>
-    semanticTermsContainAny(matchedTerms, group.directTerms) ||
-      group.allOfAny.every((termGroup) => semanticTermsContainAny(matchedTerms, termGroup)),
-  );
+): SemanticConceptMatchResult {
+  if (!queryPlan.semanticConceptGroups.length) {
+    return { matched: true, strength: 'none', reasons: [], score: 0 };
+  }
+
+  const haystack = normalizedFileHaystack(file);
+  const haystackMatches = [
+    ...queryPlan.semanticConceptGroups.flatMap((group) => [
+      ...matchedSemanticTerms(haystack, group.directTerms),
+      ...group.allOfAny.flatMap((termGroup) => matchedSemanticTerms(haystack, termGroup)),
+    ]),
+  ];
+  const anchorTermGroups = contentEvidenceAnchorTermGroups(evidence);
+  const allEvidenceTerms = contentEvidenceMatchedTerms(evidence);
+  let best: SemanticConceptMatchResult = {
+    matched: false,
+    strength: 'none',
+    reasons: [],
+    score: 0,
+  };
+  const take = (candidate: SemanticConceptMatchResult) => {
+    if (!candidate.matched) return;
+    if (candidate.score > best.score) best = candidate;
+  };
+
+  for (const group of queryPlan.semanticConceptGroups) {
+    const nameDirectMatches = matchedSemanticTerms(normalizeRelaySearchText(file.name), group.directTerms);
+    const pathDirectMatches = matchedSemanticTerms(normalizeRelaySearchText(file.displayPath), group.directTerms)
+      .filter((term) => !nameDirectMatches.includes(term));
+    const directMatches = [...nameDirectMatches, ...pathDirectMatches];
+    if (directMatches.length) {
+      const strongNameDirect = nameDirectMatches.some((term) => /売上|sales|revenue/iu.test(term));
+      take({
+        matched: true,
+        strength: 'filename_direct',
+        reasons: directMatches.map((term) => `semantic_direct:${group.source}:${term}`),
+        score: (strongNameDirect ? 52 : nameDirectMatches.length ? 40 : 28) + Math.min(12, directMatches.length * 4),
+      });
+    }
+
+    const allOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(haystack, termGroup));
+    if (allOfAnyMatches.every((matches) => matches.length > 0)) {
+      take({
+        matched: true,
+        strength: 'filename_compound',
+        reasons: [`semantic_compound:${group.source}`],
+        score: 24,
+      });
+    }
+
+    for (const anchorTerms of anchorTermGroups) {
+      if (semanticTermsContainAny(anchorTerms, group.directTerms)) {
+        take({
+          matched: true,
+          strength: 'content_direct',
+          reasons: [`semantic_content_direct:${group.source}`],
+          score: 45,
+        });
+      }
+      if (group.allOfAny.every((termGroup) => semanticTermsContainAny(anchorTerms, termGroup))) {
+        take({
+          matched: true,
+          strength: 'content_compound',
+          reasons: [`semantic_content_compound:${group.source}`],
+          score: 26,
+        });
+      }
+      const combined = [...new Set([...haystackMatches, ...anchorTerms])];
+      if (group.allOfAny.every((termGroup) => semanticTermsContainAny(combined, termGroup))) {
+        take({
+          matched: true,
+          strength: 'hybrid_compound',
+          reasons: [`semantic_hybrid_compound:${group.source}`],
+          score: 18,
+        });
+      }
+    }
+
+    if (semanticTermsContainAny([...haystackMatches, ...allEvidenceTerms], [...group.directTerms, ...group.allOfAny.flat()])) {
+      take({
+        matched: false,
+        strength: 'partial',
+        reasons: [`semantic_partial:${group.source}`],
+        score: 0,
+      });
+    }
+  }
+
+  return best;
 }
 
 function semanticScoreForCandidate(
@@ -917,35 +1047,18 @@ function semanticScoreForCandidate(
   }
 
   const haystack = normalizedFileHaystack(file);
-  let allowed = false;
-  let score = 0;
-  const reasons: string[] = [];
-  for (const group of queryPlan.semanticConceptGroups) {
-    const directMatches = matchedSemanticTerms(haystack, group.directTerms);
-    const allOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(haystack, termGroup));
-    const compoundMatched = allOfAnyMatches.every((matches) => matches.length > 0);
-    if (directMatches.length || compoundMatched) {
-      allowed = true;
-      if (directMatches.length) {
-        score += directMatches.length * 8;
-        reasons.push(...directMatches.map((term) => `semantic_direct:${group.source}:${term}`));
-      }
-      if (compoundMatched) {
-        score += 6;
-        reasons.push(`semantic_compound:${group.source}`);
-      }
+  const conceptMatch = semanticConceptMatchForCandidate(file, evidence, queryPlan);
+  let allowed = conceptMatch.matched;
+  let score = conceptMatch.score;
+  const reasons: string[] = [...conceptMatch.reasons];
+  if (allowed) {
+    for (const group of queryPlan.semanticConceptGroups) {
       const supportMatches = matchedSemanticTerms(haystack, [...queryPlan.supportOnlyTerms, ...group.supportTerms]);
       if (supportMatches.length) {
         score += Math.min(4, supportMatches.length);
         reasons.push(...supportMatches.slice(0, 4).map((term) => `semantic_support:${term}`));
       }
     }
-  }
-
-  if (!allowed && contentEvidenceMatchesSemanticGroup(evidence, queryPlan)) {
-    allowed = true;
-    score += 10;
-    reasons.push('semantic_content_confirmed');
   }
 
   const demoteMatches = matchedSemanticTerms(haystack, queryPlan.demoteTerms);
@@ -956,6 +1069,15 @@ function semanticScoreForCandidate(
 
   if (!allowed) reasons.push('semantic_gate:missing_required_concept');
   return { required, allowed, score, reasons };
+}
+
+function semanticContentScanEligible(file: FileMetadata, queryPlan: RelayDocumentSearchQueryPlanV1): boolean {
+  if (!queryPlan.semanticConceptGroups.length) return true;
+  if (semanticScoreForCandidate(file, queryPlan).allowed) return true;
+  const haystack = normalizedFileHaystack(file);
+  return queryPlan.semanticConceptGroups.some((group) =>
+    matchedSemanticTerms(haystack, [...group.directTerms, ...group.recallTerms]).length > 0,
+  );
 }
 
 function isTransientOfficeLockFile(file: FileMetadata): boolean {
@@ -1096,6 +1218,17 @@ function rankingWarningsForCandidate(
     ...(contentWarning ? [contentWarning] : []),
     ...accessWarningsForFile(file),
   ])];
+}
+
+function evidenceStateForCandidate(
+  candidate: RankedCandidate,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
+): RelayDocumentSearchEvidenceState {
+  if (!candidate.contentEvidence) return 'filename_only';
+  if (!queryPlan.semanticConceptGroups.length) return 'content_confirmed';
+  const semanticMatch = semanticConceptMatchForCandidate(candidate.file, candidate.contentEvidence, queryPlan);
+  if (semanticMatch.matched) return 'concept_confirmed';
+  return contentEvidenceMatchedTerms(candidate.contentEvidence).length ? 'partial_content_match' : 'generic_content_match';
 }
 
 function modifiedTimeMs(file: FileMetadata): number {
@@ -1455,6 +1588,17 @@ function lineSnippet(line: string): string {
 function matchedTermsForText(text: string, terms: string[]): string[] {
   const normalized = normalizeRelaySearchText(text);
   return terms.filter((term) => term && normalized.includes(term));
+}
+
+function contentInspectionTerms(queryPlan: RelayDocumentSearchQueryPlanV1): string[] {
+  const out = new Set<string>(queryPlan.normalizedTerms);
+  for (const group of queryPlan.semanticConceptGroups) {
+    for (const term of group.directTerms) out.add(term);
+    for (const termGroup of group.allOfAny) {
+      for (const term of termGroup) out.add(term);
+    }
+  }
+  return [...out].filter(Boolean);
 }
 
 function evidenceForAnchor(
@@ -1934,7 +2078,7 @@ function filesForCandidateFirstContentScan(
     .filter((file): file is FileMetadata => Boolean(file));
 
   const semanticMatched = queryPlan.semanticConceptGroups.length
-    ? matched.filter((file) => semanticScoreForCandidate(file, queryPlan).allowed)
+    ? matched.filter((file) => semanticContentScanEligible(file, queryPlan))
     : matched;
   if (semanticMatched.length > 0) {
     return semanticMatched.slice(0, limit);
@@ -3810,6 +3954,7 @@ export async function executeRelayDocumentSearch(
   const maxScanFiles = Math.max(1, Math.min(options.maxScanFiles ?? DEFAULT_MAX_SCAN_FILES, DEFAULT_MAX_SCAN_FILES));
   const relayQueryPlan = buildRelayDocumentSearchQueryPlan(request, roots);
   const terms = relayQueryPlan.normalizedTerms;
+  const contentTerms = contentInspectionTerms(relayQueryPlan);
   const files: FileMetadata[] = [];
   const metadataCache: MetadataCacheState = { hits: [], misses: [], writes: [], writeErrors: [] };
   const freshnessReports: RelayDocumentSearchFreshnessReport[] = [];
@@ -3936,7 +4081,7 @@ export async function executeRelayDocumentSearch(
     );
     contentEvidence = await collectContentEvidence(
       contentScanFiles,
-      terms,
+      contentTerms,
       request,
       state,
       options,
@@ -3945,8 +4090,8 @@ export async function executeRelayDocumentSearch(
       indexDb,
       contentIndexCommit,
     );
-    indexDbSearchProbe = await searchIndexDbFts(terms, roots, options, indexDb);
-    promoteIndexDbEvidence(filteredFiles, contentEvidence.byFileId, indexDbSearchProbe, terms, indexDb);
+    indexDbSearchProbe = await searchIndexDbFts(contentTerms, roots, options, indexDb);
+    promoteIndexDbEvidence(filteredFiles, contentEvidence.byFileId, indexDbSearchProbe, contentTerms, indexDb);
     refreshIndexDbCutoverReadiness(indexDb);
     refreshIndexDbPrimaryPathGate(indexDb, indexDbPrimaryModeForOptions(options));
     syncJournalEvents.push({
@@ -4075,7 +4220,7 @@ export async function executeRelayDocumentSearch(
       : roleBucket;
     const warnings = candidate.rankingWarnings;
     const matchMode = candidate.contentEvidence ? 'content' : 'filename';
-    const evidenceState = candidate.contentEvidence ? 'content_confirmed' : 'filename_only';
+    const evidenceState = evidenceStateForCandidate(candidate, relayQueryPlan);
     const indexState = candidate.contentEvidence ? 'content_indexed' : 'metadata_indexed';
     const resultId = `result-${candidate.file.fileId}`;
     const resultGroup = groupedRanked.groupsByFileId.get(candidate.file.fileId);

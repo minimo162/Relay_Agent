@@ -31,9 +31,9 @@ test("AionUi Relay manifest pins exact upstream source baselines", () => {
   assert.equal(manifest.upstreams.aionUi.license, "Apache-2.0");
 
   assert.equal(manifest.upstreams.officeCli.repository, "https://github.com/iOfficeAI/OfficeCLI");
-  assert.equal(manifest.upstreams.officeCli.version, "1.0.76");
-  assert.equal(manifest.upstreams.officeCli.tag, "v1.0.76");
-  assert.equal(manifest.upstreams.officeCli.commit, "958717ea25351b8920a3d8313d46e08b24b9c95b");
+  assert.equal(manifest.upstreams.officeCli.version, "1.0.92");
+  assert.equal(manifest.upstreams.officeCli.tag, "v1.0.92");
+  assert.equal(manifest.upstreams.officeCli.commit, "f4b87533dc48fdfa8f9ce53e8331422f6a53f054");
   assert.equal(manifest.upstreams.officeCli.license, "Apache-2.0");
 });
 
@@ -48,11 +48,11 @@ test("AionUi Relay manifest pins admin-free OfficeCLI Windows artifact", () => {
   assert.equal(artifact.format, "exe");
   assert.equal(
     artifact.url,
-    "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe",
+    "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.92/officecli-win-x64.exe",
   );
-  assert.equal(artifact.sha256, "f9e4895505858ab813e133d4d1f9f01004c7b4b08397408487f534caf9e2ec58");
+  assert.equal(artifact.sha256, "ce5e4926dcfc766e467e92b207786822150a28930700f98334e10fe16ddc054a");
   assert.match(artifact.sha256, /^[a-f0-9]{64}$/);
-  assert.equal(artifact.size, 30433916);
+  assert.equal(artifact.size, 30777980);
   assert.equal(artifact.entrypoint, "officecli.exe");
 });
 

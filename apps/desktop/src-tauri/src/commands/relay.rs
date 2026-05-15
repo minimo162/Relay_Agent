@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,6 +21,8 @@ const DOCUMENT_SEARCH_DEFAULT_TIMEOUT_MS: u64 = 300_000;
 const DOCUMENT_SEARCH_MIN_TIMEOUT_MS: u64 = 10_000;
 const DOCUMENT_SEARCH_MAX_TIMEOUT_MS: u64 = 900_000;
 const DOCUMENT_SEARCH_TEMP_MAX_AGE_SECS: u64 = 24 * 60 * 60;
+const OFFICECLI_SMOKE_TIMEOUT_MS: u64 = 20_000;
+static OFFICECLI_CAPABILITY_CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 #[tauri::command]
 pub fn get_relay_workspace_state(
@@ -426,7 +431,7 @@ fn resolve_document_search_cli(app: &AppHandle) -> Option<PathBuf> {
 fn resolve_officecli_path(app: &AppHandle) -> Option<PathBuf> {
     if let Ok(path) = std::env::var("RELAY_OFFICECLI_PATH") {
         let path = PathBuf::from(path);
-        if executable_ok(&path, "--version") {
+        if officecli_capability_ok(app, &path) {
             return Some(path);
         }
     }
@@ -439,22 +444,135 @@ fn resolve_officecli_path(app: &AppHandle) -> Option<PathBuf> {
         let manifest_dir = PathBuf::from(manifest_dir);
         candidates.push(manifest_dir.join("binaries/relay-officecli-win-x64.exe"));
         candidates.push(
-            manifest_dir.join("binaries/.relay-officecli-download-cache/1.0.76/officecli.exe"),
+            manifest_dir.join("binaries/.relay-officecli-download-cache/1.0.92/officecli.exe"),
         );
     }
     if let Some(found) = candidates
         .into_iter()
-        .find(|path| executable_ok(path, "--version"))
+        .find(|path| officecli_capability_ok(app, path))
     {
         return Some(found);
     }
     for name in ["officecli", "officecli.exe"] {
         let path = PathBuf::from(name);
-        if executable_ok(&path, "--version") {
+        if officecli_capability_ok(app, &path) {
             return Some(path);
         }
     }
     None
+}
+
+fn officecli_capability_ok(app: &AppHandle, path: &Path) -> bool {
+    if !executable_ok(path, "--version") {
+        return false;
+    }
+    if std::env::var("RELAY_OFFICECLI_SKIP_CAPABILITY_CHECK")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        return true;
+    }
+    let cache_key = officecli_capability_cache_key(path);
+    let cache = OFFICECLI_CAPABILITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(value) = guard.get(&cache_key) {
+            return *value;
+        }
+    }
+    let ok = officecli_view_smoke_ok(app, path);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(cache_key, ok);
+    }
+    ok
+}
+
+fn officecli_capability_cache_key(path: &Path) -> String {
+    let metadata = fs::metadata(path).ok();
+    let size = metadata.as_ref().map(|item| item.len()).unwrap_or(0);
+    let modified = metadata
+        .and_then(|item| item.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("{}|{}|{}", path.display(), size, modified)
+}
+
+fn officecli_view_smoke_ok(app: &AppHandle, officecli: &Path) -> bool {
+    let temp_root = app_local_data_dir(app)
+        .unwrap_or_else(|_| std::env::temp_dir().join("Relay Agent"))
+        .join("officecli-smoke");
+    if fs::create_dir_all(&temp_root).is_err() {
+        return false;
+    }
+    let Ok(temp_file) = tempfile::Builder::new()
+        .prefix("relay-officecli-smoke-")
+        .suffix(".xlsx")
+        .tempfile_in(&temp_root)
+    else {
+        return false;
+    };
+    if write_officecli_smoke_workbook(temp_file.path()).is_err() {
+        return false;
+    }
+    let temp_path = temp_file.path().display().to_string();
+    let mut command = Command::new(officecli);
+    command
+        .args(["view", temp_path.as_str(), "outline", "--json"])
+        .stdin(Stdio::null());
+    crate::windows_command::no_console_window(&mut command);
+    run_command_with_timeout(
+        command,
+        Duration::from_millis(OFFICECLI_SMOKE_TIMEOUT_MS),
+        &temp_root,
+    )
+    .is_ok_and(|output| output.success && output.stdout.contains("\"success\""))
+}
+
+fn write_officecli_smoke_workbook(path: &Path) -> Result<(), String> {
+    let file = fs::File::create(path)
+        .map_err(|error| format!("create OfficeCLI smoke workbook: {error}"))?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let entries = [
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>"#,
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/workbook.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/sharedStrings.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>Relay OfficeCLI smoke</t></si></sst>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#,
+        ),
+    ];
+    for (name, body) in entries {
+        writer
+            .start_file(name, options)
+            .map_err(|error| format!("write OfficeCLI smoke workbook entry {name}: {error}"))?;
+        writer
+            .write_all(body.as_bytes())
+            .map_err(|error| format!("write OfficeCLI smoke workbook entry {name}: {error}"))?;
+    }
+    writer
+        .finish()
+        .map_err(|error| format!("finish OfficeCLI smoke workbook: {error}"))?;
+    Ok(())
 }
 
 fn resolve_ripgrep_path(app: &AppHandle) -> Option<PathBuf> {
@@ -528,18 +646,38 @@ fn run_officecli(
     let output = command
         .output()
         .map_err(|error| format!("run OfficeCLI: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let error = (!output.status.success()).then(|| officecli_failure_message(&stdout, &stderr));
     Ok(RelayOfficeCommandResponse {
         ok: output.status.success(),
         command: std::iter::once(officecli.display().to_string())
             .chain(args)
             .collect(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout,
+        stderr,
         exit_code: output.status.code(),
         backup_path: backup_path.map(|path| path.display().to_string()),
         elapsed_ms: started.elapsed().as_millis() as u64,
-        error: (!output.status.success()).then(|| "OfficeCLI command failed.".to_string()),
+        error,
     })
+}
+
+fn officecli_failure_message(stdout: &str, stderr: &str) -> String {
+    let combined = format!("{stderr}\n{stdout}");
+    if combined.contains("System.Private.Xml") || combined.contains("FileNotFoundException") {
+        return "OfficeCLI runtime dependency is missing or damaged. Relay Agent found OfficeCLI, but its Office read/edit command could not load required .NET assemblies. Update Relay Agent or refresh the bundled OfficeCLI payload.".to_string();
+    }
+    if combined.contains("Unhandled exception") {
+        if let Some(line) = combined.lines().find(|line| !line.trim().is_empty()) {
+            return format!(
+                "OfficeCLI failed with an unhandled exception: {}",
+                line.trim()
+            );
+        }
+        return "OfficeCLI failed with an unhandled exception.".to_string();
+    }
+    "OfficeCLI command failed.".to_string()
 }
 
 fn create_office_backup(app: &AppHandle, file_path: &Path) -> Result<PathBuf, String> {
@@ -753,7 +891,7 @@ fn trim_for_error(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_officecli_args, split_command_words};
+    use super::{officecli_failure_message, parse_officecli_args, split_command_words};
 
     #[test]
     fn officecli_parser_preserves_windows_backslashes_inside_quotes() {
@@ -774,5 +912,16 @@ mod tests {
             args,
             vec!["view", r#"H:\shr1\book.xlsx"#, "outline", "--json"]
         );
+    }
+
+    #[test]
+    fn officecli_failure_message_explains_missing_runtime_dependency() {
+        let message = officecli_failure_message(
+            "",
+            "Unhandled exception: System.IO.FileNotFoundException: File name: 'System.Private.Xml, Version=10.0.0.0'",
+        );
+
+        assert!(message.contains("runtime dependency"));
+        assert!(message.contains("OfficeCLI"));
     }
 }

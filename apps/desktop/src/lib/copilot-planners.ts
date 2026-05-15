@@ -147,7 +147,7 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
     "Mode: document_search_result_summary. This is not a search task.",
     "Your only job is to organize the completed local Relay search results into a concise JSON summary.",
     "Do not call tools. Do not search Microsoft 365, SharePoint, the web, memory, plugins, or local files.",
-    "Do not claim file contents are confirmed unless evidenceState says content_confirmed.",
+    "Do not claim file contents are confirmed unless evidenceState says content_confirmed or concept_confirmed.",
     "Return exactly one valid JSON object and nothing else. The first character must be `{` and the last character must be `}`.",
     "Use this schema exactly:",
     JSON.stringify({
@@ -174,7 +174,7 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
     "- Never output file paths. The app will map candidateIds back to local paths.",
     "- A candidateId may appear in at most one category.",
     "- Use at most eight categories and keep labels short.",
-    "- If the evidenceState is filename_only, call it a candidate and do not state that the document content proves relevance.",
+    "- If the evidenceState is filename_only, partial_content_match, or generic_content_match, call it a candidate and do not state that the document content proves relevance.",
     "- Do not include markdown, prose outside JSON, tool calls, citations, or fields not shown in the schema.",
     "SNAPSHOT ID:",
     params.snapshotId,

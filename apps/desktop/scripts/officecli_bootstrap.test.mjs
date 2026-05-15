@@ -19,25 +19,25 @@ test("OfficeCLI bootstrap plan is user-local and admin-free", () => {
   });
 
   assert.equal(plan.platform, "windows-x64");
-  assert.equal(plan.version, "1.0.76");
+  assert.equal(plan.version, "1.0.92");
   assert.equal(plan.requiresAdmin, false);
   assert.equal(plan.installMode, "relay-bundled-portable-with-user-local-fallback");
   assert.equal(
     plan.url,
-    "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.76/officecli-win-x64.exe",
+    "https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.92/officecli-win-x64.exe",
   );
-  assert.equal(plan.sha256, "f9e4895505858ab813e133d4d1f9f01004c7b4b08397408487f534caf9e2ec58");
+  assert.equal(plan.sha256, "ce5e4926dcfc766e467e92b207786822150a28930700f98334e10fe16ddc054a");
   assert.match(plan.path, /OfficeCli|officecli/i);
-  assert.match(plan.path, /1\.0\.76/);
+  assert.match(plan.path, /1\.0\.92/);
   assert.match(plan.path, /officecli\.exe$/);
 });
 
 test("OfficeCLI path registration prepends the cache directory once", () => {
-  const officeCliPath = "C:/Relay/tools/officecli/1.0.76/officecli.exe";
+  const officeCliPath = "C:/Relay/tools/officecli/1.0.92/officecli.exe";
   const updated = officeCliPathEnv("C:/Windows/System32", officeCliPath, "win32");
   const repeated = officeCliPathEnv(updated, officeCliPath, "win32");
 
-  assert.match(updated, /^C:\/Relay\/tools\/officecli\/1\.0\.76/);
+  assert.match(updated, /^C:\/Relay\/tools\/officecli\/1\.0\.92/);
   assert.equal(repeated, updated);
 });
 
@@ -46,7 +46,7 @@ test("OfficeCLI cached path uses version and manifest entrypoint", () => {
   const cacheRoot = join(tmpdir(), "relay-officecli");
   assert.equal(
     officeCliCachedPath({ cacheRoot, artifact }),
-    join(cacheRoot, "1.0.76", "officecli.exe"),
+    join(cacheRoot, "1.0.92", "officecli.exe"),
   );
 });
 

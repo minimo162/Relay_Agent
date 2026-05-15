@@ -55,7 +55,10 @@ function statusTone(ok: boolean): string {
 function cardEvidenceLabel(card: RelaySearchResultCard): string {
   const evidence = card.evidenceState || card.matchMode || "";
   const labels: Record<string, string> = {
+    concept_confirmed: "概念一致を確認",
     content_confirmed: "内容から確認",
+    partial_content_match: "部分一致",
+    generic_content_match: "汎用一致",
     content: "内容から確認",
     filename_only: "ファイル名・パスからの候補",
     filename: "ファイル名・パスからの候補",

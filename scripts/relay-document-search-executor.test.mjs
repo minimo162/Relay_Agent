@@ -414,6 +414,27 @@ function minimalXlsx(entries = {}) {
   });
 }
 
+function xmlEscape(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function minimalXlsxWithStrings(strings, sheetName = "Data") {
+  const sharedStrings = strings.map((value) => `<si><t>${xmlEscape(value)}</t></si>`).join("");
+  const cells = strings
+    .map((_, index) => `<row r="${index + 1}"><c r="A${index + 1}" t="s"><v>${index}</v></c></row>`)
+    .join("");
+  return minimalXlsx({
+    "xl/workbook.xml":
+      `<workbook><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    "xl/sharedStrings.xml": `<sst>${sharedStrings}</sst>`,
+    "xl/worksheets/sheet1.xml": `<worksheet><sheetData>${cells}</sheetData></worksheet>`,
+  });
+}
+
 function metadataCachePathForRoot(root, cacheDir) {
   const hash = createHash("sha256").update(resolve(root)).digest("hex").slice(0, 24);
   return resolve(cacheDir, `${hash}.json`);
@@ -567,6 +588,107 @@ test("executeRelayDocumentSearch excludes folder-role-only files from compound p
       "FY160-1Q_販社・パーツ残高_DBLink.xlsx",
     ]);
     assert.equal(names.some((name) => name.includes("302 自動車国別月別売上総利益")), false);
+  } finally {
+    cleanup();
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("executeRelayDocumentSearch ranks compound parts-sales files above generic sales files", async () => {
+  const workspace = mkdtempSync(resolve(tmpdir(), "relay-document-search-parts-sales-precision-"));
+  const fsCheckDir = resolve(workspace, "160期-1Q", "連結決算", "03FSチェック", "仕向地別営業利益用データ");
+  const workDir = resolve(workspace, "160期-1Q", "連結決算", "02CFS-合算,ADJ,精算表", "Work");
+  const filingDir = resolve(workspace, "160期-4Q", "ファイリング", "⑥有価証券報告書", "①【企業の概況】");
+  const originalDir = resolve(workspace, "160期-1Q", "各社ファイル", "オリジナル");
+  const partsDir = resolve(workspace, "160期-1Q", "連結決算", "03FSチェック", "PLチェック");
+  mkdirSync(fsCheckDir, { recursive: true });
+  mkdirSync(workDir, { recursive: true });
+  mkdirSync(filingDir, { recursive: true });
+  mkdirSync(originalDir, { recursive: true });
+  mkdirSync(partsDir, { recursive: true });
+  writeFileSync(
+    resolve(fsCheckDir, "FY160-1Q_連結売上高.xlsx"),
+    minimalXlsxWithStrings(["連結売上高", "売上高", "地域別集計"]),
+  );
+  writeFileSync(
+    resolve(workDir, "Upload FY159-4Q_売上消去（確）.xlsx"),
+    minimalXlsxWithStrings(["売上消去", "連結調整", "売上高"]),
+  );
+  writeFileSync(
+    resolve(filingDir, "連結売上高集計用.xlsx"),
+    minimalXlsxWithStrings(["連結売上高集計用", "売上高"]),
+  );
+  writeFileSync(
+    resolve(originalDir, "FY160-1Q_Mパーツ.xlsx"),
+    minimalXlsxWithStrings(["パーツ", "売上高", "販売実績"]),
+  );
+  writeFileSync(
+    resolve(partsDir, "FY160-1Q PL速報依頼(パーツ).xlsx"),
+    minimalXlsxWithStrings(["パーツ売上", "PL速報", "実績"]),
+  );
+  writeFileSync(
+    resolve(fsCheckDir, "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx"),
+    minimalXlsxWithStrings(["自動車・部品他売上総利益", "部品他売上", "売上高"]),
+  );
+
+  const { module, cleanup } = await loadExecutorModule();
+  try {
+    const result = await module.executeRelayDocumentSearch(
+      {
+        query: "部品売上に関するファイルを探して",
+        roots: [workspace],
+        fileTypes: ["xlsx"],
+        intent: "find_files",
+        thoroughness: "thorough",
+        evidence: "candidate",
+        maxResults: 10,
+        queryPlanHints: {
+          schemaVersion: "RelayDocumentSearchCopilotQueryPlan.v1",
+          rawQuery: "部品売上に関するファイルを探して",
+          intent: "find_files",
+          evidence: "candidate",
+          thoroughness: "thorough",
+          expandedTerms: [
+            "部品売上",
+            "パーツ売上",
+            "部販",
+            "補修部品売上",
+            "サービス部品売上",
+            "部品他売上",
+            "売上",
+            "売上高",
+            "販売実績",
+          ],
+          supportTerms: ["実績", "内訳", "明細", "集計"],
+          demoteTerms: ["最終版", "バックアップ", "コピー"],
+          fileTypeHints: ["any"],
+          timeScopeIntent: "balanced",
+          summary: "部品売上の表現揺れを補う",
+        },
+      },
+      {
+        jobId: "job-parts-sales-precision",
+        queryId: "query-parts-sales-precision",
+        now: new Date("2026-05-15T00:00:00.000Z"),
+        useIndexDb: false,
+        maxContentInspectFiles: 20,
+      },
+    );
+
+    const names = result.results.map((candidate) => candidate.display_name);
+    assert.equal(result.status, "ok");
+    assert.equal(names[0], "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx");
+    assert.deepEqual(new Set(names.slice(1, 3)), new Set([
+      "FY160-1Q PL速報依頼(パーツ).xlsx",
+      "FY160-1Q_Mパーツ.xlsx",
+    ]));
+    assert.equal(names.some((name) => name === "FY160-1Q_連結売上高.xlsx"), false);
+    assert.equal(names.some((name) => name.includes("売上消去")), false);
+    assert.equal(names.some((name) => name === "連結売上高集計用.xlsx"), false);
+    assert.equal(result.results[0].evidence_state, "concept_confirmed");
+    assert.ok(result.results[0].score_breakdown.explanationCodes.some((code) => code.includes("semantic_direct:parts_sales")));
+    assert.equal(result.queryPlan.normalizedTerms.includes("売上"), false);
+    assert.equal(result.queryPlan.normalizedTerms.includes("売上高"), false);
   } finally {
     cleanup();
     rmSync(workspace, { recursive: true, force: true });

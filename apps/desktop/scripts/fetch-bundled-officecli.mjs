@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -17,9 +17,18 @@ async function main() {
   mkdirSync(dirname(outPath), { recursive: true });
 
   if (existsSync(outPath)) {
-    verifyOfficeCliArtifactFile(outPath, artifact);
-    console.log(`fetch-bundled-officecli: exists, verified: ${outPath}`);
-    return;
+    try {
+      verifyOfficeCliArtifactFile(outPath, artifact);
+      console.log(`fetch-bundled-officecli: exists, verified: ${outPath}`);
+      return;
+    } catch (error) {
+      rmSync(outPath, { force: true });
+      console.log(
+        `fetch-bundled-officecli: refreshing ${outPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   const tempCachePath = resolve(

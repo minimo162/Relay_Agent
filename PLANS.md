@@ -100,6 +100,13 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   Relay reads prompt text from nested textbox/value/lexical candidates, waits
   longer before submit, and proceeds when the send button is ready even if the
   composer text cannot be read back through CDP.
+- Compound document-search evidence now distinguishes concept-confirmed,
+  partial-content, generic-content, and filename-only states so business
+  concepts such as `部品売上` rank direct parts-sales workbooks above generic
+  sales files.
+- OfficeCLI packaging now pins the current Windows x64 artifact and validates
+  real `view outline --json` capability with a small workbook smoke test, not
+  just `--version`, before enabling Office workflows.
 
 ## Remaining Hardening Tasks
 

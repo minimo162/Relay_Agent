@@ -44,6 +44,8 @@ export type RelayDocumentSearchSemanticConceptGroupV1 = {
   source: string;
   directTerms: string[];
   allOfAny: string[][];
+  recallTerms: string[];
+  standaloneBlockedTerms: string[];
   supportTerms: string[];
 };
 
@@ -85,8 +87,6 @@ const ACCOUNTING_SYNONYMS: Array<{ pattern: RegExp; source: string; terms: strin
       'パーツ',
       '補修部品',
       '販社 パーツ',
-      '売上',
-      '売上高',
       'parts sales',
     ],
   },
@@ -363,6 +363,11 @@ function semanticConceptGroupsForRequest(
         normalizeTermList(PARTS_SALES_PART_TERMS),
         normalizeTermList(PARTS_SALES_SALES_TERMS),
       ],
+      recallTerms: normalizeTermList([
+        ...PARTS_SALES_DIRECT_TERMS,
+        ...PARTS_SALES_PART_TERMS,
+      ]),
+      standaloneBlockedTerms: normalizeTermList(PARTS_SALES_SALES_TERMS),
       supportTerms: normalizeTermList(PARTS_SALES_SUPPORT_TERMS),
     },
   ];
@@ -465,13 +470,14 @@ export function buildRelayDocumentSearchQueryPlan(
   const periods = periodHints(request.query);
   for (const hint of periods) addTerm(terms, hint);
   const semanticConceptGroups = semanticConceptGroupsForRequest(request.query, terms, copilotHintTerms);
+  const blockedStandaloneTerms = new Set<string>();
   for (const group of semanticConceptGroups) {
     for (const term of group.directTerms) addTerm(terms, term);
-    for (const termGroup of group.allOfAny) {
-      for (const term of termGroup) addTerm(terms, term);
-    }
+    for (const term of group.recallTerms) addTerm(terms, term);
+    for (const term of group.standaloneBlockedTerms) addTerm(blockedStandaloneTerms, term);
     for (const term of group.supportTerms) addTerm(supportOnlyTerms, term);
   }
+  for (const term of blockedStandaloneTerms) terms.delete(term);
   const hints = new Set(fileTypeHints(request.query, request));
   for (const hint of request.queryPlanHints?.fileTypeHints ?? []) {
     if (hint !== 'any') hints.add(hint);
