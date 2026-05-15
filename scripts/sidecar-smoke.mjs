@@ -42,6 +42,19 @@ async function waitForStatus() {
   throw new Error(`sidecar did not become ready; stderr=${stderr}`);
 }
 
+async function waitForRun(runId) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`, {
+      headers: { "X-Relay-Token": token },
+    });
+    if (!response.ok) throw new Error(`run lookup failed: ${response.status}`);
+    const runJson = await response.json();
+    if (runJson.status !== "running") return runJson;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`run did not finish: ${runId}`);
+}
+
 try {
   const status = await waitForStatus();
   if (status.app !== "Relay Agent") throw new Error(`unexpected status app: ${status.app}`);
@@ -94,11 +107,12 @@ try {
   if (!runJson.runId || !Array.isArray(runJson.events)) {
     throw new Error(`unexpected run response: ${JSON.stringify(runJson)}`);
   }
-  if (runJson.status !== "completed") {
-    throw new Error(`run did not complete through mock Copilot transport: ${JSON.stringify(runJson)}`);
+  const completedRun = await waitForRun(runJson.runId);
+  if (completedRun.status !== "completed") {
+    throw new Error(`run did not complete through mock Copilot transport: ${JSON.stringify(completedRun)}`);
   }
-  if (!runJson.events.some((event) => event.type === "final" && event.detail === "mock Copilot response from sidecar transport")) {
-    throw new Error(`run did not return final mock answer: ${JSON.stringify(runJson)}`);
+  if (!completedRun.events.some((event) => event.type === "final" && event.detail === "mock Copilot response from sidecar transport")) {
+    throw new Error(`run did not return final mock answer: ${JSON.stringify(completedRun)}`);
   }
   console.log("[sidecar-smoke] ok");
 } finally {

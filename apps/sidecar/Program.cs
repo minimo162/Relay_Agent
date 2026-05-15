@@ -15,8 +15,10 @@ var copilot = CopilotTransportFactory.FromEnvironment();
 var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentRunner(copilot, new RelayToolExecutor(options.DataDirectory, toolResolver));
+var runManager = new RunManager(ledger, tools, agentRunner);
 
 var app = builder.Build();
+app.Lifetime.ApplicationStopping.Register(runManager.Dispose);
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.None,
@@ -74,65 +76,20 @@ app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
 
 app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellationToken) =>
 {
-    var run = RunRecord.Start(request);
-    var events = new List<RunEvent>
-    {
-        RunEvent.Status("受け付けました", "Relay sidecar がタスクを検証しています。"),
-    };
-
-    if (string.IsNullOrWhiteSpace(request.Instruction))
-    {
-        events.Add(RunEvent.Error("指示が空です", "自然言語のタスクを入力してください。"));
-        return await Finish(run, "failed", events, cancellationToken);
-    }
-
-    if (string.IsNullOrWhiteSpace(request.Workspace) || !Directory.Exists(request.Workspace))
-    {
-        events.Add(RunEvent.Error("Workspace を確認できません", "存在するローカルフォルダを指定してください。"));
-        return await Finish(run, "failed", events, cancellationToken);
-    }
-
-    events.Add(RunEvent.Status("準備状態を確認しています", "Copilot、ripgrep、workspace access を確認しています。OfficeCLI は Office 操作時だけ必要です。"));
-    var checks = await tools.CheckAllAsync(cancellationToken);
-    foreach (var check in checks)
-    {
-        var requiredLabel = check.Required ? "required" : "optional";
-        events.Add(RunEvent.Tool(check.Name, check.Ready ? $"ready ({requiredLabel})" : $"{check.Detail} ({requiredLabel})"));
-    }
-
-    var requiredFailures = checks.Where(check => check.Required && !check.Ready).ToArray();
-    if (requiredFailures.Length > 0)
-    {
-        events.Add(RunEvent.Error(
-            "必須ツールが未準備です",
-            string.Join("\n", requiredFailures.Select(check => $"{check.Name}: {check.Detail}"))));
-        return await Finish(run, "failed", events, cancellationToken);
-    }
-
-    events.Add(RunEvent.Status("Copilot に計画を依頼します", "Relay はツール実行だけを担当し、Copilot の判断結果を検証します。"));
-    try
-    {
-        var result = await agentRunner.RunAsync(request, run.RunId, cancellationToken);
-        events.AddRange(result.Events);
-        return await Finish(run, result.Status, events, cancellationToken, result.PendingApproval);
-    }
-    catch (Exception ex)
-    {
-        events.Add(RunEvent.Error("Copilot transport failed", ex.Message));
-        return await Finish(run, "failed", events, cancellationToken);
-    }
+    var run = await runManager.StartAsync(request, cancellationToken);
+    return Results.Json(RunResponse.FromRun(run));
 });
 
 app.MapGet("/api/runs/{runId}", async (string runId, CancellationToken cancellationToken) =>
 {
-    var run = await ledger.LoadAsync(runId, cancellationToken);
+    var run = await runManager.GetAsync(runId, cancellationToken);
     return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(run);
 });
 
 app.MapGet("/api/runs/{runId}/events", async (HttpContext context, string runId, CancellationToken cancellationToken) =>
 {
-    var run = await ledger.LoadAsync(runId, cancellationToken);
-    if (run is null)
+    var subscription = await runManager.SubscribeAsync(runId, cancellationToken);
+    if (subscription is null)
     {
         context.Response.StatusCode = StatusCodes.Status404NotFound;
         await context.Response.WriteAsJsonAsync(new ErrorResponse("Run not found."), cancellationToken);
@@ -140,23 +97,45 @@ app.MapGet("/api/runs/{runId}/events", async (HttpContext context, string runId,
     }
 
     context.Response.ContentType = "text/event-stream; charset=utf-8";
-    foreach (var runEvent in run.Events)
+    foreach (var runEvent in subscription.Snapshot.Events)
     {
-        await context.Response.WriteAsync($"event: {runEvent.Type}\n", cancellationToken);
-        await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Default)}\n\n", cancellationToken);
-        await context.Response.Body.FlushAsync(cancellationToken);
+        await WriteSseAsync(context, runEvent, cancellationToken);
+    }
+
+    if (subscription.LiveEvents is not null)
+    {
+        try
+        {
+            await foreach (var runEvent in subscription.LiveEvents.ReadAllAsync(cancellationToken))
+            {
+                await WriteSseAsync(context, runEvent, cancellationToken);
+            }
+        }
+        finally
+        {
+            subscription.Lease?.Dispose();
+        }
     }
 });
 
 app.MapPost("/api/runs/{runId}/approve", async (string runId, CancellationToken cancellationToken) =>
 {
-    var run = await ledger.LoadAsync(runId, cancellationToken);
+    var run = await runManager.ApproveAsync(runId, cancellationToken);
     if (run is null) return Results.NotFound(new ErrorResponse("Run not found."));
     if (run.PendingApproval is null) return Results.BadRequest(new ErrorResponse("Run is not waiting for approval."));
+    return Results.Json(RunResponse.FromRun(run));
+});
 
-    var result = await agentRunner.ApproveAsync(run, cancellationToken);
-    var events = run.Events.Concat(result.Events).ToList();
-    return await Finish(run, result.Status, events, cancellationToken, result.PendingApproval);
+app.MapPost("/api/runs/{runId}/reject", async (string runId, CancellationToken cancellationToken) =>
+{
+    var run = await runManager.RejectAsync(runId, cancellationToken);
+    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
+});
+
+app.MapPost("/api/runs/{runId}/cancel", async (string runId, CancellationToken cancellationToken) =>
+{
+    var run = await runManager.CancelAsync(runId, cancellationToken);
+    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
 });
 
 app.MapGet("/v1/models", () => Results.Json(new
@@ -222,17 +201,11 @@ Console.WriteLine(JsonSerializer.Serialize(new
 
 await app.RunAsync();
 
-async Task<IResult> Finish(RunRecord run, string status, List<RunEvent> events, CancellationToken cancellationToken, PendingApproval? pendingApproval = null)
+static async Task WriteSseAsync(HttpContext context, RunEvent runEvent, CancellationToken cancellationToken)
 {
-    run = run with
-    {
-        Status = status,
-        CompletedAt = status is "completed" or "failed" or "cancelled" ? DateTimeOffset.UtcNow : null,
-        Events = events,
-        PendingApproval = pendingApproval,
-    };
-    await ledger.AppendAsync(run, cancellationToken);
-    return Results.Json(new RunResponse(run.RunId, status, events, pendingApproval));
+    await context.Response.WriteAsync("event: run-event\n", cancellationToken);
+    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Default)}\n\n", cancellationToken);
+    await context.Response.Body.FlushAsync(cancellationToken);
 }
 
 static bool RequiresToken(HttpRequest request)
@@ -364,7 +337,10 @@ public sealed class RunLedger(string dataDirectory)
 
 public sealed record RunRequest(string Instruction, string Workspace);
 
-public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events, PendingApproval? PendingApproval = null);
+public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events, PendingApproval? PendingApproval = null)
+{
+    public static RunResponse FromRun(RunRecord run) => new(run.RunId, run.Status, run.Events, run.PendingApproval);
+}
 
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
 

@@ -7,14 +7,27 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
 {
     private const int MaxSteps = 6;
 
-    public async Task<AgentRunResult> RunAsync(RunRequest request, string runId, CancellationToken cancellationToken)
+    public async Task<AgentRunResult> RunAsync(
+        RunRequest request,
+        string runId,
+        Func<RunEvent, CancellationToken, ValueTask>? onEvent,
+        CancellationToken cancellationToken)
     {
         var events = new List<RunEvent>();
         var observations = new List<ToolObservation>();
 
+        async ValueTask Emit(RunEvent runEvent)
+        {
+            events.Add(runEvent);
+            if (onEvent is not null)
+            {
+                await onEvent(runEvent, cancellationToken);
+            }
+        }
+
         for (var step = 1; step <= MaxSteps; step++)
         {
-            events.Add(RunEvent.Status("Copilot が次の手順を選択しています", $"step {step}/{MaxSteps}"));
+            await Emit(RunEvent.Status("Copilot が次の手順を選択しています", $"step {step}/{MaxSteps}"));
             var planText = await copilot.SendAsync(BuildStepPrompt(request, observations), cancellationToken);
             RelayAgentPlan plan;
             try
@@ -23,7 +36,7 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             }
             catch (Exception parseError)
             {
-                events.Add(RunEvent.Status("Copilot のJSON形式を修復しています", parseError.Message));
+                await Emit(RunEvent.Status("Copilot のJSON形式を修復しています", parseError.Message));
                 var repairText = await copilot.SendAsync(BuildPlanRepairPrompt(request, observations, planText, parseError.Message), cancellationToken);
                 try
                 {
@@ -31,7 +44,7 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
                 }
                 catch (Exception repairError)
                 {
-                    events.Add(RunEvent.Error("Copilot の計画を検証できません", $"repair failed: {repairError.Message}"));
+                    await Emit(RunEvent.Error("Copilot の計画を検証できません", $"repair failed: {repairError.Message}"));
                     return new AgentRunResult("failed", events, null);
                 }
             }
@@ -40,16 +53,16 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             {
                 if (IsPlaceholderFinalAnswer(plan.Answer))
                 {
-                    events.Add(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
+                    await Emit(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
                     return new AgentRunResult("failed", events, null);
                 }
-                events.Add(RunEvent.Final("完了しました", plan.Answer ?? ""));
+                await Emit(RunEvent.Final("完了しました", plan.Answer ?? ""));
                 return new AgentRunResult("completed", events, null);
             }
 
             if (plan.Action != "tool" || string.IsNullOrWhiteSpace(plan.Tool))
             {
-                events.Add(RunEvent.Error("Copilot の計画を検証できません", "action は final または tool である必要があります。"));
+                await Emit(RunEvent.Error("Copilot の計画を検証できません", "action は final または tool である必要があります。"));
                 return new AgentRunResult("failed", events, null);
             }
 
@@ -57,21 +70,21 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             var validation = tools.Validate(request.Workspace, toolCall);
             if (!validation.Ok)
             {
-                events.Add(RunEvent.Error("ツール引数を検証できません", validation.Error));
+                await Emit(RunEvent.Error("ツール引数を検証できません", validation.Error));
                 return new AgentRunResult("failed", events, null);
             }
 
             if (tools.RequiresApproval(toolCall))
             {
                 var approval = PendingApproval.FromToolCall(runId, toolCall);
-                events.Add(RunEvent.Approval("実行前に確認してください", tools.Describe(toolCall)));
+                await Emit(RunEvent.Approval("実行前に確認してください", tools.Describe(toolCall)));
                 return new AgentRunResult("approval_required", events, approval);
             }
 
-            events.Add(RunEvent.Tool(toolCall.Tool, tools.Describe(toolCall)));
+            await Emit(RunEvent.Tool(toolCall.Tool, tools.Describe(toolCall)));
             var observation = await tools.ExecuteAsync(request.Workspace, toolCall, cancellationToken);
             observations.Add(observation);
-            events.Add(observation.Success
+            await Emit(observation.Success
                 ? RunEvent.Tool($"{toolCall.Tool} completed", observation.Summary)
                 : RunEvent.Error($"{toolCall.Tool} failed", observation.Summary));
 
@@ -81,24 +94,35 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             }
         }
 
-        events.Add(RunEvent.Error("手順上限に達しました", $"最大 {MaxSteps} step で停止しました。"));
+        await Emit(RunEvent.Error("手順上限に達しました", $"最大 {MaxSteps} step で停止しました。"));
         return new AgentRunResult("failed", events, null);
     }
 
-    public async Task<AgentRunResult> ApproveAsync(RunRecord run, CancellationToken cancellationToken)
+    public async Task<AgentRunResult> ApproveAsync(
+        RunRecord run,
+        Func<RunEvent, CancellationToken, ValueTask>? onEvent,
+        CancellationToken cancellationToken)
     {
         if (run.PendingApproval is null)
         {
             return new AgentRunResult("failed", [RunEvent.Error("承認待ちではありません", "実行できる保留中の操作がありません。")], null);
         }
 
-        var toolCall = run.PendingApproval.ToolCall;
-        var events = new List<RunEvent>
+        var events = new List<RunEvent>();
+
+        async ValueTask Emit(RunEvent runEvent)
         {
-            RunEvent.Status("承認済みの操作を実行しています", tools.Describe(toolCall)),
-        };
+            events.Add(runEvent);
+            if (onEvent is not null)
+            {
+                await onEvent(runEvent, cancellationToken);
+            }
+        }
+
+        var toolCall = run.PendingApproval.ToolCall;
+        await Emit(RunEvent.Status("承認済みの操作を実行しています", tools.Describe(toolCall)));
         var observation = await tools.ExecuteAsync(run.Request.Workspace, toolCall, cancellationToken, approvalGranted: true);
-        events.Add(observation.Success
+        await Emit(observation.Success
             ? RunEvent.Tool($"{toolCall.Tool} completed", observation.Summary)
             : RunEvent.Error($"{toolCall.Tool} failed", observation.Summary));
 
@@ -117,7 +141,7 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             JsonSerializer.Serialize(observation, JsonOptions.Default),
         ]);
         var final = await copilot.SendAsync(finalPrompt, cancellationToken);
-        events.Add(RunEvent.Final("完了しました", final));
+        await Emit(RunEvent.Final("完了しました", final));
         return new AgentRunResult("completed", events, null);
     }
 

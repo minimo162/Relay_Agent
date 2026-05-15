@@ -16842,3 +16842,39 @@ Result:
   Copilot answer text.
 - Linux and Windows self-contained sidecar publish outputs were produced under
   `dist/relay-agent-linux-x64` and `dist/relay-agent-win-x64`.
+
+## 2026-05-16: Workbench UX Streaming and Approval Polish
+
+Changes:
+
+- Changed `/api/runs` from a blocking request into an immediate run start that
+  returns a `runId` while the sidecar executes the run in the background.
+- Added run event persistence and live SSE streaming so the Workbench shows
+  validation, readiness checks, Copilot planning, tool execution, and final
+  output as they happen.
+- Added run cancellation and explicit approval rejection endpoints.
+- Reworked the browser Workbench into a result-first, minimal single-column
+  interface with more whitespace, workspace history, textarea auto-resize,
+  Ctrl/Cmd+Enter submission, a send/stop button, compact status pills, and
+  human-readable approval cards with raw details collapsed.
+- Updated the Workbench E2E to assert progress appears immediately, final
+  answers are visible above the activity trace, and write tools do not execute
+  before approval.
+
+Verification commands run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm --filter @relay-agent/workbench typecheck
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Workbench TypeScript typecheck passed.
+- Workbench browser E2E passed and produced screenshots for empty, completed,
+  and approval states under `dist/e2e/`.
+- Full `pnpm check` passed after updating the sidecar and golden smoke tests
+  for the asynchronous run lifecycle.

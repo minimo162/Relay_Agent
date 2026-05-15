@@ -211,12 +211,14 @@ async function runBrowserFlow() {
     readiness: document.querySelector('#readiness')?.textContent,
     sendText: document.querySelector('#send')?.textContent,
     shellWidth: Math.round(document.querySelector('.shell')?.getBoundingClientRect().width ?? 0),
+    runState: document.querySelector('#run-state')?.textContent,
   }))()`);
   if (initialUx.title !== "Workbench") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
   if (initialUx.detailsOpen !== false) throw new Error(`details should be collapsed by default: ${JSON.stringify(initialUx)}`);
   if (initialUx.hasLegacyModes) throw new Error(`legacy mode labels should not be visible: ${JSON.stringify(initialUx)}`);
   if (!["Ready", "Limited"].includes(initialUx.readiness)) throw new Error(`Copilot-backed UX should be ready or limited: ${JSON.stringify(initialUx)}`);
   if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
+  if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
   if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for focused workbench UX: ${JSON.stringify(initialUx)}`);
 
   await captureScreenshot("workbench-empty.png");
@@ -225,9 +227,19 @@ async function runBrowserFlow() {
   await setValue("#instruction", "seed を探して");
   const searchStarted = Date.now();
   await click("#send");
+  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Running' || Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('受け付けました'))", 2000, "visible running progress");
   await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('検索は rg_files を使いました。'))", 6000, "search final event");
   const searchMs = Date.now() - searchStarted;
   if (searchMs > 6000) throw new Error(`mock search UX took too long: ${searchMs}ms`);
+  const resultUx = await evaluate(`(() => ({
+    summaryVisible: !document.querySelector('#summary')?.hidden,
+    summaryText: document.querySelector('#summary-text')?.textContent,
+    runState: document.querySelector('#run-state')?.textContent,
+  }))()`);
+  if (resultUx.summaryVisible !== true || !resultUx.summaryText.includes('検索は rg_files')) {
+    throw new Error(`final answer should be visible above activity: ${JSON.stringify(resultUx)}`);
+  }
+  if (resultUx.runState !== "Done") throw new Error(`run state should be Done: ${JSON.stringify(resultUx)}`);
 
   await captureScreenshot("workbench-completed.png");
 
@@ -238,9 +250,17 @@ async function runBrowserFlow() {
   const approvalMs = Date.now() - approvalStarted;
   if (approvalMs > 6000) throw new Error(`approval UX took too long: ${approvalMs}ms`);
   if (existsSync(join(workspace, "approval.txt"))) throw new Error("write executed before approval");
+  const approvalUx = await evaluate(`(() => ({
+    hasApprove: Array.from(document.querySelectorAll('#approval button')).some((button) => button.textContent.includes('許可')),
+    hasReject: Array.from(document.querySelectorAll('#approval button')).some((button) => button.textContent.includes('実行しない')),
+    runState: document.querySelector('#run-state')?.textContent,
+  }))()`);
+  if (approvalUx.hasApprove !== true || approvalUx.hasReject !== true || approvalUx.runState !== "Waiting") {
+    throw new Error(`approval UX is incomplete: ${JSON.stringify(approvalUx)}`);
+  }
 
   await captureScreenshot("workbench-approval.png");
-  await click("#approval button");
+  await click("#approval .primary-button");
   await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('承認済みの書き込みを実行しました。'))", 6000, "approval final event");
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved file content mismatch");

@@ -65,10 +65,24 @@ async function postRun(instruction) {
   return response.json();
 }
 
+async function waitForRun(runId, expectedStatuses = ["completed", "failed", "approval_required", "cancelled"]) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`, {
+      headers: { "X-Relay-Token": token },
+    });
+    if (!response.ok) throw new Error(`run lookup failed: ${response.status}`);
+    const runJson = await response.json();
+    if (expectedStatuses.includes(runJson.status)) return runJson;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`run did not reach ${expectedStatuses.join(",")}: ${runId}`);
+}
+
 try {
   await waitForStatus();
 
-  const searchRun = await postRun("seed を探して");
+  const searchStart = await postRun("seed を探して");
+  const searchRun = await waitForRun(searchStart.runId, ["completed", "failed", "cancelled"]);
   if (searchRun.status !== "completed") throw new Error(`search run did not complete: ${JSON.stringify(searchRun)}`);
   if (!searchRun.events.some((event) => event.type === "tool" && event.message === "rg_files")) {
     throw new Error(`search run did not execute rg_files: ${JSON.stringify(searchRun)}`);
@@ -77,7 +91,8 @@ try {
     throw new Error(`search run final answer mismatch: ${JSON.stringify(searchRun)}`);
   }
 
-  const writeRun = await postRun("approval.txt を作って");
+  const writeStart = await postRun("approval.txt を作って");
+  const writeRun = await waitForRun(writeStart.runId, ["approval_required", "completed", "failed", "cancelled"]);
   if (writeRun.status !== "approval_required" || !writeRun.pendingApproval) {
     throw new Error(`write run did not pause for approval: ${JSON.stringify(writeRun)}`);
   }
@@ -93,7 +108,8 @@ try {
     },
   });
   if (!approval.ok) throw new Error(`approval failed: ${approval.status} ${await approval.text()}`);
-  const approvedRun = await approval.json();
+  const approvalStart = await approval.json();
+  const approvedRun = await waitForRun(approvalStart.runId, ["completed", "failed", "cancelled"]);
   if (approvedRun.status !== "completed") throw new Error(`approved run did not complete: ${JSON.stringify(approvedRun)}`);
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved write output mismatch");
