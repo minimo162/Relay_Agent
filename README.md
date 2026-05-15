@@ -47,6 +47,9 @@ details behind the sidecar.
 
 The sidecar binds to `127.0.0.1` by default and requires a per-run launch token
 for state-changing APIs. It stores run ledgers under user-local Relay app data.
+It also exposes a Relay-owned OpenAI-compatible `/v1/chat/completions` endpoint
+that uses the sidecar Copilot transport rather than the old Node/Tauri-era
+bridge.
 
 Readiness checks currently cover:
 
@@ -56,6 +59,16 @@ Readiness checks currently cover:
 
 If a required capability is missing, Relay stops visibly. It does not silently
 fall back to a weaker search/edit path.
+
+For live Copilot use, start or attach to a signed-in Edge remote-debugging
+session and set:
+
+```bash
+export RELAY_COPILOT_CDP_PORT=9360
+```
+
+Tests may use the explicit mock transport only when
+`RELAY_ALLOW_MOCK_COPILOT=1` and `RELAY_COPILOT_MOCK_RESPONSE` are set.
 
 ## Development
 

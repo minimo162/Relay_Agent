@@ -104,10 +104,12 @@ Implemented the first active hard-cutover slice:
 
 Known limitation:
 
-- The new sidecar currently fails visibly when `RELAY_COPILOT_CDP_PORT` is not
-  configured. It does not silently fall back to local deterministic execution.
-  Full Copilot CDP message transport still needs to be ported into the sidecar
-  boundary before this cutover can replace all live Copilot runs.
+- The sidecar now owns an initial Copilot CDP transport and
+  `/v1/chat/completions` endpoint. It still needs live signed-in M365 Copilot
+  validation on Windows and Linux before it can be treated as behaviorally
+  equivalent to the historical Node bridge. If `RELAY_COPILOT_CDP_PORT` is not
+  configured, it fails visibly and does not silently fall back to local
+  deterministic execution.
 
 Verification commands run locally:
 
@@ -122,6 +124,41 @@ Results:
   build, sidecar Release build, and sidecar HTTP smoke.
 - `pnpm release:inventory`: passed and wrote
   `dist/release/relay-release-inventory.json`.
+
+### 2026-05-16 sidecar Copilot transport activation
+
+Moved the remaining Copilot transport work into the active sidecar path:
+
+- Added `apps/sidecar/CopilotTransport.cs` with:
+  - explicit mock transport for smoke tests only when
+    `RELAY_ALLOW_MOCK_COPILOT=1`;
+  - missing-transport failure when no CDP port is configured;
+  - initial Edge CDP transport that discovers or creates a Copilot tab,
+    pastes into the composer, clicks Send, and extracts a visible response.
+- Added a sidecar-owned OpenAI-compatible `/v1/models` and
+  `/v1/chat/completions` endpoint. This gives Microsoft Agent Framework and
+  other local harness code a sidecar-local model surface without restoring the
+  old Node/Tauri-era bridge as the active product path.
+- Updated `/api/runs` so a run now calls the sidecar Copilot transport and
+  records the Copilot response in the run ledger instead of returning a
+  placeholder final event.
+- Expanded `scripts/sidecar-smoke.mjs` to cover readiness, `/v1/models`,
+  `/v1/chat/completions`, and a completed `/api/runs` flow through the explicit
+  mock transport.
+- Made `relay-assets.json` deterministic so `pnpm check` does not dirty the
+  worktree by writing a new timestamp on every build.
+
+Verification command run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk pnpm check
+```
+
+Result:
+
+- Passed. Covered hard-cut guard, Workbench typecheck, Workbench build,
+  sidecar Release build, and sidecar smoke through the explicit mock Copilot
+  transport.
 
 ### 2026-05-15 Agentic v3 contracts for search, Office, and code
 

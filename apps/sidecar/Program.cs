@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -13,7 +12,8 @@ var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.0"
 var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);
-var tools = new ToolReadiness();
+var copilot = CopilotTransportFactory.FromEnvironment();
+var tools = new ToolReadiness(copilot);
 
 var app = builder.Build();
 app.UseForwardedHeaders(new ForwardedHeadersOptions
@@ -61,9 +61,9 @@ if (Directory.Exists(staticRoot))
     });
 }
 
-app.MapGet("/api/status", () =>
+app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
 {
-    var checks = tools.CheckAll();
+    var checks = await tools.CheckAllAsync(cancellationToken);
     return Results.Json(new StatusResponse(
         App: "Relay Agent",
         Version: version,
@@ -92,7 +92,7 @@ app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellati
     }
 
     events.Add(RunEvent.Status("準備状態を確認しています", "Copilot、ripgrep、OfficeCLI、workspace access を確認しています。"));
-    var checks = tools.CheckAll();
+    var checks = await tools.CheckAllAsync(cancellationToken);
     foreach (var check in checks)
     {
         events.Add(RunEvent.Tool(check.Name, check.Ready ? "ready" : check.Detail));
@@ -108,8 +108,43 @@ app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellati
     }
 
     events.Add(RunEvent.Status("Copilot に計画を依頼します", "Relay はツール実行だけを担当し、Copilot の判断結果を検証します。"));
-    events.Add(RunEvent.Final("実行基盤は準備済みです", "この sidecar は hard-cutover 後の単一実行経路です。"));
+    try
+    {
+        var reply = await copilot.SendAsync(BuildRelayPrompt(request), cancellationToken);
+        events.Add(RunEvent.Final("Copilot から応答を取得しました", reply));
+    }
+    catch (Exception ex)
+    {
+        events.Add(RunEvent.Error("Copilot transport failed", ex.Message));
+        return await Finish(run, "failed", events, cancellationToken);
+    }
     return await Finish(run, "completed", events, cancellationToken);
+});
+
+app.MapGet("/v1/models", () => Results.Json(new
+{
+    @object = "list",
+    data = new[]
+    {
+        new
+        {
+            id = "m365-copilot",
+            @object = "model",
+            owned_by = "relay-sidecar",
+        },
+    },
+}));
+
+app.MapPost("/v1/chat/completions", async (OpenAiChatCompletionRequest request, CancellationToken cancellationToken) =>
+{
+    var prompt = request.LastUserMessage();
+    if (string.IsNullOrWhiteSpace(prompt))
+    {
+        return Results.BadRequest(new ErrorResponse("No user message was supplied."));
+    }
+
+    var reply = await copilot.SendAsync(prompt, cancellationToken);
+    return Results.Json(OpenAiChatCompletionResponse.FromText(request.Model ?? "m365-copilot", reply));
 });
 
 app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>
@@ -154,10 +189,23 @@ async Task<IResult> Finish(RunRecord run, string status, List<RunEvent> events, 
     return Results.Json(new RunResponse(run.RunId, status, events));
 }
 
+static string BuildRelayPrompt(RunRequest request) =>
+    string.Join("\n", [
+        "RELAY AGENT RUN",
+        "You are the planning and synthesis brain. Relay executes local tools.",
+        "Do not claim local execution unless Relay observations prove it.",
+        "Return a concise Japanese answer for the user request.",
+        $"WORKSPACE: {request.Workspace}",
+        "USER REQUEST:",
+        request.Instruction,
+    ]);
+
 static bool RequiresToken(HttpRequest request)
 {
     if (request.Path == "/" || request.Path == "/index.html") return false;
-    return request.Path.StartsWithSegments("/api") || request.Path.StartsWithSegments("/events");
+    return request.Path.StartsWithSegments("/api")
+        || request.Path.StartsWithSegments("/events")
+        || request.Path.StartsWithSegments("/v1");
 }
 
 static bool HasValidToken(HttpRequest request, string token)
@@ -228,23 +276,17 @@ public sealed record RelayOptions(
     }
 }
 
-public sealed class ToolReadiness
+public sealed class ToolReadiness(ICopilotTransport copilot)
 {
-    public IReadOnlyList<ReadinessCheck> CheckAll() =>
-    [
-        CheckExecutable("ripgrep", "rg", "--version"),
-        CheckExecutable("officecli", "officecli", "--version"),
-        CheckCopilot(),
-    ];
-
-    private static ReadinessCheck CheckCopilot()
+    public async Task<IReadOnlyList<ReadinessCheck>> CheckAllAsync(CancellationToken cancellationToken)
     {
-        var port = Environment.GetEnvironmentVariable("RELAY_COPILOT_CDP_PORT");
-        if (string.IsNullOrWhiteSpace(port))
+        var checks = new List<ReadinessCheck>
         {
-            return new ReadinessCheck("copilot-cdp", false, "Set RELAY_COPILOT_CDP_PORT to a signed-in Edge CDP port.");
-        }
-        return new ReadinessCheck("copilot-cdp", true, $"Edge CDP port {port} configured.");
+            CheckExecutable("ripgrep", "rg", "--version"),
+            CheckExecutable("officecli", "officecli", "--version"),
+            await copilot.CheckAsync(cancellationToken),
+        };
+        return checks;
     }
 
     private static ReadinessCheck CheckExecutable(string name, string fileName, string argument)

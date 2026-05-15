@@ -16,7 +16,7 @@ cpSync(workbenchDist, wwwroot, { recursive: true });
 writeFileSync(resolve(wwwroot, "relay-assets.json"), JSON.stringify({
   schemaVersion: "RelayWorkbenchAssets.v1",
   source: "apps/workbench/dist",
-  generatedAt: new Date().toISOString(),
+  generatedBy: "scripts/prepare-sidecar-assets.mjs",
 }, null, 2));
 
 console.log(`Prepared sidecar assets: ${wwwroot}`);

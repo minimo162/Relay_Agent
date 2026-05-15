@@ -45,6 +45,10 @@ The next architecture target is a **generic Relay Workbench**:
   run the agent harness, validate and execute tools, manage app-local storage,
   and supervise the Copilot CDP bridge. The preferred implementation is a
   self-contained .NET sidecar using Microsoft Agent Framework.
+- Sidecar Copilot transport: the active sidecar owns the first
+  OpenAI-compatible `/v1/chat/completions` surface and routes it through the
+  sidecar Copilot transport. The historical Node/Tauri-era bridge is no longer
+  the active product path.
 - Browser role: the user opens the Relay Workbench at a localhost URL. This
   browser surface is separate from the controlled Edge/Copilot CDP session.
   If Edge is used for both, Relay must use a separate profile or CDP boundary
@@ -526,6 +530,10 @@ must be deleted or archived when the hard cutover reaches parity.
     `AsAIAgent` and succeeded against both a local mock and the live
     `copilot_server.js` -> Edge CDP -> M365 Copilot path.
   - Productization preference is .NET sidecar over Python sidecar.
+- The active .NET sidecar now includes an initial Copilot CDP transport and
+  sidecar-owned `/v1/models` / `/v1/chat/completions` endpoints. Smoke tests
+  cover this path with an explicit mock transport; live signed-in Copilot CDP
+  validation remains a release-readiness gate.
 
 ## Cutover Implementation Tasks
 
