@@ -194,8 +194,9 @@ if (Directory.Exists(staticRoot))
 {
     app.MapFallback(async context =>
     {
+        var pathValue = context.Request.Path.Value ?? string.Empty;
         if (context.Request.Path.StartsWithSegments("/assets") ||
-            context.Request.Path.Value?.EndsWith('/') == true)
+            (pathValue.Length > 1 && pathValue.EndsWith('/')))
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;

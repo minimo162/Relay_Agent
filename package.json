@@ -13,6 +13,8 @@
     "sidecar:build": "dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release",
     "sidecar:smoke": "node scripts/sidecar-smoke.mjs",
     "sidecar:security-smoke": "node scripts/sidecar-security-smoke.mjs",
+    "workbench:ux-e2e": "pnpm build && pnpm sidecar:build && node scripts/workbench-ux-e2e.mjs",
+    "workbench:live-copilot-e2e": "pnpm build && pnpm sidecar:build && node scripts/workbench-live-copilot-e2e.mjs",
     "sidecar:publish:linux": "dotnet publish apps/sidecar/Relay.Sidecar.csproj --configuration Release --runtime linux-x64 --self-contained true --output dist/relay-agent-linux-x64",
     "sidecar:publish:windows": "dotnet publish apps/sidecar/Relay.Sidecar.csproj --configuration Release --runtime win-x64 --self-contained true --output dist/relay-agent-win-x64",
     "release:inventory": "node scripts/release/collect-inventory.mjs",

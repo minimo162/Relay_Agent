@@ -109,3 +109,4 @@ jobs:
             gh release upload "$RELEASE_TAG" "dist/relay-agent-${{ matrix.rid }}.tar.gz" --clobber
           fi
           gh release upload "$RELEASE_TAG" "dist/release/relay-release-inventory.json" --clobber
+          gh release upload "$RELEASE_TAG" "dist/release/relay-sbom.json" --clobber

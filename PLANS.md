@@ -510,6 +510,104 @@ Completed:
 - Show result cards, changed files, or Office edit outcome below.
 - Keep trace/details collapsed unless the user expands them.
 
+### Smooth UX acceptance requirements
+
+The Workbench must be validated as a user-facing product, not only as a
+backend agent API.
+
+- First paint and entry route:
+  - the launch URL `/` with the relay token must render the Workbench, not a
+    404, browser error page, Edge Copilot page, or diagnostic console;
+  - the first visible surface must be usable without opening details or logs;
+  - static asset directory listing must remain blocked while the root route
+    still serves the app.
+- Readiness:
+  - readiness must not collapse all tool checks into one misleading
+    `Not ready` state;
+  - use `Ready` when all checked tools are available, `Limited` when Copilot
+    is available but optional tool checks fail, and `Not ready` only when the
+    agent cannot accept tasks;
+  - the composer remains understandable in `Limited` state and the detailed
+    missing-tool reasons stay in collapsed details.
+- Task flow:
+  - a read-only task submitted from the composer must visibly progress to a
+    final answer without mode selection;
+  - a write/mutation task must pause before mutation, show one concise approval
+    card, and never create or modify a file before approval;
+  - after approval, the approval card must disappear and the completed result
+    must be visible without requiring the user to inspect raw JSON.
+- Visual behavior:
+  - legacy mode labels such as `資料を探す`, `Officeファイルを編集する`, and
+    `コードを書く` must not appear in the unified Workbench;
+  - details, raw observations, and diagnostics remain collapsed by default;
+  - the focused work area should stay within roughly `960-1040px` on desktop
+    and preserve generous whitespace.
+- Responsiveness:
+  - deterministic mock E2E should complete read-only final-answer display and
+    approval-card display within `6s` each;
+  - the test must save screenshots for empty, completed, and approval states
+    so spacing regressions can be inspected.
+- Regression gate:
+  - `pnpm workbench:ux-e2e` is the browser-level UX smoke gate. It launches
+    the sidecar, opens Microsoft Edge through CDP, performs a real DOM-driven
+    submit/approval flow, and writes screenshots under `dist/e2e/`.
+  - `pnpm check` remains the non-browser acceptance gate; UX E2E is run when
+    verifying user-visible flow changes or release readiness on machines with
+    Edge available.
+
+### Live Copilot UX requirements
+
+Mock E2E is not enough for release confidence. Relay must also prove that the
+same Workbench flow can drive a signed-in M365 Copilot session.
+
+- Live gate:
+  - `pnpm workbench:live-copilot-e2e` is the signed-in Copilot UX gate.
+  - It must run with mock Copilot disabled and `RELAY_COPILOT_CDP_PORT`
+    pointing at a real signed-in Microsoft Edge CDP session.
+  - The Workbench browser and the Copilot browser must use separate CDP ports
+    and profiles so user-facing UI automation cannot disturb the controlled
+    Copilot tab.
+- What it must prove:
+  - `/api/status` reports Copilot CDP reachable before accepting the run;
+  - the Workbench readiness pill reaches `Ready` or `Limited`, not a frozen
+    `Checking` state;
+  - the user can submit a task from the single composer;
+  - Relay can paste the prompt into Copilot, submit it, wait for completion,
+    extract the assistant response, and display the final event in the
+    Workbench;
+  - diagnostics/details remain collapsed by default after completion;
+  - a screenshot of the completed live Copilot run is captured under
+    `dist/e2e/`.
+- Smoothness target:
+  - for a short exact-response prompt, live Copilot final-answer display should
+    complete within `15s` on a signed-in warm Edge session;
+  - `15-30s` is acceptable but should be flagged as degraded;
+  - over `30s`, prompt delivery failure, stale response extraction, or
+    completion detection must be treated as a UX regression unless Microsoft
+    365 service latency is clearly isolated.
+- Failure requirements:
+  - if the CDP port is unreachable, the run fails with a clear `Copilot CDP is
+    not reachable` message;
+  - if Copilot is signed out, blocked by tenant policy, or the composer cannot
+    be found, the UI must show a visible actionable error and must not silently
+    retry forever;
+  - invalid Copilot output may fail the run, but the user must see whether the
+    failure was prompt delivery, send button, response timeout, JSON/action
+    validation, or tool validation.
+- Prompt and JSON robustness:
+  - Copilot prompts must not include copyable placeholder answers such as
+    `"Japanese answer"` that can be mistaken for valid output;
+  - Relay must parse the first complete JSON object from a Copilot response so
+    harmless trailing text does not break an otherwise valid action;
+  - if multiple JSON objects or trailing prose appear, Relay uses only the
+    first complete object and still validates action/tool/args before
+    execution.
+- Release policy:
+  - deterministic mock UX E2E remains suitable for CI;
+  - live Copilot E2E is required before release or after any change touching
+    Copilot CDP selectors, prompt delivery, response extraction, readiness, or
+    Workbench run rendering.
+
 ## Non-Negotiable Completion Criteria
 
 - The first visible product surface is the Relay Workbench, not Edge Copilot,

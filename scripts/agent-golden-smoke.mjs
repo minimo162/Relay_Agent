@@ -9,8 +9,8 @@ const port = 17892;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-agent-golden-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-agent-golden-workspace-"));
 const responses = [
-  JSON.stringify({ action: "tool", tool: "rg_files", args: { contains: "seed", limit: 5 } }),
-  JSON.stringify({ action: "final", answer: "検索は rg_files を使いました。" }),
+  `${JSON.stringify({ action: "tool", tool: "rg_files", args: { contains: "seed", limit: 5 } })}\n\nSure.`,
+  `${JSON.stringify({ action: "final", answer: "検索は rg_files を使いました。" })}\n\nDone.`,
   JSON.stringify({ action: "tool", tool: "write", args: { path: "approval.txt", content: "approved write" } }),
   "承認済みの書き込みを実行しました。",
 ];

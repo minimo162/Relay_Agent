@@ -135,8 +135,17 @@ async function refreshStatus(): Promise<void> {
   });
   if (!response.ok) throw new Error(`Status failed: ${response.status}`);
   const status = (await response.json()) as StatusResponse;
-  readinessEl.textContent = status.ready ? "Ready" : "Not ready";
-  readinessEl.dataset.ready = String(status.ready);
+  const copilotReady = status.checks.some((check) => check.name === "copilot-cdp" && check.ready);
+  if (status.ready) {
+    readinessEl.textContent = "Ready";
+    readinessEl.dataset.ready = "true";
+  } else if (copilotReady) {
+    readinessEl.textContent = "Limited";
+    readinessEl.dataset.ready = "partial";
+  } else {
+    readinessEl.textContent = "Not ready";
+    readinessEl.dataset.ready = "false";
+  }
   rawEl.textContent = JSON.stringify(status, null, 2);
 }
 

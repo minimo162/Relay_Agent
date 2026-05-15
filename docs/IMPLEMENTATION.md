@@ -122,6 +122,101 @@ Result:
   build, sidecar smoke, agent golden smoke, sidecar security smoke, and release
   inventory/SBOM generation.
 
+### 2026-05-16 Workbench UX E2E and smoothness requirements
+
+Added and ran a browser-level Workbench UX E2E smoke:
+
+- Added `scripts/workbench-ux-e2e.mjs`.
+- Added `pnpm workbench:ux-e2e`.
+- The test starts the sidecar with deterministic mock Copilot responses,
+  launches Microsoft Edge headless through CDP, opens the local Workbench,
+  fills the workspace and task composer, submits a read-only task, verifies the
+  final answer appears, submits a write task, verifies the approval card
+  appears before any file is created, approves the write, and verifies the
+  final answer and file contents.
+- The test also checks that legacy mode labels are absent, details are
+  collapsed by default, the focused shell is not too wide, and screenshots are
+  captured for empty, completed, and approval states.
+
+UX issue found and fixed:
+
+- The initial launch URL `/` returned a 404 because the static fallback blocked
+  every path ending in `/`. This protected asset directories but also blocked
+  the Workbench root. The fallback now blocks `/assets` and nested directory
+  paths while allowing `/` to render the Workbench.
+- The readiness pill previously collapsed all tool checks into `Ready` /
+  `Not ready`. That made the app look unusable when Copilot was available but
+  an optional tool such as OfficeCLI was missing. The Workbench now shows
+  `Ready`, `Limited`, or `Not ready`.
+
+Verification commands run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+```
+
+Results:
+
+- `pnpm workbench:ux-e2e`: passed. Reported `search=575ms` and
+  `approval=122ms`. Wrote screenshots to `dist/e2e/workbench-empty.png`,
+  `dist/e2e/workbench-completed.png`, and
+  `dist/e2e/workbench-approval.png`.
+- `pnpm check`: passed. Covered hard-cut guard, Workbench typecheck/build,
+  sidecar Release build, sidecar smoke, agent golden smoke, sidecar security
+  smoke, and release inventory/SBOM generation.
+
+### 2026-05-16 live Copilot Workbench E2E
+
+Added and ran a signed-in M365 Copilot Workbench E2E:
+
+- Added `scripts/workbench-live-copilot-e2e.mjs`.
+- Added `pnpm workbench:live-copilot-e2e`.
+- The test uses a real Edge CDP session for Copilot through
+  `RELAY_COPILOT_CDP_PORT` / `RELAY_LIVE_COPILOT_CDP_PORT` and does not enable
+  mock Copilot.
+- The test starts the sidecar, verifies Copilot CDP readiness, launches a
+  separate headless Edge instance for the Workbench UI, fills the workspace and
+  task composer, submits a prompt through the Workbench, waits for the live
+  Copilot response to be rendered in the Workbench, verifies details remain
+  collapsed, and captures `dist/e2e/workbench-live-copilot-completed.png`.
+
+Verification command run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_LIVE_COPILOT_CDP_PORT=9360 pnpm workbench:live-copilot-e2e
+```
+
+Result:
+
+- Passed. Reported `elapsed=7439ms`, `readiness=Limited`, `cdp=9360`.
+- This confirms the current sidecar Workbench can drive a live signed-in
+  M365 Copilot session end to end for a short exact-response task.
+- `Limited` was expected in this environment because Copilot was reachable
+  while not every optional tool readiness check was green.
+
+Follow-up hardening from repeated live E2E:
+
+- A later live run exposed that Copilot can append trailing text after a valid
+  JSON action. `RelayAgentPlan.Parse` now extracts the first complete balanced
+  JSON object instead of slicing from the first `{` to the last `}`.
+- `scripts/agent-golden-smoke.mjs` now includes trailing text after mock JSON
+  actions so this regression is covered by `pnpm check`.
+- Another live run exposed that a copyable schema placeholder
+  `"Japanese answer"` could be returned as the final answer. The step-planner
+  prompt now describes fields without a copyable placeholder answer and
+  explicitly tells Copilot not to copy placeholder text.
+
+Verification command run after the hardening:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_LIVE_COPILOT_CDP_PORT=9360 pnpm workbench:live-copilot-e2e
+```
+
+Result:
+
+- Passed. Reported `elapsed=6897ms`, `readiness=Limited`, `cdp=9360`.
+
 ### 2026-05-16 unified workbench architecture and UX plan
 
 Updated `PLANS.md` to capture the current product direction:

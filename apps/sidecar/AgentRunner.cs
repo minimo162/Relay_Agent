@@ -104,9 +104,11 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "RELAY AGENT STEP PLANNER",
             "Mode: choose exactly one next action for Relay.",
             "Return exactly one JSON object and nothing else.",
-            """Schema for final: {"action":"final","answer":"Japanese answer"}""",
-            """Schema for tool: {"action":"tool","tool":"rg_files|rg_search|read|officecli|edit|write|ask_user","args":{}}""",
+            """For a final answer, return fields: action="final", answer=<your actual concise answer to the user>.""",
+            """For a tool call, return fields: action="tool", tool=<one allowed tool name>, args=<JSON object>.""",
+            "Allowed tool names: rg_files, rg_search, read, officecli, edit, write, ask_user.",
             "Rules:",
+            "- Do not copy placeholder text from these instructions.",
             "- Relay executes tools locally. You do not execute or claim execution.",
             "- Use rg_files or rg_search before read unless the exact file path is already known.",
             "- Use read for exact files only.",
@@ -440,8 +442,51 @@ public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Arg
     private static string ExtractJsonObject(string text)
     {
         var start = text.IndexOf('{');
-        var end = text.LastIndexOf('}');
-        if (start < 0 || end <= start) throw new InvalidOperationException("No JSON object found in Copilot response.");
-        return text[start..(end + 1)];
+        if (start < 0) throw new InvalidOperationException("No JSON object found in Copilot response.");
+
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        for (var index = start; index < text.Length; index++)
+        {
+            var c = text[index];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+            if (c == '{')
+            {
+                depth++;
+                continue;
+            }
+            if (c == '}')
+            {
+                depth--;
+                if (depth == 0) return text[start..(index + 1)];
+                if (depth < 0) break;
+            }
+        }
+
+        throw new InvalidOperationException("No complete JSON object found in Copilot response.");
     }
 }
