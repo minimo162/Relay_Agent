@@ -67,8 +67,10 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   fails visibly if ripgrep is unavailable instead of falling back to a silent
   slow scan.
 - Search and Office editing no longer depend on the historical OpenCode
-  provider-gateway warmup path. The current UI connects directly to M365
-  Copilot over Edge CDP when it needs planning.
+  provider-gateway warmup path. The current UI prewarms the dedicated Node
+  Copilot bridge and sends planning prompts through that bridge so Relay uses
+  the robust Copilot submit/wait/failure-classification harness instead of the
+  lightweight diagnostic CDP send path.
 - The Office workflow now separates file inspection from edit execution and
   presents the two user actions as `変更内容を確認` and
   `バックアップを作成して適用`.

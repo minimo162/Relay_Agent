@@ -791,80 +791,116 @@ pub async fn connect_cdp(
 }
 
 pub async fn cdp_send_prompt(
-    _app: AppHandle,
+    services: State<'_, AppServices>,
     request: CdpSendPromptRequest,
 ) -> Result<CdpPromptResult, String> {
     let timeout_secs = request.wait_response_secs.unwrap_or(120);
 
     let prompt_preview = request.prompt.chars().take(60).collect::<String>();
-    tracing::info!("[CDP] send prompt: {prompt_preview}…");
+    tracing::info!("[CopilotBridge] send prompt via Node bridge: {prompt_preview}…");
 
-    let existing_page = cdp_session()
-        .lock()
-        .map_err(|e| format!("cdp_session lock poisoned: {e}"))?
-        .page
-        .clone();
-    let page = if let Some(page) = existing_page {
-        page
-    } else {
-        let base_port = COPILOT_JS_CDP_PORT;
-        let debug_url = get_cdp_debug_url(base_port);
-        match cdp_copilot::connect_copilot_page(&debug_url, true, base_port).await {
-            Ok(res) => {
-                tracing::info!(
-                    "[CDP] connected for prompt → {} — {}",
-                    res.page.url,
-                    res.page.title
-                );
-                set_cdp_session_connected(
-                    res.port,
-                    res.launched,
-                    res.edge_process_id(),
-                    res.page.url.clone(),
-                    res.page.clone(),
-                );
-                res.page.clone()
-            }
-            Err(e) => {
-                return Ok(CdpPromptResult {
-                    ok: false,
-                    response_text: String::new(),
-                    body_length: 0,
-                    error: Some(format!("CDP connect: {e}")),
-                })
-            }
-        }
-    };
-
-    if let Err(e) = page.send_prompt(&request.prompt).await {
+    if request.prompt.trim().is_empty() {
         return Ok(CdpPromptResult {
             ok: false,
             response_text: String::new(),
             body_length: 0,
-            error: Some(format!("Send: {e}")),
+            error: Some("Prompt is empty.".to_string()),
         });
     }
 
-    let response = match page.wait_for_response(timeout_secs).await {
-        Ok(t) => t,
-        Err(e) => {
-            let partial = page.body_text().await.unwrap_or_default();
+    let bridge = services.copilot_bridge();
+    let cdp_port = effective_cdp_port(None);
+    let relay_request_id = Uuid::new_v4().to_string();
+    let relay_request_chain = format!("desktop-{}", relay_request_id);
+
+    tokio::task::spawn_blocking(move || {
+        run_copilot_prompt_blocking(
+            bridge,
+            cdp_port,
+            request.prompt,
+            timeout_secs,
+            relay_request_id,
+            relay_request_chain,
+        )
+    })
+    .await
+    .map_err(|e| format!("copilot prompt task: {e}"))?
+}
+
+fn run_copilot_prompt_blocking(
+    bridge: Arc<CopilotBridgeManager>,
+    cdp_port: u16,
+    prompt: String,
+    timeout_secs: u64,
+    relay_request_id: String,
+    relay_request_chain: String,
+) -> Result<CdpPromptResult, String> {
+    let server_arc = match ensure_copilot_server(cdp_port, bridge) {
+        Ok(server_arc) => server_arc,
+        Err(error) => {
             return Ok(CdpPromptResult {
                 ok: false,
-                response_text: partial.clone(),
-                body_length: partial.len(),
-                error: Some(format!("Response timeout: {e}")),
+                response_text: String::new(),
+                body_length: 0,
+                error: Some(format!("Copilot bridge start: {error}")),
             });
         }
     };
 
-    tracing::info!("[CDP] response {} chars", response.len());
-    Ok(CdpPromptResult {
-        ok: true,
-        response_text: response.clone(),
-        body_length: response.len(),
-        error: None,
-    })
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("copilot prompt runtime: {e}"))?;
+    let mut guard = server_arc
+        .lock()
+        .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+
+    let response = rt.block_on(guard.send_prompt(
+        crate::copilot_server::CopilotSendPromptRequest {
+            relay_session_id: "relay-desktop-copilot",
+            relay_request_id: &relay_request_id,
+            relay_request_chain: &relay_request_chain,
+            relay_request_attempt: 1,
+            relay_stage_label: "desktop_prompt",
+            relay_probe_mode: false,
+            // Desktop planning prompts must not inherit arbitrary prior Copilot chat state.
+            relay_force_fresh_chat: true,
+            system_prompt: "",
+            user_prompt: &prompt,
+            timeout_secs,
+            attachment_paths: &[],
+            new_chat: false,
+        },
+    ));
+
+    match response {
+        Ok(text) => {
+            tracing::info!("[CopilotBridge] response {} chars", text.len());
+            Ok(CdpPromptResult {
+                ok: true,
+                body_length: text.len(),
+                response_text: text,
+                error: None,
+            })
+        }
+        Err(error) => {
+            let detail = guard
+                .last_bridge_failure()
+                .and_then(|failure| {
+                    failure
+                        .failure_class
+                        .as_deref()
+                        .map(|class| format!("; failureClass={class}"))
+                })
+                .unwrap_or_default();
+            Ok(CdpPromptResult {
+                ok: false,
+                response_text: String::new(),
+                body_length: 0,
+                error: Some(format!("Copilot bridge send: {error}{detail}")),
+            })
+        }
+    }
 }
 
 pub async fn cdp_start_new_chat(

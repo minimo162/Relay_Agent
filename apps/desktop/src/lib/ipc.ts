@@ -2,11 +2,13 @@
  * Tauri IPC bridge for the Relay desktop workbench.
  *
  * The current product surface uses these commands directly for workspace
- * state, document search, OfficeCLI execution, and M365 Copilot CDP planning.
+ * state, document search, OfficeCLI execution, and M365 Copilot planning.
  *
  * Diagnostic commands (tauri_bridge.rs):
  *   warmup_copilot_bridge (optional browserSettings), get_relay_diagnostics,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
+ *   (`cdp_send_prompt` is routed through the Node Copilot bridge; direct CDP
+ *   send is kept backend-side only for diagnostics.)
  *
  * Legacy agent chat/session commands are intentionally not exported from this
  * frontend bridge.

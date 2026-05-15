@@ -1237,33 +1237,14 @@ pub async fn warmup_copilot_bridge_from_state(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<CopilotWarmupResult, String> {
-    let request_settings = browser_settings.clone();
-    if let Some(result) = warmup_existing_copilot_bridge(
-        services.opencode_provider_bridge(),
-        request_settings.clone(),
-    )
-    .await?
-    {
-        return Ok(result);
-    }
-
-    let settings = request_settings.unwrap_or_else(default_browser_settings);
-    let cdp_port = crate::tauri_bridge::effective_cdp_port(Some(&settings));
-    Ok(warmup_result(
-        &Uuid::new_v4().to_string(),
-        cdp_port,
-        false,
-        CopilotWarmupStage::EnsureServer,
-        "Copilot connection is not ready. Open Microsoft 365 Copilot in Edge and try again.",
-        CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::EnsureServerFailed)),
-    ))
+    warmup_copilot_bridge(services.copilot_bridge(), browser_settings).await
 }
 
 pub async fn get_relay_diagnostics_from_state(
     services: State<'_, AppServices>,
 ) -> RelayDiagnostics {
     let openwork_setup = services.openwork_setup_status();
-    let mut diagnostics = get_relay_diagnostics(services.opencode_provider_bridge()).await;
+    let mut diagnostics = get_relay_diagnostics(services.copilot_bridge()).await;
     diagnostics.openwork_setup = Some(openwork_setup);
     diagnostics
 }

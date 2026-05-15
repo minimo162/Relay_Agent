@@ -3,11 +3,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { For, Show, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import {
   cdpSendPrompt,
-  connectCdp,
   executeOfficeCliCommand,
   getRelayWorkspaceState,
   inspectOfficeFile,
   runRelayDocumentSearch,
+  warmupCopilotBridge,
   type RelayDocumentSearchResponse,
   type RelayOfficeCommandResponse,
   type RelaySearchResultCard,
@@ -91,6 +91,9 @@ function friendlyErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/provider gateway is still starting/iu.test(message)) {
     return "Copilot接続を準備できませんでした。EdgeでMicrosoft 365 Copilotにサインインしてから、もう一度実行してください。";
+  }
+  if (/Copilot bridge send|Copilot bridge start|submit_not_observed|new_chat_not_ready|dom_response_timeout|network_seed/iu.test(message)) {
+    return `Copilotへの送信または応答取得に失敗しました。EdgeでMicrosoft 365 Copilotが操作できる状態か確認してから、もう一度実行してください。詳細: ${message}`;
   }
   if (/CDP connect|composer not found|Copilot page may not be ready/iu.test(message)) {
     return "Copilotに接続できませんでした。EdgeでMicrosoft 365 Copilotを開いてサインインしてから、もう一度実行してください。";
@@ -194,11 +197,28 @@ export default function Shell(): JSX.Element {
     setOfficeError("");
   };
 
+  let copilotWarmupPromise: Promise<void> | null = null;
+  let copilotWarmupReadyAt = 0;
+
   const ensureCopilotReady = async () => {
-    const connection = await connectCdp({ autoLaunch: true });
-    if (!connection.ok) {
-      throw new Error(connection.error || "Copilot に接続できませんでした。Edge で M365 Copilot にサインインしてから再実行してください。");
+    const now = Date.now();
+    if (copilotWarmupReadyAt > 0 && now - copilotWarmupReadyAt < 5 * 60 * 1000) return;
+    if (!copilotWarmupPromise) {
+      copilotWarmupPromise = warmupCopilotBridge()
+        .then((result) => {
+          if (!result.connected) {
+            throw new Error(
+              result.message ||
+                "Copilot に接続できませんでした。Edge で M365 Copilot にサインインしてから再実行してください。",
+            );
+          }
+          copilotWarmupReadyAt = Date.now();
+        })
+        .finally(() => {
+          copilotWarmupPromise = null;
+        });
     }
+    await copilotWarmupPromise;
   };
 
   const compileSearchPlan = async (query: string, workspace: string) => {

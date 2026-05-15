@@ -15695,6 +15695,42 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-05-15 - Restore Copilot bridge planning path
+
+Reconnected the dedicated Relay desktop UI to the Node `copilot_server.js`
+bridge for Copilot planning prompts. The `cdp_send_prompt` IPC now preserves
+its frontend API shape but routes through `CopilotServer::send_prompt`, which
+restores the AionUi-era Copilot submit harness: bridge startup, fresh-chat
+planning prompts, DOM/Network response waiting, structured bridge failure
+capture, and restart/retry behavior. The lightweight Rust CDP prompt sender is
+no longer the active search/Office planning path.
+
+Also corrected the desktop Copilot warmup and diagnostics state lookup so they
+use the current `copilot_bridge` service instead of the legacy OpenCode provider
+bridge. The SolidJS UI now calls `warmup_copilot_bridge` before asking Copilot
+to generate document-search or Office-edit JSON plans and caches a successful
+warmup briefly to avoid repeated setup work within one workflow.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`: passed, 38 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

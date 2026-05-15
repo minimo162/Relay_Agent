@@ -21,10 +21,10 @@ pub async fn connect_cdp(
 
 #[tauri::command]
 pub async fn cdp_send_prompt(
-    app: AppHandle,
+    services: State<'_, AppServices>,
     request: crate::tauri_bridge::CdpSendPromptRequest,
 ) -> Result<crate::tauri_bridge::CdpPromptResult, String> {
-    crate::tauri_bridge::cdp_send_prompt(app, request).await
+    crate::tauri_bridge::cdp_send_prompt(services, request).await
 }
 
 #[tauri::command]
