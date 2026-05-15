@@ -2,14 +2,18 @@
 
 ## Status
 
-- Current phase: Relay_Agent is a dedicated Relay desktop application for
+- Current phase: Relay_Agent has a dedicated Relay desktop implementation for
   document search, OfficeCLI-backed Office file operations, and bounded code
-  edits. AionUi overlay work is historical reference code, not the product
-  shell.
-- Repository state: pnpm workspace, Relay SolidJS workbench, Tauri v2 shell,
-  Rust-source IPC contracts with generated TS bindings, shared doctor service,
-  deterministic provider/diagnostic coverage, app-local document-search
-  storage, and OfficeCLI packaging are in source.
+  edits. The next planned direction is a unified local business-agent workbench
+  with one composer, generic local tools, and Copilot-led tool choice. The UI
+  shell decision is now made: hard-cut over to a browser-hosted local web
+  workbench served by the Relay sidecar for better Linux/Windows parity. AionUi,
+  OpenCode/OpenWork, and Tauri are not fallback paths in the final product.
+- Repository state: the repo still contains the pre-cutover SolidJS/Tauri
+  workbench, Rust-source IPC contracts, diagnostic/provider coverage,
+  app-local document-search storage, OfficeCLI packaging, and historical
+  AionUi/OpenCode/OpenWork artifacts. These are inventory/deletion inputs for
+  the hard cutover, not target architecture.
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
@@ -21,6 +25,103 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-16 unified workbench architecture and UX plan
+
+Updated `PLANS.md` to capture the current product direction:
+
+- Replace the three visible modes (`資料を探す`, `Officeファイルを編集する`,
+  `コードを書く`) with one natural-language task composer.
+- Treat search, Office editing, and code editing as internal capabilities
+  exposed through generic local tools rather than user-facing modes.
+- Prefer Microsoft Agent Framework as a .NET sidecar if Relay adopts an
+  external agent harness. The .NET path has been validated against Relay's
+  Chat Completions-compatible Copilot bridge and live M365 Copilot via Edge
+  CDP.
+- Choose the browser-hosted local web workbench as the final UI shell. The
+  migration must be a hard cutover, not a compatibility stack: serve the
+  workbench from the Relay sidecar, replace Tauri IPC with local HTTP/WebSocket
+  APIs, delete active AionUi/OpenCode/OpenWork/Tauri runtime paths, and reject
+  fallback execution when validation fails.
+- Remove language that treats old AionUi/OpenCode/OpenWork/Tauri components as
+  acceptable long-lived fallbacks. Historical records may stay in archived docs,
+  but active product code and release artifacts must move fully to the sidecar
+  workbench path.
+- Keep M365 Copilot as the primary reasoning engine and Relay as the only local
+  executor for validation, tool execution, approvals, backups, diffs, and logs.
+- Move toward a generic progressive tool catalog: `rg_files`, `rg_search`,
+  `read`, `officecli`, `edit`, `write`, `ask_user`, and `final`.
+- Define the integrated UI as a quiet professional workbench: one workspace,
+  one composer, concise status, write approval cards, result cards, and
+  collapsed diagnostics/details.
+- Added prior-art-informed requirements after reviewing Microsoft Agent
+  Framework / AG-UI, ASP.NET Core local web hosting patterns, OWASP CSRF
+  guidance, and established coding-agent UX patterns:
+  - prefer AG-UI/SSE-style run events over a Relay-specific event protocol
+    when the .NET package path is practical;
+  - secure the localhost workbench with loopback binding, launch token,
+    Origin/Host validation, authenticated event streams, and no directory
+    listing;
+  - keep an append-only run ledger with cancellation, terminal states,
+    recoverable history, and support bundle export;
+  - add OpenTelemetry-shaped tracing/supportability behind collapsed details;
+  - record change provenance through git status/diff for code, backup
+    manifests for Office, and explicit undo only when restoration evidence
+    exists;
+  - keep unrestricted shell out of the initial tool catalog and treat any
+    future shell support as a separate sandbox milestone.
+
+Verification:
+
+- Documentation-only planning update; no runtime tests run.
+
+### 2026-05-16 hard-cutover sidecar/workbench activation
+
+Implemented the first active hard-cutover slice:
+
+- Added `apps/workbench/`, a browser-hosted local Workbench with one workspace
+  field, one task composer, concise readiness, run events, and collapsed
+  details. The UI has no visible search/Office/code mode buttons and no Tauri
+  or provider chrome.
+- Added `apps/sidecar/`, a self-contained .NET sidecar project that serves the
+  built Workbench, binds to `127.0.0.1`, requires a launch token for local APIs,
+  validates `Origin` on state-changing requests, records run ledgers in
+  user-local Relay data, and exposes readiness checks for ripgrep, OfficeCLI,
+  and Copilot CDP configuration.
+- Switched root `pnpm` scripts to the active sidecar/workbench path. The old
+  Tauri/OpenCode/OpenWork/AionUi scripts are no longer root active scripts.
+- Narrowed `pnpm-workspace.yaml` to `apps/workbench` so the old desktop package
+  is not an active workspace package.
+- Replaced CI with the hard-cutover acceptance path: hard-cut guard,
+  Workbench typecheck/build, sidecar build, and sidecar smoke.
+- Replaced the release workflow with sidecar publishing for `win-x64` and
+  `linux-x64`, plus release inventory upload.
+- Rewrote `README.md` and `AGENTS.md` for the browser Workbench + .NET sidecar
+  architecture.
+- Added `scripts/check-hard-cut-guard.mjs`,
+  `scripts/prepare-sidecar-assets.mjs`, `scripts/sidecar-smoke.mjs`, and
+  `scripts/release/collect-inventory.mjs`.
+
+Known limitation:
+
+- The new sidecar currently fails visibly when `RELAY_COPILOT_CDP_PORT` is not
+  configured. It does not silently fall back to local deterministic execution.
+  Full Copilot CDP message transport still needs to be ported into the sidecar
+  boundary before this cutover can replace all live Copilot runs.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk pnpm check
+pnpm release:inventory
+```
+
+Results:
+
+- `pnpm check`: passed. Covered hard-cut guard, Workbench typecheck, Workbench
+  build, sidecar Release build, and sidecar HTTP smoke.
+- `pnpm release:inventory`: passed and wrote
+  `dist/release/relay-release-inventory.json`.
 
 ### 2026-05-15 Agentic v3 contracts for search, Office, and code
 
@@ -16208,3 +16309,103 @@ Updated `docs/OFFICE_SEARCH_DESIGN.md` from review feedback before Phase A imple
 Verification:
 
 - Documentation-only change; no runtime tests run.
+
+## 2026-05-16 - Microsoft Agent Framework Copilot bridge feasibility check
+
+Checked whether Microsoft Agent Framework can act as a Relay agent harness while
+using the existing M365 Copilot Edge/CDP bridge as the model transport.
+
+Findings:
+
+- .NET SDK was not initially installed in the Linux verification environment,
+  so the first pass used the Python SDK in an isolated
+  `/tmp/relay-maf-check` virtualenv. A follow-up pass installed .NET SDK 8.0
+  locally under `/tmp/relay-dotnet/sdk` and validated the .NET Agent Framework
+  path as well.
+- `agent-framework-core==1.4.0` and `agent-framework-openai==1.4.0` installed
+  successfully.
+- `OpenAIChatClient` calls `/v1/responses` and therefore does not work against
+  the current Relay Copilot bridge without adding a Responses-compatible
+  endpoint.
+- `OpenAIChatCompletionClient` calls `/v1/chat/completions`, which matches the
+  current `copilot_server.js` bridge shape.
+- A mock `/v1/chat/completions` Copilot bridge successfully completed an
+  Agent Framework tool loop: the framework emitted a `local_search` tool schema,
+  accepted a model `tool_calls` response, executed the Python tool, sent the
+  tool result in the second request, and returned the final answer.
+- `@tool(approval_mode="always_require")` produced a
+  `function_approval_request` without executing the tool; returning
+  `to_function_approval_response(True)` in the same `AgentSession` executed the
+  tool and completed the turn.
+- The real `copilot_server.js` started locally and returned authenticated
+  `/v1/models` with `m365-copilot`; unauthenticated `/v1/models` returned 401
+  when `--boot-token` was set.
+- A live signed-in Edge/CDP instance was available on port `9360`.
+  `copilot_server.js` reported `connected: true` and `loginRequired: false`.
+- A live Microsoft Agent Framework -> `OpenAIChatCompletionClient` ->
+  `copilot_server.js` -> M365 Copilot smoke prompt succeeded and returned
+  `{"ok":true,"source":"maf-live"}`.
+- Live generic tool-choice smoke tests were run through the same path:
+  - For a Japanese file-search request, Copilot selected the generic `rg` tool,
+    MAF executed the mock tool, and Copilot synthesized a Japanese answer from
+    the tool result.
+  - For an Excel edit request, Copilot selected the generic `officecli` tool
+    with `["set", "C:/Users/m242054/Downloads/Book2.xlsx", "/Sheet1/A1",
+    "--prop", "fill=FF0000", "--json"]`, and MAF stopped with a
+    `function_approval_request` before executing the write tool.
+  - For a code edit request, Copilot inspected via `read` and then selected the
+    generic `edit` tool with an exact-string replacement, again stopping with a
+    `function_approval_request`.
+- Tool choice is viable but not sufficient by itself. The file-search smoke
+  produced a weak `glob` argument (`.xls` instead of `*.xlsx`), so Relay must
+  still validate and normalize tool arguments before execution.
+- The .NET Agent Framework path also succeeded:
+  - `Microsoft.Agents.AI.OpenAI` 1.6.1 installed into a temporary .NET console
+    project.
+  - A `OpenAI.Chat.ChatClient` with `OpenAIClientOptions.Endpoint` pointing at
+    Relay's `/v1` bridge was wrapped with `AsAIAgent`.
+  - The .NET agent succeeded against both a local mock
+    `/v1/chat/completions` endpoint and the live `copilot_server.js` ->
+    signed-in Edge/CDP -> M365 Copilot path, returning
+    `{"ok":true,"source":"maf-dotnet"}`.
+
+Verification commands run locally:
+
+```bash
+python3 -m venv /tmp/relay-maf-check
+/tmp/relay-maf-check/bin/python -m pip install agent-framework-core agent-framework-openai
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-openai-compat-smoke.py
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-approval-smoke.py
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-approval-resume-smoke.py
+node apps/desktop/src-tauri/binaries/copilot_server.js --port 18435 --boot-token relay-test-token
+curl -H "Authorization: Bearer relay-test-token" http://127.0.0.1:18435/v1/models
+node apps/desktop/src-tauri/binaries/copilot_server.js --port 18436 --cdp-port 9360 --boot-token relay-live-status
+curl -H "Authorization: Bearer relay-live-status" http://127.0.0.1:18436/status
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-live-copilot-smoke.py
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-live-tool-choice-smoke.py
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-live-tool-choice-office-smoke.py
+/tmp/relay-maf-check/bin/python /tmp/relay-maf-live-tool-choice-code-smoke.py
+mkdir -p /tmp/relay-dotnet
+curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/relay-dotnet/dotnet-install.sh
+bash /tmp/relay-dotnet/dotnet-install.sh --channel 8.0 --install-dir /tmp/relay-dotnet/sdk
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet new console --framework net8.0
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet add package Microsoft.Agents.AI.OpenAI --prerelease
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build
+RELAY_MAF_API_KEY=relay-dotnet-smoke DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet run --no-build
+```
+
+Result:
+
+- Feasibility is **pass with constraints**. Microsoft Agent Framework can wrap
+  the current Relay Copilot bridge through `OpenAIChatCompletionClient`,
+  including function tools, approval requests, and live M365 Copilot prompt
+  delivery through Edge/CDP. M365 Copilot can select generic tools such as
+  `rg`, `read`, `officecli`, and `edit` from natural-language instructions, but
+  Relay must remain responsible for argument validation, path normalization,
+  approval, backup, and execution safety. It is not a drop-in Codex app-server
+  replacement, and the default `OpenAIChatClient` Responses path does not match
+  Relay's current bridge.
+- For productization, prefer the **.NET Agent Framework sidecar** over Python
+  if Relay adopts Agent Framework. It avoids bundling Python and aligns better
+  with Windows enterprise deployment, while still keeping Linux support possible
+  through self-contained .NET publishing.

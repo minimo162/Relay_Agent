@@ -27,6 +27,10 @@ build/
 dist/
 scripts/dist/
 target/
+bin/
+obj/
+**/bin/
+**/obj/
 apps/desktop/src-tauri/gen/schemas/windows-schema.json
 
 # Local signing artifacts

@@ -9,27 +9,12 @@ on:
 
 jobs:
   checks:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu Acceptance
-            os: ubuntu-latest
-            run_launch_smokes: true
-            run_windows_smoke: false
-          - name: Windows Acceptance
-            os: windows-latest
-            run_launch_smokes: false
-            run_windows_smoke: true
+    name: Hard Cutover Acceptance
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -42,6 +27,11 @@ jobs:
           corepack enable
           corepack prepare pnpm@10.33.0 --activate
 
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
@@ -51,48 +41,8 @@ jobs:
           test -f pnpm-lock.yaml
           test ! -f package-lock.json
 
-      - name: Prepare Relay desktop bundle resources
-        working-directory: apps/desktop
-        run: pnpm run prep:tauri-bundle
+      - name: Check hard cutover path
+        run: node scripts/check-hard-cut-guard.mjs
 
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            file \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            wget \
-            xvfb
-
-      - name: Guard live docs against stale references
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          ! rg -n "packages/contracts|spreadsheet-centric demo|minimal CSV end-to-end demo" README.md PLANS.md AGENTS.md docs/CLAW_CODE_ALIGNMENT.md
-
-      - name: cargo check
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
-
-      - name: cargo test --workspace --exclude relay-agent-desktop
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
-
-      - name: cargo test --test doctor_cli
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
-
-      - name: pnpm check
+      - name: Build active workbench and sidecar
         run: pnpm check
-
-      - name: pnpm diag:desktop-launch
-        if: matrix.run_launch_smokes
-        run: pnpm diag:desktop-launch
-
-      - name: pnpm diag:windows-smoke
-        if: matrix.run_windows_smoke
-        run: pnpm diag:windows-smoke

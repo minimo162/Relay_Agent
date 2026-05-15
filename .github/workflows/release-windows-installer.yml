@@ -1,38 +1,37 @@
-name: release-windows-installer
+name: release-relay-sidecar
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to publish, for example v0.2.0 or v0.2.0-rc.1"
+        description: "Release tag to publish, for example v0.3.0"
         required: true
         type: string
       release_name:
         description: "Optional GitHub Release name override"
         required: false
         type: string
-      self_signed_prerelease:
-        description: "When Trusted Signing is absent, publish a self-signed internal prerelease installer instead of unsigned."
-        required: false
-        default: true
-        type: boolean
 
 jobs:
-  publish-windows-installer:
-    runs-on: windows-latest
+  publish:
+    name: Publish ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
-      id-token: write
-    env:
-      AZURE_CODESIGN_ENDPOINT: ${{ vars.AZURE_CODESIGN_ENDPOINT }}
-      AZURE_CODESIGN_ACCOUNT_NAME: ${{ vars.AZURE_CODESIGN_ACCOUNT_NAME }}
-      AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+            archive: zip
+          - rid: linux-x64
+            os: ubuntu-latest
+            archive: tar
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -45,10 +44,13 @@ jobs:
           corepack enable
           corepack prepare pnpm@10.33.0 --activate
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
         with:
-          targets: x86_64-pc-windows-msvc
+          dotnet-version: 8.0.x
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Resolve release metadata
         id: release_meta
@@ -56,346 +58,54 @@ jobs:
         run: |
           tag="${{ inputs.release_tag }}"
           release_name="${{ inputs.release_name }}"
-
-          if [ -z "$tag" ]; then
-            echo "Release tag is required." >&2
+          version="$(node -p "require('./apps/workbench/package.json').version")"
+          if [[ "$tag" != "v${version}" && "$tag" != v${version}-* ]]; then
+            echo "Release tag '$tag' must match Relay version '$version'." >&2
             exit 1
           fi
-
-          relay_agent_version="$(node -p "require('./apps/desktop/package.json').version")"
-          if [[ "$tag" != "v${relay_agent_version}" && "$tag" != v${relay_agent_version}-* ]]; then
-            echo "Release tag '$tag' must match Relay Agent version '$relay_agent_version' (expected v${relay_agent_version} or v${relay_agent_version}-...)." >&2
-            exit 1
-          fi
-
           if [ -z "$release_name" ]; then
             release_name="Relay Agent ${tag}"
           fi
-
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
-          printf 'relay_agent_version=%s\n' "$relay_agent_version" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve Trusted Signing mode
-        id: signing_mode
-        shell: bash
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          required=(
-            AZURE_CLIENT_ID
-            AZURE_TENANT_ID
-            AZURE_SUBSCRIPTION_ID
-            AZURE_CODESIGN_ENDPOINT
-            AZURE_CODESIGN_ACCOUNT_NAME
-            AZURE_CODESIGN_CERT_PROFILE_NAME
-          )
+      - name: Run active acceptance gate
+        run: pnpm check
 
-          missing=()
-          present=0
-
-          for var_name in "${required[@]}"; do
-            if [ -n "${!var_name:-}" ]; then
-              present=$((present + 1))
-            else
-              missing+=("$var_name")
-            fi
-          done
-
-          if [ "$present" -eq 0 ]; then
-            if [[ "${{ steps.release_meta.outputs.tag }}" != *-* ]]; then
-              echo "Trusted Signing is required for formal releases. Use a prerelease tag for internal fallback builds." >&2
-              exit 1
-            fi
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            if [ "${{ inputs.self_signed_prerelease }}" = "true" ]; then
-              echo "mode=self-signed-prerelease" >> "$GITHUB_OUTPUT"
-              echo "summary=Trusted Signing is not configured; this workflow_dispatch prerelease will publish a self-signed internal installer asset." >> "$GITHUB_OUTPUT"
-            else
-              echo "mode=unsigned-prerelease" >> "$GITHUB_OUTPUT"
-              echo "summary=Trusted Signing is not configured; this workflow_dispatch prerelease will publish an unsigned installer asset marked as unsigned." >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
-          fi
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf 'Trusted Signing configuration is partial. Missing: %s\n' "${missing[*]}" >&2
-            exit 1
-          fi
-
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
-          echo "mode=trusted-signing" >> "$GITHUB_OUTPUT"
-          echo "summary=Trusted Signing is configured, so the workflow will sign the installer before upload." >> "$GITHUB_OUTPUT"
-
-      - name: Install workspace dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Guard pnpm lockfile policy
+      - name: Publish sidecar
         shell: bash
         run: |
-          test -f pnpm-lock.yaml
-          test ! -f package-lock.json
+          dotnet publish apps/sidecar/Relay.Sidecar.csproj \
+            --configuration Release \
+            --runtime "${{ matrix.rid }}" \
+            --self-contained true \
+            --output "dist/relay-agent-${{ matrix.rid }}"
+          pnpm release:inventory
 
-      - name: Run workspace typecheck
-        run: pnpm typecheck
-
-      - name: Prepare Tauri bundle prerequisites
-        working-directory: apps/desktop
+      - name: Create zip asset
+        if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          foreach ($attempt in 1..3) {
-            pnpm run prep:tauri-bundle
-            if ($LASTEXITCODE -eq 0) {
-              exit 0
-            }
-            if ($attempt -eq 3) {
-              Write-Error "prep:tauri-bundle failed after $attempt attempts."
-              exit 1
-            }
-            $sleepSeconds = $attempt * 15
-            Write-Warning "prep:tauri-bundle failed on attempt $attempt; retrying in ${sleepSeconds}s..."
-            Start-Sleep -Seconds $sleepSeconds
-          }
+          Compress-Archive -Path "dist/relay-agent-${{ matrix.rid }}/*" -DestinationPath "dist/relay-agent-${{ matrix.rid }}.zip" -Force
 
-      - name: Run Rust workspace tests
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
-
-      - name: Run doctor CLI tests
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
-
-      - name: Build Windows installer
+      - name: Create tar asset
+        if: matrix.archive == 'tar'
         shell: bash
         run: |
-          for attempt in 1 2 3; do
-            if pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.json; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "tauri build failed after $attempt attempts." >&2
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "tauri build failed on attempt $attempt; retrying in ${sleep_seconds}s..." >&2
-            sleep "$sleep_seconds"
-          done
+          tar -C "dist/relay-agent-${{ matrix.rid }}" -czf "dist/relay-agent-${{ matrix.rid }}.tar.gz" .
 
-      - name: Locate installer artifact
-        id: installer
-        shell: pwsh
-        run: |
-          $installerDir = Join-Path $env:GITHUB_WORKSPACE "target\release\bundle\nsis"
-          if (-not (Test-Path $installerDir)) {
-            throw "NSIS bundle directory was not created: $installerDir"
-          }
-
-          $installer = Get-ChildItem -Path $installerDir -Filter "*.exe" -File |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1
-
-          if (-not $installer) {
-            throw "No NSIS installer `.exe` was found in $installerDir"
-          }
-
-          "path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "name=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Azure login for Trusted Signing
-        if: steps.signing_mode.outputs.enabled == 'true'
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Sign installer with Trusted Signing
-        if: steps.signing_mode.outputs.enabled == 'true'
-        uses: azure/artifact-signing-action@v1
-        with:
-          endpoint: ${{ vars.AZURE_CODESIGN_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_CODESIGN_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
-          files: ${{ steps.installer.outputs.path }}
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: Relay Agent Windows installer
-          description-url: https://github.com/${{ github.repository }}
-
-      - name: Sign installer with self-signed certificate
-        if: steps.signing_mode.outputs.mode == 'self-signed-prerelease'
-        id: self_signed
-        shell: pwsh
-        run: |
-          $outputDir = Join-Path $env:RUNNER_TEMP "relay-agent-self-signed"
-          $pfxPassword = "RelayAgentSelfSignedCi-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          & .\scripts\windows-self-sign-installer.ps1 `
-            -InstallerPath "${{ steps.installer.outputs.path }}" `
-            -OutputDirectory $outputDir `
-            -Organization "Relay Agent Dev" `
-            -CommonName "Relay Agent GitHub Actions Internal Test" `
-            -PfxPassword $pfxPassword `
-            -SkipSignToolVerify
-
-          $signedInstaller = Get-ChildItem -Path $outputDir -Filter "*-selfsigned.exe" -File |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1
-          if (-not $signedInstaller) {
-            throw "Self-signed installer was not created under $outputDir."
-          }
-
-          $certificatePath = Join-Path $outputDir "relay-agent-selfsigned.crt"
-          if (-not (Test-Path -LiteralPath $certificatePath)) {
-            throw "Self-signed public certificate was not created at $certificatePath."
-          }
-
-          $certificateAssetPath = Join-Path $outputDir "relay-agent-selfsigned-public-test-cert.crt"
-          Copy-Item -LiteralPath $certificatePath -Destination $certificateAssetPath -Force
-
-          $signature = Get-AuthenticodeSignature $signedInstaller.FullName
-          if (-not $signature.SignerCertificate) {
-            throw "Expected an Authenticode signer certificate on the self-signed installer, got '$($signature.Status)'."
-          }
-
-          "path=$($signedInstaller.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "name=$($signedInstaller.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "cert_path=$certificateAssetPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "cert_name=$([System.IO.Path]::GetFileName($certificateAssetPath))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "status=$($signature.Status)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Verify Authenticode signature
-        if: steps.signing_mode.outputs.enabled == 'true'
-        id: signature
-        shell: pwsh
-        run: |
-          $signature = Get-AuthenticodeSignature "${{ steps.installer.outputs.path }}"
-          if ($signature.Status -ne "Valid") {
-            throw "Expected a valid Authenticode signature, got '$($signature.Status)'."
-          }
-
-          "status=$($signature.Status)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Prepare release asset
-        id: release_asset
-        shell: pwsh
-        run: |
-          $path = "${{ steps.installer.outputs.path }}"
-          $name = "${{ steps.installer.outputs.name }}"
-          $mode = "${{ steps.signing_mode.outputs.mode }}"
-
-          if ($mode -eq "self-signed-prerelease") {
-            $path = "${{ steps.self_signed.outputs.path }}"
-            $name = "${{ steps.self_signed.outputs.name }}"
-          } elseif ("${{ steps.signing_mode.outputs.enabled }}" -ne "true") {
-            $dir = Split-Path -Parent $path
-            $stem = [System.IO.Path]::GetFileNameWithoutExtension($name)
-            $unsignedName = "$stem-unsigned.exe"
-            $unsignedPath = Join-Path $dir $unsignedName
-            Copy-Item -Path $path -Destination $unsignedPath -Force
-            $path = $unsignedPath
-            $name = $unsignedName
-          }
-
-          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Collect installer digest
-        id: installer_digest
-        shell: pwsh
-        run: |
-          $hash = Get-FileHash "${{ steps.release_asset.outputs.path }}" -Algorithm SHA256
-          "sha256=$($hash.Hash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Publish installer to GitHub Releases
-        shell: pwsh
+      - name: Upload release assets
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
           RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
-          RELEASE_PRERELEASE: ${{ contains(steps.release_meta.outputs.tag, '-') }}
-          INSTALLER_PATH: ${{ steps.release_asset.outputs.path }}
-          SELF_SIGNED_CERT_PATH: ${{ steps.self_signed.outputs.cert_path }}
-          SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
         run: |
-          $releaseNotes = @"
-          Relay Agent Windows NSIS installer.
-
-          Signing mode: $env:SIGNING_MODE
-
-          This release contains the dedicated Relay Agent desktop UX for document search and OfficeCLI-backed Office file workflows.
-          "@
-
-          if ($env:SIGNING_MODE -eq "self-signed-prerelease") {
-            $releaseNotes += @"
-
-          Internal prerelease note: this installer is self-signed for smoke testing only. It does not provide public publisher trust or SmartScreen reputation.
-          "@
-          }
-
-          $assets = @($env:INSTALLER_PATH)
-          if ($env:SIGNING_MODE -eq "self-signed-prerelease" -and -not [string]::IsNullOrWhiteSpace($env:SELF_SIGNED_CERT_PATH)) {
-            $assets += $env:SELF_SIGNED_CERT_PATH
-          }
-
-          gh release view $env:RELEASE_TAG *> $null
-          $releaseExists = $LASTEXITCODE -eq 0
-
-          if ($releaseExists) {
-            gh release upload $env:RELEASE_TAG @assets --clobber
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          } else {
-            $args = @(
-              "release",
-              "create",
-              $env:RELEASE_TAG
-            )
-            $args += $assets
-            $args += @(
-              "--title",
-              $env:RELEASE_NAME,
-              "--notes",
-              $releaseNotes
-            )
-            if ($env:RELEASE_PRERELEASE -eq "true") {
-              $args += "--prerelease"
-            }
-
-            gh @args
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
-          }
-
-      - name: Summarize release publication
-        shell: bash
-        run: |
-          {
-            echo "## Relay Agent Windows Installer Release"
-            echo ""
-            echo "- Release tag: \`${{ steps.release_meta.outputs.tag }}\`"
-            echo "- Release name: \`${{ steps.release_meta.outputs.release_name }}\`"
-            echo "- Bundle target: \`tauri nsis\`"
-            echo "- Installer asset: \`${{ steps.release_asset.outputs.name }}\`"
-            echo "- Installer SHA256: \`${{ steps.installer_digest.outputs.sha256 }}\`"
-            echo "- Signing mode: \`${{ steps.signing_mode.outputs.mode }}\`"
-            echo "- Signing summary: ${{ steps.signing_mode.outputs.summary }}"
-            if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
-              echo "- Authenticode status: \`${{ steps.signature.outputs.status }}\`"
-              echo "- Authenticode subject: \`${{ steps.signature.outputs.subject }}\`"
-            elif [ "${{ steps.signing_mode.outputs.mode }}" = "self-signed-prerelease" ]; then
-              echo "- Authenticode status: \`${{ steps.self_signed.outputs.status }}\`"
-              echo "- Authenticode subject: \`${{ steps.self_signed.outputs.subject }}\`"
-              echo "- Authenticode thumbprint: \`${{ steps.self_signed.outputs.thumbprint }}\`"
-              echo "- Self-signed certificate asset: \`${{ steps.self_signed.outputs.cert_name }}\`"
-            else
-              echo "- Authenticode status: \`not checked (unsigned prerelease)\`"
-            fi
-            echo "- Repo setup guide: \`docs/TRUSTED_SIGNING_SETUP.md\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar workbench release."
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            gh release upload "$RELEASE_TAG" "dist/relay-agent-${{ matrix.rid }}.zip" --clobber
+          else
+            gh release upload "$RELEASE_TAG" "dist/relay-agent-${{ matrix.rid }}.tar.gz" --clobber
+          fi
+          gh release upload "$RELEASE_TAG" "dist/release/relay-release-inventory.json" --clobber
