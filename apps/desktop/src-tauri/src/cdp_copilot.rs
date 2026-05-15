@@ -44,6 +44,31 @@ pub use desktop_core::cdp::relay_agent_edge_profile_dir;
 
 /* ── Profile + DevToolsActivePort (port 0) ───────────────────── */
 
+const CDP_HTTP_TIMEOUT: Duration = Duration::from_millis(1200);
+
+fn cdp_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(CDP_HTTP_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+fn devtools_active_port_path(profile_dir: &std::path::Path) -> std::path::PathBuf {
+    profile_dir.join("DevToolsActivePort")
+}
+
+fn remove_stale_devtools_active_port(profile_dir: &std::path::Path) {
+    let path = devtools_active_port_path(profile_dir);
+    match std::fs::remove_file(&path) {
+        Ok(()) => info!("[CDP] removed stale DevToolsActivePort before Edge relaunch"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => warn!(
+            "[CDP] could not remove stale DevToolsActivePort at {:?}: {}",
+            path, error
+        ),
+    }
+}
+
 /// Poll until `DevToolsActivePort` appears after `--remote-debugging-port=0` launch.
 async fn wait_for_devtools_active_port(
     profile_dir: &std::path::Path,
@@ -51,26 +76,38 @@ async fn wait_for_devtools_active_port(
 ) -> Result<u16> {
     let deadline = std::time::Instant::now() + Duration::from_secs(max_wait_secs);
     let interval = Duration::from_millis(100);
+    let mut last_port: Option<u16> = None;
     loop {
         if std::time::Instant::now() > deadline {
-            bail!("DevToolsActivePort did not appear within {max_wait_secs}s");
+            let suffix = last_port.map_or_else(String::new, |port| {
+                format!("; last observed port {port} was not ready")
+            });
+            bail!("DevToolsActivePort did not point to a ready Edge CDP endpoint within {max_wait_secs}s{suffix}");
         }
         if let Some(p) = read_devtools_active_port(profile_dir) {
-            return Ok(p);
+            last_port = Some(p);
+            let url = format!("http://127.0.0.1:{p}");
+            if cdp_http_ready_relay_dedicated(&url).await {
+                return Ok(p);
+            }
         }
         tokio::time::sleep(interval).await;
     }
 }
 
 async fn cdp_http_ready(debug_url: &str) -> bool {
+    let client = cdp_http_client();
     matches!(
-        reqwest::get(format!("{debug_url}/json/version")).await,
+        client.get(format!("{debug_url}/json/version")).send().await,
         Ok(r) if r.status().is_success()
     )
 }
 
 async fn fetch_cdp_version(debug_url: &str) -> Option<Value> {
-    let response = reqwest::get(format!("{debug_url}/json/version"))
+    let client = cdp_http_client();
+    let response = client
+        .get(format!("{debug_url}/json/version"))
+        .send()
         .await
         .ok()?;
     response.json::<Value>().await.ok()
@@ -221,7 +258,11 @@ pub async fn wait_for_cdp_ready(debug_url: &str, max_wait_secs: u64) -> Result<(
         }
         attempts += 1;
 
-        match reqwest::get(&format!("{debug_url}/json/version")).await {
+        match cdp_http_client()
+            .get(format!("{debug_url}/json/version"))
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 info!(
                     "[CDP] Edge ready on {} (after {} attempts)",
@@ -251,7 +292,7 @@ impl Default for CdpConfig {
     fn default() -> Self {
         Self {
             debug_url: "http://127.0.0.1:9360".into(),
-            copilot_url: "https://m365.cloud.microsoft/chat".into(),
+            copilot_url: default_copilot_url().into(),
             auto_launch: false,
             base_port: 9360,
         }
@@ -269,7 +310,9 @@ pub struct PageInfo {
 }
 
 pub async fn list_pages(debug_url: &str) -> Result<Vec<PageInfo>> {
-    let resp = reqwest::get(&format!("{debug_url}/json/list"))
+    let resp = cdp_http_client()
+        .get(format!("{debug_url}/json/list"))
+        .send()
         .await
         .context("fetch /json/list")?;
     let items: Vec<Value> = resp.json().await.context("/json/list JSON")?;
@@ -288,11 +331,26 @@ pub async fn list_pages(debug_url: &str) -> Result<Vec<PageInfo>> {
 
 /// Copilot page URL patterns checked in order.
 const COPILOT_URL_PATTERNS: &[&str] = &[
+    "m365copilot.com",
     "m365.cloud.microsoft",
     "copilot.microsoft.com",
     "copilot.cloud.microsoft",
     "m365.microsoft.com/chat",
 ];
+
+/// Microsoft documents m365copilot.com as the user-facing web entry point.
+/// Keep m365.cloud.microsoft as the first fallback because tenants with pinned
+/// Copilot Chat often redirect there.
+const COPILOT_NAVIGATION_URLS: &[&str] = &[
+    "https://m365copilot.com",
+    "https://m365.cloud.microsoft/chat",
+    "https://copilot.cloud.microsoft",
+    "https://copilot.microsoft.com",
+];
+
+fn default_copilot_url() -> &'static str {
+    COPILOT_NAVIGATION_URLS[0]
+}
 
 pub async fn find_copilot_page(debug_url: &str) -> Result<Option<PageInfo>> {
     for p in list_pages(debug_url).await? {
@@ -568,11 +626,8 @@ impl CopilotPage {
     pub async fn navigate_to_chat(&self) -> Result<()> {
         info!("[CDP] navigate to /chat");
         let ctx = self.connect_ctx().await?;
-        ctx.send(
-            "Page.navigate",
-            json!({ "url": "https://m365.cloud.microsoft/chat" }),
-        )
-        .await?;
+        ctx.send("Page.navigate", json!({ "url": default_copilot_url() }))
+            .await?;
         ctx.send("Page.enable", json!({})).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
@@ -896,19 +951,34 @@ async fn debug_url_matches_relay_profile(debug_url: &str) -> bool {
 
 async fn navigate_page_to_copilot(debug_url: &str, page: &PageInfo) -> Result<PageInfo> {
     let page_ctx = Ctx::connect(&page.ws_url).await?;
-    let result = page_ctx
-        .send(
-            "Page.navigate",
-            json!({ "url": "https://m365.cloud.microsoft/chat" }),
-        )
-        .await;
-    info!("[CDP] Page.navigate result: {:?}", result);
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    let pages = list_pages(debug_url).await.unwrap_or_default();
-    pages
-        .into_iter()
-        .find(|p| p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat)))
-        .context("Copilot URL did not resolve after navigation")
+    let mut last_titles = Vec::new();
+    for target_url in COPILOT_NAVIGATION_URLS {
+        let result = page_ctx
+            .send("Page.navigate", json!({ "url": target_url }))
+            .await;
+        info!("[CDP] Page.navigate to {} result: {:?}", target_url, result);
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let pages = list_pages(debug_url).await.unwrap_or_default();
+        last_titles = pages
+            .iter()
+            .filter(|p| p.kind == "page")
+            .map(|p| format!("{} ({})", p.title, p.url))
+            .collect();
+        if let Some(page) = pages.into_iter().find(|p| {
+            p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
+        }) {
+            return Ok(page);
+        }
+    }
+    bail!(
+        "Copilot URL did not resolve after navigation. Tried: {}. Current Edge pages: {}",
+        COPILOT_NAVIGATION_URLS.join(", "),
+        if last_titles.is_empty() {
+            "(none)".to_string()
+        } else {
+            last_titles.join(" | ")
+        }
+    )
 }
 
 /// Connect to a Copilot page, auto-launching Edge if needed.
@@ -946,7 +1016,7 @@ pub async fn connect_copilot_page(
                     "[CDP] DevToolsActivePort on {} but CDP not up yet — waiting before any new launch…",
                     p
                 );
-            wait_for_cdp_ready(&url, 30).await.is_ok() && cdp_http_ready_relay_dedicated(&url).await
+            wait_for_cdp_ready(&url, 5).await.is_ok() && cdp_http_ready_relay_dedicated(&url).await
         };
 
         if reuse_existing {
@@ -959,6 +1029,7 @@ pub async fn connect_copilot_page(
             warn!(
                     "[CDP] DevToolsActivePort present but CDP unreachable after wait; launching new Edge…"
                 );
+            remove_stale_devtools_active_port(&profile_dir);
             let spawned = launch_dedicated_edge(0)?;
             let p2 = wait_for_devtools_active_port(&profile_dir, 30).await?;
             (format!("http://127.0.0.1:{p2}"), Some(spawned), true)
@@ -1004,6 +1075,8 @@ pub async fn connect_copilot_page(
         bail!("[CDP] no tabs found after Edge launch");
     }
     let mut copilot_page: Option<PageInfo> = None;
+    let mut copilot_navigation_error: Option<String> = None;
+    let mut last_created_target_pages: Vec<String> = Vec::new();
 
     for page in &pages {
         if page.kind != "page" {
@@ -1027,34 +1100,62 @@ pub async fn connect_copilot_page(
                 "[CDP] Navigating existing tab to Copilot (was: {})",
                 first_page.url
             );
-            copilot_page = navigate_page_to_copilot(&debug_url_new, first_page)
-                .await
-                .ok();
+            match navigate_page_to_copilot(&debug_url_new, first_page).await {
+                Ok(page) => copilot_page = Some(page),
+                Err(error) => {
+                    warn!("[CDP] Copilot navigation failed: {error}");
+                    copilot_navigation_error = Some(error.to_string());
+                }
+            }
         }
     }
 
     if copilot_page.is_none() {
         // Create a new tab via Target.createTarget
-        info!("[CDP] Creating new Copilot tab via Target.createTarget…");
-        let create_result = ctx
-            .send(
-                "Target.createTarget",
-                json!({
-                    "type": "page",
-                    "url": "https://m365.cloud.microsoft/chat"
-                }),
-            )
-            .await;
-        info!("[CDP] Target.createTarget result: {:?}", create_result);
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        for target_url in COPILOT_NAVIGATION_URLS {
+            info!("[CDP] Creating Copilot tab via Target.createTarget: {target_url}");
+            let create_result = ctx
+                .send(
+                    "Target.createTarget",
+                    json!({
+                        "type": "page",
+                        "url": target_url
+                    }),
+                )
+                .await;
+            info!("[CDP] Target.createTarget result: {:?}", create_result);
+            tokio::time::sleep(Duration::from_secs(8)).await;
 
-        let pages3 = list_pages(&debug_url_new).await.unwrap_or_default();
-        copilot_page = pages3.into_iter().find(|p| {
-            p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
-        });
+            let pages3 = list_pages(&debug_url_new).await.unwrap_or_default();
+            last_created_target_pages = pages3
+                .iter()
+                .filter(|p| p.kind == "page")
+                .map(|p| format!("{} ({})", p.title, p.url))
+                .collect();
+            copilot_page = pages3.into_iter().find(|p| {
+                p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
+            });
+            if copilot_page.is_some() {
+                break;
+            }
+        }
     }
 
-    let copilot_page = copilot_page.context("no Copilot tab found after all attempts")?;
+    let Some(copilot_page) = copilot_page else {
+        let navigation_detail = copilot_navigation_error
+            .unwrap_or_else(|| "no existing tab navigation was attempted".to_string());
+        let page_detail = if last_created_target_pages.is_empty() {
+            "(none)".to_string()
+        } else {
+            last_created_target_pages.join(" | ")
+        };
+        bail!(
+            "no Copilot tab found after all attempts. Tried: {}. Navigation detail: {}. Current Edge pages: {}",
+            COPILOT_NAVIGATION_URLS.join(", "),
+            navigation_detail,
+            page_detail
+        );
+    };
 
     info!(
         "[CDP] Using Copilot tab: {} ({})",
@@ -1150,7 +1251,9 @@ fn extract_target_id(ws_url: &str) -> Option<String> {
 
 /// Resolve the WebSocket URL from a debug endpoint by fetching /json/version directly.
 async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
-    let r = reqwest::get(&format!("{debug_url}/json/version"))
+    let r = cdp_http_client()
+        .get(format!("{debug_url}/json/version"))
+        .send()
         .await
         .context("/json/version")?;
     let v: Value = r.json().await.context("/json/version JSON")?;
@@ -1183,7 +1286,9 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     }
 
     // Must use a full URL (scheme + host); `127.0.0.1:port` alone is invalid for HTTP clients.
-    let r = reqwest::get(format!("{debug_base}/json/version"))
+    let r = cdp_http_client()
+        .get(format!("{debug_base}/json/version"))
+        .send()
         .await
         .context("/json/version")?;
     let v: Value = r.json().await.context("/json/version JSON")?;
@@ -1201,4 +1306,30 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     let url = url.replace("ws://localhost/", &format!("ws://{target_host}/"));
     let url = url.replace("ws://127.0.0.1/", &format!("ws://{target_host}/"));
     Ok(url.replace("ws://0.0.36.6/", &format!("ws://{target_host}/")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copilot_navigation_prefers_official_web_entrypoint() {
+        assert_eq!(default_copilot_url(), "https://m365copilot.com");
+        assert!(COPILOT_NAVIGATION_URLS.contains(&"https://m365.cloud.microsoft/chat"));
+        assert!(COPILOT_URL_PATTERNS.contains(&"m365copilot.com"));
+    }
+
+    #[test]
+    fn remove_stale_devtools_active_port_deletes_only_known_marker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let devtools = devtools_active_port_path(dir.path());
+        let unrelated = dir.path().join("keep.txt");
+        std::fs::write(&devtools, "65530\n/devtools/browser/stale\n").unwrap();
+        std::fs::write(&unrelated, "keep").unwrap();
+
+        remove_stale_devtools_active_port(dir.path());
+
+        assert!(!devtools.exists());
+        assert_eq!(std::fs::read_to_string(unrelated).unwrap(), "keep");
+    }
 }

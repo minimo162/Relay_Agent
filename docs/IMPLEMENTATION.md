@@ -15575,6 +15575,38 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed, 6 passed.
 - `git diff --check`: passed.
 
+## 2026-05-15 - Edge CDP startup hardening
+
+Fixed a Copilot startup path where a stale `DevToolsActivePort` file in the
+Relay-owned Edge profile could be trusted after the CDP endpoint was no longer
+reachable. Relaunch now removes the stale marker and waits for a port that
+actually responds as an Edge CDP endpoint. CDP HTTP probes also use a bounded
+timeout so unreachable local ports do not stretch startup unpredictably.
+
+Updated Copilot navigation to prefer Microsoft's documented web entry point
+`https://m365copilot.com`, with `m365.cloud.microsoft/chat` and other Copilot
+hosts as fallback targets. This avoids hard-failing when one tenant/network path
+shows an Edge DNS error page while another supported entry point can redirect to
+the chat experience.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib`: passed, 2 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`
