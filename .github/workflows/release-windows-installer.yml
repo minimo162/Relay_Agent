@@ -143,7 +143,20 @@ jobs:
 
       - name: Prepare Tauri bundle prerequisites
         working-directory: apps/desktop
-        run: pnpm run prep:tauri-bundle
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm run prep:tauri-bundle; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "prep:tauri-bundle failed after $attempt attempts." >&2
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 15))
+            echo "prep:tauri-bundle failed on attempt $attempt; retrying in ${sleep_seconds}s..." >&2
+            sleep "$sleep_seconds"
+          done
 
       - name: Run Rust workspace tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
@@ -153,7 +166,19 @@ jobs:
 
       - name: Build Windows installer
         shell: bash
-        run: pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.json
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.json; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "tauri build failed after $attempt attempts." >&2
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "tauri build failed on attempt $attempt; retrying in ${sleep_seconds}s..." >&2
+            sleep "$sleep_seconds"
+          done
 
       - name: Locate installer artifact
         id: installer
