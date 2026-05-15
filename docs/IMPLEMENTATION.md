@@ -26,6 +26,111 @@
 
 ## Milestone Log
 
+### 2026-05-16 Copilot response extraction and live E2E hardening
+
+Compared the active .NET sidecar Copilot transport with the previously stable
+`40622c0` Node bridge beyond the input/composer path and ported the missing
+stability pieces that matter for the current architecture:
+
+- Added CDP event dispatch to `CdpSession` so command-response waits no longer
+  discard browser events silently.
+- Added a bounded Copilot WebSocket/Network capture path. DOM extraction remains
+  primary, but assistant candidates from M365 Copilot WebSocket frames can now
+  be used when the visible DOM is empty, echo-like, or still settling.
+- Replaced the simple body-text response wait with a structured assistant
+  snapshot extractor: assistant turn selectors, Copilot chrome stripping,
+  prompt-echo rejection, stop/generating detection, incomplete JSON detection,
+  stable quiet polling, and phantom-generating tolerance.
+- Added basic Copilot page health checks for DNS/unreachable pages and crash
+  pages before waiting indefinitely for a composer.
+- Hardened Copilot step planning by adding one explicit JSON repair turn before
+  any local tool execution. Invalid JSON still stops the run if the repair also
+  fails; there is no silent tool fallback.
+
+Verification commands run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_LIVE_COPILOT_CDP_PORT=9360 pnpm workbench:live-copilot-e2e
+```
+
+Results:
+
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release`:
+  passed.
+- `pnpm check`: passed.
+- `pnpm workbench:live-copilot-e2e`: passed against the live signed-in
+  Microsoft 365 Copilot Edge CDP session. The run reported `elapsed=7944ms`,
+  `readiness=Ready`, `cdp=9360`.
+
+### 2026-05-16 Copilot CDP stable-bridge parity migration
+
+Ported the most important stability behaviors from the previously stable
+`40622c0` Node Copilot bridge into the active .NET sidecar transport:
+
+- Added deep composer discovery helpers based on the stable bridge's
+  `COMPOSER_DOM_HELPERS`, including same-origin iframe traversal, labeled
+  textbox discovery, Lexical editor discovery, and shadow-root walking.
+- Added accessible-name based control clicking based on the stable bridge's
+  control helpers, so Send and New Chat are found by labels instead of one
+  shallow button selector.
+- The sidecar now brings the Copilot page to front, ensures the page is on a
+  Copilot or login URL, waits for a visible composer, and starts a new chat by
+  default before each prompt. `RELAY_COPILOT_SKIP_NEW_CHAT=1` can opt out for
+  diagnostics.
+- Prompt insertion now uses the stable order: focus/clear composer,
+  `Input.insertText`, DOM paste fallback, visible-length confirmation, then
+  send-button lifecycle polling.
+- Target selection now prefers the most recent Copilot tab, then login/page
+  targets, matching the stable bridge's "use last viable target" behavior.
+- Fresh target creation remains available only for diagnostics through
+  `RELAY_COPILOT_FRESH_TARGET=1`; normal runs reuse the signed-in Edge session
+  and isolate state by clicking New Chat.
+
+Follow-up hardening completed after comparing the active .NET transport against
+the stable bridge's `pastePromptRaw`, `insertTextViaCdp`, and
+`submitPromptRaw` implementations:
+
+- Replaced the one-shot prompt insertion path with the stable chunked
+  `Input.insertText` pipeline. Text is split by Unicode code point, paced
+  between chunks, and never refocused inside the insert loop.
+- Ported the stable prompt-length heuristics: `pasteNeedMinChars`,
+  `pasteLooksComplete`, long-prompt innerText cap handling, and
+  `minComposerThresholdForSubmit`.
+- Ported the stable paste fallback order: fast inline `Input.insertText`,
+  outer Lexical clipboard paste, synchronous in-page `execCommand`, long-prompt
+  CDP-first insert, synthetic clipboard paste, chunked CDP insert, chunked
+  `execCommand`, InputEvent fallback, and final key-char fallback.
+- Ported the stable submit lifecycle: Enter-first submission, send-state
+  confirmation by generating state or composer length decrease, stable send
+  button polling, DOM click fallback, CDP mouse fallback, Ctrl+Enter fallback,
+  and final Enter+mouse retry.
+- Response waiting now also checks the Copilot generating/stop-control state
+  before treating a quiet DOM snapshot as final.
+
+Verification commands run locally:
+
+```bash
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+DOTNET_ROOT=/tmp/relay-dotnet/sdk PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_LIVE_COPILOT_CDP_PORT=9360 pnpm workbench:live-copilot-e2e
+```
+
+Results:
+
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release`:
+  passed.
+- `pnpm check`: passed.
+- `pnpm workbench:ux-e2e`: passed. Reported `search=220ms` and
+  `approval=135ms`.
+- Follow-up after the full paste/submit pipeline port: `dotnet build` passed,
+  `pnpm check` passed, and `pnpm workbench:live-copilot-e2e` passed. The live
+  run reported `elapsed=9729ms`, `readiness=Ready`, `cdp=9360`.
+- Previous `pnpm workbench:live-copilot-e2e`: passed. Reported `elapsed=10478ms`,
+  `readiness=Ready`, `cdp=9360`.
+
 ### 2026-05-16 OfficeCLI optional readiness hardening
 
 Implemented the OfficeCLI readiness fix for the unified sidecar Workbench:

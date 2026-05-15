@@ -16,7 +16,25 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
         {
             events.Add(RunEvent.Status("Copilot が次の手順を選択しています", $"step {step}/{MaxSteps}"));
             var planText = await copilot.SendAsync(BuildStepPrompt(request, observations), cancellationToken);
-            var plan = RelayAgentPlan.Parse(planText);
+            RelayAgentPlan plan;
+            try
+            {
+                plan = RelayAgentPlan.Parse(planText);
+            }
+            catch (Exception parseError)
+            {
+                events.Add(RunEvent.Status("Copilot のJSON形式を修復しています", parseError.Message));
+                var repairText = await copilot.SendAsync(BuildPlanRepairPrompt(request, observations, planText, parseError.Message), cancellationToken);
+                try
+                {
+                    plan = RelayAgentPlan.Parse(repairText);
+                }
+                catch (Exception repairError)
+                {
+                    events.Add(RunEvent.Error("Copilot の計画を検証できません", $"repair failed: {repairError.Message}"));
+                    return new AgentRunResult("failed", events, null);
+                }
+            }
 
             if (plan.Action == "final")
             {
@@ -129,6 +147,33 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "OBSERVATIONS JSON:",
             JsonSerializer.Serialize(observations, JsonOptions.Default),
             "Return the next JSON object now.",
+        ]);
+
+    private static string BuildPlanRepairPrompt(
+        RunRequest request,
+        IReadOnlyList<ToolObservation> observations,
+        string invalidResponse,
+        string validationError) =>
+        string.Join("\n", [
+            "RELAY AGENT JSON REPAIR",
+            "Mode: repair only. Do not answer the user and do not call tools.",
+            "Return exactly one valid JSON object and nothing else.",
+            """For a final answer, return fields: action="final", answer=<actual concise Japanese answer>.""",
+            """For a tool call, return fields: action="tool", tool=<one allowed tool name>, args=<JSON object>.""",
+            "Allowed tool names: rg_files, rg_search, read, officecli, edit, write, ask_user.",
+            "Rules:",
+            "- Preserve the intent of the invalid response.",
+            "- Escape Windows backslashes correctly or prefer forward slashes inside JSON strings.",
+            "- Do not include markdown, prose, code fences, or fields outside action/tool/args/answer.",
+            $"- Validation error: {validationError}",
+            $"WORKSPACE: {request.Workspace}",
+            "USER REQUEST:",
+            request.Instruction,
+            "OBSERVATIONS JSON:",
+            JsonSerializer.Serialize(observations, JsonOptions.Default),
+            "INVALID RESPONSE:",
+            invalidResponse,
+            "Return the repaired JSON object now.",
         ]);
 
     private static bool IsPlaceholderFinalAnswer(string? answer)
