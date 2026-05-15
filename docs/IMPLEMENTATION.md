@@ -15607,6 +15607,39 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-05-15 - Copilot DNS error page rejection
+
+Fixed the follow-up Copilot launch issue where `m365copilot.com` could fail DNS
+resolution in a corporate network, yet the Edge error page still exposed a URL
+containing `m365copilot.com`. Relay previously treated that tab as a usable
+Copilot tab because the URL pattern matched.
+
+Relay now prefers `https://m365.cloud.microsoft/chat` as the first navigation
+target and keeps `https://m365copilot.com` only as a late fallback. Candidate tab
+selection also rejects browser/network error pages (`DNS error`,
+`ERR_NAME_NOT_RESOLVED`, `chrome-error://`, `edge-error://`, localized "site
+cannot be reached" titles) even when their URL contains a Copilot domain. This
+lets the CDP connector continue to the next supported Copilot entry point
+instead of attaching to an Edge DNS error page.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot --lib`: passed, 4 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

@@ -338,23 +338,50 @@ const COPILOT_URL_PATTERNS: &[&str] = &[
     "m365.microsoft.com/chat",
 ];
 
-/// Microsoft documents m365copilot.com as the user-facing web entry point.
-/// Keep m365.cloud.microsoft as the first fallback because tenants with pinned
-/// Copilot Chat often redirect there.
+/// Prefer the tenant-facing M365 chat URL. `m365copilot.com` is a documented
+/// entry point, but some corporate DNS configurations fail it while still
+/// allowing the M365 cloud host.
 const COPILOT_NAVIGATION_URLS: &[&str] = &[
-    "https://m365copilot.com",
     "https://m365.cloud.microsoft/chat",
     "https://copilot.cloud.microsoft",
     "https://copilot.microsoft.com",
+    "https://m365copilot.com",
 ];
 
 fn default_copilot_url() -> &'static str {
     COPILOT_NAVIGATION_URLS[0]
 }
 
+fn is_browser_error_page(page: &PageInfo) -> bool {
+    let url = page.url.to_lowercase();
+    let title = page.title.to_lowercase();
+
+    url.starts_with("chrome-error://")
+        || url.starts_with("edge-error://")
+        || url.starts_with("about:neterror")
+        || title.contains("dns error")
+        || title.contains("dns エラー")
+        || title.contains("err_name_not_resolved")
+        || title.contains("err_internet_disconnected")
+        || title.contains("this site can't be reached")
+        || title.contains("this site can’t be reached")
+        || title.contains("can't reach this page")
+        || title.contains("can’t reach this page")
+        || title.contains("このサイトにアクセスできません")
+        || title.contains("ホスト名")
+}
+
+fn is_copilot_page_candidate(page: &PageInfo) -> bool {
+    page.kind == "page"
+        && !is_browser_error_page(page)
+        && COPILOT_URL_PATTERNS
+            .iter()
+            .any(|pat| page.url.contains(pat))
+}
+
 pub async fn find_copilot_page(debug_url: &str) -> Result<Option<PageInfo>> {
     for p in list_pages(debug_url).await? {
-        if p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat)) {
+        if is_copilot_page_candidate(&p) {
             return Ok(Some(p));
         }
     }
@@ -957,6 +984,14 @@ async fn navigate_page_to_copilot(debug_url: &str, page: &PageInfo) -> Result<Pa
             .send("Page.navigate", json!({ "url": target_url }))
             .await;
         info!("[CDP] Page.navigate to {} result: {:?}", target_url, result);
+        if let Some(error_text) = result
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("errorText"))
+            .and_then(Value::as_str)
+        {
+            warn!("[CDP] Page.navigate to {target_url} reported {error_text}");
+        }
         tokio::time::sleep(Duration::from_secs(8)).await;
         let pages = list_pages(debug_url).await.unwrap_or_default();
         last_titles = pages
@@ -964,9 +999,7 @@ async fn navigate_page_to_copilot(debug_url: &str, page: &PageInfo) -> Result<Pa
             .filter(|p| p.kind == "page")
             .map(|p| format!("{} ({})", p.title, p.url))
             .collect();
-        if let Some(page) = pages.into_iter().find(|p| {
-            p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
-        }) {
+        if let Some(page) = pages.into_iter().find(is_copilot_page_candidate) {
             return Ok(page);
         }
     }
@@ -1082,10 +1115,7 @@ pub async fn connect_copilot_page(
         if page.kind != "page" {
             continue;
         }
-        if COPILOT_URL_PATTERNS
-            .iter()
-            .any(|pat| page.url.contains(pat))
-        {
+        if is_copilot_page_candidate(page) {
             // Already a Copilot tab — use it
             info!("[CDP] Found existing Copilot tab: {}", page.url);
             copilot_page = Some(page.clone());
@@ -1132,9 +1162,7 @@ pub async fn connect_copilot_page(
                 .filter(|p| p.kind == "page")
                 .map(|p| format!("{} ({})", p.title, p.url))
                 .collect();
-            copilot_page = pages3.into_iter().find(|p| {
-                p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
-            });
+            copilot_page = pages3.into_iter().find(is_copilot_page_candidate);
             if copilot_page.is_some() {
                 break;
             }
@@ -1313,10 +1341,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn copilot_navigation_prefers_official_web_entrypoint() {
-        assert_eq!(default_copilot_url(), "https://m365copilot.com");
+    fn copilot_navigation_prefers_m365_cloud_chat() {
+        assert_eq!(default_copilot_url(), "https://m365.cloud.microsoft/chat");
         assert!(COPILOT_NAVIGATION_URLS.contains(&"https://m365.cloud.microsoft/chat"));
+        assert!(COPILOT_NAVIGATION_URLS.contains(&"https://m365copilot.com"));
         assert!(COPILOT_URL_PATTERNS.contains(&"m365copilot.com"));
+    }
+
+    #[test]
+    fn copilot_page_candidate_rejects_edge_dns_error_page() {
+        let page = PageInfo {
+            kind: "page".to_string(),
+            url: "https://m365copilot.com/".to_string(),
+            title: "DNS error".to_string(),
+            ws_url: "ws://127.0.0.1:9360/devtools/page/test".to_string(),
+        };
+
+        assert!(is_browser_error_page(&page));
+        assert!(!is_copilot_page_candidate(&page));
+    }
+
+    #[test]
+    fn copilot_page_candidate_accepts_loaded_m365_chat_page() {
+        let page = PageInfo {
+            kind: "page".to_string(),
+            url: "https://m365.cloud.microsoft/chat".to_string(),
+            title: "Microsoft 365 Copilot".to_string(),
+            ws_url: "ws://127.0.0.1:9360/devtools/page/test".to_string(),
+        };
+
+        assert!(!is_browser_error_page(&page));
+        assert!(is_copilot_page_candidate(&page));
     }
 
     #[test]
