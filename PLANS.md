@@ -87,6 +87,15 @@ active application shell is the Tauri v2 + SolidJS Relay desktop UI under
   derived-content caches, background/index coordinators, job-store snapshots,
   sync journals, and user-memory writes. Search work stays in-memory plus
   bounded temp files under Relay app-local data.
+- Copilot result organization no longer returns local Windows paths. Relay
+  sends stable candidate IDs to Copilot, validates returned IDs, and maps them
+  back to paths locally. If Copilot result organization fails, the already
+  completed local search snapshot remains visible with a warning instead of
+  being treated as a search failure.
+- Compound business queries such as `部品売上` now use Relay-owned semantic
+  gating: direct aliases rank highest, component matches must include both the
+  parts concept and the sales concept, and support/workflow terms can only
+  boost already relevant candidates.
 
 ## Remaining Hardening Tasks
 

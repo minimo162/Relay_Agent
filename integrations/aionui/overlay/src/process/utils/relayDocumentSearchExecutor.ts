@@ -286,6 +286,7 @@ type RankedCandidate = {
   rankingWarnings: string[];
   filenameIndexMatch?: RelayDocumentSearchFilenameIndexMatch;
   contentEvidence?: ContentEvidence;
+  semanticAllowed?: boolean;
 };
 
 type RelayDocumentSearchCandidateBucket =
@@ -854,6 +855,107 @@ function scoreCandidate(file: FileMetadata, terms: string[]): { score: number; r
     }
   }
   return { score, reasons };
+}
+
+function normalizedFileHaystack(file: FileMetadata): string {
+  return `${normalizeRelaySearchText(file.name)} ${normalizeRelaySearchText(file.displayPath)}`;
+}
+
+function matchedSemanticTerms(text: string, terms: string[]): string[] {
+  const normalized = normalizeRelaySearchText(text);
+  return terms.filter((term) => term && normalized.includes(term));
+}
+
+function contentEvidenceMatchedTerms(evidence: ContentEvidence | undefined): string[] {
+  if (!evidence) return [];
+  const terms = new Set<string>();
+  for (const anchor of evidence.anchors) {
+    const matchedTerms = (anchor as { matchedTerms?: unknown }).matchedTerms;
+    if (!Array.isArray(matchedTerms)) continue;
+    for (const term of matchedTerms) {
+      if (typeof term === 'string') {
+        const normalized = normalizeRelaySearchText(term);
+        if (normalized) terms.add(normalized);
+      }
+    }
+  }
+  return [...terms];
+}
+
+function semanticTermsContainAny(matchedTerms: string[], requiredTerms: string[]): boolean {
+  return requiredTerms.some((required) =>
+    matchedTerms.some((matched) => matched === required || matched.includes(required) || required.includes(matched)),
+  );
+}
+
+function contentEvidenceMatchesSemanticGroup(
+  evidence: ContentEvidence | undefined,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
+): boolean {
+  const matchedTerms = contentEvidenceMatchedTerms(evidence);
+  if (!matchedTerms.length) return false;
+  return queryPlan.semanticConceptGroups.some((group) =>
+    semanticTermsContainAny(matchedTerms, group.directTerms) ||
+      group.allOfAny.every((termGroup) => semanticTermsContainAny(matchedTerms, termGroup)),
+  );
+}
+
+function semanticScoreForCandidate(
+  file: FileMetadata,
+  queryPlan: RelayDocumentSearchQueryPlanV1,
+  evidence?: ContentEvidence,
+): { required: boolean; allowed: boolean; score: number; reasons: string[] } {
+  const required = queryPlan.semanticConceptGroups.length > 0;
+  if (!required) {
+    const demoteMatches = matchedSemanticTerms(normalizedFileHaystack(file), queryPlan.demoteTerms);
+    return {
+      required: false,
+      allowed: true,
+      score: -(demoteMatches.length * 4),
+      reasons: demoteMatches.map((term) => `demote:${term}`),
+    };
+  }
+
+  const haystack = normalizedFileHaystack(file);
+  let allowed = false;
+  let score = 0;
+  const reasons: string[] = [];
+  for (const group of queryPlan.semanticConceptGroups) {
+    const directMatches = matchedSemanticTerms(haystack, group.directTerms);
+    const allOfAnyMatches = group.allOfAny.map((termGroup) => matchedSemanticTerms(haystack, termGroup));
+    const compoundMatched = allOfAnyMatches.every((matches) => matches.length > 0);
+    if (directMatches.length || compoundMatched) {
+      allowed = true;
+      if (directMatches.length) {
+        score += directMatches.length * 8;
+        reasons.push(...directMatches.map((term) => `semantic_direct:${group.source}:${term}`));
+      }
+      if (compoundMatched) {
+        score += 6;
+        reasons.push(`semantic_compound:${group.source}`);
+      }
+      const supportMatches = matchedSemanticTerms(haystack, [...queryPlan.supportOnlyTerms, ...group.supportTerms]);
+      if (supportMatches.length) {
+        score += Math.min(4, supportMatches.length);
+        reasons.push(...supportMatches.slice(0, 4).map((term) => `semantic_support:${term}`));
+      }
+    }
+  }
+
+  if (!allowed && contentEvidenceMatchesSemanticGroup(evidence, queryPlan)) {
+    allowed = true;
+    score += 10;
+    reasons.push('semantic_content_confirmed');
+  }
+
+  const demoteMatches = matchedSemanticTerms(haystack, queryPlan.demoteTerms);
+  if (demoteMatches.length) {
+    score -= demoteMatches.length * 4;
+    reasons.push(...demoteMatches.map((term) => `demote:${term}`));
+  }
+
+  if (!allowed) reasons.push('semantic_gate:missing_required_concept');
+  return { required, allowed, score, reasons };
 }
 
 function isTransientOfficeLockFile(file: FileMetadata): boolean {
@@ -1831,6 +1933,12 @@ function filesForCandidateFirstContentScan(
     .map((match) => byFileId.get(match.fileId))
     .filter((file): file is FileMetadata => Boolean(file));
 
+  const semanticMatched = queryPlan.semanticConceptGroups.length
+    ? matched.filter((file) => semanticScoreForCandidate(file, queryPlan).allowed)
+    : matched;
+  if (semanticMatched.length > 0) {
+    return semanticMatched.slice(0, limit);
+  }
   if (matched.length > 0) {
     return matched.slice(0, limit);
   }
@@ -3878,6 +3986,7 @@ export async function executeRelayDocumentSearch(
         : scoreCandidate(file, terms);
       const memoryScore = relayDocumentSearchUserMemoryBoostForFile(file, userMemory.record);
       const evidence = contentEvidence.byFileId.get(file.fileId);
+      const semanticScore = semanticScoreForCandidate(file, relayQueryPlan, evidence);
       const filenameComponent = scoreFromReasons(filenameScore.reasons, 'filename:', 5);
       const pathComponent = scoreFromReasons(filenameScore.reasons, 'path:', 2);
       const termComponent = scoreFromReasons(filenameScore.reasons, 'term:', 1);
@@ -3901,6 +4010,7 @@ export async function executeRelayDocumentSearch(
       const recencyScore = recencyScoreForCandidate(file, relayQueryPlan.recencyPreference, options.now ?? new Date());
       const baseScore =
         filenameScore.score +
+        semanticScore.score +
         folderRoleScore.score +
         memoryScore.score +
         contentComponent +
@@ -3912,7 +4022,7 @@ export async function executeRelayDocumentSearch(
         file,
         score: Math.max(0, baseScore - penalty),
         baseScore,
-        reasons: [...filenameScore.reasons, ...folderRoleScore.reasons, ...memoryScore.reasons],
+        reasons: [...filenameScore.reasons, ...semanticScore.reasons, ...folderRoleScore.reasons, ...memoryScore.reasons],
         filenameScore: filenameComponent,
         pathScore: pathComponent,
         termScore: termComponent,
@@ -3928,16 +4038,20 @@ export async function executeRelayDocumentSearch(
         rankingWarnings,
         filenameIndexMatch: indexedMatch,
         contentEvidence: evidence,
+        semanticAllowed: semanticScore.allowed,
       };
     })
     .filter((candidate) =>
-      terms.length === 0 ||
-      candidate.filenameScore > 0 ||
-      candidate.pathScore > 0 ||
-      candidate.termScore > 0 ||
-      candidate.contentScore > 0 ||
-      candidate.indexDbScore > 0 ||
-      candidate.userMemoryBoost > 0
+      (candidate.semanticAllowed ?? true) &&
+      (
+        terms.length === 0 ||
+        candidate.filenameScore > 0 ||
+        candidate.pathScore > 0 ||
+        candidate.termScore > 0 ||
+        candidate.contentScore > 0 ||
+        candidate.indexDbScore > 0 ||
+        candidate.userMemoryBoost > 0
+      )
     );
   const rankedAll = withRrfHybridScores(rankedCandidates).sort(candidateComparator);
   userMemory.diagnostics.boostedFileCount = rankedAll.filter((candidate) => candidate.userMemoryBoost > 0).length;

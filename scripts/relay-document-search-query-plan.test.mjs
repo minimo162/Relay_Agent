@@ -135,6 +135,11 @@ test("Relay document search query plan keeps Japanese business compounds and exp
     assert.ok(plan.normalizedTerms.includes("部品他売上"));
     assert.ok(plan.normalizedTerms.includes("部販"));
     assert.ok(plan.normalizedTerms.includes("パーツ"));
+    assert.equal(plan.semanticConceptGroups.length, 1);
+    assert.equal(plan.semanticConceptGroups[0].source, "parts_sales");
+    assert.ok(plan.semanticConceptGroups[0].directTerms.includes("部品売上"));
+    assert.ok(plan.semanticConceptGroups[0].allOfAny[0].includes("部品"));
+    assert.ok(plan.semanticConceptGroups[0].allOfAny[1].includes("売上"));
     assert.equal(plan.normalizedTerms.includes("部品売上に関する"), false);
     assert.ok(plan.synonymExpansions.some((item) => item.source === "parts_sales"));
     assert.ok(plan.ignoredIntentTerms.some((term) => term.startsWith("search_instruction:に関する")));
@@ -231,7 +236,8 @@ test("Relay document search query plan merges validated Copilot hint terms witho
     );
 
     assert.ok(plan.normalizedTerms.includes("連結cf"));
-    assert.ok(plan.normalizedTerms.includes("adj"));
+    assert.equal(plan.normalizedTerms.includes("adj"), false);
+    assert.ok(plan.supportOnlyTerms.includes("adj"));
     assert.deepEqual(plan.synonymExpansions.at(-1), {
       source: "copilot_query_plan",
       terms: ["連結cf", "連結cfs", "精算表", "合算", "adj"],

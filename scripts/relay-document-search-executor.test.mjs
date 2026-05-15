@@ -563,8 +563,8 @@ test("executeRelayDocumentSearch excludes folder-role-only files from compound p
     const names = result.results.map((candidate) => candidate.display_name);
     assert.equal(result.status, "ok");
     assert.deepEqual(names, [
-      "FY160-1Q_販社・パーツ残高_DBLink.xlsx",
       "301 自動車・部品他売上総利益(easyGKAJ)_160_1Q.xlsx",
+      "FY160-1Q_販社・パーツ残高_DBLink.xlsx",
     ]);
     assert.equal(names.some((name) => name.includes("302 自動車国別月別売上総利益")), false);
   } finally {

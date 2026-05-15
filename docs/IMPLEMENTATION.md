@@ -21,6 +21,45 @@
 
 ## Milestone Log
 
+### 2026-05-15 Copilot organizer ID contract and compound query ranking
+
+Fixed the document-search failure where Copilot could return raw Windows paths
+inside JSON categories, for example `H:\shr1\...`, causing JSON parsing to fail
+with a bad escape sequence. Relay now sends Copilot stable candidate IDs
+(`candidate-001`, etc.) instead of local paths for result organization.
+Copilot may only return those IDs; Relay validates them and maps them back to
+local paths internally. The result organizer prompt also keeps display paths in
+forward-slash form and explicitly forbids path output.
+
+The desktop UI now displays the local Relay search snapshot immediately after
+local search completes. Copilot's post-search organization updates only the
+summary/category layer. If Copilot organization fails or returns invalid JSON,
+the search results remain visible and the UI shows a warning that only the
+organization layer was skipped.
+
+Search precision for compound business concepts was tightened. `部品売上` now
+uses a deterministic semantic gate: direct aliases such as `部品他売上`,
+`パーツ売上`, `部販`, and `parts sales` rank highest; otherwise a candidate
+must match both a parts-side term and a sales-side term. Support terms such as
+`実績`, `内訳`, `明細`, and `国内DL` can boost a candidate only after the core
+concept is present, so generic sales or broad consolidation files no longer win
+from support terms alone.
+
+The desktop package, Tauri config, and Cargo package version were advanced to
+`0.2.5` for the installer release that contains this fix.
+
+Verification:
+
+- `node --test scripts/copilot-planners.test.mjs` — pass, 3 passed.
+- `node --test scripts/relay-document-search-query-plan.test.mjs` — pass, 6 passed.
+- `node --test scripts/relay-document-search-executor.test.mjs` — pass, 35 passed.
+- `pnpm --filter @relay-agent/desktop typecheck` — pass.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` — pass, 38 passed.
+- `git diff --check` — pass.
+- `pnpm check` — pass.
+- Post-version-bump `pnpm --filter @relay-agent/desktop typecheck` — pass.
+
 ### 2026-05-15 CDP page-target WebSocket repair
 
 Fixed a Copilot send failure reported as

@@ -24,6 +24,8 @@ export type RelayDocumentSearchQueryPlanV1 = {
   query: string;
   roots: string[];
   normalizedTerms: string[];
+  supportOnlyTerms: string[];
+  semanticConceptGroups: RelayDocumentSearchSemanticConceptGroupV1[];
   synonymExpansions: Array<{ source: string; terms: string[] }>;
   copilotHintSummary?: string;
   periodHints: string[];
@@ -36,6 +38,13 @@ export type RelayDocumentSearchQueryPlanV1 = {
   timeScopeIntent: RelayDocumentSearchTimeScopeIntent;
   timeScopeReason: string;
   confirmationPolicy: 'candidate_ok' | 'content_required';
+};
+
+export type RelayDocumentSearchSemanticConceptGroupV1 = {
+  source: string;
+  directTerms: string[];
+  allOfAny: string[][];
+  supportTerms: string[];
 };
 
 const ACCOUNTING_SYNONYMS: Array<{ pattern: RegExp; source: string; terms: string[] }> = [
@@ -65,16 +74,19 @@ const ACCOUNTING_SYNONYMS: Array<{ pattern: RegExp; source: string; terms: strin
     terms: ['pl', '損益計算書', 'profit loss'],
   },
   {
-    pattern: /部品\s*売上|パーツ\s*売上|部販|補修部品|parts?\s*sales?/iu,
+    pattern: /部品(?:の|\s*)売上|パーツ(?:の|\s*)売上|部販|補修部品|parts?\s*sales?/iu,
     source: 'parts_sales',
     terms: [
       '部品売上',
       '部品他売上',
       'パーツ売上',
       '部販',
+      '部品',
       'パーツ',
       '補修部品',
       '販社 パーツ',
+      '売上',
+      '売上高',
       'parts sales',
     ],
   },
@@ -156,6 +168,12 @@ function stripJapaneseParticles(value: string): string {
 function addTerm(terms: Set<string>, value: string): void {
   const normalized = normalizeRelaySearchText(value);
   if (normalized.length >= 2) terms.add(normalized);
+}
+
+function normalizeTermList(values: string[]): string[] {
+  const terms = new Set<string>();
+  for (const value of values) addTerm(terms, value);
+  return [...terms];
 }
 
 function collectIntentNoise(query: string): { cleaned: string; ignoredIntentTerms: string[] } {
@@ -261,6 +279,95 @@ function excludedTerms(query: string): string[] {
   return [...out];
 }
 
+const PARTS_SALES_DIRECT_TERMS = [
+  '部品売上',
+  '部品他売上',
+  'パーツ売上',
+  '部販',
+  '販社 パーツ',
+  '補修部品売上',
+  'サービス部品売上',
+  'アフターパーツ売上',
+  'スペアパーツ売上',
+  'parts sales',
+  'spare parts sales',
+  'service parts revenue',
+  'aftermarket parts sales',
+];
+
+const PARTS_SALES_PART_TERMS = [
+  '部品',
+  '部品他',
+  'パーツ',
+  '部販',
+  '補修部品',
+  'サービス部品',
+  'アフターパーツ',
+  'スペアパーツ',
+  'parts',
+  'spare parts',
+  'service parts',
+  'aftermarket parts',
+];
+
+const PARTS_SALES_SALES_TERMS = [
+  '売上',
+  '売上高',
+  '売上金額',
+  '販売',
+  '販売実績',
+  'sales',
+  'revenue',
+];
+
+const PARTS_SALES_SUPPORT_TERMS = [
+  '実績',
+  '計画',
+  '見込',
+  '分析',
+  '内訳',
+  '明細',
+  '集計',
+  'データ',
+  '国内dl',
+  '国内dlr',
+  '販社',
+  '四半期',
+  '月次',
+];
+
+function termCollectionHasAny(values: Iterable<string>, terms: string[]): boolean {
+  const normalizedTerms = normalizeTermList(terms);
+  for (const value of values) {
+    const normalized = normalizeRelaySearchText(value);
+    if (normalizedTerms.some((term) => normalized.includes(term))) return true;
+  }
+  return false;
+}
+
+function semanticConceptGroupsForRequest(
+  query: string,
+  terms: Set<string>,
+  copilotHintTerms: Set<string>,
+): RelayDocumentSearchSemanticConceptGroupV1[] {
+  const signals = [normalizeRelaySearchText(query), ...terms, ...copilotHintTerms];
+  const hasDirectPartsSales = termCollectionHasAny(signals, PARTS_SALES_DIRECT_TERMS);
+  const hasParts = termCollectionHasAny(signals, PARTS_SALES_PART_TERMS);
+  const hasSales = termCollectionHasAny(signals, PARTS_SALES_SALES_TERMS);
+  if (!hasDirectPartsSales && !(hasParts && hasSales)) return [];
+  return [
+    {
+      source: 'parts_sales',
+      directTerms: normalizeTermList(PARTS_SALES_DIRECT_TERMS),
+      allOfAny: [
+        normalizeTermList(PARTS_SALES_PART_TERMS),
+        normalizeTermList(PARTS_SALES_SALES_TERMS),
+      ],
+      supportTerms: normalizeTermList(PARTS_SALES_SUPPORT_TERMS),
+    },
+  ];
+}
+
 function recencyPreference(query: string): RelayDocumentSearchQueryPlanV1['recencyPreference'] {
   if (/最新|最新版|直近|新しい|最近|recent|newest|latest|current/iu.test(query)) return 'prefer_recent';
   if (/古い|過去|旧版|以前|old|older|archive/iu.test(query)) return 'prefer_older';
@@ -329,6 +436,7 @@ export function buildRelayDocumentSearchQueryPlan(
   roots: string[],
 ): RelayDocumentSearchQueryPlanV1 {
   const { terms, rejectedTokens, ignoredIntentTerms } = baseTokens(request.query);
+  const supportOnlyTerms = new Set<string>();
   const synonymExpansions: RelayDocumentSearchQueryPlanV1['synonymExpansions'] = [];
   for (const synonym of ACCOUNTING_SYNONYMS) {
     if (!synonym.pattern.test(request.query)) continue;
@@ -346,7 +454,7 @@ export function buildRelayDocumentSearchQueryPlan(
       addTerm(copilotHintTerms, term);
     }
     for (const term of request.queryPlanHints.supportTerms) {
-      addTerm(terms, term);
+      addTerm(supportOnlyTerms, term);
       addTerm(copilotHintTerms, term);
     }
     if (copilotHintTerms.size > 0) {
@@ -356,6 +464,14 @@ export function buildRelayDocumentSearchQueryPlan(
 
   const periods = periodHints(request.query);
   for (const hint of periods) addTerm(terms, hint);
+  const semanticConceptGroups = semanticConceptGroupsForRequest(request.query, terms, copilotHintTerms);
+  for (const group of semanticConceptGroups) {
+    for (const term of group.directTerms) addTerm(terms, term);
+    for (const termGroup of group.allOfAny) {
+      for (const term of termGroup) addTerm(terms, term);
+    }
+    for (const term of group.supportTerms) addTerm(supportOnlyTerms, term);
+  }
   const hints = new Set(fileTypeHints(request.query, request));
   for (const hint of request.queryPlanHints?.fileTypeHints ?? []) {
     if (hint !== 'any') hints.add(hint);
@@ -375,6 +491,8 @@ export function buildRelayDocumentSearchQueryPlan(
     query: request.query,
     roots,
     normalizedTerms: [...terms],
+    supportOnlyTerms: [...supportOnlyTerms],
+    semanticConceptGroups,
     synonymExpansions,
     ...(request.queryPlanHints?.summary ? { copilotHintSummary: request.queryPlanHints.summary } : {}),
     periodHints: periods,

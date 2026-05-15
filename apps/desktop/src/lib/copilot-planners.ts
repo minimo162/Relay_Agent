@@ -32,6 +32,7 @@ export type RelayDocumentSearchResultCategory = {
   label: string;
   rationale: string;
   confidence: "high" | "medium" | "low";
+  candidateIds: string[];
   paths: string[];
 };
 
@@ -47,6 +48,32 @@ export type RelayDocumentSearchResultSummary = {
 export type PlannerValidation<T> =
   | { ok: true; value: T }
   | { ok: false; errors: string[] };
+
+export function candidateIdForResultIndex(index: number): string {
+  return `candidate-${String(index + 1).padStart(3, "0")}`;
+}
+
+export function buildLocalDocumentSearchResultSummary(params: {
+  rawQuery: string;
+  snapshotId: string;
+  resultSummary: string;
+  coverageLabel: string;
+  cards: RelaySearchResultCard[];
+}): RelayDocumentSearchResultSummary {
+  const caveats = new Set<string>();
+  if (params.coverageLabel) caveats.add(params.coverageLabel);
+  if (params.cards.some((card) => (card.evidenceState || card.matchMode) === "filename_only")) {
+    caveats.add("一部または全部の候補はファイル名・パスからの推定で、内容確認は未完了です。");
+  }
+  return {
+    schemaVersion: SEARCH_RESULT_SCHEMA_VERSION,
+    rawQuery: params.rawQuery,
+    snapshotId: params.snapshotId,
+    summary: params.resultSummary || "ローカル検索の候補を表示しています。",
+    categories: [],
+    caveats: [...caveats].slice(0, 6),
+  };
+}
 
 export function buildDocumentSearchPlanPrompt(params: {
   userQuery: string;
@@ -79,14 +106,15 @@ export function buildDocumentSearchPlanPrompt(params: {
     "- intent must be find_files for this UI mode.",
     "- evidence must be candidate.",
     "- thoroughness must be thorough.",
-    "- expandedTerms should include direct synonyms, abbreviations, Japanese variants, English variants, and business aliases.",
-    "- supportTerms should include workflow or workpaper terms that improve recall without replacing the user's meaning.",
+    "- expandedTerms should include direct synonyms, abbreviations, Japanese variants, English variants, and business aliases that can stand on their own.",
+    "- For compound business concepts, keep the user's core concept intact. Example: 部品売上 means parts AND sales, not generic sales alone.",
+    "- supportTerms should include workflow or workpaper terms that improve recall only after the core concept is present.",
     "- demoteTerms should include output/review/backup terms only when those are likely copies rather than source files.",
     "- fileTypeHints may include any, txt, md, csv, docx, xlsx, xlsm, pptx, pdf. Use any unless the user clearly narrows file type.",
     "- timeScopeIntent must be latest_first, historical_examples, balanced, explicit_period, or unknown.",
     "- Do not include roots, path, recipient_name, tool_calls, tool_uses, glob patterns, bash commands, or any field not shown in the schema.",
     "Examples:",
-    "- 部品売上 -> expandedTerms can include 部品売上, 部品, パーツ, 売上, 売上高, parts sales, spare parts; supportTerms can include 国内DL, 部販, 実績データ.",
+    "- 部品売上 -> expandedTerms can include 部品売上, 部品他売上, パーツ売上, 部販, 補修部品売上, parts sales, service parts revenue; supportTerms can include 国内DL, 実績データ, 内訳, 明細.",
     "- キャッシュフロー計算書 -> expandedTerms can include キャッシュフロー, CFS, CF, 連結CF, 連結CFS; supportTerms can include 精算表, 合算, ADJ.",
     `Relay-selected workspace context (do not rewrite it): ${params.workspacePath}`,
     "USER REQUEST DATA:",
@@ -104,10 +132,10 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
   cards: RelaySearchResultCard[];
 }): string {
   const cardFacts = params.cards.slice(0, 80).map((card, index) => ({
+    candidateId: candidateIdForResultIndex(index),
     position: index + 1,
     title: card.title,
-    path: card.path,
-    displayPath: card.displayPath || card.path,
+    displayPath: (card.displayPath || card.path).replaceAll("\\", "/"),
     fileType: card.fileType || "",
     modifiedTime: card.modifiedTime || "",
     evidenceState: card.evidenceState || card.matchMode || "candidate",
@@ -132,7 +160,7 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
           label: "dynamic category label based only on these results",
           rationale: "why these files belong together, based only on names/paths/evidence states",
           confidence: "medium",
-          paths: ["exact candidate path from CANDIDATE FACTS"],
+          candidateIds: ["candidate-001"],
         },
       ],
       caveats: ["short caveat when content is not confirmed or coverage is partial"],
@@ -142,8 +170,9 @@ export function buildDocumentSearchResultSummaryPrompt(params: {
     "- rawQuery must equal USER REQUEST DATA exactly.",
     "- snapshotId must equal SNAPSHOT ID exactly.",
     "- categories must be dynamic. Do not force fixed labels such as 作業元, 出力, 監査, バックアップ unless the result facts themselves support them.",
-    "- Each category must include one or more exact paths from CANDIDATE FACTS.",
-    "- A path may appear in at most one category.",
+    "- Each category must include one or more exact candidateIds from CANDIDATE FACTS.",
+    "- Never output file paths. The app will map candidateIds back to local paths.",
+    "- A candidateId may appear in at most one category.",
     "- Use at most eight categories and keep labels short.",
     "- If the evidenceState is filename_only, call it a candidate and do not state that the document content proves relevance.",
     "- Do not include markdown, prose outside JSON, tool calls, citations, or fields not shown in the schema.",
@@ -221,11 +250,11 @@ export function validateDocumentSearchResultSummaryText(
   text: string,
   rawQuery: string,
   snapshotId: string,
-  candidatePaths: string[],
+  candidatePathById: Map<string, string>,
 ): PlannerValidation<RelayDocumentSearchResultSummary> {
   const parsed = parseStrictJsonObject(text);
   if (!parsed.ok) return parsed;
-  return validateDocumentSearchResultSummary(parsed.value, rawQuery, snapshotId, candidatePaths);
+  return validateDocumentSearchResultSummary(parsed.value, rawQuery, snapshotId, candidatePathById);
 }
 
 export function validateOfficeEditPlanText(text: string, rawInstruction: string, filePath: string): PlannerValidation<RelayOfficeEditPlan> {
@@ -328,7 +357,7 @@ function validateDocumentSearchResultSummary(
   value: JsonRecord,
   rawQuery: string,
   snapshotId: string,
-  candidatePaths: string[],
+  candidatePathById: Map<string, string>,
 ): PlannerValidation<RelayDocumentSearchResultSummary> {
   const errors: string[] = [];
   rejectUnknownFields(value, ["schemaVersion", "rawQuery", "snapshotId", "summary", "categories", "caveats"], errors, "result summary");
@@ -337,7 +366,7 @@ function validateDocumentSearchResultSummary(
   if (value.snapshotId !== snapshotId) errors.push("snapshotId must exactly match the Relay snapshot id.");
   const summary = stringValue(value.summary, "summary", 420, errors);
   const caveats = stringArray(value.caveats, "caveats", 6, errors).map((item) => item.slice(0, 160));
-  const categories = validateResultCategories(value.categories, new Set(candidatePaths), errors);
+  const categories = validateResultCategories(value.categories, candidatePathById, errors);
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
@@ -354,7 +383,7 @@ function validateDocumentSearchResultSummary(
 
 function validateResultCategories(
   value: unknown,
-  candidatePaths: Set<string>,
+  candidatePathById: Map<string, string>,
   errors: string[],
 ): RelayDocumentSearchResultCategory[] {
   if (!Array.isArray(value)) {
@@ -362,23 +391,25 @@ function validateResultCategories(
     return [];
   }
   if (value.length > 8) errors.push("categories may contain at most eight entries.");
-  const usedPaths = new Set<string>();
+  const usedIds = new Set<string>();
   const categories: RelayDocumentSearchResultCategory[] = [];
   value.slice(0, 8).forEach((entry, index) => {
     if (!isRecord(entry)) {
       errors.push(`categories[${index}] must be an object.`);
       return;
     }
-    rejectUnknownFields(entry, ["label", "rationale", "confidence", "paths"], errors, `categories[${index}]`);
+    rejectUnknownFields(entry, ["label", "rationale", "confidence", "candidateIds"], errors, `categories[${index}]`);
     const label = stringValue(entry.label, `categories[${index}].label`, 40, errors);
     const rationale = stringValue(entry.rationale, `categories[${index}].rationale`, 220, errors);
     const confidence = enumValue(entry.confidence, RESULT_CONFIDENCE_LEVELS, `categories[${index}].confidence`, errors);
-    const paths = exactPathArray(entry.paths, `categories[${index}].paths`, 30, candidatePaths, usedPaths, errors);
-    if (label && rationale && confidence && paths.length) {
+    const candidateIds = exactCandidateIdArray(entry.candidateIds, `categories[${index}].candidateIds`, 30, candidatePathById, usedIds, errors);
+    const paths = candidateIds.map((candidateId) => candidatePathById.get(candidateId)).filter((path): path is string => Boolean(path));
+    if (label && rationale && confidence && candidateIds.length && paths.length) {
       categories.push({
         label,
         rationale,
         confidence: confidence as RelayDocumentSearchResultCategory["confidence"],
+        candidateIds,
         paths,
       });
     }
@@ -386,12 +417,12 @@ function validateResultCategories(
   return categories;
 }
 
-function exactPathArray(
+function exactCandidateIdArray(
   value: unknown,
   field: string,
   maxItems: number,
-  allowedPaths: Set<string>,
-  usedPaths: Set<string>,
+  allowedCandidateIds: Map<string, string>,
+  usedCandidateIds: Set<string>,
   errors: string[],
 ): string[] {
   if (!Array.isArray(value)) {
@@ -405,18 +436,18 @@ function exactPathArray(
       errors.push(`${field} entries must be non-empty strings.`);
       continue;
     }
-    const path = item.trim();
-    if (hasControlCharacters(path)) errors.push(`${field} entries must not contain control characters.`);
-    if (!allowedPaths.has(path)) {
-      errors.push(`${field} includes a path that was not in the Relay candidate set: ${path}`);
+    const candidateId = item.trim();
+    if (hasControlCharacters(candidateId)) errors.push(`${field} entries must not contain control characters.`);
+    if (!allowedCandidateIds.has(candidateId)) {
+      errors.push(`${field} includes a candidateId that was not in the Relay candidate set: ${candidateId}`);
       continue;
     }
-    if (usedPaths.has(path)) {
-      errors.push(`${field} includes a path already assigned to another category: ${path}`);
+    if (usedCandidateIds.has(candidateId)) {
+      errors.push(`${field} includes a candidateId already assigned to another category: ${candidateId}`);
       continue;
     }
-    usedPaths.add(path);
-    out.push(path);
+    usedCandidateIds.add(candidateId);
+    out.push(candidateId);
   }
   return out;
 }

@@ -14,9 +14,11 @@ import {
   type RelayWorkspaceState,
 } from "../lib/ipc";
 import {
+  buildLocalDocumentSearchResultSummary,
   buildDocumentSearchPlanPrompt,
   buildDocumentSearchResultSummaryPrompt,
   buildOfficeEditPlanPrompt,
+  candidateIdForResultIndex,
   officePlanToArgs,
   validateDocumentSearchPlanText,
   validateDocumentSearchResultSummaryText,
@@ -112,6 +114,7 @@ export default function Shell(): JSX.Element {
   const [searchSnapshot, setSearchSnapshot] = createSignal<SearchSnapshot | null>(null);
   const [selectedCard, setSelectedCard] = createSignal<RelaySearchResultCard | null>(null);
   const [searchError, setSearchError] = createSignal("");
+  const [searchWarning, setSearchWarning] = createSignal("");
   const [searchStatus, setSearchStatus] = createSignal("");
   const [searchPhase, setSearchPhase] = createSignal<SearchPhase>("");
   const [visibleResultCount, setVisibleResultCount] = createSignal(24);
@@ -137,6 +140,9 @@ export default function Shell(): JSX.Element {
     }
     return map;
   });
+  const candidatePathById = (cards: RelaySearchResultCard[]) => new Map(
+    cards.slice(0, 80).map((card, index) => [candidateIdForResultIndex(index), card.path] as const),
+  );
   const searchProgressPercent = createMemo(() => {
     switch (searchPhase()) {
       case "planning":
@@ -280,7 +286,7 @@ export default function Shell(): JSX.Element {
       response.responseText,
       query,
       snapshotId,
-      result.cards.map((card) => card.path),
+      candidatePathById(result.cards),
     );
     if (!validation.ok) {
       throw new Error(`Copilot検索結果整理の検証に失敗しました: ${validation.errors.join(" / ")}`);
@@ -307,6 +313,7 @@ export default function Shell(): JSX.Element {
       setVisibleResultCount(24);
     }
     setSearchError("");
+    setSearchWarning("");
     setSearchStatus("");
     setSearchPhase("");
     const searchId = ++searchSequence;
@@ -327,22 +334,46 @@ export default function Shell(): JSX.Element {
       });
       if (searchId !== searchSequence) return;
       const snapshotId = `snapshot-${Date.now().toString(36)}-${searchId}`;
-      const organizer = await organizeSearchSnapshot(query, workspace, snapshotId, result);
-      if (searchId !== searchSequence) return;
+      const localOrganizer = buildLocalDocumentSearchResultSummary({
+        rawQuery: query,
+        snapshotId,
+        resultSummary: result.summary,
+        coverageLabel: result.coverageLabel,
+        cards: result.cards,
+      });
       setSearchSnapshot({
         id: snapshotId,
         query,
         createdAt: new Date().toISOString(),
         result,
-        organizer,
+        organizer: localOrganizer,
       });
       setSelectedCard(result.cards[0] ?? null);
       if (!result.ok) setSearchError(result.error || result.summary);
       showToast({
         tone: result.ok ? "ok" : "danger",
-        message: result.ok ? "検索が完了しました" : "検索に失敗しました",
-        detail: organizer.summary,
+        message: result.ok ? "検索結果を表示しました" : "検索に失敗しました",
+        detail: localOrganizer.summary,
       });
+      if (!result.ok || result.cards.length === 0) return;
+      try {
+        const organizer = await organizeSearchSnapshot(query, workspace, snapshotId, result);
+        if (searchId !== searchSequence) return;
+        setSearchSnapshot((current) => current && current.id === snapshotId
+          ? { ...current, organizer }
+          : current);
+        showToast({
+          tone: "ok",
+          message: "検索結果を整理しました",
+          detail: organizer.summary,
+        });
+      } catch (error) {
+        if (searchId !== searchSequence) return;
+        const message = friendlyErrorMessage(error);
+        setSearchWarning(`検索結果の整理だけ完了できませんでした。ローカル検索結果は表示しています。詳細: ${message}`);
+        showToast({ tone: "warn", message: "結果整理をスキップしました", detail: message });
+        return;
+      }
     } catch (error) {
       if (searchId !== searchSequence) return;
       const message = friendlyErrorMessage(error);
@@ -672,6 +703,12 @@ export default function Shell(): JSX.Element {
               <div class="relay-state-panel relay-state-panel--danger">
                 <strong>検索を完了できませんでした</strong>
                 <p>{searchError()}</p>
+              </div>
+            </Show>
+            <Show when={searchWarning()}>
+              <div class="relay-state-panel">
+                <strong>検索結果の整理を完了できませんでした</strong>
+                <p>{searchWarning()}</p>
               </div>
             </Show>
 
