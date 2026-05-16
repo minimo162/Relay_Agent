@@ -20,10 +20,11 @@ mkdirSync(installerDir, { recursive: true });
 
 writeFileSync(scriptPath, buildNsisScript({ version, packageDir, installerPath }));
 
-const makensis = process.env.MAKENSIS || "makensis";
+const makensis = resolveMakensis();
 const result = spawnSync(makensis, [scriptPath], { cwd: root, stdio: "inherit" });
 if (result.status !== 0) {
-  throw new Error(`${makensis} ${scriptPath} failed with ${result.status}. Install NSIS or set MAKENSIS.`);
+  const suffix = result.error ? ` (${result.error.message})` : "";
+  throw new Error(`${makensis} ${scriptPath} failed with ${result.status}${suffix}. Install NSIS or set MAKENSIS.`);
 }
 
 console.log(`build-windows-installer: wrote ${relativePath(installerPath)}`);
@@ -99,6 +100,20 @@ Section "Uninstall"
   RMDir /r "$INSTDIR"
 SectionEnd
 `.trimStart();
+}
+
+function resolveMakensis() {
+  if (process.env.MAKENSIS) return process.env.MAKENSIS;
+  if (process.platform === "win32") {
+    const candidates = [
+      "C:\\Program Files (x86)\\NSIS\\makensis.exe",
+      "C:\\Program Files\\NSIS\\makensis.exe",
+      "C:\\ProgramData\\chocolatey\\bin\\makensis.exe",
+    ];
+    const found = candidates.find((candidate) => existsSync(candidate));
+    if (found) return found;
+  }
+  return "makensis";
 }
 
 function nsisPath(path) {
