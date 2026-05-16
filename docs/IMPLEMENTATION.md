@@ -278,6 +278,44 @@ Results:
   sidecar build/smokes, agent smokes, Office/PDF read smoke, OfficeCLI smoke,
   security smoke, and release inventory.
 
+### 2026-05-16 Support Bundle Redaction Fixture Coverage
+
+Completed the support-bundle privacy hardening slice:
+
+- Replaced the support-bundle default redaction path with a JSON-aware
+  recursive redactor followed by free-text redaction.
+- Sensitive JSON fields now redact by key before archive writing, including
+  workspace/path fields, prompts/instructions, content snippets, old/new edit
+  strings, stdout/stderr/detail/output/result-like fields, tokens, cookies,
+  passwords, and path/token/secret suffixes.
+- Free-text redaction still catches local Windows/Linux paths, email
+  addresses, and token/secret/password assignments that appear inside otherwise
+  non-sensitive strings.
+- Expanded `sidecar-security-smoke` with a fixture run ledger under the
+  temporary data directory. The fixture includes local workspace paths, a
+  sensitive document path, document-like content, a user instruction, error
+  detail, an email address, token/password-like text, and backup paths.
+- The smoke now downloads the default support ZIP, extracts text entries with a
+  small in-test ZIP reader, and asserts that raw fixture values are absent
+  while redaction markers are present.
+
+Verification commands:
+
+```bash
+PATH=/tmp/dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+node --check scripts/sidecar-security-smoke.mjs
+PATH=/tmp/dotnet:$PATH pnpm sidecar:security-smoke
+PATH=/tmp/dotnet:$PATH pnpm check
+```
+
+Results:
+
+- Sidecar Release build passed.
+- `node --check scripts/sidecar-security-smoke.mjs` passed.
+- `pnpm sidecar:security-smoke` passed with the redaction fixture assertions.
+- Full `pnpm check` passed with support-bundle redaction coverage in the
+  canonical acceptance gate.
+
 ### 2026-05-16 OfficeCLI Capability Registry Implementation
 
 Implemented the OfficeCLI execution side of the revised plan:

@@ -364,9 +364,9 @@ Implementation status on 2026-05-16:
   from AG-UI state instead of `RunResponse.pendingApproval`; React + Vite +
   TypeScript + Tailwind CSS + shadcn-style local components + Radix Tooltip
   Workbench migration; `@ag-ui/client`-based Workbench stream consumption; and
-  golden smoke coverage for those behaviors.
-- Still open for the next slices: deeper support-bundle redaction fixture
-  coverage and richer PDF extraction for filtered streams.
+  deeper support-bundle redaction fixture coverage; and golden smoke coverage
+  for those behaviors.
+- Still open for the next slice: richer PDF extraction for filtered streams.
 
 Framework-first revision after current Microsoft documentation review:
 
@@ -512,6 +512,12 @@ Framework-first revision after current Microsoft documentation review:
      Full-content export requires explicit opt-in.
    - Acceptance: security smoke proves unauthenticated support export fails and
      default bundle output does not contain raw workspace document contents.
+   - Current slice: complete. Default support bundles now run JSON-aware
+     recursive redaction before free-text redaction. The security smoke seeds a
+     fixture run ledger with local paths, instructions, document contents,
+     stdout/stderr-like details, email addresses, tokens, and backup paths,
+     then extracts the generated ZIP and proves default output contains only
+     redaction markers.
 
 8. Add generic verification and review tools for agentic coding and business
    tasks.

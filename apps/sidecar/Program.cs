@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
@@ -549,7 +550,7 @@ public static class SupportBundle
                 }
                 else
                 {
-                    AddText(archive, relative, Redact(await File.ReadAllTextAsync(file, cancellationToken)));
+                    AddText(archive, relative, SupportBundleRedactor.Redact(await File.ReadAllTextAsync(file, cancellationToken)));
                 }
             }
         }
@@ -558,26 +559,125 @@ public static class SupportBundle
         return path;
     }
 
-    private static string Redact(string text)
-    {
-        var redacted = Regex.Replace(
-            text,
-            "(?i)\"(workspace|path|filePath|originalPath|backupPath|content|oldString|newString)\"\\s*:\\s*\"([^\"\\\\]|\\\\.)*\"",
-            match =>
-            {
-                var name = Regex.Match(match.Value, "^\"([^\"]+)\"").Groups[1].Value;
-                return $"\"{name}\":\"[REDACTED]\"";
-            });
-        redacted = Regex.Replace(redacted, "[A-Za-z]:\\\\[^\"'\\r\\n]+", "[REDACTED_PATH]");
-        redacted = Regex.Replace(redacted, "/(?:home|root|tmp|Users|mnt|workspace)/[^\"'\\s\\r\\n]+", "[REDACTED_PATH]");
-        return redacted;
-    }
-
     private static void AddText(ZipArchive archive, string path, string content)
     {
         var entry = archive.CreateEntry(path, CompressionLevel.Fastest);
         using var stream = entry.Open();
         using var writer = new StreamWriter(stream);
         writer.Write(content);
+    }
+}
+
+public static class SupportBundleRedactor
+{
+    private static readonly HashSet<string> SensitiveFieldNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "authorization",
+        "backupPath",
+        "content",
+        "cookie",
+        "detail",
+        "filePath",
+        "instruction",
+        "messageContent",
+        "messages",
+        "newString",
+        "observation",
+        "oldString",
+        "originalPath",
+        "output",
+        "password",
+        "path",
+        "prompt",
+        "rawInstruction",
+        "result",
+        "secret",
+        "stderr",
+        "stdout",
+        "text",
+        "token",
+        "workspace",
+    };
+
+    public static string Redact(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        try
+        {
+            var node = JsonNode.Parse(text);
+            if (node is not null)
+            {
+                RedactNode(node, parentKey: null);
+                return RedactFreeText(node.ToJsonString(JsonOptions.Default));
+            }
+        }
+        catch (JsonException)
+        {
+            // Fall through to best-effort free-text redaction for plain logs.
+        }
+
+        return RedactFreeText(text);
+    }
+
+    private static void RedactNode(JsonNode node, string? parentKey)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (var property in obj.ToArray())
+            {
+                if (property.Value is null) continue;
+                if (IsSensitiveField(property.Key))
+                {
+                    obj[property.Key] = "[REDACTED]";
+                    continue;
+                }
+                RedactNode(property.Value, property.Key);
+            }
+            return;
+        }
+
+        if (node is JsonArray array)
+        {
+            if (parentKey is not null && IsSensitiveField(parentKey))
+            {
+                array.Clear();
+                array.Add("[REDACTED]");
+                return;
+            }
+
+            foreach (var item in array)
+            {
+                if (item is not null) RedactNode(item, parentKey);
+            }
+            return;
+        }
+
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            var redacted = RedactFreeText(text);
+            if (!string.Equals(text, redacted, StringComparison.Ordinal))
+            {
+                node.ReplaceWith(JsonValue.Create(redacted));
+            }
+        }
+    }
+
+    private static bool IsSensitiveField(string name)
+    {
+        if (SensitiveFieldNames.Contains(name)) return true;
+        return name.EndsWith("Path", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("Token", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("Secret", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("cookie", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string RedactFreeText(string text)
+    {
+        var redacted = Regex.Replace(text, "[A-Za-z]:\\\\[^\"'\\r\\n]+", "[REDACTED_PATH]");
+        redacted = Regex.Replace(redacted, "/(?:home|root|tmp|Users|mnt|workspace|private|var)/[^\"'\\s\\r\\n]+", "[REDACTED_PATH]");
+        redacted = Regex.Replace(redacted, @"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[REDACTED_EMAIL]");
+        redacted = Regex.Replace(redacted, @"(?i)\b(bearer|token|secret|password)\s*[:=]\s*[^\s""']+", "$1=[REDACTED]");
+        return redacted;
     }
 }
