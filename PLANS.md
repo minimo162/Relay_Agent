@@ -347,8 +347,8 @@ Implementation status on 2026-05-16:
 
 - Completed in the current slices: generic `workspace_status`, `diff`, and
   approval-gated bounded `run_command`; `rg_search` `--` hardening; Workbench
-  event identity by `runId + sequence`; AG-UI-compatible SSE event mapping;
-  Workbench consumption of `/agui-events`; hard-cut guard coverage that blocks
+  event identity by `runId + sequence`; official AG-UI SSE event mapping;
+  Workbench consumption of `/agui/relay`; hard-cut guard coverage that blocks
   returning the Workbench to the old `/events` stream; the
   `RelayCopilotChatClient` `IChatClient` adapter; POST-only support-bundle
   export with default redaction; streaming/capped ripgrep output for
@@ -364,29 +364,24 @@ Implementation status on 2026-05-16:
   approval response resume/session serialization; Workbench approval rendering
   from AG-UI state instead of `RunResponse.pendingApproval`; React + Vite +
   TypeScript + Tailwind CSS + shadcn-style local components + Radix Tooltip
-  Workbench migration; `@ag-ui/client`-based Workbench stream consumption;
-  deeper support-bundle redaction fixture coverage; golden smoke coverage for
-  those behaviors; and filtered PDF stream extraction coverage.
+  Workbench migration; official `/agui/relay` execution through
+  `@ag-ui/client`; removal of legacy `/api/runs` product routes, run ledger,
+  and compatibility approval protocol; deeper support-bundle redaction fixture
+  coverage; golden smoke coverage for those behaviors; and filtered PDF stream
+  extraction coverage.
 - The official Agent Framework AG-UI ASP.NET Core hosting package is now
   registered and exposed at `/agui/relay`. That endpoint is smoke-tested for
   framework-native AG-UI lifecycle SSE while still using `RelayCopilotChatClient`
   as the only model adapter and the same Relay tool functions.
-- Workbench-facing custom `/api/runs/{runId}/agui-events` remains the primary
-  approval-capable stream because the current official `MapAGUI` conversion
-  path does not surface `ToolApprovalRequestContent` as a user-confirmation
-  event. Relay therefore keeps the run ledger and approval/resume route for
-  mutating tools instead of weakening safety to force a premature cutover.
-- The Workbench AG-UI compatibility stream now emits `REASONING_*` rather than
-  deprecated `THINKING_*`, and Workbench event mapping no longer depends on the
+- The legacy Workbench-facing custom `/api/runs` product path has been removed.
+  Mutating-tool approval now flows through Agent Framework
+  `ApprovalRequiredAIFunction`, the Relay AG-UI approval bridge, and AG-UI
+  `request_approval` client-tool result messages.
+- Workbench event mapping consumes standard AG-UI lifecycle, text, reasoning,
+  tool-call, state, error, and completion events without depending on the
   Relay-only `relayType` field.
-- Next scheduled slice: replace the remaining approval-capable custom run
-  stream with official Agent Framework AG-UI client-tool semantics. The
-  2026-05-16 Microsoft Agent Framework AG-UI review found that the current
-  .NET packages do not expose a `UseAGUIClientTool` helper; the supported path
-  is therefore explicit Agent Framework middleware that converts
-  `ToolApprovalRequestContent` into an AG-UI client `request_approval` tool
-  call, then converts the AG-UI tool result back into
-  `ToolApprovalResponseContent` before resuming the same Agent Framework turn.
+- Next scheduled slice: add official-path acceptance coverage and documentation
+  around the now-current Agent Framework + AG-UI product path.
 
 #### Next Task: Agent Framework + AG-UI Native Approval Cutover
 
@@ -422,10 +417,14 @@ Current completed tasks:
   HTTP/SSE endpoint with `@ag-ui/client` `HttpAgent`, derives approval cards
   from AG-UI `request_approval` client-tool calls, and no longer uses legacy
   `/api/runs` routes as its product execution path.
+- **AFAGUI04: Remove legacy run stream and approval compatibility routes.**
+  The sidecar no longer maps legacy `/api/runs` product routes, `RunManager`
+  has been removed, Workbench types no longer expose `RunResponse`, and smoke
+  scripts now drive runs through the official `/agui/relay` endpoint.
 
 Next task after this checkpoint:
 
-- **AFAGUI04: Remove legacy run stream and approval compatibility routes.**
+- **AFAGUI05: Add official-path acceptance coverage and documentation.**
 
 1. Add a proof slice for AG-UI client-tool approvals.
    - Confirm the current Agent Framework AG-UI package surface. If a future

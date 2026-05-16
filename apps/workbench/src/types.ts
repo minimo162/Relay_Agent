@@ -50,12 +50,6 @@ export type ApprovalState = {
 
 export type RunStatus = "running" | "completed" | "failed" | "approval_required" | "cancelled";
 
-export type RunResponse = {
-  runId: string;
-  status: RunStatus;
-  events: RunEvent[];
-};
-
 export const runEventTypes: readonly RunEvent["type"][] = [
   "status",
   "tool",

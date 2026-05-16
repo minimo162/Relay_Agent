@@ -998,7 +998,7 @@
           "blockedBy": [
             "B11"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "B13",
@@ -1670,7 +1670,7 @@
           "blockedBy": [
             "AFAGUI03"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "AFAGUI05",

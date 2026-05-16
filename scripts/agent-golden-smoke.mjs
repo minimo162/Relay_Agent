@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  approvalMessages,
+  assistantText,
+  collectToolCall,
+  hasRunFinished,
+  postAgUi,
+  readApprovalRequest,
+} from "./lib/agui-smoke.mjs";
 
 const token = "relay-golden-token";
 const port = 17892;
@@ -19,7 +28,7 @@ const responses = [
   JSON.stringify({ action: "final", answer: "状態確認と検証を完了しました。" }),
 ];
 
-await import("node:fs/promises").then(({ writeFile }) => writeFile(join(workspace, "seed.txt"), "部品売上 seed"));
+await writeFile(join(workspace, "seed.txt"), "部品売上 seed");
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
   cwd: process.cwd(),
@@ -55,144 +64,81 @@ async function waitForStatus() {
   throw new Error(`sidecar did not become ready; stderr=${stderr}`);
 }
 
-async function postRun(instruction) {
-  const response = await fetch(`http://127.0.0.1:${port}/api/runs?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Relay-Token": token,
-      "Origin": `http://127.0.0.1:${port}`,
-    },
-    body: JSON.stringify({ instruction, workspace }),
-  });
-  if (!response.ok) throw new Error(`run failed: ${response.status} ${await response.text()}`);
-  return response.json();
-}
-
-async function waitForRun(runId, expectedStatuses = ["completed", "failed", "approval_required", "cancelled"]) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`, {
-      headers: { "X-Relay-Token": token },
-    });
-    if (!response.ok) throw new Error(`run lookup failed: ${response.status}`);
-    const runJson = await response.json();
-    if (expectedStatuses.includes(runJson.status)) return runJson;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`run did not reach ${expectedStatuses.join(",")}: ${runId}`);
-}
-
-async function readAgUiEvents(runId) {
-  const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}/agui-events?token=${encodeURIComponent(token)}`, {
-    headers: { "X-Relay-Token": token },
-  });
-  if (!response.ok) throw new Error(`AG-UI stream failed: ${response.status}`);
-  const text = await response.text();
-  const events = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith("data: ")) continue;
-    events.push(JSON.parse(line.slice(6)));
-  }
-  return { text, events };
-}
-
-function latestApprovalFromAgUi(events) {
-  let approval = null;
-  for (const event of events) {
-    if (event.type === "USER_CONFIRMATION_REQUEST") approval = event.state?.approval ?? null;
-    if (event.type === "USER_CONFIRMATION_RESULT" || event.type === "RUN_FINISHED" || event.type === "RUN_CANCELLED" || event.type === "RUN_ERROR") {
-      approval = null;
-    }
-  }
-  return approval;
-}
-
 try {
   await waitForStatus();
 
-  const searchStart = await postRun("seed を探して");
-  const searchRun = await waitForRun(searchStart.runId, ["completed", "failed", "cancelled"]);
-  if (searchRun.status !== "completed") throw new Error(`search run did not complete: ${JSON.stringify(searchRun)}`);
-  if (!searchRun.events.some((event) => event.type === "status" && event.message === "Microsoft Agent Framework セッションを開始しました")) {
-    throw new Error(`search run did not start through Microsoft Agent Framework: ${JSON.stringify(searchRun)}`);
-  }
-  if (!searchRun.events.some((event) => event.type === "tool_call_started" && event.message === "rg_files")) {
-    throw new Error(`search run did not execute rg_files: ${JSON.stringify(searchRun)}`);
-  }
-  if (!searchRun.events.some((event) => event.type === "completed" && event.detail === "検索は rg_files を使いました。")) {
-    throw new Error(`search run final answer mismatch: ${JSON.stringify(searchRun)}`);
-  }
-  const { text: aguiText } = await readAgUiEvents(searchRun.runId);
-  if (!aguiText.includes("event: ag-ui-event") || !aguiText.includes("RUN_FINISHED")) {
-    throw new Error(`AG-UI stream did not expose mapped events: ${aguiText}`);
+  const search = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "golden-search",
+    instruction: "seed を探して",
+  });
+  collectToolCall(search.events, "rg_files");
+  if (!hasRunFinished(search.events)) throw new Error(`search run did not finish: ${JSON.stringify(search.events)}`);
+  if (assistantText(search.events) !== "検索は rg_files を使いました。") {
+    throw new Error(`search run final answer mismatch: ${assistantText(search.events)}`);
   }
 
-  const writeStart = await postRun("approval.txt を作って");
-  const writeRun = await waitForRun(writeStart.runId, ["approval_required", "completed", "failed", "cancelled"]);
-  if (writeRun.status !== "approval_required") {
-    throw new Error(`write run did not pause for approval: ${JSON.stringify(writeRun)}`);
-  }
-  if ("pendingApproval" in writeRun) {
-    throw new Error(`RunResponse should not expose PendingApproval: ${JSON.stringify(writeRun)}`);
-  }
-  const writeAgUi = await readAgUiEvents(writeRun.runId);
-  const writeApproval = latestApprovalFromAgUi(writeAgUi.events);
-  if (writeApproval?.toolCall?.tool !== "write") {
-    throw new Error(`AG-UI approval state did not expose write tool call: ${JSON.stringify(writeAgUi.events)}`);
+  const writePrompt = "approval.txt を作って";
+  const writeStart = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "golden-write-start",
+    instruction: writePrompt,
+  });
+  const writeApprovalCall = collectToolCall(writeStart.events, "request_approval");
+  const writeApproval = readApprovalRequest(writeApprovalCall).request;
+  if (writeApproval.functionName !== "write") {
+    throw new Error(`write run did not pause for write approval: ${JSON.stringify(writeApproval)}`);
   }
   if (existsSync(join(workspace, "approval.txt"))) {
     throw new Error("write tool executed before approval");
   }
-
-  const approval = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(writeRun.runId)}/approve?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "X-Relay-Token": token,
-      "Origin": `http://127.0.0.1:${port}`,
-    },
+  const approvedWrite = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "golden-write-approved",
+    instruction: writePrompt,
+    messages: approvalMessages("golden-write-approved", writePrompt, writeApprovalCall, true),
   });
-  if (!approval.ok) throw new Error(`approval failed: ${approval.status} ${await approval.text()}`);
-  const approvalStart = await approval.json();
-  const approvedRun = await waitForRun(approvalStart.runId, ["completed", "failed", "cancelled"]);
-  if (approvedRun.status !== "completed") throw new Error(`approved run did not complete: ${JSON.stringify(approvedRun)}`);
+  if (!hasRunFinished(approvedWrite.events)) {
+    throw new Error(`approved write run did not finish: ${JSON.stringify(approvedWrite.events)}`);
+  }
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved write output mismatch");
   }
-  if (!approvedRun.events.some((event) => event.type === "status" && event.detail?.includes("ToolApprovalResponseContent"))) {
-    throw new Error(`approved run did not resume with Agent Framework approval response: ${JSON.stringify(approvedRun)}`);
-  }
 
-  const verificationStart = await postRun("ワークスペース状態と差分を確認し、node のバージョンで検証して");
-  const verificationRun = await waitForRun(verificationStart.runId, ["approval_required", "completed", "failed", "cancelled"]);
-  if (verificationRun.status !== "approval_required") {
-    throw new Error(`verification run did not pause before run_command: ${JSON.stringify(verificationRun)}`);
-  }
-  const verificationAgUi = await readAgUiEvents(verificationRun.runId);
-  const verificationApproval = latestApprovalFromAgUi(verificationAgUi.events);
-  if (verificationApproval?.toolCall?.tool !== "run_command") {
-    throw new Error(`AG-UI approval state did not expose run_command: ${JSON.stringify(verificationAgUi.events)}`);
-  }
-  if (!verificationRun.events.some((event) => event.type === "tool_call_started" && event.message === "workspace_status")) {
-    throw new Error(`verification run did not inspect workspace_status: ${JSON.stringify(verificationRun)}`);
-  }
-  if (!verificationRun.events.some((event) => event.type === "tool_call_started" && event.message === "diff")) {
-    throw new Error(`verification run did not inspect diff: ${JSON.stringify(verificationRun)}`);
-  }
-  const verificationApprovalResponse = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(verificationRun.runId)}/approve?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "X-Relay-Token": token,
-      "Origin": `http://127.0.0.1:${port}`,
-    },
+  const verificationPrompt = "ワークスペース状態と差分を確認し、node のバージョンで検証して";
+  const verificationStart = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "golden-verification-start",
+    instruction: verificationPrompt,
   });
-  if (!verificationApprovalResponse.ok) throw new Error(`verification approval failed: ${verificationApprovalResponse.status} ${await verificationApprovalResponse.text()}`);
-  const verificationApprovalStart = await verificationApprovalResponse.json();
-  const approvedVerificationRun = await waitForRun(verificationApprovalStart.runId, ["completed", "failed", "cancelled"]);
-  if (approvedVerificationRun.status !== "completed") {
-    throw new Error(`verification run did not complete: ${JSON.stringify(approvedVerificationRun)}`);
+  collectToolCall(verificationStart.events, "workspace_status");
+  collectToolCall(verificationStart.events, "diff");
+  const commandApprovalCall = collectToolCall(verificationStart.events, "request_approval");
+  const commandApproval = readApprovalRequest(commandApprovalCall).request;
+  if (commandApproval.functionName !== "run_command") {
+    throw new Error(`verification run did not pause for run_command approval: ${JSON.stringify(commandApproval)}`);
   }
-  if (!approvedVerificationRun.events.some((event) => event.type === "completed" && event.detail === "状態確認と検証を完了しました。")) {
-    throw new Error(`verification run final answer mismatch: ${JSON.stringify(approvedVerificationRun)}`);
+  const approvedVerification = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "golden-verification-approved",
+    instruction: verificationPrompt,
+    messages: approvalMessages("golden-verification-approved", verificationPrompt, commandApprovalCall, true),
+  });
+  if (!hasRunFinished(approvedVerification.events)) {
+    throw new Error(`verification run did not finish: ${JSON.stringify(approvedVerification.events)}`);
+  }
+  if (assistantText(approvedVerification.events) !== "状態確認と検証を完了しました。") {
+    throw new Error(`verification final answer mismatch: ${assistantText(approvedVerification.events)}`);
   }
 
   console.log("[agent-golden-smoke] ok");

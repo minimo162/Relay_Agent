@@ -61,7 +61,16 @@ const workbenchSource = walk("apps/workbench/src")
   .join("\n");
 assert(workbenchSource.includes("@ag-ui/client"), "Workbench must consume AG-UI through @ag-ui/client");
 assert(workbenchSource.includes("/agui/relay"), "Workbench must consume the official AG-UI run endpoint");
-assert(read("apps/sidecar/Program.cs").includes("/agui/relay"), "Sidecar must expose the official Agent Framework AG-UI endpoint");
+const sidecarProgram = read("apps/sidecar/Program.cs");
+const sidecarSource = walk("apps/sidecar")
+  .filter((path) => /\.(cs|csproj)$/.test(path))
+  .map((path) => read(path))
+  .join("\n");
+assert(sidecarProgram.includes("/agui/relay"), "Sidecar must expose the official Agent Framework AG-UI endpoint");
+assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the legacy run REST product path");
+assert(!sidecarSource.includes("Run" + "Manager"), "Sidecar must not retain the legacy RunManager runtime");
+assert(!sidecarSource.includes("Run" + "Response"), "Sidecar must not retain the legacy RunResponse protocol");
+assert(!sidecarSource.includes("Pending" + "Approval"), "Sidecar must not retain the legacy PendingApproval protocol");
 assert(!workbenchSource.includes("/agui-events"), "Workbench must not consume the old custom AG-UI run stream");
 assert(!workbenchSource.includes("/api/runs"), "Workbench must not use the legacy run REST product path");
 assert(!/\/events[`'"]/.test(workbenchSource), "Workbench must not consume the old custom run-event stream");

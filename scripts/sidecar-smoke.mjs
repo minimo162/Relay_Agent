@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assistantText, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
 
 const token = "relay-smoke-token";
 const port = 17891;
@@ -42,19 +43,6 @@ async function waitForStatus() {
   throw new Error(`sidecar did not become ready; stderr=${stderr}`);
 }
 
-async function waitForRun(runId) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`, {
-      headers: { "X-Relay-Token": token },
-    });
-    if (!response.ok) throw new Error(`run lookup failed: ${response.status}`);
-    const runJson = await response.json();
-    if (runJson.status !== "running") return runJson;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`run did not finish: ${runId}`);
-}
-
 try {
   const status = await waitForStatus();
   if (status.app !== "Relay Agent") throw new Error(`unexpected status app: ${status.app}`);
@@ -77,7 +65,7 @@ try {
     headers: {
       "Content-Type": "application/json",
       "X-Relay-Token": token,
-      "Origin": `http://127.0.0.1:${port}`,
+      Origin: `http://127.0.0.1:${port}`,
     },
     body: JSON.stringify({
       model: "m365-copilot",
@@ -86,57 +74,25 @@ try {
   });
   if (!completion.ok) throw new Error(`completion endpoint failed: ${completion.status}`);
   const completionJson = await completion.json();
-  if (completionJson.choices?.[0]?.message?.content !== JSON.stringify({ action: "final", answer: "mock Copilot response from sidecar transport" })) {
+  const expected = JSON.stringify({ action: "final", answer: "mock Copilot response from sidecar transport" });
+  if (completionJson.choices?.[0]?.message?.content !== expected) {
     throw new Error(`unexpected completion response: ${JSON.stringify(completionJson)}`);
   }
 
-  const agui = await fetch(`http://127.0.0.1:${port}/agui/relay?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Relay-Token": token,
-      "Origin": `http://127.0.0.1:${port}`,
-    },
-    body: JSON.stringify({
-      threadId: "sidecar-smoke-thread",
-      runId: "sidecar-smoke-run",
-      state: {},
-      messages: [{ id: "sidecar-smoke-message", role: "user", content: "ping" }],
-      tools: [],
-      context: [{ description: "workspace", value: process.cwd() }],
-      forwardedProperties: { workspace: process.cwd() },
-    }),
+  const agui = await postAgUi({
+    port,
+    token,
+    workspace: process.cwd(),
+    runId: "sidecar-smoke-run",
+    instruction: "ping",
   });
-  if (!agui.ok) throw new Error(`official AG-UI endpoint failed: ${agui.status} ${await agui.text()}`);
-  const aguiText = await agui.text();
-  if (!aguiText.includes('"type":"RUN_STARTED"') || !aguiText.includes('"type":"RUN_FINISHED"')) {
-    throw new Error(`official AG-UI stream did not emit run lifecycle events: ${aguiText}`);
+  if (!hasRunFinished(agui.events)) {
+    throw new Error(`official AG-UI stream did not emit run lifecycle events: ${agui.text}`);
+  }
+  if (assistantText(agui.events) !== "mock Copilot response from sidecar transport") {
+    throw new Error(`official AG-UI final text mismatch: ${agui.text}`);
   }
 
-  const run = await fetch(`http://127.0.0.1:${port}/api/runs?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Relay-Token": token,
-      "Origin": `http://127.0.0.1:${port}`,
-    },
-    body: JSON.stringify({
-      instruction: "部品売上に関するファイルを探して",
-      workspace: process.cwd(),
-    }),
-  });
-  if (!run.ok) throw new Error(`run endpoint failed: ${run.status}`);
-  const runJson = await run.json();
-  if (!runJson.runId || !Array.isArray(runJson.events)) {
-    throw new Error(`unexpected run response: ${JSON.stringify(runJson)}`);
-  }
-  const completedRun = await waitForRun(runJson.runId);
-  if (completedRun.status !== "completed") {
-    throw new Error(`run did not complete through mock Copilot transport: ${JSON.stringify(completedRun)}`);
-  }
-  if (!completedRun.events.some((event) => event.type === "completed" && event.detail === "mock Copilot response from sidecar transport")) {
-    throw new Error(`run did not return final mock answer: ${JSON.stringify(completedRun)}`);
-  }
   console.log("[sidecar-smoke] ok");
 } finally {
   child.kill("SIGTERM");

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { collectToolCall, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
 
 const token = "relay-rg-stream-token";
 const port = 17895;
@@ -76,41 +77,24 @@ async function waitForStatus() {
   throw new Error(`sidecar did not become ready; stderr=${stderr}`);
 }
 
-async function waitForRun(runId) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`, {
-      headers: { "X-Relay-Token": token },
-    });
-    if (!response.ok) throw new Error(`run lookup failed: ${response.status}`);
-    const run = await response.json();
-    if (["completed", "failed", "cancelled"].includes(run.status)) return run;
-    await sleep(100);
-  }
-  throw new Error(`run did not finish: ${runId}`);
-}
-
 try {
   await waitForStatus();
 
   const started = Date.now();
-  const response = await fetch(`http://127.0.0.1:${port}/api/runs?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Relay-Token": token,
-      Origin: `http://127.0.0.1:${port}`,
-    },
-    body: JSON.stringify({ instruction: "stream cap smoke", workspace }),
+  const run = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "rg-stream-cap",
+    instruction: "stream cap smoke",
   });
-  if (!response.ok) throw new Error(`run failed: ${response.status} ${await response.text()}`);
-  const runStart = await response.json();
-  const run = await waitForRun(runStart.runId);
   const elapsed = Date.now() - started;
 
-  if (run.status !== "completed") throw new Error(`run did not complete: ${JSON.stringify(run)}`);
+  if (!hasRunFinished(run.events)) throw new Error(`run did not finish: ${JSON.stringify(run.events)}`);
   if (elapsed > 2500) throw new Error(`rg stream cap took too long: ${elapsed}ms`);
   if (existsSync(sentinel)) throw new Error("fake rg reached line 50; output was not capped before buffering");
-  if (!run.events.some((event) => event.type === "tool_call_completed" && String(event.detail ?? "").includes("truncated at limit"))) {
+  const rgFiles = collectToolCall(run.events, "rg_files");
+  if (!rgFiles.results.some((result) => String(result).includes("truncated at limit"))) {
     throw new Error(`rg_files did not report truncation: ${JSON.stringify(run.events)}`);
   }
 

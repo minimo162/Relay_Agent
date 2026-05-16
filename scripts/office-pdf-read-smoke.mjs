@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
+import { collectToolCall, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
 
 const token = "relay-office-pdf-read-token";
 const port = 17896;
@@ -118,27 +119,29 @@ child.stderr.on("data", (chunk) => {
 try {
   await waitForStatus();
   for (const [path, kind] of cases) {
-    const run = await postRun(`read ${path}`);
-    const completed = await waitForRun(run.runId);
-    if (completed.status !== "completed") {
-      throw new Error(`${path} run did not complete: ${JSON.stringify(completed)}`);
+    const run = await postAgUi({
+      port,
+      token,
+      workspace,
+      runId: `office-pdf-read-${path.replace(/[^a-z0-9]/gi, "-")}`,
+      instruction: `read ${path}`,
+    });
+    if (!hasRunFinished(run.events)) {
+      throw new Error(`${path} run did not complete: ${JSON.stringify(run.events)}`);
     }
-    const readEvent = completed.events.find((event) =>
-      event.type === "tool_call_completed" &&
-      event.message === "read completed" &&
-      String(event.detail ?? "").includes(`${kind} extracted`));
-    if (!readEvent) {
-      throw new Error(`${path} did not use extracted ${kind} read path: ${JSON.stringify(completed.events)}`);
+    const readCall = collectToolCall(run.events, "read");
+    const detail = readCall.results.join("\n");
+    if (!detail.includes(`${kind} extracted`)) {
+      throw new Error(`${path} did not use extracted ${kind} read path: ${JSON.stringify(run.events)}`);
     }
-    const detail = String(readEvent.detail ?? "");
     if (!new RegExp(`${kind} extracted, [1-9][0-9]* chars read`).test(detail)) {
-      throw new Error(`${path} extracted no text: ${JSON.stringify(readEvent)}`);
+      throw new Error(`${path} extracted no text: ${detail}`);
     }
     if (detail.includes("warnings=")) {
-      throw new Error(`${path} emitted extraction warnings: ${JSON.stringify(readEvent)}`);
+      throw new Error(`${path} emitted extraction warnings: ${detail}`);
     }
     if (detail.includes("Binary file")) {
-      throw new Error(`${path} fell back to binary read: ${JSON.stringify(readEvent)}`);
+      throw new Error(`${path} fell back to binary read: ${detail}`);
     }
   }
 
@@ -160,33 +163,6 @@ async function waitForStatus() {
     await sleep(250);
   }
   throw new Error(`sidecar did not become ready; stderr=${stderr}`);
-}
-
-async function postRun(instruction) {
-  const response = await fetch(`http://127.0.0.1:${port}/api/runs?token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Relay-Token": token,
-      Origin: `http://127.0.0.1:${port}`,
-    },
-    body: JSON.stringify({ instruction, workspace }),
-  });
-  if (!response.ok) throw new Error(`run failed: ${response.status} ${await response.text()}`);
-  return response.json();
-}
-
-async function waitForRun(runId) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`, {
-      headers: { "X-Relay-Token": token },
-    });
-    if (!response.ok) throw new Error(`run lookup failed: ${response.status}`);
-    const run = await response.json();
-    if (["completed", "failed", "cancelled"].includes(run.status)) return run;
-    await sleep(100);
-  }
-  throw new Error(`run did not finish: ${runId}`);
 }
 
 function sleep(ms) {

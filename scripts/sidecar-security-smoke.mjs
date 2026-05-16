@@ -116,11 +116,19 @@ try {
   });
   if (badHost !== 403) throw new Error(`expected 403 for bad host, got ${badHost}`);
 
-  const badOrigin = await requestStatus(`/api/runs?token=${encodeURIComponent(token)}`, {
+  const badOrigin = await requestStatus(`/agui/relay?token=${encodeURIComponent(token)}`, {
     "X-Relay-Token": token,
     "Content-Type": "application/json",
     Origin: "http://evil.invalid",
-  }, "POST");
+  }, "POST", JSON.stringify({
+    threadId: "security-bad-origin-thread",
+    runId: "security-bad-origin-run",
+    state: {},
+    messages: [{ id: "security-bad-origin-message", role: "user", content: "ping" }],
+    tools: [],
+    context: [{ description: "workspace", value: sensitiveWorkspace }],
+    forwardedProps: { workspace: sensitiveWorkspace },
+  }));
   if (badOrigin !== 403) throw new Error(`expected 403 for bad origin, got ${badOrigin}`);
 
   const noTokenSupportBundle = await requestStatus("/api/support-bundle", {

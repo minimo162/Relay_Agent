@@ -3,7 +3,6 @@ using System.IO.Compression;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -16,17 +15,14 @@ builder.Services.AddAGUI();
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.3";
 var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
-var ledger = new RunLedger(options.DataDirectory);
 var copilot = CopilotTransportFactory.FromEnvironment();
 var copilotChatClient = new RelayCopilotChatClient(copilot);
 var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
-var runManager = new RunManager(ledger, tools, agentRunner);
 var agUiHostedAgent = agentRunner.CreateHostedAgent();
 
 var app = builder.Build();
-app.Lifetime.ApplicationStopping.Register(runManager.Dispose);
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.None,
@@ -94,102 +90,6 @@ app.MapPost("/api/workspace", (WorkspaceRequest request) =>
         Path: fullPath,
         Exists: Directory.Exists(fullPath),
         DisplayPath: fullPath));
-});
-
-app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellationToken) =>
-{
-    var run = await runManager.StartAsync(request, cancellationToken);
-    return Results.Json(RunResponse.FromRun(run));
-});
-
-app.MapGet("/api/runs/{runId}", async (string runId, CancellationToken cancellationToken) =>
-{
-    var run = await runManager.GetAsync(runId, cancellationToken);
-    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
-});
-
-app.MapGet("/api/runs/{runId}/events", async (HttpContext context, string runId, CancellationToken cancellationToken) =>
-{
-    var subscription = await runManager.SubscribeAsync(runId, cancellationToken);
-    if (subscription is null)
-    {
-        context.Response.StatusCode = StatusCodes.Status404NotFound;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse("Run not found."), cancellationToken);
-        return;
-    }
-
-    context.Response.ContentType = "text/event-stream; charset=utf-8";
-    foreach (var runEvent in subscription.Snapshot.Events)
-    {
-        await WriteSseAsync(context, runEvent, cancellationToken);
-    }
-
-    if (subscription.LiveEvents is not null)
-    {
-        try
-        {
-            await foreach (var runEvent in subscription.LiveEvents.ReadAllAsync(cancellationToken))
-            {
-                await WriteSseAsync(context, runEvent, cancellationToken);
-            }
-        }
-        finally
-        {
-            subscription.Lease?.Dispose();
-        }
-    }
-});
-
-app.MapGet("/api/runs/{runId}/agui-events", async (HttpContext context, string runId, CancellationToken cancellationToken) =>
-{
-    var subscription = await runManager.SubscribeAsync(runId, cancellationToken);
-    if (subscription is null)
-    {
-        context.Response.StatusCode = StatusCodes.Status404NotFound;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse("Run not found."), cancellationToken);
-        return;
-    }
-
-    context.Response.ContentType = "text/event-stream; charset=utf-8";
-    foreach (var runEvent in subscription.Snapshot.Events)
-    {
-        await WriteAgUiSseAsync(context, runEvent, cancellationToken);
-    }
-
-    if (subscription.LiveEvents is not null)
-    {
-        try
-        {
-            await foreach (var runEvent in subscription.LiveEvents.ReadAllAsync(cancellationToken))
-            {
-                await WriteAgUiSseAsync(context, runEvent, cancellationToken);
-            }
-        }
-        finally
-        {
-            subscription.Lease?.Dispose();
-        }
-    }
-});
-
-app.MapPost("/api/runs/{runId}/approve", async (string runId, CancellationToken cancellationToken) =>
-{
-    var run = await runManager.ApproveAsync(runId, cancellationToken);
-    if (run is null) return Results.NotFound(new ErrorResponse("Run not found."));
-    if (run.PendingApproval is null) return Results.BadRequest(new ErrorResponse("Run is not waiting for approval."));
-    return Results.Json(RunResponse.FromRun(run));
-});
-
-app.MapPost("/api/runs/{runId}/reject", async (string runId, CancellationToken cancellationToken) =>
-{
-    var run = await runManager.RejectAsync(runId, cancellationToken);
-    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
-});
-
-app.MapPost("/api/runs/{runId}/cancel", async (string runId, CancellationToken cancellationToken) =>
-{
-    var run = await runManager.CancelAsync(runId, cancellationToken);
-    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
 });
 
 app.MapAGUI("/agui/relay", agUiHostedAgent);
@@ -275,56 +175,6 @@ Console.WriteLine(JsonSerializer.Serialize(new
 }));
 
 await app.RunAsync();
-
-static async Task WriteSseAsync(HttpContext context, RunEvent runEvent, CancellationToken cancellationToken)
-{
-    await context.Response.WriteAsync("event: run-event\n", cancellationToken);
-    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Compact)}\n\n", cancellationToken);
-    await context.Response.Body.FlushAsync(cancellationToken);
-}
-
-static async Task WriteAgUiSseAsync(HttpContext context, RunEvent runEvent, CancellationToken cancellationToken)
-{
-    await context.Response.WriteAsync("event: ag-ui-event\n", cancellationToken);
-    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(ToAgUiEvent(runEvent), JsonOptions.Compact)}\n\n", cancellationToken);
-    await context.Response.Body.FlushAsync(cancellationToken);
-}
-
-static object ToAgUiEvent(RunEvent runEvent)
-{
-    var type = runEvent.Type switch
-    {
-        "status" => "STATE_DELTA",
-        "copilot_turn_started" => "REASONING_START",
-        "copilot_turn_completed" => "REASONING_END",
-        "tool_call_started" => "TOOL_CALL_START",
-        "tool_call_completed" => "TOOL_CALL_END",
-        "approval_requested" => "USER_CONFIRMATION_REQUEST",
-        "approval_resolved" => "USER_CONFIRMATION_RESULT",
-        "completed" => "RUN_FINISHED",
-        "cancelled" => "RUN_CANCELLED",
-        "error" => "RUN_ERROR",
-        _ => "TEXT_MESSAGE_CONTENT",
-    };
-    var state = runEvent.Type switch
-    {
-        "approval_requested" => new { approval = runEvent.Data },
-        "approval_resolved" => new { approval = (object?)null },
-        _ => null,
-    };
-
-    return new
-    {
-        type,
-        runId = runEvent.RunId,
-        sequence = runEvent.Sequence,
-        timestamp = runEvent.Timestamp,
-        message = runEvent.Message,
-        detail = runEvent.Detail,
-        data = runEvent.Data,
-        state,
-    };
-}
 
 static bool RequiresToken(HttpRequest request)
 {
@@ -417,53 +267,9 @@ public sealed class ToolReadiness(ICopilotTransport copilot, ToolResolver resolv
     }
 }
 
-public sealed class RunLedger(string dataDirectory)
-{
-    private readonly string _runDirectory = Path.Combine(dataDirectory, "runs");
-    private readonly string _eventDirectory = Path.Combine(dataDirectory, "run-events");
-    private readonly SemaphoreSlim _lock = new(1, 1);
-
-    public async Task AppendAsync(RunRecord run, CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(_runDirectory);
-        await _lock.WaitAsync(cancellationToken);
-        try
-        {
-            var path = Path.Combine(_runDirectory, $"{run.RunId}.json");
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(run, JsonOptions.Default), cancellationToken);
-            Directory.CreateDirectory(_eventDirectory);
-            var eventPath = Path.Combine(_eventDirectory, $"{run.RunId}.jsonl");
-            var existing = File.Exists(eventPath) ? await File.ReadAllLinesAsync(eventPath, cancellationToken) : [];
-            var previousCount = existing.Length;
-            var nextEvents = run.Events.Skip(previousCount)
-                .Select(runEvent => JsonSerializer.Serialize(runEvent, JsonOptions.Default));
-            await File.AppendAllLinesAsync(eventPath, nextEvents, cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async Task<RunRecord?> LoadAsync(string runId, CancellationToken cancellationToken)
-    {
-        var path = Path.Combine(_runDirectory, $"{runId}.json");
-        if (!File.Exists(path)) return null;
-        var text = await File.ReadAllTextAsync(path, cancellationToken);
-        return JsonSerializer.Deserialize<RunRecord>(text, JsonOptions.Default);
-    }
-}
-
-public sealed record RunRequest(string Instruction, string Workspace);
-
 public sealed record WorkspaceRequest(string Path);
 
 public sealed record WorkspaceResponse(string Path, bool Exists, string DisplayPath);
-
-public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events)
-{
-    public static RunResponse FromRun(RunRecord run) => new(run.RunId, run.Status, run.Events);
-}
 
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
 
@@ -472,45 +278,6 @@ public sealed record ReadinessCheck(string Name, bool Ready, string Detail, bool
 public sealed record ErrorResponse(string Error);
 
 public sealed record SupportBundleRequest(bool IncludeSensitive = false);
-
-public sealed record RunEvent(
-    [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("message")] string Message,
-    [property: JsonPropertyName("detail")] string? Detail = null,
-    [property: JsonPropertyName("data")] object? Data = null,
-    [property: JsonPropertyName("runId")] string? RunId = null,
-    [property: JsonPropertyName("sequence")] long Sequence = 0,
-    [property: JsonPropertyName("timestamp")] DateTimeOffset? Timestamp = null)
-{
-    public static RunEvent Status(string message, string? detail = null) => new("status", message, detail);
-    public static RunEvent CopilotTurnStarted(string message, string? detail = null) => new("copilot_turn_started", message, detail);
-    public static RunEvent CopilotTurnCompleted(string message, string? detail = null) => new("copilot_turn_completed", message, detail);
-    public static RunEvent ToolCallStarted(string message, string? detail = null) => new("tool_call_started", message, detail);
-    public static RunEvent ToolCallCompleted(string message, string? detail = null) => new("tool_call_completed", message, detail);
-    public static RunEvent Approval(string message, string? detail = null, object? data = null) => new("approval_requested", message, detail, data);
-    public static RunEvent ApprovalResolved(string message, string? detail = null) => new("approval_resolved", message, detail);
-    public static RunEvent Error(string message, string? detail = null) => new("error", message, detail);
-    public static RunEvent Completed(string message, string? detail = null) => new("completed", message, detail);
-}
-
-public sealed record RunRecord(
-    string RunId,
-    string Status,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? CompletedAt,
-    RunRequest Request,
-    IReadOnlyList<RunEvent> Events,
-    PendingApproval? PendingApproval = null,
-    JsonElement? AgentSessionState = null)
-{
-    public static RunRecord Start(RunRequest request) =>
-        new($"run-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{RandomNumberGenerator.GetHexString(6).ToLowerInvariant()}",
-            "running",
-            DateTimeOffset.UtcNow,
-            null,
-            request,
-            []);
-}
 
 public static class JsonOptions
 {

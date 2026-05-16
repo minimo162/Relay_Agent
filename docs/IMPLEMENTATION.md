@@ -17889,3 +17889,48 @@ Result:
   client-tool approval smoke, ripgrep stream cap smoke, Office/PDF read smoke,
   OfficeCLI registry smoke, sidecar security smoke, and release inventory
   generation.
+
+## 2026-05-16: AFAGUI04 Legacy Run Route Removal
+
+Changes:
+
+- Removed the legacy sidecar product routes for `/api/runs`,
+  `/api/runs/{runId}`, `/api/runs/{runId}/events`,
+  `/api/runs/{runId}/agui-events`, and legacy approve/reject/cancel actions.
+- Deleted `RunManager` and the old `RunResponse`/`PendingApproval` product
+  protocol. The sidecar now keeps only non-agent local APIs plus official
+  Agent Framework AG-UI execution at `/agui/relay`.
+- Updated sidecar, golden, ripgrep cap, Office/PDF read, OfficeCLI registry,
+  and security smokes so they drive runs through `/agui/relay`.
+- Added shared AG-UI smoke helpers for posting `RunAgentInput`, parsing SSE,
+  collecting tool calls, and resuming approval through AG-UI tool result
+  messages.
+- Strengthened the hard-cut guard so active sidecar source cannot retain the
+  legacy run route, `RunManager`, `RunResponse`, or `PendingApproval`.
+- Moved raw OfficeCLI argv rejection into the Copilot tool-projection adapter
+  so invalid OfficeCLI argv fails before an AG-UI approval request can expose
+  or execute it.
+- Marked `AFAGUI04` complete in Task Master and updated `PLANS.md` so
+  `AFAGUI05` is the next checkpoint.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/dotnet:/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm --filter @relay-agent/workbench typecheck
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm agent:officecli-registry-smoke
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Workbench typecheck passed.
+- OfficeCLI registry smoke passed after the AG-UI approval payload was updated
+  to accept object-form function arguments and raw argv rejection moved before
+  approval projection.
+- Full `pnpm check` passed, including hard-cut guard, Workbench build and
+  sidecar asset preparation, sidecar Release build/smoke, golden agent smoke,
+  AG-UI client-tool approval smoke, ripgrep stream cap smoke, Office/PDF read
+  smoke, OfficeCLI registry smoke, sidecar security smoke, and release
+  inventory generation.

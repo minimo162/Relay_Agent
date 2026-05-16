@@ -124,7 +124,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             throw new InvalidOperationException("Copilot tool projection must return action=tool or action=final.");
         }
 
-        var toolName = NormalizeRequestedTool(plan.Tool, plan.Args ?? new JsonObject());
+        var planArgs = plan.Args ?? new JsonObject();
+        ValidateProjectedToolCall(plan.Tool, planArgs);
+        var toolName = NormalizeRequestedTool(plan.Tool, planArgs);
         var availableTools = GetToolDeclarations(options).Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         if (!availableTools.Contains(toolName))
         {
@@ -136,7 +138,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             new FunctionCallContent(
                 $"call-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}",
                 toolName,
-                ToArgumentDictionary(plan.Args ?? new JsonObject())),
+                ToArgumentDictionary(planArgs)),
         };
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, contents))
         {
@@ -287,14 +289,17 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             ? value?.ToString()
             : null;
 
+    private static void ValidateProjectedToolCall(string tool, JsonObject args)
+    {
+        if (tool == "officecli" && (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs")))
+        {
+            throw new InvalidOperationException("officecli raw argv is not allowed. Use semantic operation fields.");
+        }
+    }
+
     private static string NormalizeRequestedTool(string tool, JsonObject args)
     {
         if (tool != "officecli") return tool;
-        if (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs"))
-        {
-            return "officecli_mutate";
-        }
-
         var operation = NormalizeOfficeCliOperation(GetString(args, "operation") ?? GetString(args, "command") ?? "view");
         var readOnly = operation is "capabilities" or "help" or "view" or "get" or "query" or "validate" or "dump" or "raw" or "open";
         return readOnly ? "officecli" : "officecli_mutate";

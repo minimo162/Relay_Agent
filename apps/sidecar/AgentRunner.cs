@@ -34,136 +34,8 @@ public sealed class RelayAgentFrameworkRunner
 
     public AIAgent CreateHostedAgent()
     {
-        var functionSet = new RelayAgentFunctionSet(null, _tools, _ => ValueTask.CompletedTask);
+        var functionSet = new RelayAgentFunctionSet(null, _tools);
         return CreateAgUiApprovalBridge(CreateAgent(functionSet.CreateTools()));
-    }
-
-    public async Task<AgentRunResult> RunAsync(
-        RunRequest request,
-        string runId,
-        Func<RunEvent, CancellationToken, ValueTask>? onEvent,
-        CancellationToken cancellationToken)
-    {
-        var events = new List<RunEvent>();
-
-        async ValueTask Emit(RunEvent runEvent)
-        {
-            events.Add(runEvent);
-            if (onEvent is not null)
-            {
-                await onEvent(runEvent, cancellationToken);
-            }
-        }
-
-        var functionSet = new RelayAgentFunctionSet(request.Workspace, _tools, Emit);
-        var agent = CreateAgent(functionSet.CreateTools());
-        var session = await agent.CreateSessionAsync(cancellationToken);
-        await Emit(RunEvent.Status(
-            "Microsoft Agent Framework セッションを開始しました",
-            "Tool planning and observation turns are handled by ChatClientAgent with function invocation middleware."));
-
-        try
-        {
-            await Emit(RunEvent.CopilotTurnStarted("Copilot が実行方針を選択しています", "function-calling request"));
-            var response = await agent.RunAsync(
-                BuildUserPrompt(request),
-                session,
-                CreateRunOptions(),
-                cancellationToken);
-
-            var approval = TryCreatePendingApproval(request.Workspace, runId, response);
-            if (approval is not null)
-            {
-                var serializedSession = await SerializeSessionAsync(agent, session, cancellationToken);
-                await Emit(RunEvent.CopilotTurnCompleted("Copilot が承認の必要な操作を選択しました", approval.ToolCall.Tool));
-                await Emit(RunEvent.Approval(
-                    "実行前に確認してください",
-                    _tools.Describe(approval.ToolCall),
-                    ApprovalDisplayState.FromPendingApproval(approval)));
-                return new AgentRunResult("approval_required", events, approval, serializedSession);
-            }
-
-            await Emit(RunEvent.CopilotTurnCompleted("Copilot の応答を受け取りました", "final"));
-            if (IsPlaceholderFinalAnswer(response.Text))
-            {
-                await Emit(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
-                return new AgentRunResult("failed", events, null, null);
-            }
-            await Emit(RunEvent.Completed("完了しました", response.Text.Trim()));
-            return new AgentRunResult("completed", events, null, null);
-        }
-        catch (Exception ex)
-        {
-            await Emit(RunEvent.Error("Agent Framework 実行に失敗しました", ex.Message));
-            return new AgentRunResult("failed", events, null, null);
-        }
-    }
-
-    public async Task<AgentRunResult> ApproveAsync(
-        RunRecord run,
-        Func<RunEvent, CancellationToken, ValueTask>? onEvent,
-        CancellationToken cancellationToken)
-    {
-        if (run.PendingApproval is null)
-        {
-            return new AgentRunResult("failed", [RunEvent.Error("承認待ちではありません", "実行できる保留中の操作がありません。")], null, null);
-        }
-
-        if (run.AgentSessionState is null || run.PendingApproval.FrameworkApproval is null)
-        {
-            return new AgentRunResult(
-                "failed",
-                [RunEvent.Error("承認セッションを再開できません", "Agent Framework の承認状態が保存されていません。")],
-                null,
-                null);
-        }
-
-        var events = new List<RunEvent>();
-
-        async ValueTask Emit(RunEvent runEvent)
-        {
-            events.Add(runEvent);
-            if (onEvent is not null)
-            {
-                await onEvent(runEvent, cancellationToken);
-            }
-        }
-
-        var pendingApproval = run.PendingApproval;
-        var functionSet = new RelayAgentFunctionSet(run.Request.Workspace, _tools, Emit);
-        var agent = CreateAgent(functionSet.CreateTools());
-        var session = await DeserializeSessionAsync(agent, run.AgentSessionState.Value, cancellationToken);
-        await Emit(RunEvent.Status(
-            "Microsoft Agent Framework セッションを再開しました",
-            "保存済みセッションに ToolApprovalResponseContent を戻して続行します。"));
-        await Emit(RunEvent.ApprovalResolved("承認しました", _tools.Describe(pendingApproval.ToolCall)));
-
-        var response = await agent.RunAsync(
-            BuildApprovalResponseMessage(pendingApproval.FrameworkApproval),
-            session,
-            CreateRunOptions(),
-            cancellationToken);
-
-        var nextApproval = TryCreatePendingApproval(run.Request.Workspace, run.RunId, response);
-        if (nextApproval is not null)
-        {
-            var serializedSession = await SerializeSessionAsync(agent, session, cancellationToken);
-            await Emit(RunEvent.CopilotTurnCompleted("Copilot が追加承認の必要な操作を選択しました", nextApproval.ToolCall.Tool));
-            await Emit(RunEvent.Approval(
-                "実行前に確認してください",
-                _tools.Describe(nextApproval.ToolCall),
-                ApprovalDisplayState.FromPendingApproval(nextApproval)));
-            return new AgentRunResult("approval_required", events, nextApproval, serializedSession);
-        }
-
-        await Emit(RunEvent.CopilotTurnCompleted("Copilot の応答を受け取りました", "final"));
-        if (IsPlaceholderFinalAnswer(response.Text))
-        {
-            await Emit(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
-            return new AgentRunResult("failed", events, null, null);
-        }
-        await Emit(RunEvent.Completed("完了しました", response.Text.Trim()));
-        return new AgentRunResult("completed", events, null, null);
     }
 
     private ChatClientAgent CreateAgent(IList<AITool> tools) =>
@@ -383,134 +255,11 @@ public sealed class RelayAgentFrameworkRunner
         }
     }
 
-    private static ChatClientAgentRunOptions CreateRunOptions() =>
-        new(new ChatOptions
-        {
-            ModelId = "m365-copilot",
-            AllowMultipleToolCalls = false,
-        });
-
-    private static string BuildUserPrompt(RunRequest request) =>
-        string.Join("\n", [
-            "RELAY AGENT USER TASK",
-            "Use the function tools exposed by Microsoft Agent Framework when local action or evidence is needed.",
-            "Relay-selected workspace:",
-            request.Workspace,
-            "User request:",
-            request.Instruction,
-        ]);
-
-    private static async Task<JsonElement> SerializeSessionAsync(
-        ChatClientAgent agent,
-        AgentSession session,
-        CancellationToken cancellationToken) =>
-        await agent.SerializeSessionAsync(session, JsonOptions.Default, cancellationToken);
-
-    private static async Task<AgentSession> DeserializeSessionAsync(
-        ChatClientAgent agent,
-        JsonElement serializedSession,
-        CancellationToken cancellationToken) =>
-        await agent.DeserializeSessionAsync(serializedSession, JsonOptions.Default, cancellationToken);
-
-    private static ChatMessage BuildApprovalResponseMessage(AgentFrameworkApproval approval)
-    {
-        var functionCall = new FunctionCallContent(
-            approval.CallId,
-            approval.FunctionName,
-            JsonObjectToArguments(approval.Arguments));
-        var request = new ToolApprovalRequestContent(approval.RequestId, functionCall);
-        return new ChatMessage(ChatRole.User, [request.CreateResponse(true, "Approved by Relay user.")]);
-    }
-
-    private PendingApproval? TryCreatePendingApproval(string workspace, string runId, AgentResponse response)
-    {
-        foreach (var content in response.Messages.SelectMany(message => message.Contents))
-        {
-            if (content is ToolApprovalRequestContent requestContent &&
-                requestContent.ToolCall is FunctionCallContent call)
-            {
-                var executorTool = RelayAgentFunctionSet.ToExecutorToolName(call.Name);
-                var toolCall = new RelayToolCall(call.CallId, executorTool, ArgumentsToJsonObject(call.Arguments ?? new Dictionary<string, object?>()));
-                var validation = _tools.Validate(workspace, toolCall);
-                if (!validation.Ok)
-                {
-                    throw new InvalidOperationException(validation.Error ?? "Invalid tool approval request.");
-                }
-                return PendingApproval.FromFrameworkRequest(runId, toolCall, requestContent.RequestId, call.Name);
-            }
-        }
-
-        return null;
-    }
-
-    private static JsonObject ArgumentsToJsonObject(IDictionary<string, object?> arguments)
-    {
-        var result = new JsonObject();
-        foreach (var (key, value) in arguments)
-        {
-            result[key] = ToJsonNode(value);
-        }
-        return result;
-    }
-
-    private static JsonNode? ToJsonNode(object? value)
-    {
-        if (value is null) return null;
-        return value switch
-        {
-            JsonNode node => node.DeepClone(),
-            JsonElement element => JsonNode.Parse(element.GetRawText()),
-            _ => JsonSerializer.SerializeToNode(value, JsonOptions.Default),
-        };
-    }
-
-    private static Dictionary<string, object?> JsonObjectToArguments(JsonObject arguments)
-    {
-        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
-        foreach (var (key, value) in arguments)
-        {
-            result[key] = ToClrValue(value);
-        }
-        return result;
-    }
-
-    private static object? ToClrValue(JsonNode? node)
-    {
-        if (node is null) return null;
-        if (node is JsonArray array)
-        {
-            return array.Select(ToClrValue).ToArray();
-        }
-        if (node is JsonObject obj)
-        {
-            return obj.ToDictionary(pair => pair.Key, pair => ToClrValue(pair.Value), StringComparer.Ordinal);
-        }
-
-        var element = JsonSerializer.Deserialize<JsonElement>(node.ToJsonString(), JsonOptions.Compact);
-        return element.ValueKind switch
-        {
-            JsonValueKind.String => element.GetString(),
-            JsonValueKind.Number when element.TryGetInt32(out var intValue) => intValue,
-            JsonValueKind.Number when element.TryGetInt64(out var longValue) => longValue,
-            JsonValueKind.Number when element.TryGetDouble(out var doubleValue) => doubleValue,
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null => null,
-            _ => JsonSerializer.Deserialize<object?>(node.ToJsonString(), JsonOptions.Compact),
-        };
-    }
-
-    private static bool IsPlaceholderFinalAnswer(string? answer)
-    {
-        var normalized = (answer ?? "").Trim().Trim('"').ToLowerInvariant();
-        return normalized is "" or "answer" or "final answer" or "japanese answer" or "your actual concise answer to the user";
-    }
 }
 
 public sealed class RelayAgentFunctionSet(
     string? workspace,
-    RelayToolExecutor tools,
-    Func<RunEvent, ValueTask> emit)
+    RelayToolExecutor tools)
 {
     private static readonly RelayAgentToolRegistration[] ReadOnlyToolRegistrations =
     [
@@ -548,15 +297,6 @@ public sealed class RelayAgentFunctionSet(
         string executorTool,
         RelayAgentToolSafety safety = RelayAgentToolSafety.ReadOnly) =>
         new(methodName, name, description, executorTool, safety);
-
-    public static bool IsMutatingAgentTool(string name) =>
-        MutatingToolRegistrations.Any(tool => tool.Name.Equals(name, StringComparison.Ordinal));
-
-    public static string ToExecutorToolName(string agentToolName) =>
-        ReadOnlyToolRegistrations.Concat(MutatingToolRegistrations)
-            .FirstOrDefault(tool => tool.Name.Equals(agentToolName, StringComparison.Ordinal))
-            ?.ExecutorTool
-        ?? agentToolName;
 
     public Task<ToolObservation> RgFilesAsync(
         string? contains = null,
@@ -704,16 +444,10 @@ public sealed class RelayAgentFunctionSet(
         if (!validation.Ok)
         {
             var failed = ToolObservation.Fail(call.Id, call.Tool, validation.Error ?? "Invalid tool call.");
-            await emit(RunEvent.Error($"{tool} validation failed", failed.Summary));
             throw new InvalidOperationException(failed.Summary);
         }
 
-        await emit(RunEvent.ToolCallStarted(call.Tool, tools.Describe(call)));
         var observation = await tools.ExecuteAsync(effectiveWorkspace, call, cancellationToken, approvalGranted: true);
-        await emit(observation.Success
-            ? RunEvent.ToolCallCompleted($"{call.Tool} completed", observation.Summary)
-            : RunEvent.Error($"{call.Tool} failed", observation.Summary));
-
         if (!observation.Success)
         {
             throw new InvalidOperationException(observation.Summary);
@@ -2430,12 +2164,6 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
     }
 }
 
-public sealed record AgentRunResult(
-    string Status,
-    IReadOnlyList<RunEvent> Events,
-    PendingApproval? PendingApproval,
-    JsonElement? AgentSessionState);
-
 public sealed record RelayToolCall(string Id, string Tool, JsonObject Args);
 
 public sealed record ToolObservation(string ToolCallId, string Tool, bool Success, string Summary, object? Data)
@@ -2453,38 +2181,6 @@ public sealed record ToolValidation(bool Ok, string? Error)
 public sealed record ProcessResult(bool Success, string Output);
 
 public sealed record LineProcessResult(bool Success, IReadOnlyList<string> Lines, string Output, bool Truncated);
-
-public sealed record PendingApproval(
-    string ApprovalId,
-    string RunId,
-    RelayToolCall ToolCall,
-    DateTimeOffset CreatedAt,
-    AgentFrameworkApproval? FrameworkApproval = null)
-{
-    public static PendingApproval FromFrameworkRequest(
-        string runId,
-        RelayToolCall toolCall,
-        string requestId,
-        string functionName) =>
-        new(
-            $"approval-{RandomNumberGenerator.GetHexString(6).ToLowerInvariant()}",
-            runId,
-            toolCall,
-            DateTimeOffset.UtcNow,
-            new AgentFrameworkApproval(requestId, functionName, toolCall.Id, toolCall.Args.DeepClone().AsObject()));
-}
-
-public sealed record AgentFrameworkApproval(
-    string RequestId,
-    string FunctionName,
-    string CallId,
-    JsonObject Arguments);
-
-public sealed record ApprovalDisplayState(string ApprovalId, RelayToolCall ToolCall)
-{
-    public static ApprovalDisplayState FromPendingApproval(PendingApproval approval) =>
-        new(approval.ApprovalId, approval.ToolCall);
-}
 
 public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Args, string? Answer)
 {
