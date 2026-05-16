@@ -151,6 +151,9 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
 }
 
 function eventKey(event: RunEvent): string {
+  if (event.runId && event.sequence) {
+    return `${event.runId}:${event.sequence}`;
+  }
   return `${event.type}\u0000${event.message}\u0000${event.detail ?? ""}`;
 }
 

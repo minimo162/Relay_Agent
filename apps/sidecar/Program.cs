@@ -8,7 +8,7 @@ using Microsoft.Extensions.FileProviders;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseKestrel(options => options.AddServerHeader = false);
 
-var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.2";
+var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.3";
 var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);
@@ -133,6 +133,38 @@ app.MapGet("/api/runs/{runId}/events", async (HttpContext context, string runId,
     }
 });
 
+app.MapGet("/api/runs/{runId}/agui-events", async (HttpContext context, string runId, CancellationToken cancellationToken) =>
+{
+    var subscription = await runManager.SubscribeAsync(runId, cancellationToken);
+    if (subscription is null)
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        await context.Response.WriteAsJsonAsync(new ErrorResponse("Run not found."), cancellationToken);
+        return;
+    }
+
+    context.Response.ContentType = "text/event-stream; charset=utf-8";
+    foreach (var runEvent in subscription.Snapshot.Events)
+    {
+        await WriteAgUiSseAsync(context, runEvent, cancellationToken);
+    }
+
+    if (subscription.LiveEvents is not null)
+    {
+        try
+        {
+            await foreach (var runEvent in subscription.LiveEvents.ReadAllAsync(cancellationToken))
+            {
+                await WriteAgUiSseAsync(context, runEvent, cancellationToken);
+            }
+        }
+        finally
+        {
+            subscription.Lease?.Dispose();
+        }
+    }
+});
+
 app.MapPost("/api/runs/{runId}/approve", async (string runId, CancellationToken cancellationToken) =>
 {
     var run = await runManager.ApproveAsync(runId, cancellationToken);
@@ -227,6 +259,42 @@ static async Task WriteSseAsync(HttpContext context, RunEvent runEvent, Cancella
     await context.Response.WriteAsync("event: run-event\n", cancellationToken);
     await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Compact)}\n\n", cancellationToken);
     await context.Response.Body.FlushAsync(cancellationToken);
+}
+
+static async Task WriteAgUiSseAsync(HttpContext context, RunEvent runEvent, CancellationToken cancellationToken)
+{
+    await context.Response.WriteAsync("event: ag-ui-event\n", cancellationToken);
+    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(ToAgUiEvent(runEvent), JsonOptions.Compact)}\n\n", cancellationToken);
+    await context.Response.Body.FlushAsync(cancellationToken);
+}
+
+static object ToAgUiEvent(RunEvent runEvent)
+{
+    var type = runEvent.Type switch
+    {
+        "status" => "STATE_DELTA",
+        "copilot_turn_started" => "THINKING_START",
+        "copilot_turn_completed" => "THINKING_END",
+        "tool_call_started" => "TOOL_CALL_START",
+        "tool_call_completed" => "TOOL_CALL_END",
+        "approval_requested" => "USER_CONFIRMATION_REQUEST",
+        "approval_resolved" => "USER_CONFIRMATION_RESULT",
+        "completed" => "RUN_FINISHED",
+        "cancelled" => "RUN_CANCELLED",
+        "error" => "RUN_ERROR",
+        _ => "TEXT_MESSAGE_CONTENT",
+    };
+
+    return new
+    {
+        type,
+        runId = runEvent.RunId,
+        sequence = runEvent.Sequence,
+        timestamp = runEvent.Timestamp,
+        message = runEvent.Message,
+        detail = runEvent.Detail,
+        relayType = runEvent.Type,
+    };
 }
 
 static bool RequiresToken(HttpRequest request)

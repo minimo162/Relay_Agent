@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecutor tools)
 {
     private const int MaxSteps = 6;
+    private const string AllowedTools = "rg_files, rg_search, read, officecli, edit, write, workspace_status, diff, run_command, ask_user";
 
     public async Task<AgentRunResult> RunAsync(
         RunRequest request,
@@ -155,7 +156,7 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "Return exactly one JSON object and nothing else.",
             """For a final answer, return fields: action="final", answer=<your actual concise answer to the user>.""",
             """For a tool call, return fields: action="tool", tool=<one allowed tool name>, args=<JSON object>.""",
-            "Allowed tool names: rg_files, rg_search, read, officecli, edit, write, ask_user.",
+            $"Allowed tool names: {AllowedTools}.",
             "Rules:",
             "- Do not copy placeholder text from these instructions.",
             "- Never answer with placeholder text such as `Japanese answer`, `answer`, or `final answer`.",
@@ -166,6 +167,9 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "- Use read for exact files only.",
             "- Use officecli for Office inspection or mutation. Mutations require approval.",
             "- Use edit/write only for workspace-scoped file changes. They require approval.",
+            "- Use workspace_status before code changes when repository state matters.",
+            "- Use diff to review local changes before summarizing a code or text edit.",
+            "- Use run_command only for bounded verification such as test, build, lint, typecheck, or git status/diff. It requires approval.",
             "- If enough observations exist, return final.",
             "- Never request shell/bash/powershell.",
             $"WORKSPACE: {request.Workspace}",
@@ -187,7 +191,7 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "Return exactly one valid JSON object and nothing else.",
             """For a final answer, return fields: action="final", answer=<actual concise Japanese answer>.""",
             """For a tool call, return fields: action="tool", tool=<one allowed tool name>, args=<JSON object>.""",
-            "Allowed tool names: rg_files, rg_search, read, officecli, edit, write, ask_user.",
+            $"Allowed tool names: {AllowedTools}.",
             "Rules:",
             "- Preserve the intent of the invalid response.",
             "- Escape Windows backslashes correctly or prefer forward slashes inside JSON strings.",
@@ -212,12 +216,56 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
 
 public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolResolver)
 {
-    private static readonly HashSet<string> ReadTools = ["rg_files", "rg_search", "read", "ask_user"];
-    private static readonly HashSet<string> WriteTools = ["officecli", "edit", "write"];
+    private static readonly HashSet<string> ReadTools = ["rg_files", "rg_search", "read", "workspace_status", "diff", "ask_user"];
+    private static readonly HashSet<string> WriteTools = ["officecli", "edit", "write", "run_command"];
+    private static readonly HashSet<string> AllowedCommands = [
+        "cargo",
+        "dotnet",
+        "git",
+        "go",
+        "make",
+        "node",
+        "npm",
+        "pnpm",
+        "python",
+        "python3",
+        "pytest",
+        "rg",
+        "uv",
+    ];
+    private static readonly HashSet<string> AllowedGitSubcommands = [
+        "branch",
+        "diff",
+        "log",
+        "ls-files",
+        "rev-parse",
+        "show",
+        "status",
+    ];
+    private static readonly HashSet<string> BlockedCommandTokens = [
+        "add",
+        "checkout",
+        "clean",
+        "delete",
+        "del",
+        "fetch",
+        "install",
+        "pull",
+        "push",
+        "publish",
+        "remove",
+        "reset",
+        "restore",
+        "rm",
+        "upgrade",
+        "update",
+    ];
 
     public bool RequiresApproval(RelayToolCall call) =>
         call.Tool == "officecli"
             ? !string.Equals(GetString(call.Args, "operation") ?? "view", "view", StringComparison.OrdinalIgnoreCase)
+            : call.Tool == "run_command"
+                ? true
             : WriteTools.Contains(call.Tool);
 
     public ToolValidation Validate(string workspace, RelayToolCall call)
@@ -238,6 +286,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
             "officecli" => ValidateWorkspacePath(workspace, call.Args, mustExist: true, key: "filePath"),
             "edit" => ValidateWorkspacePath(workspace, call.Args, mustExist: true),
             "write" => ValidateWorkspacePath(workspace, call.Args, mustExist: false),
+            "workspace_status" => ToolValidation.Pass(),
+            "diff" => ValidateOptionalWorkspacePath(workspace, call.Args),
+            "run_command" => ValidateRunCommand(workspace, call.Args),
             "ask_user" => ToolValidation.Pass(),
             _ => ToolValidation.Fail($"Unsupported tool: {call.Tool}"),
         };
@@ -252,6 +303,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
             "officecli" => $"file={GetString(call.Args, "filePath")}, operation={GetString(call.Args, "operation") ?? GetString(call.Args, "command") ?? "inspect"}",
             "edit" => $"path={GetString(call.Args, "path")}",
             "write" => $"path={GetString(call.Args, "path")}",
+            "workspace_status" => "inspect workspace and git status",
+            "diff" => $"diff path={GetString(call.Args, "path") ?? "."}",
+            "run_command" => $"verify command={string.Join(" ", GetStringArray(call.Args, "argv") ?? [])}",
             "ask_user" => GetString(call.Args, "question") ?? "追加情報が必要です。",
             _ => call.Tool,
         };
@@ -277,6 +331,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
                 "officecli" => await OfficeCliAsync(workspace, call, cancellationToken),
                 "edit" => await EditAsync(workspace, call, cancellationToken),
                 "write" => await WriteAsync(workspace, call, cancellationToken),
+                "workspace_status" => await WorkspaceStatusAsync(workspace, call, cancellationToken),
+                "diff" => await DiffAsync(workspace, call, cancellationToken),
+                "run_command" => await RunCommandAsync(workspace, call, cancellationToken),
                 "ask_user" => ToolObservation.Ok(call.Id, call.Tool, GetString(call.Args, "question") ?? "追加情報が必要です。", null),
                 _ => ToolObservation.Fail(call.Id, call.Tool, $"Unknown tool: {call.Tool}"),
             };
@@ -321,8 +378,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         var pattern = GetString(call.Args, "pattern") ?? "";
         var glob = GetString(call.Args, "glob");
         var limit = GetInt(call.Args, "limit") ?? 80;
-        var args = new List<string> { "--line-number", "--color", "never", "--fixed-strings", pattern };
-        if (!string.IsNullOrWhiteSpace(glob)) args.InsertRange(0, ["-g", glob]);
+        var args = new List<string> { "--line-number", "--color", "never", "--fixed-strings" };
+        if (!string.IsNullOrWhiteSpace(glob)) args.AddRange(["-g", glob]);
+        args.AddRange(["--", pattern]);
         var result = await RunProcessAsync(rg.ExecutablePath, args, workspace, cancellationToken, allowExitOne: true);
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
         var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -397,6 +455,93 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         return ToolObservation.Ok(call.Id, call.Tool, backupPath is null ? "file written" : $"file written; backup={backupPath}", path);
     }
 
+    private static async Task<ToolObservation> WorkspaceStatusAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    {
+        var root = Path.GetFullPath(workspace);
+        var sampleLimit = Math.Clamp(GetInt(call.Args, "limit") ?? 5000, 100, 20000);
+        var filesScanned = 0;
+        try
+        {
+            foreach (var _ in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Take(sampleLimit + 1))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                filesScanned++;
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, $"Workspace scan failed: {ex.Message}");
+        }
+
+        var gitRoot = FindGitRoot(root);
+        string? gitStatus = null;
+        if (gitRoot is not null)
+        {
+            var status = await RelayProcess.RunAsync(
+                "git",
+                ["status", "--short", "--branch"],
+                gitRoot,
+                cancellationToken,
+                timeoutMs: 15000);
+            gitStatus = status.Success ? Truncate(status.Output, 12000) : $"git status failed: {status.Output}";
+        }
+
+        var data = new
+        {
+            workspace = root,
+            exists = Directory.Exists(root),
+            scannedFiles = Math.Min(filesScanned, sampleLimit),
+            truncated = filesScanned > sampleLimit,
+            gitRoot,
+            gitStatus,
+        };
+        return ToolObservation.Ok(call.Id, call.Tool, gitRoot is null ? "workspace inspected" : "workspace and git status inspected", data);
+    }
+
+    private static async Task<ToolObservation> DiffAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    {
+        var root = Path.GetFullPath(workspace);
+        var gitRoot = FindGitRoot(root);
+        if (gitRoot is null)
+        {
+            return ToolObservation.Ok(call.Id, call.Tool, "workspace is not a git repository", "");
+        }
+
+        var args = new List<string> { "diff", "--no-ext-diff", "--" };
+        var path = GetString(call.Args, "path");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            var full = ResolveWorkspacePath(workspace, path);
+            args.Add(Path.GetRelativePath(gitRoot, full));
+        }
+
+        var result = await RelayProcess.RunAsync("git", args, gitRoot, cancellationToken, timeoutMs: 30000);
+        if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
+        var output = Truncate(result.Output, 24000);
+        return ToolObservation.Ok(call.Id, call.Tool, string.IsNullOrWhiteSpace(output) ? "no diff" : "diff captured", output);
+    }
+
+    private static async Task<ToolObservation> RunCommandAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    {
+        var argv = GetStringArray(call.Args, "argv") ?? [];
+        if (argv.Length == 0) return ToolObservation.Fail(call.Id, call.Tool, "argv is required.");
+        var cwd = GetString(call.Args, "cwd");
+        var workingDirectory = string.IsNullOrWhiteSpace(cwd)
+            ? Path.GetFullPath(workspace)
+            : ResolveWorkspaceDirectory(workspace, cwd);
+        var timeoutMs = Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 120000, 1000, 600000);
+        var result = await RelayProcess.RunAsync(
+            argv[0],
+            argv.Skip(1).ToArray(),
+            workingDirectory,
+            cancellationToken,
+            allowExitOne: false,
+            timeoutMs: timeoutMs);
+        return result.Success
+            ? ToolObservation.Ok(call.Id, call.Tool, "verification command completed", Truncate(result.Output, 24000))
+            : ToolObservation.Fail(call.Id, call.Tool, Truncate(result.Output, 24000));
+    }
+
     private async Task<string> CreateBackupAsync(string path, CancellationToken cancellationToken)
     {
         var backupRoot = Path.Combine(dataDirectory, "backups", DateTimeOffset.UtcNow.ToString("yyyyMMdd"));
@@ -437,6 +582,72 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         }
     }
 
+    private static ToolValidation ValidateOptionalWorkspacePath(string workspace, JsonObject args, string key = "path")
+    {
+        var path = GetString(args, key);
+        if (string.IsNullOrWhiteSpace(path)) return ToolValidation.Pass();
+        try
+        {
+            ResolveWorkspacePath(workspace, path);
+            return ToolValidation.Pass();
+        }
+        catch (Exception ex)
+        {
+            return ToolValidation.Fail(ex.Message);
+        }
+    }
+
+    private static ToolValidation ValidateRunCommand(string workspace, JsonObject args)
+    {
+        var argv = GetStringArray(args, "argv");
+        if (argv is null || argv.Length == 0 || string.IsNullOrWhiteSpace(argv[0]))
+        {
+            return ToolValidation.Fail("run_command requires argv as a non-empty string array.");
+        }
+
+        var executable = Path.GetFileNameWithoutExtension(argv[0]).ToLowerInvariant();
+        if (!AllowedCommands.Contains(executable))
+        {
+            return ToolValidation.Fail($"run_command executable is not allowed for verification: {argv[0]}");
+        }
+
+        var normalized = argv.Skip(1).Select(arg => arg.Trim().ToLowerInvariant()).ToArray();
+        if (normalized.Any(arg => BlockedCommandTokens.Contains(arg)))
+        {
+            return ToolValidation.Fail("run_command contains a blocked mutation, network, or package-management token.");
+        }
+
+        if (executable == "git")
+        {
+            var subcommand = normalized.FirstOrDefault(arg => !arg.StartsWith('-'));
+            if (string.IsNullOrWhiteSpace(subcommand) || !AllowedGitSubcommands.Contains(subcommand))
+            {
+                return ToolValidation.Fail("run_command git usage is limited to status, diff, show, log, branch, rev-parse, and ls-files.");
+            }
+        }
+
+        var cwd = GetString(args, "cwd");
+        if (!string.IsNullOrWhiteSpace(cwd))
+        {
+            try
+            {
+                ResolveWorkspaceDirectory(workspace, cwd);
+            }
+            catch (Exception ex)
+            {
+                return ToolValidation.Fail(ex.Message);
+            }
+        }
+
+        var timeoutMs = GetInt(args, "timeoutMs");
+        if (timeoutMs is not null && (timeoutMs < 1000 || timeoutMs > 600000))
+        {
+            return ToolValidation.Fail("timeoutMs must be between 1000 and 600000.");
+        }
+
+        return ToolValidation.Pass();
+    }
+
     private static string ResolveWorkspacePath(string workspace, string path)
     {
         var root = Path.GetFullPath(workspace);
@@ -449,8 +660,49 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         return full;
     }
 
+    private static string ResolveWorkspaceDirectory(string workspace, string path)
+    {
+        var full = ResolveWorkspacePath(workspace, path);
+        if (!Directory.Exists(full)) throw new InvalidOperationException("cwd does not exist or is not a directory.");
+        return full;
+    }
+
+    private static string? FindGitRoot(string start)
+    {
+        var current = new DirectoryInfo(start);
+        while (current is not null)
+        {
+            if (Directory.Exists(Path.Combine(current.FullName, ".git")) || File.Exists(Path.Combine(current.FullName, ".git")))
+            {
+                return current.FullName;
+            }
+            current = current.Parent;
+        }
+        return null;
+    }
+
     private static string? GetString(JsonObject args, string key) =>
         args.TryGetPropertyValue(key, out var value) ? value?.GetValue<string>() : null;
+
+    private static string[]? GetStringArray(JsonObject args, string key)
+    {
+        if (!args.TryGetPropertyValue(key, out var value) || value is null) return null;
+        if (value is not JsonArray array) return null;
+        var strings = new List<string>();
+        foreach (var item in array)
+        {
+            if (item is null) return null;
+            try
+            {
+                strings.Add(item.GetValue<string>());
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return strings.ToArray();
+    }
 
     private static int? GetInt(JsonObject args, string key)
     {

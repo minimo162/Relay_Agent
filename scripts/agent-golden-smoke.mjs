@@ -13,6 +13,10 @@ const responses = [
   `${JSON.stringify({ action: "final", answer: "検索は rg_files を使いました。" })}\n\nDone.`,
   JSON.stringify({ action: "tool", tool: "write", args: { path: "approval.txt", content: "approved write" } }),
   "承認済みの書き込みを実行しました。",
+  JSON.stringify({ action: "tool", tool: "workspace_status", args: { limit: 100 } }),
+  JSON.stringify({ action: "tool", tool: "diff", args: {} }),
+  JSON.stringify({ action: "tool", tool: "run_command", args: { argv: ["node", "--version"], timeoutMs: 30000 } }),
+  "状態確認と検証を完了しました。",
 ];
 
 await import("node:fs/promises").then(({ writeFile }) => writeFile(join(workspace, "seed.txt"), "部品売上 seed"));
@@ -90,6 +94,14 @@ try {
   if (!searchRun.events.some((event) => event.type === "completed" && event.detail === "検索は rg_files を使いました。")) {
     throw new Error(`search run final answer mismatch: ${JSON.stringify(searchRun)}`);
   }
+  const agui = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(searchRun.runId)}/agui-events?token=${encodeURIComponent(token)}`, {
+    headers: { "X-Relay-Token": token },
+  });
+  if (!agui.ok) throw new Error(`AG-UI stream failed: ${agui.status}`);
+  const aguiText = await agui.text();
+  if (!aguiText.includes("event: ag-ui-event") || !aguiText.includes("RUN_FINISHED")) {
+    throw new Error(`AG-UI stream did not expose mapped events: ${aguiText}`);
+  }
 
   const writeStart = await postRun("approval.txt を作って");
   const writeRun = await waitForRun(writeStart.runId, ["approval_required", "completed", "failed", "cancelled"]);
@@ -113,6 +125,34 @@ try {
   if (approvedRun.status !== "completed") throw new Error(`approved run did not complete: ${JSON.stringify(approvedRun)}`);
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved write output mismatch");
+  }
+
+  const verificationStart = await postRun("ワークスペース状態と差分を確認し、node のバージョンで検証して");
+  const verificationRun = await waitForRun(verificationStart.runId, ["approval_required", "completed", "failed", "cancelled"]);
+  if (verificationRun.status !== "approval_required" || verificationRun.pendingApproval?.toolCall?.tool !== "run_command") {
+    throw new Error(`verification run did not pause before run_command: ${JSON.stringify(verificationRun)}`);
+  }
+  if (!verificationRun.events.some((event) => event.type === "tool_call_started" && event.message === "workspace_status")) {
+    throw new Error(`verification run did not inspect workspace_status: ${JSON.stringify(verificationRun)}`);
+  }
+  if (!verificationRun.events.some((event) => event.type === "tool_call_started" && event.message === "diff")) {
+    throw new Error(`verification run did not inspect diff: ${JSON.stringify(verificationRun)}`);
+  }
+  const verificationApproval = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(verificationRun.runId)}/approve?token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: {
+      "X-Relay-Token": token,
+      "Origin": `http://127.0.0.1:${port}`,
+    },
+  });
+  if (!verificationApproval.ok) throw new Error(`verification approval failed: ${verificationApproval.status} ${await verificationApproval.text()}`);
+  const verificationApprovalStart = await verificationApproval.json();
+  const approvedVerificationRun = await waitForRun(verificationApprovalStart.runId, ["completed", "failed", "cancelled"]);
+  if (approvedVerificationRun.status !== "completed") {
+    throw new Error(`verification run did not complete: ${JSON.stringify(approvedVerificationRun)}`);
+  }
+  if (!approvedVerificationRun.events.some((event) => event.type === "completed" && event.detail === "状態確認と検証を完了しました。")) {
+    throw new Error(`verification run final answer mismatch: ${JSON.stringify(approvedVerificationRun)}`);
   }
 
   console.log("[agent-golden-smoke] ok");

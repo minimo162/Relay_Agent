@@ -2,23 +2,24 @@
 
 ## Status
 
-- Current phase: Relay_Agent has a dedicated Relay desktop implementation for
-  document search, OfficeCLI-backed Office file operations, and bounded code
-  edits. The next planned direction is a unified local business-agent workbench
-  with one composer, generic local tools, and Copilot-led tool choice. The UI
-  shell decision is now made: hard-cut over to a browser-hosted local web
-  workbench served by the Relay sidecar for better Linux/Windows parity. AionUi,
-  OpenCode/OpenWork, and Tauri are not fallback paths in the final product.
-- Repository state: the repo still contains the pre-cutover SolidJS/Tauri
-  workbench, Rust-source IPC contracts, diagnostic/provider coverage,
-  app-local document-search storage, OfficeCLI packaging, and historical
-  AionUi/OpenCode/OpenWork artifacts. These are inventory/deletion inputs for
-  the hard cutover, not target architecture.
+- Current phase: Relay_Agent now uses the unified browser-hosted Workbench and
+  self-contained .NET sidecar as the active product path. The next work is
+  Microsoft Agent Framework backend adoption plus AG-UI-first Workbench
+  hardening: replace the custom runner/event protocol and custom visual flow
+  with Agent Framework sessions/tools/approvals plus AG-UI
+  message/tool/state/interrupt semantics. Relay implements the M365 Copilot CDP
+  provider adapter and local tool governance. File search, Office editing, and
+  coding are high-frequency recipes over one generic tool catalog, not product
+  modes or separate runners. AionUi, OpenCode/OpenWork, Tauri, Python workflow
+  wrappers, and hidden fallback runners are not fallback paths.
+- Repository state: active source lives under `apps/workbench/`,
+  `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
+  docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
+  those references are implementation history and must not steer new work.
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
-  - `docs/CLAW_CODE_ALIGNMENT.md`
 - Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
   task metadata. The current executable plan is `PLANS.md`.
 - Packaging policy: `docs/PACKAGING_POLICY.md` now fixes the active release
@@ -29,15 +30,169 @@
 
 ## Milestone Log
 
+### 2026-05-16 Generic Tool Runtime and AG-UI Stream Slice
+
+Implemented the first executable slice of the generic-agent remediation plan:
+
+- Added `workspace_status`, `diff`, and bounded `run_command` to the sidecar
+  tool catalog and Copilot planner prompts.
+- Kept `run_command` approval-gated and limited to structured argv
+  verification commands with workspace-contained `cwd`, timeout bounds, output
+  caps, a command allowlist, and deny rules for package install, network, and
+  destructive git/file operations.
+- Hardened `rg_search` argv construction by inserting `--` before the search
+  pattern so patterns beginning with `-` cannot become ripgrep options.
+- Added a Workbench-facing `/api/runs/{runId}/agui-events` SSE endpoint that
+  maps Relay run events into AG-UI-compatible lifecycle/tool/approval/error
+  event names while the custom stream remains available during migration.
+- Changed Workbench event dedupe to prefer stable `runId + sequence` identity,
+  preserving repeated but legitimate status/tool messages.
+- Extended the agent golden smoke test to cover `workspace_status`, `diff`,
+  approval-gated `run_command`, and the AG-UI-compatible SSE stream.
+- Added the `Microsoft.Agents.AI` NuGet package as the .NET Agent Framework
+  dependency anchor for the next runtime-adoption step. The current executable
+  slice still uses the transitional runner while the Agent Framework adapter is
+  completed.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.3` because `v0.3.2`
+  already exists as the latest GitHub Release.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj
+pnpm --filter @relay-agent/workbench typecheck
+git diff --check
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+node --check scripts/agent-golden-smoke.mjs
+PATH=/root/.dotnet:$PATH pnpm agent:golden-smoke
+PATH=/root/.dotnet:$PATH pnpm check
+PATH=/root/.dotnet:$PATH pnpm sidecar:publish:linux
+PATH=/root/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=/root/.dotnet:$PATH pnpm sidecar:installer:windows
+tar -C dist/relay-agent-linux-x64 -czf dist/relay-agent-linux-x64.tar.gz .
+PATH=/root/.dotnet:$PATH pnpm release:inventory
+```
+
+Result:
+
+- Debug and Release sidecar builds passed.
+- Workbench TypeScript typecheck passed.
+- `git diff --check` passed.
+- The enhanced agent golden smoke passed and verified search, approval,
+  workspace status, diff, bounded command verification, and AG-UI-compatible
+  stream mapping.
+- Full `pnpm check` passed after the `0.3.3` version bump, covering the
+  hard-cut guard, Workbench typecheck and build, sidecar Release build,
+  sidecar smoke, enhanced agent golden smoke, sidecar security smoke, and
+  release inventory/SBOM generation.
+- Linux and Windows sidecar packages were produced, the Linux tarball was
+  refreshed, and the Windows user-scope NSIS installer was produced at
+  `dist/installer/Relay.Agent-0.3.3-win-x64-setup.exe`.
+
+### 2026-05-16 generic-agent capability plan correction
+
+Reviewed the plan against common agent patterns from Microsoft Agent Framework,
+AG-UI, and established coding-agent tool/permission models, then revised it so
+search, Office editing, and coding remain representative generic-agent recipes
+rather than separate products:
+
+- Expanded the generic tool catalog to include `workspace_status`, `diff`, and
+  bounded `run_command` alongside `rg_files`, `rg_search`, `read`,
+  `officecli`, `edit`, `write`, `ask_user`, and `final`.
+- Defined `run_command` as a structured verification tool, not unrestricted
+  shell: argv only, workspace containment, timeout/output caps, cancellation,
+  and deny rules for destructive, network, package-install, secret-reading, and
+  cross-workspace behavior unless explicitly approved.
+- Added search evidence-state requirements so Relay distinguishes candidates
+  from confirmed evidence and avoids reviving the old dedicated document-search
+  engine.
+- Added Office operation-registry requirements: semantic OfficeCLI operations,
+  backups, AG-UI approval interrupts, post-apply verification, and clear
+  Office-only failure when OfficeCLI is unavailable.
+- Added coding-loop requirements: inspect with generic tools, show diffs,
+  approve mutations, run bounded verification, and let Agent Framework iterate
+  on failures.
+- Added generic recipe requirements for search, Office, coding, and other local
+  tasks so future features add reusable tools instead of new UX modes.
+
+Verification:
+
+- Planning/documentation update only; runtime tests not run.
+
+### 2026-05-16 backend plan correction
+
+Updated the backend plan after deciding that "Agent Framework as reference" is
+too weak for the product direction:
+
+- Microsoft Agent Framework is now the target production backend agent runtime
+  inside the .NET sidecar, not a reference-only design source.
+- Relay will implement M365 Copilot as `RelayCopilotChatClient` or an
+  equivalent Agent Framework-compatible provider adapter over Edge CDP.
+- Agent Framework owns sessions, typed tools, approvals, middleware, streaming,
+  and run lifecycle. Relay owns local tool governance, workspace containment,
+  approvals policy, backups, diffs, support bundles, and packaging.
+- AG-UI remains the Workbench-facing protocol and visual interaction model,
+  preferably through Agent Framework's ASP.NET Core AG-UI integration.
+- Copilot transport is fail-fast. Prompt delivery failure, send failure,
+  response extraction failure, invalid JSON, stale response pickup, and selector
+  drift must fail the run with AG-UI error events and diagnostics instead of
+  routing to fallback planners, old runners, or weaker tools.
+- Python workflow wrappers are not part of the production runtime. They may be
+  used only for comparison unless a future plan explicitly accepts their
+  packaging and verification cost.
+
+Verification:
+
+- Planning/documentation update only; runtime tests not run.
+
+### 2026-05-16 implementation-review plan correction
+
+Updated `PLANS.md` after reviewing the active sidecar/workbench implementation
+against the current repository state:
+
+- Revised the plan again so AG-UI is no longer just a reference. It is now the
+  target Workbench-facing protocol and UX model, including visual interaction
+  patterns for streaming messages, tool activity, approvals, state, errors, and
+  final answers.
+- Revised the backend direction to keep the production runtime on the .NET
+  sidecar while adopting Microsoft Agent Framework as the backend agent
+  runtime. Python AG-UI workflow examples are comparison material only unless a
+  future plan explicitly accepts the packaging/runtime cost.
+- Fixed the target frontend/design stack as React + Vite + TypeScript +
+  Tailwind CSS + shadcn/ui + Radix UI + `@ag-ui/client`, with lucide-react for
+  icons. Next.js and Chakra UI are not defaults for the local Workbench.
+- Added AG-UI full-adoption tasks ahead of the tool-hardening tasks: public run
+  stream replacement, AG-UI client/visual migration, and AG-UI interrupt/resume
+  approval flow.
+- Clarified that the sidecar/workbench cutover is now the active architecture,
+  not a future target, and that older instructions referencing active
+  `apps/desktop`, Tauri, AionUi, or OpenCode/OpenWork substrate are obsolete.
+- Added a current remediation plan so new work does not get lost inside the
+  historical migration checklist.
+- Prioritized P0 fixes for exact `read` extraction on Office/PDF containers,
+  semantic allowlisted OfficeCLI operations, and redacted/explicit support
+  bundle export.
+- Added P1 fixes for ripgrep streaming/capping and `rg_search` argument
+  hardening with `--` before model/user patterns.
+- Added P2 UX trace reliability work so Workbench event dedupe keys on
+  `runId + sequence` instead of display text.
+- Aligned `AGENTS.md` with the active sidecar/workbench architecture and added
+  current tool implementation rules so stale `apps/desktop` / Tauri /
+  OpenCode/OpenWork instructions do not steer future work.
+
+Verification:
+
+- Planning/documentation update only; runtime tests not run.
+
 ### 2026-05-16 plan consistency cleanup
 
 Reviewed the new generic Workbench plan against the current repository shape
 and corrected the active roadmap to avoid ancestor-regressing into the old
 search-specific or desktop-specific architecture:
 
-- Microsoft Agent Framework is now recorded as a reference design, not a
-  required production dependency. The active harness remains the Relay-owned
-  .NET sidecar runner unless a future ADR replaces it.
+- Microsoft Agent Framework is now recorded as the required production backend
+  harness for the next architecture step. The active custom sidecar runner is a
+  transitional implementation to replace, not a fallback to preserve.
 - Search precision work is framed as generic `rg_files` / `rg_search` /
   exact `read` observation quality, not as a revival of the old
   `RelayDocumentSearch*` engine, SQLite/FTS, reflection prompts, or per-mode
