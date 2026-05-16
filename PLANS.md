@@ -170,13 +170,21 @@ The active product target is a **generic Relay Workbench**:
 - Search storage: user-local Relay app data only. Shared folders and searched
   folders must not receive `.aionrs`, index databases, or cache artifacts.
 - Office editing: OfficeCLI-backed inspection and mutation only. Relay creates
-  backups before executing OfficeCLI mutations from the desktop UI.
-- Office tool policy: expose OfficeCLI through a semantic operation registry,
-  not arbitrary argv. Start with `view_outline`, `read_range`,
-  `set_cell_value`, `set_cell_fill`, and `rename_sheet`, then add operations
-  only with tests and approval behavior. Office mutations must produce a backup,
-  approval interrupt, command summary, post-apply verification, and rollback
-  note.
+  backups before executing OfficeCLI mutations from the Workbench.
+- Office tool policy: expose OfficeCLI through a broad capability registry,
+  not arbitrary argv and not a tiny hand-written allowlist. The registry should
+  be generated or validated from pinned OfficeCLI help/schema output where
+  available, then normalized into Relay semantic operation families: discovery
+  and inspection; Excel workbook/sheet/cell/range/table/formula/style/data
+  operations; Word document/text/table/style/review operations; PowerPoint
+  slide/shape/text/media/layout operations; and cross-document export,
+  convert, render, merge, split, batch, refresh, resident open/close, and
+  validation operations when supported by the bundled OfficeCLI version. Copilot
+  selects only a semantic operation plus typed arguments. Relay validates paths,
+  document type, selectors, sheet/range/property values, safety class, and then
+  compiles the operation to OfficeCLI argv. Office mutations must produce a
+  backup, approval interrupt, command summary, post-apply verification, and
+  rollback note.
 - OfficeCLI readiness checks must validate real `view outline --json`
   capability without falsely failing because Relay's own smoke workbook handle
   is still open. Smoke workbooks must be written to a unique app-local path,
@@ -345,12 +353,13 @@ Implementation status on 2026-05-16:
   `RelayCopilotChatClient` `IChatClient` adapter; POST-only support-bundle
   export with default redaction; streaming/capped ripgrep output for
   `rg_files` and `rg_search`; exact `read` extraction for `.docx`, `.xlsx`,
-  `.xlsm`, `.pptx`, and uncompressed text-layer `.pdf`; and golden smoke
-  coverage for those behaviors.
+  `.xlsm`, `.pptx`, and uncompressed text-layer `.pdf`; broad semantic
+  OfficeCLI capability-registry compilation with raw-argv rejection; and golden
+  smoke coverage for those behaviors.
 - Still open for the next slice: full Microsoft Agent Framework runner
   replacement, full React/Tailwind/shadcn/Radix/`@ag-ui/client` Workbench
-  migration, semantic OfficeCLI operation registry, deeper support-bundle
-  redaction fixture coverage, and richer PDF extraction for filtered streams.
+  migration, deeper support-bundle redaction fixture coverage, and richer PDF
+  extraction for filtered streams.
 
 ### P0: AG-UI Full Adoption
 
@@ -416,13 +425,26 @@ Implementation status on 2026-05-16:
      `.xlsx`, `.docx`, `.pptx`, and text-layer `.pdf` fixtures without routing
      back to the deleted document-search engine.
 
-6. Replace open-ended OfficeCLI argv planning with semantic Office operations.
-   - Current risk: Copilot can shape `officecli` arguments too directly.
-   - Target: Copilot may select only Relay-owned operations such as
-     `view_outline`, `set_cell_value`, `set_cell_fill`, and later explicitly
-     added operations. Relay compiles those semantic requests into argv.
-   - Acceptance: mutation operations still create backups and approval cards;
-     invalid operations fail closed with a user-visible error.
+6. Replace open-ended OfficeCLI argv planning with an OfficeCLI capability
+   registry.
+   - Current risk: Copilot can shape raw `officecli` arguments too directly,
+     while a tiny manual allowlist would discard most of OfficeCLI's value.
+   - Target: Relay maintains a broad OfficeCLI capability registry, populated
+     from pinned OfficeCLI docs/help/schema where possible and normalized into
+     typed semantic operations. The registry should cover discovery,
+     inspection, validation, Excel workbook/sheet/cell/range/table/formula/
+     style/data operations, Word document/text/table/style/review operations,
+     PowerPoint slide/shape/text/media/layout operations, and cross-document
+     export/convert/render/merge/split/batch/refresh/resident operations when
+     the bundled OfficeCLI version supports them. Copilot may select only
+     registry operations and typed args; Relay owns path, file type, selector,
+     sheet/range/property validation, safety classification, and argv
+     compilation.
+   - Acceptance: Office tasks can use the broad OfficeCLI surface without
+     exposing raw argv. Mutations create backups and approval cards, run
+     post-apply verification, and fail closed on unsupported command families,
+     ambiguous targets, unsafe paths, invalid schemas, or OfficeCLI version
+     drift.
 
 7. Make support bundle export explicit and redacted by default.
    - Current risk: a simple support-bundle endpoint can package run ledgers and
@@ -816,11 +838,16 @@ Agent Framework + Relay tool model is capable enough for real work.
     confirmed evidence from candidates and ask for follow-up search/read when
     the result set is skewed or weak.
 - Office file editing recipe:
-  - Copilot inspects the target Office file through `read` or semantic
-    `officecli` view operations.
-  - Relay compiles semantic Office operations to OfficeCLI argv, creates a
-    backup, emits an AG-UI approval interrupt, applies only after approval, and
-    verifies with a post-apply view/read.
+  - Copilot inspects the target Office file through `read` or registry-backed
+    OfficeCLI inspection operations.
+  - Relay compiles typed Office capability-registry operations to OfficeCLI
+    argv, creates a backup, emits an AG-UI approval interrupt, applies only
+    after approval, and verifies with a post-apply OfficeCLI view/read/render
+    where available.
+  - The Office registry must be broad enough to use OfficeCLI's agent-facing
+    surface for Word, Excel, PowerPoint, and cross-document workflows, while
+    still fail-closing on unknown command families, unsupported properties,
+    ambiguous targets, unsafe paths, or OfficeCLI version drift.
   - Invalid sheet names, ambiguous ranges, missing OfficeCLI, and smoke failures
     fail the Office task clearly without degrading unrelated agent tasks.
 - Coding recipe:
@@ -1102,6 +1129,9 @@ same Workbench flow can drive a signed-in M365 Copilot session.
   built-in search, SharePoint search, or Copilot's own browsing.
 - Office workflows must execute through OfficeCLI, not Microsoft 365 built-in
   editing or ad hoc shell scripts.
+- Relay may introspect OfficeCLI help/schema output to keep the semantic
+  operation registry aligned with the bundled OfficeCLI version, but Copilot
+  must never emit or directly execute raw OfficeCLI argv.
 - OfficeCLI availability must not be marked failed when the failure is caused
   by Relay's own smoke-test file locking. File-sharing violations during smoke
   checks are release blockers until the smoke harness is corrected.

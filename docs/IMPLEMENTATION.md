@@ -30,6 +30,94 @@
 
 ## Milestone Log
 
+### 2026-05-16 OfficeCLI Capability Registry Implementation
+
+Implemented the OfficeCLI execution side of the revised plan:
+
+- Replaced the previous `officecli` tool behavior that treated `operation` and
+  `command` as near-raw argv fragments with a Relay-owned semantic capability
+  registry.
+- Copilot can now select semantic OfficeCLI operations such as `capabilities`,
+  `help`, `view`, `get`, `query`, `validate`, `dump`, `raw`, `create`, `set`,
+  `add`, `remove`, `move`, `copy`, `refresh`, `open`, `close`, `watch`,
+  `unwatch`, and `goto`.
+- Relay rejects `argv`, `args`, and `commandArgs` in OfficeCLI tool calls.
+  Copilot must provide typed fields such as `filePath`, `operation`, `target`,
+  `selector`, `mode`, `elementType`, `properties`, `format`, `verb`, and
+  `element`.
+- Relay validates workspace containment, supported Office extensions, target
+  paths, selectors, view modes, help topics, property names, property values,
+  timeouts, and watch ports before approval or execution.
+- Read-only OfficeCLI operations can run without approval. Mutating or
+  side-effecting operations still pause for approval, create a backup when an
+  existing file may be changed, and run a post-apply `view outline --json`
+  verification where appropriate.
+- Added `scripts/officecli-registry-smoke.mjs` and wired it into `pnpm check`.
+  The smoke confirms that a semantic Excel `set` operation reaches approval
+  without creating a backup and that raw OfficeCLI argv is rejected before
+  approval.
+
+Verification commands:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk pnpm agent:officecli-registry-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk pnpm check
+```
+
+Results:
+
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release` -
+  passed.
+- `pnpm agent:officecli-registry-smoke` - passed.
+- `pnpm check` - passed. Covered hard-cut guard, Workbench typecheck/build,
+  sidecar Release build, sidecar smoke, golden agent smoke, ripgrep streaming,
+  Office/PDF read extraction, OfficeCLI registry smoke, security smoke, and
+  release inventory generation.
+
+### 2026-05-16 OfficeCLI Capability Registry Plan Revision
+
+Revised the Office plan after checking the upstream OfficeCLI repository and
+SKILL.md:
+
+- OfficeCLI is designed as an AI-agent-facing Office substrate, not just a
+  small Excel cell editor. The upstream docs describe deterministic `--json`
+  output, path-based document addressing, built-in help/schema entry points,
+  resident mode, render/watch workflows, and broad Word, Excel, PowerPoint,
+  and cross-document commands.
+- Updated `PLANS.md` so Relay will use a broad OfficeCLI capability registry
+  instead of either raw argv from Copilot or a tiny fixed allowlist.
+- The registry should be generated or validated from pinned OfficeCLI
+  help/schema output where available, then normalized into Relay semantic
+  operation families:
+  - discovery, inspection, validation, and issue views;
+  - Excel workbook, sheet, cell, range, table, formula, style, and data
+    operations;
+  - Word document, paragraph/text, table, style, review/comment, section, and
+    field operations;
+  - PowerPoint slide, shape, text, media, chart, table, notes, and layout
+    operations;
+  - cross-document export, convert, render, merge, split, batch, refresh,
+    resident open/close, and template operations when supported by the bundled
+    OfficeCLI version.
+- Copilot still must not emit raw OfficeCLI argv. It selects a registry
+  operation and typed arguments only. Relay validates the file path, document
+  type, selector, sheet/range/property values, safety class, and OfficeCLI
+  version before compiling argv.
+- Mutations still require backup creation, approval-card rendering,
+  post-apply verification, and clear fail-closed errors for unsupported
+  command families, ambiguous targets, unsafe paths, invalid schemas, or
+  OfficeCLI version drift.
+
+Research sources:
+
+- https://github.com/iOfficeAI/OfficeCLI
+- https://github.com/iOfficeAI/OfficeCLI/blob/main/SKILL.md
+
+Verification for this plan-only change:
+
+- `git diff --check` - passed.
+
 ### 2026-05-16 AG-UI Stream Consumption and Copilot ChatClient Adapter
 
 Continued the remediation plan without cutting a release:

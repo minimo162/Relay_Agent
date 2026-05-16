@@ -167,6 +167,10 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "- Use rg_files or rg_search before read unless the exact file path is already known.",
             "- Use read for exact files only. read can extract bounded text from txt/md/csv/code plus docx/xlsx/xlsm/pptx/text-layer pdf.",
             "- Use officecli for Office inspection or mutation. Mutations require approval.",
+            "- officecli args must be semantic, never raw argv. Shape: { filePath, operation, target?, mode?, selector?, elementType?, properties?, depth?, format?, verb?, element? }.",
+            "- Useful officecli operations: capabilities, help, view, get, query, validate, dump, create, set, add, remove, move, copy, refresh, open, close, watch, unwatch, goto.",
+            "- For Excel cell formatting use operation=\"set\", target=\"/Sheet1/A1\", properties={\"fill\":\"FF0000\"}.",
+            "- For Office help/schema use operation=\"help\" with format/verb/element instead of guessing property names.",
             "- Use edit/write only for workspace-scoped file changes. They require approval.",
             "- Use workspace_status before code changes when repository state matters.",
             "- Use diff to review local changes before summarizing a code or text edit.",
@@ -264,7 +268,7 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
     public bool RequiresApproval(RelayToolCall call) =>
         call.Tool == "officecli"
-            ? !string.Equals(GetString(call.Args, "operation") ?? "view", "view", StringComparison.OrdinalIgnoreCase)
+            ? OfficeCliCapabilityRegistry.RequiresApproval(call.Args)
             : call.Tool == "run_command"
                 ? true
             : WriteTools.Contains(call.Tool);
@@ -284,7 +288,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
                 ? ToolValidation.Fail("rg_search requires pattern.")
                 : ToolValidation.Pass(),
             "read" => ValidateWorkspacePath(workspace, call.Args, mustExist: true),
-            "officecli" => ValidateWorkspacePath(workspace, call.Args, mustExist: true, key: "filePath"),
+            "officecli" => OfficeCliCapabilityRegistry.TryCompile(workspace, call.Args, out _, out var officeError)
+                ? ToolValidation.Pass()
+                : ToolValidation.Fail(officeError ?? "Invalid officecli operation."),
             "edit" => ValidateWorkspacePath(workspace, call.Args, mustExist: true),
             "write" => ValidateWorkspacePath(workspace, call.Args, mustExist: false),
             "workspace_status" => ToolValidation.Pass(),
@@ -301,7 +307,7 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
             "rg_files" => $"files contains={GetString(call.Args, "contains") ?? "*"}",
             "rg_search" => $"pattern={GetString(call.Args, "pattern")}",
             "read" => $"path={GetString(call.Args, "path")}",
-            "officecli" => $"file={GetString(call.Args, "filePath")}, operation={GetString(call.Args, "operation") ?? GetString(call.Args, "command") ?? "inspect"}",
+            "officecli" => OfficeCliCapabilityRegistry.Describe(call.Args),
             "edit" => $"path={GetString(call.Args, "path")}",
             "write" => $"path={GetString(call.Args, "path")}",
             "workspace_status" => "inspect workspace and git status",
@@ -440,27 +446,67 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
     private async Task<ToolObservation> OfficeCliAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
+        if (!OfficeCliCapabilityRegistry.TryCompile(workspace, call.Args, out var plan, out var planError) || plan is null)
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, planError ?? "Invalid officecli operation.");
+        }
+
+        if (plan.LocalResult is not null)
+        {
+            return ToolObservation.Ok(call.Id, call.Tool, plan.Summary, plan.LocalResult);
+        }
+
         var officeCli = toolResolver.ResolveOfficeCli();
         if (!officeCli.Available || string.IsNullOrWhiteSpace(officeCli.ExecutablePath))
         {
             return ToolObservation.Fail(call.Id, call.Tool, $"OfficeCLI is not available: {officeCli.Detail}");
         }
 
-        var filePath = ResolveWorkspacePath(workspace, GetString(call.Args, "filePath") ?? "");
-        var operation = GetString(call.Args, "operation") ?? "view";
-        var command = GetString(call.Args, "command") ?? "outline";
         string? backupPath = null;
-        if (!string.Equals(operation, "view", StringComparison.OrdinalIgnoreCase))
+        if (plan.MutatesExistingFile && plan.FilePath is not null && File.Exists(plan.FilePath))
         {
-            backupPath = await CreateBackupAsync(filePath, cancellationToken);
+            backupPath = await CreateBackupAsync(plan.FilePath, cancellationToken);
         }
-        var args = operation == "view"
-            ? new List<string> { "view", filePath, command, "--json" }
-            : [operation, filePath, command, "--json"];
-        var result = await RunProcessAsync(officeCli.ExecutablePath, args, workspace, cancellationToken);
-        return result.Success
-            ? ToolObservation.Ok(call.Id, call.Tool, backupPath is null ? "OfficeCLI completed" : $"OfficeCLI completed; backup={backupPath}", Truncate(result.Output, 12000))
-            : ToolObservation.Fail(call.Id, call.Tool, result.Output);
+
+        var result = await RelayProcess.RunAsync(
+            officeCli.ExecutablePath,
+            plan.Argv,
+            workspace,
+            cancellationToken,
+            timeoutMs: plan.TimeoutMs);
+        if (!result.Success)
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, result.Output);
+        }
+
+        ProcessResult? verification = null;
+        if (plan.VerifyAfter && plan.FilePath is not null && File.Exists(plan.FilePath))
+        {
+            verification = await RelayProcess.RunAsync(
+                officeCli.ExecutablePath,
+                ["view", plan.FilePath, "outline", "--json"],
+                workspace,
+                cancellationToken,
+                timeoutMs: 20000);
+            if (!verification.Success)
+            {
+                return ToolObservation.Fail(call.Id, call.Tool, $"OfficeCLI operation succeeded but verification failed: {verification.Output}");
+            }
+        }
+
+        var data = new
+        {
+            operation = plan.Operation,
+            argv = plan.Argv,
+            output = Truncate(result.Output, 12000),
+            backupPath,
+            verification = verification is null ? null : Truncate(verification.Output, 12000),
+        };
+        return ToolObservation.Ok(
+            call.Id,
+            call.Tool,
+            backupPath is null ? plan.Summary : $"{plan.Summary}; backup={backupPath}",
+            data);
     }
 
     private async Task<ToolObservation> EditAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -572,6 +618,606 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         return result.Success
             ? ToolObservation.Ok(call.Id, call.Tool, "verification command completed", Truncate(result.Output, 24000))
             : ToolObservation.Fail(call.Id, call.Tool, Truncate(result.Output, 24000));
+    }
+
+    private sealed record OfficeCliOperationPlan(
+        string Operation,
+        IReadOnlyList<string> Argv,
+        string? FilePath,
+        bool RequiresApproval,
+        bool MutatesExistingFile,
+        bool VerifyAfter,
+        int TimeoutMs,
+        string Summary,
+        object? LocalResult = null);
+
+    private sealed record OfficeCliCapability(
+        string Operation,
+        string Safety,
+        string Summary,
+        string[] RequiredArgs,
+        string[] OptionalArgs);
+
+    private static class OfficeCliCapabilityRegistry
+    {
+        private static readonly HashSet<string> Formats = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "docx",
+            "xlsx",
+            "xlsm",
+            "pptx",
+            "word",
+            "excel",
+            "ppt",
+            "powerpoint",
+        };
+
+        private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".docx",
+            ".xlsx",
+            ".xlsm",
+            ".pptx",
+            ".csv",
+        };
+
+        private static readonly HashSet<string> ViewModes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "outline",
+            "stats",
+            "issues",
+            "text",
+            "annotated",
+            "html",
+            "screenshot",
+        };
+
+        private static readonly HashSet<string> ReadOnlyOperations = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "capabilities",
+            "help",
+            "view",
+            "get",
+            "query",
+            "validate",
+            "dump",
+            "raw",
+            "open",
+        };
+
+        private static readonly Dictionary<string, OfficeCliCapability> Capabilities = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["capabilities"] = new("capabilities", "read", "Return Relay's OfficeCLI semantic capability registry.", [], []),
+            ["help"] = new("help", "read", "Ask OfficeCLI for command, element, or property schema help.", [], ["format", "verb", "element", "property"]),
+            ["view"] = new("view", "read", "Inspect a document using OfficeCLI view modes.", ["filePath"], ["mode"]),
+            ["get"] = new("get", "read", "Read one document node/path and optional children.", ["filePath", "target"], ["depth"]),
+            ["query"] = new("query", "read", "Query document nodes with an OfficeCLI selector.", ["filePath", "selector"], []),
+            ["validate"] = new("validate", "read", "Run OfficeCLI validation for a document.", ["filePath"], []),
+            ["dump"] = new("dump", "read", "Serialize a supported document into replayable structured JSON.", ["filePath"], []),
+            ["raw"] = new("raw", "read", "Read raw Office document XML for a path/part.", ["filePath", "target"], []),
+            ["create"] = new("create", "write", "Create a new Office document.", ["filePath"], []),
+            ["set"] = new("set", "write", "Set properties on a document path, cell, range, shape, paragraph, or other OfficeCLI node.", ["filePath", "target", "properties"], []),
+            ["add"] = new("add", "write", "Add an OfficeCLI element below a target path.", ["filePath", "target", "elementType"], ["properties", "after", "before"]),
+            ["remove"] = new("remove", "write", "Remove a document element at a target path.", ["filePath", "target"], []),
+            ["move"] = new("move", "write", "Move a document element from source to destination.", ["filePath", "source", "destination"], []),
+            ["copy"] = new("copy", "write", "Copy a document element from source to destination.", ["filePath", "source", "destination"], []),
+            ["refresh"] = new("refresh", "write", "Refresh calculated document state such as fields or workbook calculations when OfficeCLI supports it.", ["filePath"], []),
+            ["close"] = new("close", "write", "Close a resident OfficeCLI session and save/release the file.", ["filePath"], []),
+            ["watch"] = new("watch", "side_effect", "Start OfficeCLI live preview for a document.", ["filePath"], ["port"]),
+            ["unwatch"] = new("unwatch", "side_effect", "Stop OfficeCLI live preview for a document.", ["filePath"], []),
+            ["goto"] = new("goto", "side_effect", "Scroll a watched preview to a target path.", ["filePath", "target"], []),
+        };
+
+        public static bool RequiresApproval(JsonObject args)
+        {
+            if (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs"))
+            {
+                return true;
+            }
+
+            var operation = NormalizeOperation(GetString(args, "operation") ?? GetString(args, "command") ?? "view");
+            return !ReadOnlyOperations.Contains(operation);
+        }
+
+        public static string Describe(JsonObject args)
+        {
+            var operation = NormalizeOperation(GetString(args, "operation") ?? GetString(args, "command") ?? "view");
+            var target = GetString(args, "target")
+                ?? GetString(args, "selector")
+                ?? GetString(args, "mode")
+                ?? GetString(args, "format")
+                ?? "";
+            var file = GetString(args, "filePath") ?? "";
+            return $"file={file}, operation={operation}{(string.IsNullOrWhiteSpace(target) ? "" : $", target={target}")}";
+        }
+
+        public static bool TryCompile(
+            string workspace,
+            JsonObject args,
+            out OfficeCliOperationPlan? plan,
+            out string? error)
+        {
+            plan = null;
+            error = null;
+
+            if (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs"))
+            {
+                error = "officecli raw argv is not allowed. Use semantic operation fields.";
+                return false;
+            }
+
+            var operation = NormalizeOperation(GetString(args, "operation") ?? GetString(args, "command") ?? "view");
+            if (!Capabilities.TryGetValue(operation, out _))
+            {
+                error = $"Unsupported officecli operation: {operation}. Use operation=capabilities to inspect the supported registry.";
+                return false;
+            }
+
+            if (operation == "capabilities")
+            {
+                var registry = Capabilities.Values
+                    .Select(capability => new
+                    {
+                        operation = capability.Operation,
+                        safety = capability.Safety,
+                        summary = capability.Summary,
+                        requiredArgs = capability.RequiredArgs,
+                        optionalArgs = capability.OptionalArgs,
+                    })
+                    .ToArray();
+                plan = new OfficeCliOperationPlan(
+                    operation,
+                    [],
+                    null,
+                    RequiresApproval: false,
+                    MutatesExistingFile: false,
+                    VerifyAfter: false,
+                    TimeoutMs: 1000,
+                    Summary: "OfficeCLI capability registry",
+                    LocalResult: registry);
+                return true;
+            }
+
+            if (operation == "help")
+            {
+                if (!TryBuildHelpArgs(args, out var helpArgs, out error)) return false;
+                plan = new OfficeCliOperationPlan(
+                    operation,
+                    helpArgs,
+                    null,
+                    RequiresApproval: false,
+                    MutatesExistingFile: false,
+                    VerifyAfter: false,
+                    TimeoutMs: 15000,
+                    Summary: "OfficeCLI help/schema requested");
+                return true;
+            }
+
+            var filePathInput = GetString(args, "filePath");
+            if (string.IsNullOrWhiteSpace(filePathInput))
+            {
+                error = "officecli requires filePath for this operation.";
+                return false;
+            }
+
+            string filePath;
+            try
+            {
+                filePath = ResolveWorkspacePath(workspace, filePathInput);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            var extension = Path.GetExtension(filePath);
+            if (!SupportedExtensions.Contains(extension))
+            {
+                error = $"Unsupported OfficeCLI file extension: {extension}. Supported: {string.Join(", ", SupportedExtensions)}.";
+                return false;
+            }
+
+            if (operation == "create")
+            {
+                if (File.Exists(filePath))
+                {
+                    error = "officecli create target already exists.";
+                    return false;
+                }
+            }
+            else if (!File.Exists(filePath))
+            {
+                error = "officecli filePath does not exist.";
+                return false;
+            }
+
+            if (!TryBuildOfficeArgs(operation, filePath, args, out var argv, out error)) return false;
+
+            var requiresApproval = !ReadOnlyOperations.Contains(operation);
+            var mutatesExistingFile = requiresApproval && operation != "create" && File.Exists(filePath);
+            plan = new OfficeCliOperationPlan(
+                operation,
+                argv,
+                filePath,
+                requiresApproval,
+                mutatesExistingFile,
+                VerifyAfter: requiresApproval && operation is not ("watch" or "unwatch" or "goto"),
+                TimeoutMs: Math.Clamp(GetInt(args, "timeoutMs") ?? 120000, 1000, 600000),
+                Summary: $"OfficeCLI {operation} prepared");
+            return true;
+        }
+
+        private static string NormalizeOperation(string operation)
+        {
+            var normalized = operation.Trim().ToLowerInvariant().Replace('-', '_');
+            return normalized switch
+            {
+                "schema" or "help_schema" => "help",
+                "inspect" or "view_outline" => "view",
+                "read_node" => "get",
+                "find_nodes" => "query",
+                "set_cell_value" or "set_cell_fill" or "rename_sheet" => "set",
+                "read_range" => "get",
+                "delete" => "remove",
+                _ => normalized.Replace('_', '-'),
+            };
+        }
+
+        private static bool TryBuildHelpArgs(JsonObject args, out List<string> argv, out string? error)
+        {
+            argv = ["help"];
+            error = null;
+
+            var format = NormalizeFormat(GetString(args, "format"));
+            var verb = GetString(args, "verb");
+            var element = GetString(args, "element") ?? GetString(args, "elementType");
+            var property = GetString(args, "property");
+
+            if (format is not null)
+            {
+                if (!Formats.Contains(format))
+                {
+                    error = $"Unsupported OfficeCLI help format: {format}.";
+                    return false;
+                }
+                argv.Add(format);
+            }
+
+            if (!string.IsNullOrWhiteSpace(verb))
+            {
+                if (!IsSafeHelpToken(verb))
+                {
+                    error = "OfficeCLI help verb contains unsupported characters.";
+                    return false;
+                }
+                argv.Add(verb.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(element))
+            {
+                if (!IsSafeHelpToken(element))
+                {
+                    error = "OfficeCLI help element contains unsupported characters.";
+                    return false;
+                }
+                argv.Add(element.Trim());
+            }
+
+            if (!string.IsNullOrWhiteSpace(property))
+            {
+                if (string.IsNullOrWhiteSpace(element) || !IsSafeHelpToken(property))
+                {
+                    error = "OfficeCLI help property requires a safe element and property.";
+                    return false;
+                }
+                argv[^1] = $"{argv[^1]}.{property.Trim()}";
+            }
+
+            argv.Add("--json");
+            return true;
+        }
+
+        private static bool TryBuildOfficeArgs(
+            string operation,
+            string filePath,
+            JsonObject args,
+            out List<string> argv,
+            out string? error)
+        {
+            argv = [];
+            error = null;
+
+            switch (operation)
+            {
+                case "view":
+                {
+                    var mode = GetString(args, "mode") ?? GetString(args, "command") ?? "outline";
+                    if (!ViewModes.Contains(mode))
+                    {
+                        error = $"Unsupported OfficeCLI view mode: {mode}.";
+                        return false;
+                    }
+                    argv.AddRange(["view", filePath, mode, "--json"]);
+                    return true;
+                }
+                case "get":
+                {
+                    var target = GetTarget(args, required: true);
+                    if (!ValidateTarget(target, allowSelected: true, out error)) return false;
+                    argv.AddRange(["get", filePath, target!, "--json"]);
+                    var depth = GetInt(args, "depth");
+                    if (depth is not null)
+                    {
+                        argv.AddRange(["--depth", Math.Clamp(depth.Value, 0, 20).ToString()]);
+                    }
+                    return true;
+                }
+                case "query":
+                {
+                    var selector = GetString(args, "selector") ?? GetTarget(args, required: true);
+                    if (!ValidateSelector(selector, out error)) return false;
+                    argv.AddRange(["query", filePath, selector!, "--json"]);
+                    return true;
+                }
+                case "validate":
+                case "dump":
+                case "refresh":
+                case "open":
+                case "close":
+                case "watch":
+                case "unwatch":
+                {
+                    argv.AddRange([operation, filePath, "--json"]);
+                    var port = GetInt(args, "port");
+                    if (operation == "watch" && port is not null)
+                    {
+                        if (port < 1024 || port > 65535)
+                        {
+                            error = "OfficeCLI watch port must be between 1024 and 65535.";
+                            return false;
+                        }
+                        argv.AddRange(["--port", port.Value.ToString()]);
+                    }
+                    return true;
+                }
+                case "raw":
+                {
+                    var target = GetTarget(args, required: true);
+                    if (!ValidateTarget(target, allowSelected: false, out error)) return false;
+                    argv.AddRange(["raw", filePath, target!, "--json"]);
+                    return true;
+                }
+                case "create":
+                    argv.AddRange(["create", filePath, "--json"]);
+                    return true;
+                case "set":
+                {
+                    var target = GetTarget(args, required: true);
+                    if (!ValidateTarget(target, allowSelected: false, out error)) return false;
+                    if (!TryBuildPropertyArgs(args, out var propertyArgs, out error)) return false;
+                    argv.AddRange(["set", filePath, target!]);
+                    argv.AddRange(propertyArgs);
+                    argv.Add("--json");
+                    return true;
+                }
+                case "add":
+                {
+                    var target = GetTarget(args, required: true);
+                    if (!ValidateTarget(target, allowSelected: false, out error)) return false;
+                    var elementType = GetString(args, "elementType") ?? GetString(args, "type");
+                    if (!IsSafeHelpToken(elementType))
+                    {
+                        error = "officecli add requires a safe elementType.";
+                        return false;
+                    }
+                    argv.AddRange(["add", filePath, target!, "--type", elementType!.Trim()]);
+                    AddPlacement(argv, args, "after");
+                    AddPlacement(argv, args, "before");
+                    if (!TryBuildPropertyArgs(args, out var propertyArgs, out error, allowEmpty: true)) return false;
+                    argv.AddRange(propertyArgs);
+                    argv.Add("--json");
+                    return true;
+                }
+                case "remove":
+                {
+                    var target = GetTarget(args, required: true);
+                    if (!ValidateTarget(target, allowSelected: false, out error)) return false;
+                    argv.AddRange(["remove", filePath, target!, "--json"]);
+                    return true;
+                }
+                case "move":
+                case "copy":
+                {
+                    var source = GetString(args, "source") ?? GetString(args, "from");
+                    var destination = GetString(args, "destination") ?? GetString(args, "to");
+                    if (!ValidateTarget(source, allowSelected: false, out error)) return false;
+                    if (!ValidateTarget(destination, allowSelected: false, out error)) return false;
+                    argv.AddRange([operation, filePath, source!, destination!, "--json"]);
+                    return true;
+                }
+                case "goto":
+                {
+                    var target = GetTarget(args, required: true);
+                    if (!ValidateTarget(target, allowSelected: false, out error)) return false;
+                    argv.AddRange(["goto", filePath, target!, "--json"]);
+                    return true;
+                }
+                default:
+                    error = $"Unsupported OfficeCLI operation: {operation}.";
+                    return false;
+            }
+        }
+
+        private static string? NormalizeFormat(string? format)
+        {
+            if (string.IsNullOrWhiteSpace(format)) return null;
+            var normalized = format.Trim().ToLowerInvariant();
+            return normalized switch
+            {
+                "word" => "docx",
+                "excel" => "xlsx",
+                "ppt" or "powerpoint" => "pptx",
+                _ => normalized,
+            };
+        }
+
+        private static string? GetTarget(JsonObject args, bool required)
+        {
+            var target = GetString(args, "target")
+                ?? GetString(args, "pathInDocument")
+                ?? GetString(args, "range");
+            var sheet = GetString(args, "sheet") ?? GetString(args, "sheetName");
+            if (!string.IsNullOrWhiteSpace(sheet) && !string.IsNullOrWhiteSpace(target) && !target.StartsWith('/'))
+            {
+                target = $"/{sheet}/{target}";
+            }
+            else if (string.IsNullOrWhiteSpace(target) && !string.IsNullOrWhiteSpace(sheet))
+            {
+                var cell = GetString(args, "cell") ?? GetString(args, "address");
+                target = string.IsNullOrWhiteSpace(cell) ? $"/{sheet}" : $"/{sheet}/{cell}";
+            }
+            if (string.IsNullOrWhiteSpace(target) && !required) return null;
+            return target;
+        }
+
+        private static bool ValidateTarget(string? target, bool allowSelected, out string? error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                error = "officecli target is required.";
+                return false;
+            }
+            if (target.IndexOf('\0') >= 0 || target.Length > 600)
+            {
+                error = "officecli target is invalid.";
+                return false;
+            }
+            if (allowSelected && string.Equals(target, "selected", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (!target.StartsWith('/'))
+            {
+                error = "officecli target must be a path starting with `/`.";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool ValidateSelector(string? selector, out string? error)
+        {
+            error = null;
+            if (string.IsNullOrWhiteSpace(selector))
+            {
+                error = "officecli selector is required.";
+                return false;
+            }
+            if (selector.IndexOf('\0') >= 0 || selector.Length > 600)
+            {
+                error = "officecli selector is invalid.";
+                return false;
+            }
+            return true;
+        }
+
+        private static void AddPlacement(List<string> argv, JsonObject args, string key)
+        {
+            var value = GetString(args, key);
+            if (string.IsNullOrWhiteSpace(value)) return;
+            argv.Add($"--{key}");
+            argv.Add(value);
+        }
+
+        private static bool TryBuildPropertyArgs(
+            JsonObject args,
+            out List<string> argv,
+            out string? error,
+            bool allowEmpty = false)
+        {
+            argv = [];
+            error = null;
+
+            var properties = args["properties"] as JsonObject ?? args["props"] as JsonObject;
+            if (properties is null)
+            {
+                var singleKey = GetString(args, "property");
+                if (!string.IsNullOrWhiteSpace(singleKey))
+                {
+                    properties = new JsonObject { [singleKey] = JsonValue.Create(GetScalarString(args["value"])) };
+                }
+                else if (args.TryGetPropertyValue("fill", out var fill) || args.TryGetPropertyValue("color", out fill))
+                {
+                    properties = new JsonObject { ["fill"] = JsonValue.Create(GetScalarString(fill)) };
+                }
+                else if (args.TryGetPropertyValue("newName", out var newName))
+                {
+                    properties = new JsonObject { ["name"] = JsonValue.Create(GetScalarString(newName)) };
+                }
+                else if (args.TryGetPropertyValue("value", out var value))
+                {
+                    properties = new JsonObject { ["value"] = JsonValue.Create(GetScalarString(value)) };
+                }
+                else if (args.TryGetPropertyValue("formula", out var formula))
+                {
+                    var formulaText = GetScalarString(formula);
+                    if (!string.IsNullOrWhiteSpace(formulaText) && !formulaText.StartsWith('='))
+                    {
+                        formulaText = $"={formulaText}";
+                    }
+                    properties = new JsonObject { ["value"] = JsonValue.Create(formulaText) };
+                }
+            }
+
+            if (properties is null || properties.Count == 0)
+            {
+                if (allowEmpty) return true;
+                error = "officecli properties are required.";
+                return false;
+            }
+
+            foreach (var (key, value) in properties)
+            {
+                if (!IsSafePropertyName(key))
+                {
+                    error = $"Unsupported OfficeCLI property name: {key}";
+                    return false;
+                }
+                var scalar = GetScalarString(value);
+                if (scalar is null || scalar.IndexOf('\0') >= 0 || scalar.Length > 4000)
+                {
+                    error = $"Unsupported OfficeCLI property value for {key}.";
+                    return false;
+                }
+                argv.Add("--prop");
+                argv.Add($"{key}={scalar.Replace("\r\n", "\\n").Replace("\n", "\\n").Replace("\r", "\\n")}");
+            }
+
+            return true;
+        }
+
+        private static bool IsSafeHelpToken(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 80) return false;
+            foreach (var c in value)
+            {
+                if (char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/') continue;
+                return false;
+            }
+            return true;
+        }
+
+        private static bool IsSafePropertyName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 120) return false;
+            foreach (var c in value)
+            {
+                if (char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or ':' or '@') continue;
+                return false;
+            }
+            return true;
+        }
     }
 
     private async Task<string> CreateBackupAsync(string path, CancellationToken cancellationToken)
@@ -747,6 +1393,24 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         {
             return null;
         }
+    }
+
+    private static string? GetScalarString(JsonNode? value)
+    {
+        if (value is null) return null;
+        if (value is JsonArray or JsonObject) return null;
+        try
+        {
+            if (value.GetValueKind() == JsonValueKind.String) return value.GetValue<string>();
+            if (value.GetValueKind() == JsonValueKind.True) return "true";
+            if (value.GetValueKind() == JsonValueKind.False) return "false";
+            if (value.GetValueKind() == JsonValueKind.Number) return value.ToJsonString();
+        }
+        catch
+        {
+            return null;
+        }
+        return null;
     }
 
     private static int CountOccurrences(string source, string value)
