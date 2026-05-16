@@ -379,8 +379,123 @@ Implementation status on 2026-05-16:
 - The Workbench AG-UI compatibility stream now emits `REASONING_*` rather than
   deprecated `THINKING_*`, and Workbench event mapping no longer depends on the
   Relay-only `relayType` field.
-- Still open for the next slice: no remaining implementation task is currently
-  queued in this plan.
+- Next scheduled slice: replace the remaining approval-capable custom run
+  stream with official Agent Framework AG-UI client-tool semantics. The
+  2026-05-16 Microsoft Agent Framework AG-UI review found that the current
+  .NET packages do not expose a `UseAGUIClientTool` helper; the supported path
+  is therefore explicit Agent Framework middleware that converts
+  `ToolApprovalRequestContent` into an AG-UI client `request_approval` tool
+  call, then converts the AG-UI tool result back into
+  `ToolApprovalResponseContent` before resuming the same Agent Framework turn.
+
+#### Next Task: Agent Framework + AG-UI Native Approval Cutover
+
+Research sources checked on 2026-05-16:
+
+- Microsoft Agent Framework AG-UI human-in-the-loop documentation:
+  <https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop>
+- AG-UI event protocol documentation:
+  <https://docs.ag-ui.com/concepts/events>
+- AG-UI client/server communication documentation:
+  <https://docs.ag-ui.com/concepts/client-server-communication>
+
+Goal: make Microsoft Agent Framework and AG-UI own the run protocol, tool-call
+projection, user confirmation, resume, streaming lifecycle, and shared state as
+much as their current .NET APIs allow. Relay should keep only the M365 Copilot
+CDP `IChatClient` adapter, small local tool implementations, validation and
+backup policy, diagnostics, packaging, and Workbench visual composition.
+
+Implementation plan:
+
+Selected next task to execute:
+
+- **AFAGUI01: Prove Agent Framework approval projection over AG-UI.** This is
+  the first blocker for the cutover because it verifies that `MapAGUI` plus a
+  narrow Agent Framework middleware can carry a mutating local function to the
+  Workbench for approve/reject without relying on Relay's custom run stream.
+
+1. Add a proof slice for AG-UI client-tool approvals.
+   - Confirm the current Agent Framework AG-UI package surface. If a future
+     package exposes a dedicated helper, use it; in the current package,
+     implement only the missing projection middleware rather than a second run
+     stream.
+   - Build a minimal test agent that registers one read-only function and one
+     mutating function through Agent Framework, applies
+     `UseFunctionInvocation()` plus the approval projection middleware, and
+     exposes the agent with `MapAGUI`.
+   - Connect the Workbench with `@ag-ui/client` to that endpoint and prove the
+     mutating function arrives as an AG-UI `request_approval` client tool call
+     that the UI can approve or reject.
+   - Fail fast if the official middleware cannot project the action. Do not add
+     a new Relay fallback stream to mask the gap.
+
+2. Refactor Relay tools around Agent Framework primitives.
+   - Keep read-only functions (`rg_files`, `rg_search`, `read`,
+     `workspace_status`, `diff`) as normal Agent Framework tools that may run
+     automatically inside the selected workspace.
+   - Register mutating functions (`officecli` mutations, `edit`, `write`, and
+     any future bounded command operation) as Agent Framework
+     `ApprovalRequiredAIFunction` tools, then project their approval requests to
+     AG-UI client-tool calls so the UI owns explicit approval before Relay
+     executes the local operation.
+   - Keep tool bodies small and deterministic: validate scope, validate typed
+     args, create backups/diffs when applicable, execute one local action, and
+     return a structured observation. Do not rebuild a Relay planner or
+     observation loop around them.
+
+3. Move Workbench primary execution to the official AG-UI transport.
+   - Replace `RelayEventSourceAgent` and `/api/runs/{runId}/agui-events` as the
+     product path with the official AG-UI HTTP/SSE run flow.
+   - Consume standard AG-UI lifecycle, text, tool-call, state, error, and
+     completion events directly. Relay-only event fields may remain only in
+     support diagnostics until callers are removed.
+   - Render approval cards from AG-UI client-tool action state, not from
+     `RunResponse.pendingApproval` or the old ledger approval route.
+
+4. Move run/session state to Agent Framework and AG-UI identities.
+   - Use `AgentSession` plus AG-UI thread/run identifiers as the source of
+     truth for run continuity.
+   - Keep the Relay run ledger as an append-only audit/support artifact only.
+     It must not be required for normal approval/resume once the official AG-UI
+     path works.
+   - Remove `PendingApproval`, `/api/runs/{runId}/approve`, and legacy resume
+     protocol from the product path after the Workbench and tests no longer use
+     them.
+
+5. Delete replaced compatibility code in the same milestone.
+   - Remove the old Workbench `RunEvent` primary stream, approval route,
+     compatibility normalizer, and any tests that assert Relay-only event
+     fields as product behavior.
+   - Keep plain local HTTP APIs for non-agent app operations only: workspace
+     selection, readiness, support bundle, static assets, and shutdown.
+   - Do not leave a hidden compatibility mode or fallback setting. If official
+     AG-UI projection breaks, the run should fail visibly with diagnostics.
+
+6. Add acceptance coverage for the official path.
+   - Sidecar smoke: `MapAGUI` plus the approval projection middleware can
+     stream a run, call a read-only function, request a mutating tool
+     confirmation, reject without side effects, approve with a backup/diff or
+     Office manifest, resume, and complete.
+   - Workbench E2E: the browser UI submits one generic task, sees streamed
+     reasoning/text/tool activity, approves one mutation, rejects one mutation,
+     cancels a run, and sees clear error output for invalid Copilot JSON.
+   - Regression gate: active Workbench code no longer imports or depends on the
+     custom `/api/runs/{runId}/agui-events` product stream.
+   - Standard gates: `pnpm check`, sidecar security smoke, support-bundle
+     redaction smoke, release inventory, and installer policy checks.
+
+Guardrails for this task:
+
+- No Python runtime and no second agent runner.
+- No reintroduction of AionUi, OpenCode/OpenWork, Codex app-server, Tauri, or
+  the removed high-level document-search workflow.
+- No unrestricted shell tool. Future command execution must remain a typed,
+  bounded Agent Framework tool with Relay validation and approval.
+- No prompt-only safety. Copilot may choose tools, but Relay validates every
+  argument and owns local execution.
+- No silent fallback. Missing AG-UI middleware, Copilot transport drift,
+  invalid JSON, OfficeCLI/ripgrep absence, or unsupported tool args stop the
+  run with a user-visible error and support details.
 
 Framework-first revision after current Microsoft documentation review:
 
@@ -400,7 +515,9 @@ Framework-first revision after current Microsoft documentation review:
   adapter is allowed; a second Relay runner is not.
 - Prefer Agent Framework primitives before adding Relay code:
   `AIFunctionFactory.Create` for typed function tools,
-  `ApprovalRequiredAIFunction` for mutating tools,
+  `ApprovalRequiredAIFunction` for mutation tools,
+  narrow Agent Framework middleware for `ToolApprovalRequestContent` to AG-UI
+  `request_approval` projection and resume,
   `AgentSession` serialization for run continuity,
   middleware for validation/telemetry,
   and `MapAGUI` / AG-UI middleware for Workbench streaming and approvals.

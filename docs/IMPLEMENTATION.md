@@ -17704,3 +17704,102 @@ Result:
   uncompressed PDF, and FlateDecode filtered PDF fixtures.
 - Full `pnpm check` passed, including the hardened Office/PDF read smoke,
   OfficeCLI registry smoke, security smoke, and release inventory generation.
+
+## 2026-05-16: Agent Framework + AG-UI Native Approval Planning
+
+Planning changes:
+
+- Reviewed the current Microsoft Agent Framework AG-UI human-in-the-loop
+  documentation and AG-UI protocol documentation.
+- Updated `PLANS.md` with the next implementation slice to replace the
+  remaining approval-capable Relay custom run stream with official Agent
+  Framework AG-UI client-tool projection.
+- The initial plan expected a `UseAGUIClientTool` .NET helper. Follow-up
+  package inspection during implementation found that the current package
+  surface does not expose that helper, so the accepted path is narrow Agent
+  Framework middleware that projects `ToolApprovalRequestContent` to an AG-UI
+  `request_approval` client tool and converts the tool result back into
+  `ToolApprovalResponseContent`.
+- The plan keeps Relay-specific code limited to the M365 Copilot CDP
+  `IChatClient` adapter, local tool bodies, validation/backup policy,
+  diagnostics, packaging, and Workbench visual composition.
+
+Verification:
+
+- Plan-only change. No code build was required for this update.
+
+## 2026-05-16: Next Task Selection For AG-UI Cutover
+
+Planning changes:
+
+- Set `AFAGUI01: Prove Agent Framework approval projection over AG-UI` as the
+  next unblocked task from the new Agent Framework + AG-UI native approval
+  cutover plan.
+- Added the active `agent_framework_agui_native_cutover` phase to
+  `.taskmaster/tasks/tasks.json` with five dependent tasks:
+  `AFAGUI01` through `AFAGUI05`.
+- Updated the Task Master summary to reflect the current browser Workbench +
+  .NET sidecar + Microsoft Agent Framework + AG-UI architecture, with
+  AionUi/OpenCode/OpenWork/Codex app-server/Tauri paths treated as historical
+  references only.
+
+Verification:
+
+```bash
+jq empty .taskmaster/tasks/tasks.json
+jq -r '.phases[-1].tasks[] | [.id, .title, .priority, (.blockedBy | join(",")), .status] | @tsv' .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Result:
+
+- Task Master JSON parsed successfully.
+- `AFAGUI01` is pending, critical, and has no blockers.
+- `git diff --check` passed.
+
+## 2026-05-16: AFAGUI01 Agent Framework Approval Projection Smoke
+
+Changes:
+
+- Added a hosted Agent Framework agent path that wraps the existing
+  `ChatClientAgent` with narrow middleware for AG-UI human-in-the-loop
+  approval projection.
+- The middleware converts outbound `ToolApprovalRequestContent` for mutating
+  Relay tools into an AG-UI client tool call named `request_approval`, then
+  converts the AG-UI tool result back into `ToolApprovalResponseContent` before
+  resuming the same Agent Framework turn.
+- Updated the M365 Copilot chat adapter streaming path to preserve
+  `ChatResponse` tool-call updates through `ToChatResponseUpdates()` instead
+  of reducing streaming output to final text.
+- Hardened workspace propagation for AG-UI runs by resolving workspace data
+  from Agent Framework `ChatOptions.AdditionalProperties` and from
+  `FunctionInvocationContext.Options` at function invocation time.
+- Added `scripts/agui-client-tool-smoke.mjs` and wired
+  `pnpm agent:agui-client-tool-smoke` into `pnpm check`. The smoke proves a
+  read-only `read` function executes without approval, a mutating `write`
+  function pauses as an AG-UI approval request, reject creates no file, approve
+  resumes and creates the expected file, and the run completes through
+  `/agui/relay` without the legacy run stream.
+- Updated `PLANS.md` and Task Master to reflect the current package reality:
+  there is no `UseAGUIClientTool` helper in the active .NET surface, so Relay's
+  code is limited to the missing projection bridge rather than a second run
+  protocol.
+
+Verification commands run locally:
+
+```bash
+node --check scripts/agui-client-tool-smoke.mjs
+PATH=/tmp/dotnet:/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm agent:agui-client-tool-smoke
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Script syntax check passed.
+- Sidecar Release build passed.
+- AG-UI client-tool approval smoke passed.
+- Full `pnpm check` passed, including hard-cut guard, Workbench typecheck/build,
+  sidecar build/smoke, agent golden smoke, AG-UI client-tool smoke, ripgrep
+  stream cap smoke, Office/PDF read smoke, OfficeCLI registry smoke, sidecar
+  security smoke, and release inventory generation.

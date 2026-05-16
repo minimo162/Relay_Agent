@@ -32,10 +32,10 @@ public sealed class RelayAgentFrameworkRunner
         _tools = tools;
     }
 
-    public ChatClientAgent CreateHostedAgent()
+    public AIAgent CreateHostedAgent()
     {
         var functionSet = new RelayAgentFunctionSet(null, _tools, _ => ValueTask.CompletedTask);
-        return CreateAgent(functionSet.CreateTools());
+        return CreateAgUiApprovalBridge(CreateAgent(functionSet.CreateTools()));
     }
 
     public async Task<AgentRunResult> RunAsync(
@@ -176,6 +176,179 @@ public sealed class RelayAgentFrameworkRunner
             null,
             null);
 
+    private static AIAgent CreateAgUiApprovalBridge(AIAgent agent) =>
+        agent
+            .AsBuilder()
+            .Use(
+                runFunc: null,
+                runStreamingFunc: static (messages, session, options, innerAgent, cancellationToken) =>
+                    RunAgUiApprovalBridgeStreamingAsync(messages, session!, options!, innerAgent, cancellationToken))
+            .Build(null);
+
+    private static async IAsyncEnumerable<AgentResponseUpdate> RunAgUiApprovalBridgeStreamingAsync(
+        IEnumerable<ChatMessage> messages,
+        AgentSession session,
+        AgentRunOptions options,
+        AIAgent innerAgent,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var previousWorkspace = RelayWorkspaceContext.Current;
+        var resolvedWorkspace = RelayWorkspaceContext.ResolveWorkspace(options);
+        RelayWorkspaceContext.Current = resolvedWorkspace ?? previousWorkspace;
+        try
+        {
+            var processedMessages = ConvertAgUiApprovalResponses(messages);
+            await foreach (var update in innerAgent.RunStreamingAsync(processedMessages, session, options, cancellationToken))
+            {
+                yield return ConvertToolApprovalRequestsToAgUiClientTools(update);
+            }
+        }
+        finally
+        {
+            RelayWorkspaceContext.Current = previousWorkspace;
+        }
+    }
+
+    private static IEnumerable<ChatMessage> ConvertAgUiApprovalResponses(IEnumerable<ChatMessage> messages)
+    {
+        var materialized = messages.ToList();
+        var approvalRequests = new Dictionary<string, AgUiApprovalRequest>(StringComparer.Ordinal);
+        foreach (var message in materialized)
+        {
+            foreach (var content in message.Contents)
+            {
+                if (content is FunctionCallContent { Name: AgUiApprovalRequest.ToolName } call &&
+                    TryReadAgUiApprovalRequest(call.Arguments, out var request))
+                {
+                    approvalRequests[call.CallId] = request;
+                }
+            }
+        }
+
+        if (approvalRequests.Count == 0)
+        {
+            return materialized;
+        }
+
+        var convertedMessages = new List<ChatMessage>();
+        foreach (var message in materialized)
+        {
+            var convertedContents = new List<AIContent>();
+            var convertedApprovalResult = false;
+            var removedApprovalRequest = false;
+
+            foreach (var content in message.Contents)
+            {
+                if (content is FunctionCallContent { Name: AgUiApprovalRequest.ToolName } call &&
+                    approvalRequests.ContainsKey(call.CallId))
+                {
+                    removedApprovalRequest = true;
+                    continue;
+                }
+
+                if (content is FunctionResultContent result &&
+                    approvalRequests.TryGetValue(result.CallId, out var request) &&
+                    TryReadAgUiApprovalResponse(result.Result, out var response))
+                {
+                    var toolCall = request.ToFunctionCall();
+                    var approval = new ToolApprovalResponseContent(request.ApprovalId, response.Approved, toolCall)
+                    {
+                        Reason = response.Reason ?? (response.Approved ? "Approved by Relay user." : "Rejected by Relay user."),
+                    };
+                    convertedContents.Add(approval);
+                    convertedApprovalResult = true;
+                    continue;
+                }
+
+                convertedContents.Add(content);
+            }
+
+            if (removedApprovalRequest && convertedContents.Count == 0)
+            {
+                continue;
+            }
+
+            convertedMessages.Add(convertedApprovalResult
+                ? new ChatMessage(ChatRole.User, convertedContents)
+                : message);
+        }
+
+        return convertedMessages;
+    }
+
+    private static AgentResponseUpdate ConvertToolApprovalRequestsToAgUiClientTools(AgentResponseUpdate update)
+    {
+        List<AIContent>? converted = null;
+        var contents = update.Contents;
+        for (var index = 0; index < contents.Count; index++)
+        {
+            var content = contents[index];
+            if (content is not ToolApprovalRequestContent approvalRequest)
+            {
+                converted?.Add(content);
+                continue;
+            }
+
+            converted ??= contents.Take(index).ToList();
+            converted.Add(AgUiApprovalRequest.ToClientToolCall(approvalRequest));
+        }
+
+        return converted is null ? update : new AgentResponseUpdate(update.Role, converted);
+    }
+
+    private static bool TryReadAgUiApprovalRequest(
+        IDictionary<string, object?>? arguments,
+        out AgUiApprovalRequest request)
+    {
+        request = default!;
+        if (arguments is null || !arguments.TryGetValue("request", out var rawRequest))
+        {
+            return false;
+        }
+
+        try
+        {
+            request = rawRequest switch
+            {
+                string text => JsonSerializer.Deserialize<AgUiApprovalRequest>(text, JsonOptions.Compact)!,
+                JsonElement element when element.ValueKind == JsonValueKind.String =>
+                    JsonSerializer.Deserialize<AgUiApprovalRequest>(element.GetString() ?? "", JsonOptions.Compact)!,
+                JsonElement element => JsonSerializer.Deserialize<AgUiApprovalRequest>(element.GetRawText(), JsonOptions.Compact)!,
+                JsonNode node => JsonSerializer.Deserialize<AgUiApprovalRequest>(node.ToJsonString(), JsonOptions.Compact)!,
+                _ => JsonSerializer.Deserialize<AgUiApprovalRequest>(JsonSerializer.Serialize(rawRequest, JsonOptions.Compact), JsonOptions.Compact)!,
+            };
+            return !string.IsNullOrWhiteSpace(request.ApprovalId)
+                && !string.IsNullOrWhiteSpace(request.ToolCallId)
+                && !string.IsNullOrWhiteSpace(request.FunctionName);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadAgUiApprovalResponse(object? result, out AgUiApprovalResponse response)
+    {
+        response = default!;
+        try
+        {
+            response = result switch
+            {
+                string text => JsonSerializer.Deserialize<AgUiApprovalResponse>(text, JsonOptions.Compact)!,
+                JsonElement element when element.ValueKind == JsonValueKind.String =>
+                    JsonSerializer.Deserialize<AgUiApprovalResponse>(element.GetString() ?? "", JsonOptions.Compact)!,
+                JsonElement element => JsonSerializer.Deserialize<AgUiApprovalResponse>(element.GetRawText(), JsonOptions.Compact)!,
+                JsonNode node => JsonSerializer.Deserialize<AgUiApprovalResponse>(node.ToJsonString(), JsonOptions.Compact)!,
+                _ => JsonSerializer.Deserialize<AgUiApprovalResponse>(JsonSerializer.Serialize(result, JsonOptions.Compact), JsonOptions.Compact)!,
+            };
+            return response is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private IChatClient CreateFunctionInvokingClient()
     {
         var functionInvokingClient = _chatClient
@@ -187,9 +360,27 @@ public sealed class RelayAgentFrameworkRunner
                     client.MaximumIterationsPerRequest = MaxToolIterations;
                     client.AllowConcurrentInvocation = false;
                     client.TerminateOnUnknownCalls = true;
+                    client.IncludeDetailedErrors = true;
+                    client.FunctionInvoker = InvokeFunctionWithRelayWorkspaceAsync;
                 })
             .Build(null);
         return new RelayWorkspaceScopeChatClient(functionInvokingClient);
+    }
+
+    private static async ValueTask<object?> InvokeFunctionWithRelayWorkspaceAsync(
+        FunctionInvocationContext context,
+        CancellationToken cancellationToken)
+    {
+        var previous = RelayWorkspaceContext.Current;
+        RelayWorkspaceContext.Current = RelayWorkspaceContext.ResolveWorkspace(context.Options) ?? previous;
+        try
+        {
+            return await context.Function.InvokeAsync(context.Arguments, cancellationToken);
+        }
+        finally
+        {
+            RelayWorkspaceContext.Current = previous;
+        }
     }
 
     private static ChatClientAgentRunOptions CreateRunOptions() =>
@@ -519,6 +710,50 @@ public sealed class RelayAgentFunctionSet(
     }
 }
 
+public sealed record AgUiApprovalRequest(
+    string ApprovalId,
+    string ToolCallId,
+    string FunctionName,
+    JsonElement? FunctionArguments,
+    string? Message = null)
+{
+    public const string ToolName = "request_approval";
+
+    public static FunctionCallContent ToClientToolCall(ToolApprovalRequestContent request)
+    {
+        if (request.ToolCall is not FunctionCallContent functionCall)
+        {
+            throw new InvalidOperationException($"Unsupported approval tool call type: {request.ToolCall.GetType().Name}");
+        }
+
+        var approvalRequest = new AgUiApprovalRequest(
+            request.RequestId,
+            functionCall.CallId,
+            functionCall.Name,
+            functionCall.Arguments is null ? null : JsonSerializer.SerializeToElement(functionCall.Arguments, JsonOptions.Compact),
+            $"Approve execution of '{functionCall.Name}'?");
+        return new FunctionCallContent(
+            request.RequestId,
+            ToolName,
+            new Dictionary<string, object?>
+            {
+                ["request"] = JsonSerializer.Serialize(approvalRequest, JsonOptions.Compact),
+            });
+    }
+
+    public FunctionCallContent ToFunctionCall() =>
+        new(
+            ToolCallId,
+            FunctionName,
+            FunctionArguments is null
+                ? null
+                : JsonSerializer.Deserialize<Dictionary<string, object?>>(FunctionArguments.Value.GetRawText(), JsonOptions.Compact));
+}
+
+public sealed record AgUiApprovalResponse(
+    bool Approved,
+    string? Reason = null);
+
 public sealed class RelayWorkspaceScopeChatClient(IChatClient inner) : IChatClient
 {
     public async Task<ChatResponse> GetResponseAsync(
@@ -589,13 +824,31 @@ public static class RelayWorkspaceContext
     public static string? ResolveWorkspace(ChatOptions? options)
     {
         if (options?.AdditionalProperties is null) return null;
-        if (TryGetWorkspace(options.AdditionalProperties, "workspace", out var direct)) return direct;
-        if (TryGetWorkspace(options.AdditionalProperties, "relay_workspace", out var relay)) return relay;
-        if (TryGetWorkspace(options.AdditionalProperties, "ag_ui_forwarded_properties", out var forwarded)) return forwarded;
-        if (TryGetWorkspace(options.AdditionalProperties, "ag_ui_state", out var state)) return state;
-        if (TryGetContextWorkspace(options.AdditionalProperties, out var context)) return context;
+        foreach (var key in new[]
+        {
+            "workspace",
+            "relay_workspace",
+            "relayWorkspace",
+            "ag_ui_forwarded_properties",
+            "forwardedProps",
+            "forwardedProperties",
+            "ag_ui_state",
+            "state",
+        })
+        {
+            if (TryGetWorkspace(options.AdditionalProperties, key, out var workspace)) return workspace;
+        }
+        foreach (var key in new[] { "ag_ui_context", "context" })
+        {
+            if (TryGetWorkspace(options.AdditionalProperties, key, out var workspace)) return workspace;
+        }
         return null;
     }
+
+    public static string? ResolveWorkspace(AgentRunOptions? options) =>
+        options is ChatClientAgentRunOptions chatClientOptions
+            ? ResolveWorkspace(chatClientOptions.ChatOptions)
+            : null;
 
     private static bool TryGetWorkspace(IDictionary<string, object?> properties, string key, out string? workspace)
     {
@@ -618,8 +871,16 @@ public static class RelayWorkspaceContext
                 return TryReadWorkspace(element, out workspace);
             case JsonObject obj:
                 return TryReadWorkspace(obj, out workspace);
+            case JsonArray array:
+                foreach (var item in array)
+                {
+                    if (TryReadWorkspace(item, out workspace)) return true;
+                }
+                return false;
             case IDictionary<string, object?> dictionary:
                 return TryReadWorkspace(dictionary, out workspace);
+            case IEnumerable<KeyValuePair<string, string>> pairs:
+                return TryReadWorkspace(pairs.ToDictionary(pair => pair.Key, pair => (object?)pair.Value), out workspace);
             default:
                 return false;
         }
@@ -633,6 +894,14 @@ public static class RelayWorkspaceContext
             workspace = element.GetString();
             return !string.IsNullOrWhiteSpace(workspace);
         }
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in element.EnumerateArray())
+            {
+                if (TryReadWorkspace(child, out workspace)) return true;
+            }
+            return false;
+        }
         if (element.ValueKind != JsonValueKind.Object) return false;
         foreach (var key in new[] { "workspace", "relayWorkspace", "relay_workspace" })
         {
@@ -640,6 +909,17 @@ public static class RelayWorkspaceContext
             {
                 return true;
             }
+        }
+        if (TryReadContextLikeWorkspace(
+            TryGetElementString(element, "description") ?? TryGetElementString(element, "key") ?? TryGetElementString(element, "name"),
+            element.TryGetProperty("value", out var value) ? value : default,
+            out workspace))
+        {
+            return true;
+        }
+        foreach (var property in element.EnumerateObject())
+        {
+            if (TryReadWorkspace(property.Value, out workspace)) return true;
         }
         return false;
     }
@@ -651,16 +931,19 @@ public static class RelayWorkspaceContext
         {
             if (obj.TryGetPropertyValue(key, out var child) && child is not null)
             {
-                if (child is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text))
-                {
-                    workspace = text;
-                    return true;
-                }
-                if (child is JsonObject nested && TryReadWorkspace(nested, out workspace))
-                {
-                    return true;
-                }
+                if (TryReadWorkspace(child, out workspace)) return true;
             }
+        }
+        if (TryReadContextLikeWorkspace(
+            TryGetJsonObjectString(obj, "description") ?? TryGetJsonObjectString(obj, "key") ?? TryGetJsonObjectString(obj, "name"),
+            obj.TryGetPropertyValue("value", out var value) ? value : null,
+            out workspace))
+        {
+            return true;
+        }
+        foreach (var (_, child) in obj)
+        {
+            if (TryReadWorkspace(child, out workspace)) return true;
         }
         return false;
     }
@@ -675,23 +958,16 @@ public static class RelayWorkspaceContext
                 return true;
             }
         }
-        return false;
-    }
-
-    private static bool TryGetContextWorkspace(IDictionary<string, object?> properties, out string? workspace)
-    {
-        workspace = null;
-        if (!properties.TryGetValue("ag_ui_context", out var value) || value is null) return false;
-        if (value is IEnumerable<KeyValuePair<string, string>> pairs)
+        if (TryReadContextLikeWorkspace(
+            TryGetDictionaryString(dictionary, "description") ?? TryGetDictionaryString(dictionary, "key") ?? TryGetDictionaryString(dictionary, "name"),
+            dictionary.TryGetValue("value", out var value) ? value : null,
+            out workspace))
         {
-            foreach (var pair in pairs)
-            {
-                if (IsWorkspaceKey(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
-                {
-                    workspace = pair.Value;
-                    return true;
-                }
-            }
+            return true;
+        }
+        foreach (var (_, child) in dictionary)
+        {
+            if (TryReadWorkspace(child, out workspace)) return true;
         }
         return false;
     }
@@ -700,6 +976,41 @@ public static class RelayWorkspaceContext
         key.Equals("workspace", StringComparison.OrdinalIgnoreCase)
         || key.Equals("relay_workspace", StringComparison.OrdinalIgnoreCase)
         || key.Equals("relayWorkspace", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryReadContextLikeWorkspace(string? key, object? value, out string? workspace)
+    {
+        workspace = null;
+        if (key is null || !IsWorkspaceKey(key)) return false;
+        return TryReadWorkspace(value, out workspace);
+    }
+
+    private static bool TryReadContextLikeWorkspace(string? key, JsonElement value, out string? workspace)
+    {
+        workspace = null;
+        if (key is null || !IsWorkspaceKey(key)) return false;
+        return TryReadWorkspace(value, out workspace);
+    }
+
+    private static string? TryGetElementString(JsonElement element, string key) =>
+        element.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static string? TryGetJsonObjectString(JsonObject obj, string key) =>
+        obj.TryGetPropertyValue(key, out var value) &&
+        value is JsonValue jsonValue &&
+        jsonValue.TryGetValue<string>(out var text)
+            ? text
+            : null;
+
+    private static string? TryGetDictionaryString(IDictionary<string, object?> dictionary, string key) =>
+        dictionary.TryGetValue(key, out var value) ? value switch
+        {
+            string text => text,
+            JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
+            JsonValue jsonValue when jsonValue.TryGetValue<string>(out var text) => text,
+            _ => null,
+        } : null;
 }
 
 public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolResolver)

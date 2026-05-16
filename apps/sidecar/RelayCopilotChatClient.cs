@@ -33,13 +33,16 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var response = await GetResponseAsync(messages, options, cancellationToken);
-        yield return new ChatResponseUpdate(ChatRole.Assistant, response.Text)
+        var responseId = GetAdditionalPropertyString(options, "ag_ui_run_id") ?? response.ResponseId;
+        var conversationId = GetAdditionalPropertyString(options, "ag_ui_thread_id");
+        foreach (var update in response.ToChatResponseUpdates())
         {
-            ConversationId = GetAdditionalPropertyString(options, "ag_ui_thread_id"),
-            ResponseId = GetAdditionalPropertyString(options, "ag_ui_run_id") ?? response.ResponseId,
-            MessageId = $"relay-message-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}",
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
+            update.ConversationId = conversationId;
+            update.ResponseId = responseId;
+            update.MessageId ??= $"relay-message-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}";
+            update.CreatedAt ??= DateTimeOffset.UtcNow;
+            yield return update;
+        }
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)

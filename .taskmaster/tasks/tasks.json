@@ -2,7 +2,7 @@
   "projectName": "Relay_Agent Dedicated Desktop Completion",
   "version": "7.0",
   "createdAt": "2026-04-14",
-  "summary": "Historical task graph retained for artifact traceability. The current executable plan is PLANS.md: a dedicated Relay desktop application for document search and OfficeCLI-backed Office file operations, with AionUi paths treated as historical references only.",
+  "summary": "Historical task graph retained for artifact traceability. The current executable plan is PLANS.md: a browser-hosted Relay Workbench backed by the .NET sidecar, Microsoft Agent Framework, AG-UI, M365 Copilot CDP adapter, and local governed tools. AionUi, OpenCode/OpenWork, Codex app-server, Tauri, and deleted document-search workflow paths are historical references only.",
   "phases": [
     {
       "id": "baseline",
@@ -1584,6 +1584,114 @@
             "AION04",
             "AION05",
             "AION06"
+          ],
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "agent_framework_agui_native_cutover",
+      "name": "Agent Framework + AG-UI Native Approval Cutover",
+      "description": "Active task phase from PLANS.md. Maximize Microsoft Agent Framework and AG-UI by replacing the remaining Relay-owned approval-capable run stream with official MapAGUI plus narrow ToolApprovalRequestContent-to-AG-UI request_approval projection middleware, while keeping Relay-specific code limited to the Copilot CDP adapter, local tool bodies, validation, backups, diagnostics, packaging, and Workbench composition.",
+      "tasks": [
+        {
+          "id": "AFAGUI01",
+          "title": "Prove Agent Framework approval projection over AG-UI",
+          "description": "Create the proof slice for Agent Framework AG-UI human-in-the-loop behavior. Confirm the current .NET package surface, register one read-only function and one mutating function through Agent Framework, apply UseFunctionInvocation plus narrow approval projection middleware, expose the agent with MapAGUI, and prove the Workbench can approve or reject the mutating action through AG-UI tool-result resume without the Relay custom run stream.",
+          "files": [
+            "apps/sidecar/Relay.Sidecar.csproj",
+            "apps/sidecar/Program.cs",
+            "apps/workbench/src/",
+            "scripts/",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "MapAGUI + approval projection smoke showing read-only tool execution, mutating tool approval request, reject without side effect, approve with side effect, resume, and completion",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [],
+          "status": "completed"
+        },
+        {
+          "id": "AFAGUI02",
+          "title": "Refactor Relay tool registration around Agent Framework primitives",
+          "description": "Split read-only tools and mutating tools at Agent Framework registration time. Keep read-only tools as automatic Agent Framework functions and register mutating tools as AG-UI client-mediated actions so the Workbench owns explicit approval before Relay executes local file, OfficeCLI, or bounded command mutations.",
+          "files": [
+            "apps/sidecar/",
+            "apps/workbench/src/",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Relay tool catalog registered through Agent Framework with read-only automatic tools and AG-UI client-mediated mutating tools",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "AFAGUI01"
+          ],
+          "status": "pending"
+        },
+        {
+          "id": "AFAGUI03",
+          "title": "Move Workbench primary execution to official AG-UI transport",
+          "description": "Replace RelayEventSourceAgent and /api/runs/{runId}/agui-events as the product path with the official AG-UI HTTP/SSE flow. Consume standard AG-UI lifecycle, text, tool-call, state, error, and completion events directly, and render approvals from AG-UI client-tool action state.",
+          "files": [
+            "apps/workbench/src/",
+            "apps/sidecar/",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Workbench E2E showing generic task submission, streaming progress, approval, rejection, cancellation, and final answer through official AG-UI transport",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "AFAGUI01",
+            "AFAGUI02"
+          ],
+          "status": "pending"
+        },
+        {
+          "id": "AFAGUI04",
+          "title": "Remove legacy run stream and approval compatibility routes",
+          "description": "Delete or disable the old custom RunEvent product stream, PendingApproval product protocol, /api/runs/{runId}/approve route, and compatibility normalizer once the official AG-UI path is the primary Workbench route. Keep only non-agent local HTTP APIs for workspace, readiness, support bundle, static assets, and shutdown.",
+          "files": [
+            "apps/sidecar/",
+            "apps/workbench/src/",
+            "scripts/",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Source and regression checks proving active Workbench code no longer depends on /api/runs/{runId}/agui-events or legacy approval routes",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "AFAGUI03"
+          ],
+          "status": "pending"
+        },
+        {
+          "id": "AFAGUI05",
+          "title": "Add official-path acceptance coverage and documentation",
+          "description": "Add sidecar smoke, Workbench E2E, security, support-bundle, release inventory, and installer-policy coverage for the official AG-UI path. Update README, PLANS.md, docs/IMPLEMENTATION.md, and AGENTS.md if the accepted architecture or verification commands change.",
+          "files": [
+            "README.md",
+            "AGENTS.md",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            "scripts/",
+            "apps/sidecar/",
+            "apps/workbench/src/",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "pnpm check plus official AG-UI acceptance smokes passing and documented in docs/IMPLEMENTATION.md",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "AFAGUI03",
+            "AFAGUI04"
           ],
           "status": "pending"
         }
