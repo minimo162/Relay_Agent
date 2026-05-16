@@ -18272,6 +18272,82 @@ Result:
   smoke, support-bundle security smoke, and release inventory/SBOM generation.
 - `git diff --check` passed.
 
+## 2026-05-16: Live Copilot E2E Stabilization For File Creation
+
+Changes:
+
+- Fixed Workbench live E2E input setting so React/Solid-controlled inputs receive
+  native value-setter, `input`, and `change` events before submission.
+- Hardened Copilot composer insertion for long prompts:
+  - accepts off-screen but visible composer editors,
+  - uses clipboard paste before slower fallbacks,
+  - validates the submitted composer text before clicking send,
+  - avoids character-by-character fallbacks for long or multiline prompts.
+- Fixed Copilot response waiting:
+  - internal reply-timeout cancellation no longer escapes as `network error`,
+  - timeout defaults to 300 seconds and can be overridden with
+    `RELAY_COPILOT_REPLY_TIMEOUT_SECONDS`,
+  - Copilot `Reasoning completed...` chrome is stripped,
+  - answer extraction no longer stops at the first blank line,
+  - complete JSON-like `write` responses are not treated as incomplete just
+    because embedded HTML/JavaScript is not valid JSON string syntax.
+- Updated the tool projection prompt to request a fenced `json` code block. This
+  prevents Copilot UI Markdown rendering from swallowing raw HTML tags such as
+  `<head>` and `<style>`.
+- Updated assistant snapshot extraction to prefer `textContent` over `innerText`
+  when the response contains fenced JSON/tool output, preserving literal
+  HTML/XML tags from Copilot code blocks.
+- Added opt-in diagnostics:
+  - `RELAY_COPILOT_PROMPT_DUMP_DIR` for exact prompt dumps,
+  - `RELAY_COPILOT_RESPONSE_DUMP_DIR` for exact response dumps,
+  - `RELAY_COPILOT_PASTE_TRACE=1` for CDP paste-path tracing.
+- Added lenient parsing for Copilot `write` tool responses that are JSON-shaped
+  but contain unescaped large file content. This keeps Relay strict about tool
+  selection while tolerating Copilot UI serialization artifacts for long HTML.
+
+Live E2E result:
+
+- Ran a real M365 Copilot Workbench flow that asked Copilot to create a playable
+  single-file `tetris.html` in a temporary workspace.
+- Result:
+  - Copilot generated a `write` tool call.
+  - Relay displayed one approval request and executed it after approval.
+  - `tetris.html` was written to
+    `/tmp/relay-live-tetris-workspace-XxnzOU/tetris.html`.
+  - Artifact directory:
+    `dist/e2e/live-tetris-1778941336576`.
+  - The generated file contains `<!doctype html>`, `<style>`, `<script>`,
+    Canvas, and keyboard controls.
+  - Edge CDP opened the generated HTML successfully:
+    title `Tetris`, 2 canvas elements, 9 buttons, and non-blank canvas pixels.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_COPILOT_FRESH_TARGET=1 RELAY_COPILOT_REPLY_TIMEOUT_SECONDS=360 node /tmp/relay-live-tetris-e2e.mjs
+PATH=/tmp/relay-dotnet/sdk:$PATH RELAY_COPILOT_FRESH_TARGET=1 RELAY_COPILOT_REPLY_TIMEOUT_SECONDS=180 pnpm workbench:live-copilot-e2e
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+git diff --check
+```
+
+Result:
+
+- Sidecar Release build passed with 0 warnings.
+- Real Copilot Tetris E2E passed:
+  `elapsedMs=93590`, `approvals=1`, `bytes=21874`,
+  `hasDoctype=true`, `hasCanvasOrGrid=true`, `hasKeyboard=true`,
+  `readiness=Ready`.
+- Existing live Copilot E2E passed:
+  `elapsed=12496ms`, `readiness=Ready`, `cdp=9360`.
+- Workbench UX E2E passed:
+  `search=396ms`, `approval=122ms`, screenshots
+  `workbench-empty.png`, `workbench-completed.png`,
+  `workbench-approval.png`, and `workbench-mobile.png`.
+- Full `pnpm check` passed, including release inventory/SBOM generation.
+- `git diff --check` passed.
+
 ## 2026-05-16: Workbench UI/UX Direction Plan
 
 Changes:
@@ -18386,3 +18462,99 @@ Result:
   smoke, ripgrep stream cap smoke, Office/PDF read smoke, OfficeCLI registry
   smoke, support-bundle security smoke, and release inventory/SBOM generation.
 - `git diff --check` passed.
+
+## 2026-05-17: Live Copilot Practical E2E Hardening
+
+Changes:
+
+- Ran additional live Microsoft 365 Copilot E2E scenarios against the Workbench
+  through Edge CDP. The practical scenario used a temporary workspace containing
+  `meeting-notes.md` and asked Copilot to create `action-items.md` as a Markdown
+  table with owners, due dates, tasks, and release-risk notes.
+- Fixed several issues found only in the live Copilot loop:
+  Copilot sometimes selected `bash cat <file>` for ordinary file reads, so the
+  projection layer now normalizes that safe pattern to the `read` tool and
+  reinforces that `cat`/`ls`/`find` are not bash use cases.
+- Preserved pending output-file intent across Agent Framework turns. Later
+  Copilot turns can contain only a tool result, so Relay now remembers the
+  requested output file by AG-UI run/thread id and reinjects a mutation guard
+  until a successful `write`/`edit`/`apply_patch`/Office mutation is produced.
+- Tightened output-file detection so Japanese punctuation before a filename does
+  not get folded into the target path.
+- Added format-preservation guidance: Markdown requests that specify a table or
+  `表形式` should be written as a Markdown pipe table.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+RELAY_COPILOT_PROMPT_DUMP_DIR=/tmp/relay-copilot-dumps RELAY_COPILOT_RESPONSE_DUMP_DIR=/tmp/relay-copilot-dumps PATH=/tmp/relay-dotnet/sdk:$PATH node /tmp/relay-live-actions-e2e.mjs
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+git diff --check
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+```
+
+Result:
+
+- Practical live Copilot E2E passed:
+  `dist/e2e/live-actions-1778953428304/result.json`, `elapsedMs=97032`,
+  `approvals=2`, readiness `Ready`.
+- The generated `action-items.md` contains a Markdown pipe table for Aya, Ken,
+  and Mina, plus release-risk notes.
+- Baseline live Copilot E2E passed:
+  `[workbench-live-copilot-e2e] ok elapsed=10211ms readiness=Ready cdp=9360`.
+- Sidecar Release build and `git diff --check` passed.
+- Full `pnpm check` passed after the live fixes, including Workbench
+  typecheck/build, sidecar build/smoke, AG-UI client-tool smoke, Office/PDF
+  read smoke, OfficeCLI registry smoke, security smoke, and release inventory.
+
+## 2026-05-17: Live Copilot File Search E2E Hardening
+
+Changes:
+
+- Ran a separate live Microsoft 365 Copilot E2E for local file search. The
+  temporary workspace mixed release-readiness, finance, security-checklist, and
+  archived UI files, then asked Copilot in Japanese to find files related to
+  pre-release security review and return at most three filename-backed
+  candidates with reasons.
+- Fixed live issues exposed by that flow:
+  Copilot can still return `action=final` claiming local tools are unavailable,
+  so Relay now bootstraps local file-work requests with a safe bounded
+  `glob("**/*", limit=200)` when no tool result exists yet.
+- Preserved the original user request across Agent Framework tool turns. This
+  prevents Copilot from seeing only a tool result and repeatedly asking what to
+  do after `glob`.
+- Changed tool-projection output guidance from fenced `json` code blocks to one
+  plain JSON object. The fenced form can render as a Copilot code-preview label
+  (`JSON`) without extractable body text in the live UI. HTML/XML/code content
+  must instead be JSON-escaped inside string values.
+- Made `grep` a true regex search by removing `--fixed-strings`, matching the
+  model-facing tool contract and allowing Copilot-generated alternations such as
+  `security|セキュリティ|review`.
+- Treated `glob` no-match exit code 1 as a valid empty result instead of a tool
+  failure, and normalized directory-like keyword globs such as `**/security`
+  into filename-oriented patterns like `**/*security*`.
+- Added a small DOM extraction hardening pass so latest markdown replies can be
+  read even when Copilot's visual code/message wrapper fails the normal visible
+  rectangle check.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+RELAY_COPILOT_PROMPT_DUMP_DIR=/tmp/relay-copilot-search-dumps RELAY_COPILOT_RESPONSE_DUMP_DIR=/tmp/relay-copilot-search-dumps PATH=/tmp/relay-dotnet/sdk:$PATH node /tmp/relay-live-search-e2e.mjs
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+```
+
+Result:
+
+- Live Copilot file-search E2E passed:
+  `dist/e2e/live-search-1778961966792/result.json`, `elapsedMs=32685`,
+  readiness `Ready`.
+- Final candidates were:
+  `03_security/security-review-checklist.md` and
+  `01_meetings/release-readiness.md`, with Japanese reasons.
+- Baseline live Copilot E2E passed:
+  `[workbench-live-copilot-e2e] ok elapsed=9474ms readiness=Ready cdp=9360`.
+- Full `pnpm check` passed after the search hardening changes.

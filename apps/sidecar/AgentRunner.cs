@@ -14,15 +14,20 @@ public sealed class RelayAgentFrameworkRunner
 {
     private const int MaxToolIterations = 8;
     private const string AgentInstructions = """
-        You are Relay Agent running through Microsoft Agent Framework.
-        M365 Copilot provides reasoning. Relay validates and executes local tools through the provided function catalog.
-        Use tools when local workspace evidence, Office inspection/editing, or repository verification is needed.
-        Do not claim local execution yourself; use tools and then summarize the observed results.
-        Prefer glob or grep before read unless the exact file path is known.
-        Use read for exact files only. read can extract bounded text from txt/md/csv/code plus docx/xlsx/xlsm/pptx/text-layer pdf.
-        Use officecli for Office inspection or mutation. Mutating tools require user approval.
-        Use workspace_status before code changes when repository state matters, and diff before summarizing code or text edits.
-        Keep final answers concise and in the user's language.
+        You are Relay Agent. M365 Copilot reasons; Relay executes local tools.
+        Relay local tools are available through the function catalog even if the Copilot web chat itself has no built-in local tools.
+        When the user requests local work, do not say tools are unavailable; choose a Relay tool so Relay can execute it.
+        Use tools for local files, Office work, code edits, and verification.
+        For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
+        For comparisons across files, first discover and read every required source file before writing or finalizing.
+        If the user names multiple files, read each named file that is needed for the task before finalizing.
+        If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
+        Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.
+        Treat period, version, region, and department tokens in file names and paths as evidence context when the file content omits them.
+        Use ask_user only when a critical requirement is genuinely missing. Do not ask for clarification when the user already gave the objective, target files or scope, and desired output.
+        Use bash only for explicit build/test/lint/typecheck/git/rg verification commands; never wrap commands in bash/sh -lc.
+        Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.
+        Never claim local execution without tool results. Keep final answers concise in the user's language.
         """;
     private readonly IChatClient _chatClient;
     private readonly RelayToolExecutor _tools;
@@ -1143,7 +1148,7 @@ public sealed class RelayToolExecutor
             return ToolObservation.Fail(call.Id, call.Tool, rg.Detail);
         }
 
-        var pattern = GetString(call.Args, "pattern") ?? "**/*";
+        var pattern = NormalizeGlobPattern(GetString(call.Args, "pattern") ?? "**/*");
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 50, 1, 200);
         var args = new List<string> { "--files" };
         AddGlob(args, pattern);
@@ -1156,6 +1161,7 @@ public sealed class RelayToolExecutor
             cancellationToken,
             maxLines: limit,
             includeLine: null,
+            allowExitOne: true,
             timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
 
@@ -1175,7 +1181,7 @@ public sealed class RelayToolExecutor
 
         var pattern = GetString(call.Args, "pattern") ?? "";
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 80, 1, 200);
-        var args = new List<string> { "--line-number", "--color", "never", "--fixed-strings" };
+        var args = new List<string> { "--line-number", "--color", "never" };
         if (GetBool(call.Args, "case_insensitive") == true)
         {
             args.Add("--ignore-case");
@@ -2396,6 +2402,32 @@ public sealed class RelayToolExecutor
         }
     }
 
+    private static string NormalizeGlobPattern(string pattern)
+    {
+        var trimmed = pattern.Trim();
+        if (trimmed.Length == 0) return "**/*";
+        if (!ContainsGlobWildcard(trimmed))
+        {
+            return $"**/*{trimmed}*";
+        }
+
+        var normalized = trimmed.Replace('\\', '/');
+        if (normalized.StartsWith("**/", StringComparison.Ordinal) &&
+            !normalized.EndsWith('*') &&
+            !normalized.EndsWith('/') &&
+            Path.GetFileName(normalized).IndexOf('.') < 0)
+        {
+            var prefix = normalized[..^Path.GetFileName(normalized).Length];
+            var leaf = Path.GetFileName(normalized);
+            return $"{prefix}*{leaf}*";
+        }
+
+        return pattern;
+    }
+
+    private static bool ContainsGlobWildcard(string text) =>
+        text.IndexOfAny(['*', '?', '[', ']', '{', '}']) >= 0;
+
     private static void AddGlob(List<string> args, string? glob, bool exclude = false)
     {
         if (string.IsNullOrWhiteSpace(glob)) return;
@@ -2721,7 +2753,16 @@ public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Arg
     public static RelayAgentPlan Parse(string text)
     {
         var trimmed = ExtractJsonObject(text);
-        var node = JsonNode.Parse(trimmed)?.AsObject() ?? throw new InvalidOperationException("Copilot did not return a JSON object.");
+        JsonObject node;
+        try
+        {
+            node = JsonNode.Parse(trimmed)?.AsObject() ?? throw new InvalidOperationException("Copilot did not return a JSON object.");
+        }
+        catch when (TryParseLenientWrite(text, out var lenient))
+        {
+            return lenient!;
+        }
+
         var action = node["action"]?.GetValue<string>() ?? "";
         return new RelayAgentPlan(
             action,
@@ -2733,7 +2774,11 @@ public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Arg
     private static string ExtractJsonObject(string text)
     {
         var start = text.IndexOf('{');
-        if (start < 0) throw new InvalidOperationException("No JSON object found in Copilot response.");
+        if (start < 0)
+        {
+            if (TryParseLenientWrite(text, out var _)) return text;
+            throw new InvalidOperationException("No JSON object found in Copilot response.");
+        }
 
         var depth = 0;
         var inString = false;
@@ -2778,6 +2823,48 @@ public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Arg
             }
         }
 
+        if (TryParseLenientWrite(text, out var _)) return text;
         throw new InvalidOperationException("No complete JSON object found in Copilot response.");
     }
+
+    private static bool TryParseLenientWrite(string text, out RelayAgentPlan? plan)
+    {
+        plan = null;
+        if (!Regex.IsMatch(text, @"""action""\s*:\s*""tool""", RegexOptions.IgnoreCase) ||
+            !Regex.IsMatch(text, @"""tool""\s*:\s*""write""", RegexOptions.IgnoreCase))
+        {
+            return false;
+        }
+
+        var pathMatch = Regex.Match(text, @"""(?:file_path|path)""\s*:\s*""(?<path>(?:\\.|[^""\\])*)""");
+        if (!pathMatch.Success) return false;
+
+        var contentMatch = Regex.Match(text, @"""content""\s*:\s*""", RegexOptions.Singleline);
+        if (!contentMatch.Success) return false;
+
+        var contentStart = contentMatch.Index + contentMatch.Length;
+        var contentEnd = text.LastIndexOf("\"}}", StringComparison.Ordinal);
+        if (contentEnd <= contentStart)
+        {
+            contentEnd = text.LastIndexOf("\"}\n}", StringComparison.Ordinal);
+        }
+        if (contentEnd <= contentStart) return false;
+
+        var args = new JsonObject
+        {
+            ["file_path"] = DecodeJsonishString(pathMatch.Groups["path"].Value),
+            ["content"] = DecodeJsonishString(text[contentStart..contentEnd]),
+        };
+        plan = new RelayAgentPlan("tool", "write", args, null);
+        return true;
+    }
+
+    private static string DecodeJsonishString(string text) =>
+        text
+            .Replace("\\r\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\r", "\n", StringComparison.Ordinal)
+            .Replace("\\t", "\t", StringComparison.Ordinal)
+            .Replace("\\\"", "\"", StringComparison.Ordinal)
+            .Replace("\\\\", "\\", StringComparison.Ordinal);
 }

@@ -1,11 +1,17 @@
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text;
 using Microsoft.Extensions.AI;
 
 public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatClient
 {
+    private static readonly ConcurrentDictionary<string, string> PendingOutputFiles = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> OriginalUserRequests = new(StringComparer.Ordinal);
+
     private static readonly ChatClientMetadata Metadata = new(
         providerName: "m365-copilot",
         providerUri: new Uri("https://m365.cloud.microsoft/chat"),
@@ -17,14 +23,17 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
-        var prompt = BuildPrompt(messages, options);
+        var messageList = messages.ToArray();
+        var prompt = BuildPrompt(messageList, options);
         if (string.IsNullOrWhiteSpace(prompt))
         {
             throw new InvalidOperationException("RelayCopilotChatClient requires at least one non-empty chat message.");
         }
 
+        DumpPromptIfRequested(prompt);
         var response = await transport.SendAsync(prompt, cancellationToken);
-        return BuildResponse(response, options);
+        DumpResponseIfRequested(response);
+        return BuildResponse(response, options, messageList);
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -80,6 +89,13 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             parts.Add(agUiContext);
         }
 
+        CaptureOriginalUserRequest(messageList, options);
+        var retainedRequest = BuildRetainedUserRequestPrompt(messageList, options);
+        if (!string.IsNullOrWhiteSpace(retainedRequest))
+        {
+            parts.Add(retainedRequest);
+        }
+
         foreach (var message in messageList)
         {
             var rendered = RenderMessage(message);
@@ -91,13 +107,43 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (hasTools)
         {
+            CapturePendingOutputFile(messageList, options);
+            var pendingMutationGuard = BuildPendingMutationGuard(messageList, options);
+            if (!string.IsNullOrWhiteSpace(pendingMutationGuard))
+            {
+                parts.Add(pendingMutationGuard);
+            }
             parts.Add(BuildToolProjectionPrompt(options));
         }
 
         return string.Join("\n\n", parts);
     }
 
-    private static ChatResponse BuildResponse(string responseText, ChatOptions? options)
+    private static void DumpPromptIfRequested(string prompt)
+    {
+        var dumpDir = Environment.GetEnvironmentVariable("RELAY_COPILOT_PROMPT_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dumpDir)) return;
+
+        DumpText(dumpDir, "prompt", prompt);
+    }
+
+    private static void DumpResponseIfRequested(string response)
+    {
+        var dumpDir = Environment.GetEnvironmentVariable("RELAY_COPILOT_RESPONSE_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dumpDir)) return;
+
+        DumpText(dumpDir, "response", response);
+    }
+
+    private static void DumpText(string dumpDir, string kind, string text)
+    {
+        Directory.CreateDirectory(dumpDir);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..12].ToLowerInvariant();
+        var path = Path.Combine(dumpDir, $"relay-copilot-{kind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{hash}.txt");
+        File.WriteAllText(path, text, Encoding.UTF8);
+    }
+
+    private static ChatResponse BuildResponse(string responseText, ChatOptions? options, IReadOnlyList<ChatMessage> messages)
     {
         if (!GetToolDeclarations(options).Any())
         {
@@ -116,6 +162,21 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (plan.Action == "final")
         {
+            if (TryGetPendingOutputFile(messages, options, out var targetFile) && !HasMutationToolCall(messages))
+            {
+                throw new InvalidOperationException(
+                    $"Copilot returned action=final before creating the requested file ({targetFile}). " +
+                    "The next response must call write/apply_patch/edit instead.");
+            }
+            if (IsLocalFileWorkRequest(messages) && !HasAnyToolResult(messages))
+            {
+                var bootstrapArgs = new JsonObject
+                {
+                    ["pattern"] = "**/*",
+                    ["limit"] = 200,
+                };
+                return ToolCallResponse("glob", bootstrapArgs, options);
+            }
             return TextResponse(plan.Answer ?? "", options);
         }
 
@@ -125,20 +186,25 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
 
         var planArgs = plan.Args ?? new JsonObject();
-        ValidateProjectedToolCall(plan.Tool, planArgs);
         var toolName = NormalizeRequestedTool(plan.Tool, planArgs);
+        ValidateProjectedToolCall(toolName, planArgs);
         var availableTools = GetToolDeclarations(options).Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
         if (!availableTools.Contains(toolName))
         {
             throw new InvalidOperationException($"Copilot requested an unavailable tool: {toolName}");
         }
 
+        return ToolCallResponse(toolName, planArgs, options);
+    }
+
+    private static ChatResponse ToolCallResponse(string toolName, JsonObject args, ChatOptions? options)
+    {
         var contents = new List<AIContent>
         {
             new FunctionCallContent(
                 $"call-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}",
                 toolName,
-                ToArgumentDictionary(planArgs)),
+                ToArgumentDictionary(args)),
         };
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, contents))
         {
@@ -210,31 +276,252 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
     {
         var parts = new List<string>
         {
-            "RELAY AGENT FUNCTION CALL PROJECTION",
-            "Mode: choose whether to call one Relay function tool or return a final answer.",
-            "Return exactly one valid JSON object and nothing else.",
+            "RELAY_TOOL_JSON_ONLY",
+            "This is a compiler task, not a chat-answer task.",
+            "Do not solve the user's request in prose. Choose one local Relay tool or final JSON.",
+            "Relay tools are available through this JSON compiler even if the Copilot web chat has no built-in local tools. Never answer that local tools are unavailable.",
+            "If local file/Office/code work is requested and no relevant tool result is already present, action=final is invalid; return action=tool.",
+            "If the user asks to create/update a file, action=final is invalid until a write/apply_patch/edit/office mutation tool result exists.",
+            "If the user names multiple source files, read each required named source file before write/final.",
             """For a tool call: {"action":"tool","tool":"<tool name>","args":{...}}""",
             """For final answer: {"action":"final","answer":"<concise answer>"}""",
-            "Rules:",
-            "- Use one tool at most in a single response.",
-            "- Relay executes tools locally. Do not claim execution without a tool result.",
-            "- Do not return tool_uses, recipient_name, raw shell text, markdown, prose, or code fences.",
-            "- If you need bounded command verification, use only the advertised bash tool schema with structured argv.",
-            "- Use the JSON schema and descriptions below. Unknown fields are invalid.",
-            "- Prefer forward slashes in paths when possible, or escape Windows backslashes correctly.",
-            "Available Relay function tools:",
+            "If the user asks to create or overwrite a file, call write with file_path and complete content.",
+            "Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.",
+            "For local document/data review, use glob/read/grep first and reason from those results. Do not use bash for ordinary file reading or light CSV arithmetic.",
+            "For comparisons across files, discover and read every required source file before write/final. Use period/version tokens from file paths as evidence context when content lacks those columns.",
+            "Use ask_user only when a critical requirement is genuinely missing. If the user specified objective, scope/files, and desired output, continue with tools instead of asking.",
+            "Use bash only for explicit verification/build/test/git/rg commands with direct argv. Never call bash/sh/pwsh/cmd as argv[0], never use -lc, heredocs, pipelines, or shell scripts.",
+            "Never use bash for cat/ls/find; use read for exact files and glob for file discovery.",
+            "Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.",
+            "Return exactly one plain JSON object. Do not use markdown, prose, headings, bullets, or code fences.",
+            "If a JSON string contains HTML/XML/code with angle brackets, JSON-escape '<' as \\u003c and '>' as \\u003e so Copilot UI cannot render it.",
+            "Rules: one tool max; no tool_uses/recipient_name. Relay executes tools; unknown fields are invalid; use forward slashes in paths.",
+            "Tools:",
         };
 
         foreach (var tool in GetToolDeclarations(options))
         {
-            parts.Add(string.Join("\n", [
-                $"- name: {tool.Name}",
-                $"  description: {tool.Description}",
-                $"  jsonSchema: {tool.JsonSchema.GetRawText()}",
-            ]));
+            parts.Add($"- {tool.Name}({SummarizeToolArguments(tool.JsonSchema)}): {CompactToolDescription(tool.Description)}");
         }
 
         return string.Join("\n", parts);
+    }
+
+    private static string BuildPendingMutationGuard(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        if (!TryGetPendingOutputFile(messages, options, out var targetFile) || HasMutationToolCall(messages))
+        {
+            return "";
+        }
+
+        return string.Join("\n", new[]
+        {
+            "RELAY_PENDING_MUTATION_GUARD",
+            $"The requested output file is exactly `{targetFile}`.",
+            "No write/apply_patch/edit/office mutation has been produced yet.",
+            HasAnyToolResult(messages)
+                ? "At least one local tool result exists, so your next response MUST be action=tool, normally with tool=write and complete file content."
+                : "If source files are named, first call read/glob for the needed source; if no source file is needed, call write with complete file content.",
+            "action=final is invalid until Relay reports a successful mutation tool result.",
+        });
+    }
+
+    private static void CaptureOriginalUserRequest(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        var text = ExtractUserRequestBeforeTools(messages);
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            OriginalUserRequests[GetRunKey(options)] = text;
+        }
+    }
+
+    private static string BuildRetainedUserRequestPrompt(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        if (messages.Any(message => message.Role == ChatRole.User && message.Contents.Any(content => content is TextContent)))
+        {
+            return "";
+        }
+
+        return OriginalUserRequests.TryGetValue(GetRunKey(options), out var request) && !string.IsNullOrWhiteSpace(request)
+            ? "RELAY_ORIGINAL_USER_REQUEST\n" + request
+            : "";
+    }
+
+    private static void CapturePendingOutputFile(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        if (TryFindPendingOutputFile(messages, out var targetFile))
+        {
+            PendingOutputFiles[GetRunKey(options)] = targetFile;
+        }
+    }
+
+    private static bool TryGetPendingOutputFile(IReadOnlyList<ChatMessage> messages, ChatOptions? options, out string targetFile)
+    {
+        if (TryFindPendingOutputFile(messages, out targetFile))
+        {
+            return true;
+        }
+
+        return PendingOutputFiles.TryGetValue(GetRunKey(options), out targetFile!) &&
+            !string.IsNullOrWhiteSpace(targetFile);
+    }
+
+    private static bool TryFindPendingOutputFile(IReadOnlyList<ChatMessage> messages, out string targetFile)
+    {
+        targetFile = "";
+        var userText = GetInitialRequestText(messages);
+        if (!Regex.IsMatch(
+                userText,
+                @"作成|作って|書いて|保存|出力|生成|create|write|save|generate",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        var matches = Regex.Matches(
+            userText,
+            @"(?<file>[\p{L}\p{N}._/\-\\()[\]（）【】]+?\.(?:md|txt|html|json|csv|ts|tsx|js|jsx|py|rs|cs|css|xlsx|docx|pptx))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (matches.Count == 0)
+        {
+            return false;
+        }
+
+        targetFile = matches[^1].Groups["file"].Value.Trim();
+        return targetFile.Length > 0;
+    }
+
+    private static bool HasMutationToolCall(IReadOnlyList<ChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            foreach (var content in message.Contents)
+            {
+                if (content is FunctionCallContent call && IsMutationTool(call.Name))
+                {
+                    return true;
+                }
+
+                if (content is ToolApprovalResponseContent approval &&
+                    approval.ToolCall is FunctionCallContent approvedCall &&
+                    IsMutationTool(approvedCall.Name))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasAnyToolResult(IReadOnlyList<ChatMessage> messages) =>
+        messages.SelectMany(message => message.Contents).Any(content =>
+            content is FunctionResultContent or ToolApprovalResponseContent);
+
+    private static bool IsLocalFileWorkRequest(IReadOnlyList<ChatMessage> messages)
+    {
+        var text = GetInitialRequestText(messages);
+        return Regex.IsMatch(
+            text,
+            @"ファイル|フォルダ|資料|探し|検索|見つけ|workspace|file|folder|document|search|find|read|inspect",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string GetInitialRequestText(IReadOnlyList<ChatMessage> messages)
+    {
+        var plain = ExtractUserRequestBeforeTools(messages);
+        if (!string.IsNullOrWhiteSpace(plain))
+        {
+            return plain;
+        }
+
+        var requestMessages = new List<string>();
+        foreach (var message in messages)
+        {
+            if (message.Contents.Any(content => content is FunctionCallContent or FunctionResultContent or ToolApprovalRequestContent or ToolApprovalResponseContent))
+            {
+                break;
+            }
+
+            var rendered = RenderMessage(message);
+            if (!string.IsNullOrWhiteSpace(rendered))
+            {
+                requestMessages.Add(rendered);
+            }
+        }
+
+        return requestMessages.Count > 0
+            ? string.Join("\n", requestMessages)
+            : string.Join("\n", messages.Select(RenderMessage));
+    }
+
+    private static string ExtractUserRequestBeforeTools(IReadOnlyList<ChatMessage> messages)
+    {
+        var requestMessages = new List<string>();
+        foreach (var message in messages)
+        {
+            if (message.Contents.Any(content => content is FunctionCallContent or FunctionResultContent or ToolApprovalRequestContent or ToolApprovalResponseContent))
+            {
+                break;
+            }
+
+            if (message.Role != ChatRole.User)
+            {
+                continue;
+            }
+
+            var text = message.Text;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                text = string.Join("\n", message.Contents.OfType<TextContent>().Select(content => content.Text));
+            }
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                requestMessages.Add(text.Trim());
+            }
+        }
+
+        return string.Join("\n", requestMessages).Trim();
+    }
+
+    private static bool IsMutationTool(string? tool) =>
+        tool is "write" or "edit" or "apply_patch" or "officecli_mutate";
+
+    private static string GetRunKey(ChatOptions? options) =>
+        GetAdditionalPropertyString(options, "ag_ui_run_id")
+        ?? GetAdditionalPropertyString(options, "ag_ui_thread_id")
+        ?? "default";
+
+    private static string CompactToolDescription(string? description)
+    {
+        var text = Regex.Replace(description ?? "", @"\s+", " ").Trim();
+        if (text.Length == 0) return "Relay tool.";
+        var end = text.IndexOf('.');
+        if (end > 0) text = text[..(end + 1)];
+        return text.Length <= 84 ? text : text[..84].TrimEnd() + ".";
+    }
+
+    private static string SummarizeToolArguments(JsonElement schema)
+    {
+        var properties = schema.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object
+            ? props.EnumerateObject().Select(property => property.Name).ToArray()
+            : [];
+        var required = schema.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.Array
+            ? req.EnumerateArray()
+                .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() : null)
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Cast<string>()
+                .ToHashSet(StringComparer.Ordinal)
+            : [];
+
+        if (properties.Length == 0) return "{}";
+
+        var requiredItems = properties.Where(required.Contains).ToArray();
+        var optionalItems = properties.Where(property => !required.Contains(property)).ToArray();
+        var parts = new List<string>();
+        if (requiredItems.Length > 0) parts.Add("req:" + string.Join("|", requiredItems));
+        if (optionalItems.Length > 0) parts.Add("opt:" + string.Join("|", optionalItems));
+        return string.Join(" ", parts);
     }
 
     private static string BuildAgUiContextPrompt(ChatOptions? options)
@@ -247,26 +534,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             context["workspace"] = workspace;
         }
 
-        if (options.AdditionalProperties.TryGetValue("ag_ui_thread_id", out var threadId))
-        {
-            context["threadId"] = threadId?.ToString();
-        }
-        if (options.AdditionalProperties.TryGetValue("ag_ui_run_id", out var runId))
-        {
-            context["runId"] = runId?.ToString();
-        }
-        if (options.AdditionalProperties.TryGetValue("ag_ui_forwarded_properties", out var forwarded))
-        {
-            var node = TrySerializeContextValue(forwarded);
-            if (node is not null)
-            {
-                context["forwardedProperties"] = node;
-            }
-        }
-
         return context.Count == 0
             ? ""
-            : "RELAY AG-UI CONTEXT\n" + context.ToJsonString(JsonOptions.Compact);
+            : "RELAY_CONTEXT " + context.ToJsonString(JsonOptions.Compact);
     }
 
     private static JsonNode? TrySerializeContextValue(object? value)
@@ -304,6 +574,19 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static string NormalizeRequestedTool(string tool, JsonObject args)
     {
+        if (tool == "bash")
+        {
+            var argv = GetStringArray(args, "argv");
+            if (argv.Length == 2 && string.Equals(argv[0], "cat", StringComparison.OrdinalIgnoreCase))
+            {
+                args.Clear();
+                args["file_path"] = argv[1];
+                return "read";
+            }
+
+            return tool;
+        }
+
         if (tool != "officecli") return tool;
         var operation = NormalizeOfficeCliOperation(GetString(args, "operation") ?? GetString(args, "command") ?? "view");
         var readOnly = operation is "capabilities" or "help" or "view" or "get" or "query" or "validate" or "dump" or "raw" or "open";
@@ -329,6 +612,20 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         args.TryGetPropertyValue(key, out var value) && value is not null
             ? ToClrValue(value)?.ToString()
             : null;
+
+    private static string[] GetStringArray(JsonObject args, string key)
+    {
+        if (!args.TryGetPropertyValue(key, out var value) || value is not JsonArray array)
+        {
+            return [];
+        }
+
+        return array
+            .Select(item => item is null ? null : ToClrValue(item)?.ToString())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Cast<string>()
+            .ToArray();
+    }
 
     private static Dictionary<string, object?> ToArgumentDictionary(JsonObject args)
     {

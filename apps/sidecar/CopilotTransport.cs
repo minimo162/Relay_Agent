@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
@@ -69,13 +70,14 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     private const int ComposerPasteSettleExecPollMaxMs = 440;
     private const int ComposerPasteSettleExecFallbackMs = 360;
     private const int LongPromptSkipSyncInPageChars = 12_000;
+    private const int FastInlineInsertMaxChars = 4_000;
     private const string ComposerDomHelpers = """
   function __raVis(el) {
     if (!el || el.nodeType !== 1) return false;
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) return false;
     const rect = el.getBoundingClientRect();
-    return rect.width > 20 && rect.height > 10 && rect.bottom > 1 && rect.right > 1;
+    return rect.width > 20 && rect.height > 10;
   }
   function __raComposerLabelHints(el) {
     if (!el || el.nodeType !== 1) return false;
@@ -294,6 +296,10 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     {
         var closeWhenDone = Environment.GetEnvironmentVariable("RELAY_COPILOT_FRESH_TARGET") == "1";
         var target = await ResolveCopilotTargetAsync(cancellationToken);
+        if (Environment.GetEnvironmentVariable("RELAY_COPILOT_PASTE_TRACE") == "1")
+        {
+            Console.Error.WriteLine($"[relay:copilot:target] id={target.Id} url={target.Url}");
+        }
         await using var session = await CdpSession.ConnectAsync(target.WebSocketDebuggerUrl, cancellationToken);
         try
         {
@@ -496,14 +502,23 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 
     private static async Task<int> PastePromptAsync(CdpSession session, string prompt, CancellationToken cancellationToken)
     {
+        var tracePaste = Environment.GetEnvironmentVariable("RELAY_COPILOT_PASTE_TRACE") == "1";
+        void Trace(string message)
+        {
+            if (tracePaste) Console.Error.WriteLine($"[relay:copilot:paste] {message}");
+        }
+
         var timing = CopilotPromptTiming.Default;
+        Trace($"begin chars={prompt.Length}");
         await TrySendAsync(session, "Runtime.enable", null, cancellationToken);
         await TrySendAsync(session, "DOM.enable", null, cancellationToken);
         await EnableCdpInputAsync(session, cancellationToken);
         await WaitForComposerAsync(session, cancellationToken);
+        Trace("composer-ready");
         await Task.Delay(timing.ComposerReadyDelayMs, cancellationToken);
 
         var preClearLen = await GetComposerLengthAsync(session, cancellationToken);
+        Trace($"pre-clear-len={preClearLen}");
         if (preClearLen > 0)
         {
             await ClearComposerViaKeyboardAsync(session, cancellationToken);
@@ -520,10 +535,11 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         var skipSyncInPage = prompt.Length > LongPromptSkipSyncInPageChars;
         var skipBulkFallbacks = false;
 
-        if (timing.FastInline)
+        if (timing.FastInline && prompt.Length <= FastInlineInsertMaxChars)
         {
             try
             {
+                Trace("fast-inline-begin");
                 await session.SendAsync("Input.insertText", new { text = prompt }, cancellationToken);
                 len = await WaitForComposerPasteSettleAsync(
                     session,
@@ -531,17 +547,57 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
                     maxPollMs: 360,
                     fallbackMs: 120,
                     cancellationToken);
+                Trace($"fast-inline-len={len}");
                 skipBulkFallbacks = PasteLooksComplete(len, prompt.Length);
             }
             catch (Exception ex)
             {
                 insertError = ex;
+                Trace($"fast-inline-error={ex.Message}");
             }
+        }
+
+        if (!skipBulkFallbacks && len > 0)
+        {
+            await ClearComposerViaKeyboardAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterClearDelayMs, cancellationToken);
+            await FocusComposerAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterRefocusDelayMs, cancellationToken);
+            len = await GetComposerLengthAsync(session, cancellationToken);
+        }
+
+        if (!skipBulkFallbacks)
+        {
+            Trace("native-clipboard-begin");
+            var nativePasteOk = await PasteViaNavigatorClipboardAsync(session, prompt, cancellationToken);
+            Trace($"native-clipboard-ok={nativePasteOk}");
+            if (nativePasteOk)
+            {
+                len = await WaitForComposerPasteSettleAsync(
+                    session,
+                    prompt.Length,
+                    ComposerPasteSettleKirokuPollMaxMs,
+                    ComposerPasteSettleKirokuFallbackMs,
+                    cancellationToken);
+                Trace($"native-clipboard-len={len}");
+                skipBulkFallbacks = PasteLooksComplete(len, prompt.Length);
+            }
+        }
+
+        if (!skipBulkFallbacks && len > 0)
+        {
+            await ClearComposerViaKeyboardAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterClearDelayMs, cancellationToken);
+            await FocusComposerAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterRefocusDelayMs, cancellationToken);
+            len = await GetComposerLengthAsync(session, cancellationToken);
         }
 
         if (!skipBulkFallbacks && prompt.Length <= 16_000)
         {
+            Trace("kiroku-begin");
             var kirokuOk = await PasteViaKirokuOuterClipboardOnlyAsync(session, prompt, cancellationToken);
+            Trace($"kiroku-ok={kirokuOk}");
             if (kirokuOk)
             {
                 len = await WaitForComposerPasteSettleAsync(
@@ -550,18 +606,31 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
                     ComposerPasteSettleKirokuPollMaxMs,
                     ComposerPasteSettleKirokuFallbackMs,
                     cancellationToken);
+                Trace($"kiroku-len={len}");
                 skipBulkFallbacks = PasteLooksComplete(len, prompt.Length);
             }
+        }
+
+        if (!skipBulkFallbacks && len > 0)
+        {
+            await ClearComposerViaKeyboardAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterClearDelayMs, cancellationToken);
+            await FocusComposerAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterRefocusDelayMs, cancellationToken);
+            len = await GetComposerLengthAsync(session, cancellationToken);
         }
 
         if (!skipBulkFallbacks && !skipSyncInPage)
         {
             try
             {
+                Trace("sync-exec-begin");
                 await PasteViaSyncBrowserExecCommandAsync(session, prompt, cancellationToken);
+                Trace("sync-exec-end");
             }
             catch
             {
+                Trace("sync-exec-error");
                 // This fallback is opportunistic; the next path verifies whether text landed.
             }
 
@@ -571,6 +640,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
                 ComposerPasteSettleExecPollMaxMs,
                 ComposerPasteSettleExecFallbackMs,
                 cancellationToken);
+            Trace($"sync-exec-len={len}");
             skipBulkFallbacks = PasteLooksComplete(len, prompt.Length);
         }
 
@@ -642,7 +712,54 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         await Task.Delay(timing.PostPasteDelayMs, cancellationToken);
         len = await GetComposerLengthAsync(session, cancellationToken);
 
-        if (!skipBulkFallbacks && len < needMin && prompt.Length >= 20)
+        if (prompt.Length >= 80 &&
+            (!PasteLooksComplete(len, prompt.Length) ||
+             !await ComposerTextLooksLikePromptAsync(session, prompt, cancellationToken)))
+        {
+            Trace($"safe-repaste-begin len={len}");
+            await ClearComposerViaKeyboardAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterClearDelayMs, cancellationToken);
+            await FocusComposerAsync(session, cancellationToken);
+            await Task.Delay(timing.AfterRefocusDelayMs, cancellationToken);
+
+            if (await PasteViaSyntheticClipboardAsync(session, prompt, cancellationToken))
+            {
+                len = await WaitForComposerPasteSettleAsync(session, prompt.Length, 700, 500, cancellationToken);
+                Trace($"safe-synthetic-len={len}");
+            }
+
+            if (!PasteLooksComplete(len, prompt.Length) ||
+                !await ComposerTextLooksLikePromptAsync(session, prompt, cancellationToken))
+            {
+                Trace($"safe-sync-exec-begin len={len}");
+                await ClearComposerViaKeyboardAsync(session, cancellationToken);
+                await Task.Delay(timing.AfterClearDelayMs, cancellationToken);
+                await FocusComposerAsync(session, cancellationToken);
+                await Task.Delay(timing.AfterRefocusDelayMs, cancellationToken);
+                await PasteViaSyncBrowserExecCommandAsync(session, prompt, cancellationToken);
+                len = await WaitForComposerPasteSettleAsync(session, prompt.Length, 700, 500, cancellationToken);
+                Trace($"safe-sync-exec-len={len}");
+            }
+
+            if (!PasteLooksComplete(len, prompt.Length) ||
+                !await ComposerTextLooksLikePromptAsync(session, prompt, cancellationToken))
+            {
+                Trace($"safe-cdp-begin len={len}");
+                await ClearComposerViaKeyboardAsync(session, cancellationToken);
+                await Task.Delay(timing.AfterClearDelayMs, cancellationToken);
+                await FocusComposerAsync(session, cancellationToken);
+                await Task.Delay(timing.AfterRefocusDelayMs, cancellationToken);
+                await InsertTextViaCdpAsync(session, prompt, cancellationToken);
+                len = await WaitForComposerPasteSettleAsync(session, prompt.Length, 700, 500, cancellationToken);
+                Trace($"safe-cdp-len={len}");
+            }
+        }
+
+        if (!skipBulkFallbacks &&
+            len < needMin &&
+            prompt.Length >= 20 &&
+            prompt.Length <= 400 &&
+            !prompt.Contains('\n', StringComparison.Ordinal))
         {
             await FocusComposerAsync(session, cancellationToken);
             if (await GetComposerLengthAsync(session, cancellationToken) > 0)
@@ -657,7 +774,11 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             len = await WaitForComposerPasteSettleAsync(session, prompt.Length, 340, 300, cancellationToken);
         }
 
-        if (!skipBulkFallbacks && len < needMin && prompt.Length >= 20)
+        if (!skipBulkFallbacks &&
+            len < needMin &&
+            prompt.Length >= 20 &&
+            prompt.Length <= 400 &&
+            !prompt.Contains('\n', StringComparison.Ordinal))
         {
             await FocusComposerAsync(session, cancellationToken);
             if (await GetComposerLengthAsync(session, cancellationToken) > 0)
@@ -672,7 +793,11 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             len = await WaitForComposerPasteSettleAsync(session, prompt.Length, 340, 300, cancellationToken);
         }
 
-        if (!skipBulkFallbacks && len < needMin && prompt.Length >= 20)
+        if (!skipBulkFallbacks &&
+            len < needMin &&
+            prompt.Length >= 20 &&
+            prompt.Length <= 400 &&
+            !prompt.Contains('\n', StringComparison.Ordinal))
         {
             await FocusComposerAsync(session, cancellationToken);
             if (await GetComposerLengthAsync(session, cancellationToken) > 0)
@@ -689,6 +814,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 
         if (prompt.Length >= 20 && !PasteLooksComplete(len, prompt.Length))
         {
+            Trace($"final-short-len={len}");
             var floorLong = Math.Min(2200, (int)Math.Floor(prompt.Length * 0.045));
             if (!(prompt.Length > 8000 && len >= 700 && len >= floorLong))
             {
@@ -697,8 +823,44 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             }
         }
 
+        if (prompt.Length >= 80 && !await ComposerTextLooksLikePromptAsync(session, prompt, cancellationToken))
+        {
+            Trace($"final-corrupt-len={len}");
+            throw new InvalidOperationException(
+                $"prompt_insert_failed: Prompt text reached Copilot composer but was corrupted before submit (visible length {len}, expected ~{prompt.Length}).");
+        }
+
+        Trace($"done len={len}");
         await Task.Delay(timing.PostPasteDelayMs, cancellationToken);
         return len;
+    }
+
+    private static async Task<bool> PasteViaNavigatorClipboardAsync(CdpSession session, string prompt, CancellationToken cancellationToken)
+    {
+        await TrySendAsync(session, "Browser.grantPermissions", new
+        {
+            origin = "https://m365.cloud.microsoft",
+            permissions = new[] { "clipboardReadWrite", "clipboardSanitizedWrite" }
+        }, cancellationToken);
+
+        var promptJson = JsonSerializer.Serialize(prompt);
+        var wrote = await session.EvaluateJsonAsync<bool>($$"""
+(async (fullText) => {
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return false;
+    await navigator.clipboard.writeText(fullText);
+    return true;
+  } catch (_) {
+    return false;
+  }
+})({{promptJson}})
+""", cancellationToken);
+        if (!wrote) return false;
+
+        await FocusComposerAsync(session, cancellationToken);
+        await Task.Delay(80, cancellationToken);
+        await DispatchPasteShortcutAsync(session, cancellationToken);
+        return true;
     }
 
     private static Task<bool> PasteViaKirokuOuterClipboardOnlyAsync(CdpSession session, string prompt, CancellationToken cancellationToken)
@@ -1026,6 +1188,44 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         await Task.Delay(80, cancellationToken);
     }
 
+    private static Task<bool> ClearComposerViaDomAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        var script = """
+(() => {
+""" + ComposerDomHelpers + """
+  const el = __raFindComposerEditable();
+  if (!el) return false;
+  try { el.focus(); } catch (_) {}
+  try {
+    const sel = el.ownerDocument.getSelection();
+    const range = el.ownerDocument.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (_) {}
+  try { el.ownerDocument.execCommand('delete', false); } catch (_) {}
+  try {
+    if ('value' in el) el.value = '';
+    el.textContent = '';
+    el.innerHTML = '';
+    el.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'deleteContentBackward',
+      data: null
+    }));
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'deleteContentBackward',
+      data: null
+    }));
+  } catch (_) {}
+  return true;
+})()
+""";
+        return session.EvaluateJsonAsync<bool>(script, cancellationToken);
+    }
+
     private static Task<int> GetComposerLengthAsync(CdpSession session, CancellationToken cancellationToken)
     {
         var script = """
@@ -1039,6 +1239,62 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 """;
         return session.EvaluateJsonAsync<int>(script, cancellationToken);
     }
+
+    private static Task<string> GetComposerTextAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        var script = """
+(() => {
+""" + ComposerDomHelpers + """
+  const el = __raFindComposerEditable();
+  if (!el) return "";
+  const raw = el.innerText || el.textContent || "";
+  return String(raw).replace(new RegExp(String.fromCharCode(0x200b), "g"), "").trim();
+})()
+""";
+        return session.EvaluateJsonAsync<string>(script, cancellationToken);
+    }
+
+    private static async Task<bool> ComposerTextLooksLikePromptAsync(
+        CdpSession session,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        var text = await GetComposerTextAsync(session, cancellationToken);
+        return ComposerTextLooksLikePrompt(text, prompt);
+    }
+
+    private static bool ComposerTextLooksLikePrompt(string composerText, string prompt)
+    {
+        var visible = NormalizeForComposerComparison(composerText);
+        var expected = NormalizeForComposerComparison(prompt);
+        if (expected.Length < 80) return visible.Contains(expected, StringComparison.Ordinal);
+
+        var headLength = Math.Min(160, expected.Length);
+        var head = expected[..headLength];
+        if (visible.StartsWith(head, StringComparison.Ordinal) || visible.Contains(head, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var userIndex = expected.IndexOf("user:", StringComparison.OrdinalIgnoreCase);
+        if (userIndex >= 0)
+        {
+            var userSlice = expected[userIndex..Math.Min(expected.Length, userIndex + 180)];
+            if (userSlice.Length >= 60 && visible.Contains(userSlice, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeForComposerComparison(string text) =>
+        Regex.Replace(
+                text.Replace("\r", "\n").Replace("\u200b", "").Replace("\ufeff", ""),
+                @"\s+",
+                " ")
+            .Trim();
 
     private static async Task SubmitPromptAsync(CdpSession session, int expectedPromptLength, int initialComposerLength, CancellationToken cancellationToken)
     {
@@ -1154,6 +1410,48 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         await FocusComposerAsync(session, cancellationToken);
         await Task.Delay(100, cancellationToken);
         await DispatchEnterKeyAsync(session, 2, cancellationToken);
+    }
+
+    private static async Task DispatchPasteShortcutAsync(CdpSession session, CancellationToken cancellationToken)
+    {
+        var modifiers = OperatingSystem.IsMacOS() ? 4 : 2;
+        await EnableCdpInputAsync(session, cancellationToken);
+        await session.SendAsync("Input.dispatchKeyEvent", new
+        {
+            type = "keyDown",
+            key = OperatingSystem.IsMacOS() ? "Meta" : "Control",
+            code = OperatingSystem.IsMacOS() ? "MetaLeft" : "ControlLeft",
+            windowsVirtualKeyCode = OperatingSystem.IsMacOS() ? 91 : 17,
+            nativeVirtualKeyCode = OperatingSystem.IsMacOS() ? 91 : 17,
+            modifiers
+        }, cancellationToken);
+        await session.SendAsync("Input.dispatchKeyEvent", new
+        {
+            type = "keyDown",
+            key = "v",
+            code = "KeyV",
+            windowsVirtualKeyCode = 86,
+            nativeVirtualKeyCode = 86,
+            modifiers
+        }, cancellationToken);
+        await session.SendAsync("Input.dispatchKeyEvent", new
+        {
+            type = "keyUp",
+            key = "v",
+            code = "KeyV",
+            windowsVirtualKeyCode = 86,
+            nativeVirtualKeyCode = 86,
+            modifiers
+        }, cancellationToken);
+        await session.SendAsync("Input.dispatchKeyEvent", new
+        {
+            type = "keyUp",
+            key = OperatingSystem.IsMacOS() ? "Meta" : "Control",
+            code = OperatingSystem.IsMacOS() ? "MetaLeft" : "ControlLeft",
+            windowsVirtualKeyCode = OperatingSystem.IsMacOS() ? 91 : 17,
+            nativeVirtualKeyCode = OperatingSystem.IsMacOS() ? 91 : 17
+        }, cancellationToken);
+        await Task.Delay(160, cancellationToken);
     }
 
     private static async Task DispatchEnterKeyAsync(CdpSession session, int modifiers, CancellationToken cancellationToken)
@@ -1370,6 +1668,10 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
       break;
     }
   }
+  const bodyText = document.body ? String(document.body.innerText || document.body.textContent || "") : "";
+  if (/(\n|^)\s*(Generating response|Creating response|Thinking|応答を生成しています|応答を作成しています|考えています)[.\u2026…\s]*(\n|$)/i.test(bodyText)) {
+    generating = true;
+  }
   return { length: len, generating };
 })()
 """;
@@ -1451,22 +1753,40 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         var baselineSnapshot = await ExtractAssistantSnapshotAsync(session, prompt, cancellationToken);
         var baselineReply = baselineSnapshot.Reply.Length > 0 ? baselineSnapshot.Reply : ExtractLatestAssistantAnswer(baseline);
         var baselineAssistantMarkers = Math.Max(baselineSnapshot.AssistantCount, CountAssistantMarkers(baseline));
+        var expectToolJson = prompt.Contains("RELAY_TOOL_JSON_ONLY", StringComparison.Ordinal);
         string best = "";
         string previous = "";
         var quietTicks = 0;
         var phantomGeneratingTicks = 0;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(180));
+        timeout.CancelAfter(GetReplyTimeout());
 
         while (!timeout.IsCancellationRequested)
         {
-            await Task.Delay(500, timeout.Token);
-            var snapshot = await ExtractAssistantSnapshotAsync(session, prompt, timeout.Token);
+            AssistantSnapshot snapshot;
+            try
+            {
+                await Task.Delay(500, timeout.Token);
+                snapshot = await ExtractAssistantSnapshotAsync(session, prompt, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                break;
+            }
+
             var rawText = snapshot.ConversationText;
             var text = NormalizeVisibleText(rawText);
             var delta = ExtractDelta(normalizedBaseline, text);
             var promptReply = ExtractAssistantAnswerAfterPrompt(rawText, prompt);
-            var generating = snapshot.Generating || await IsCopilotGeneratingAsync(session, timeout.Token);
+            bool generating;
+            try
+            {
+                generating = snapshot.Generating || await IsCopilotGeneratingAsync(session, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+            {
+                break;
+            }
             phantomGeneratingTicks = generating ? phantomGeneratingTicks + 1 : 0;
             var latestReply = snapshot.Reply.Length > 0 ? snapshot.Reply : ExtractLatestAssistantAnswer(rawText);
             var currentAssistantMarkers = Math.Max(snapshot.AssistantCount, CountAssistantMarkers(rawText));
@@ -1512,7 +1832,14 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 
             if (quietTicks >= 2 && best.Length > 0)
             {
-                if ((generating && phantomGeneratingTicks < 12) || snapshot.IncompleteJson || LooksIncompleteAssistantResponse(best))
+                if ((generating && phantomGeneratingTicks < 12) ||
+                    (snapshot.IncompleteJson && !ContainsCompleteJsonObject(best)) ||
+                    LooksIncompleteAssistantResponse(best))
+                {
+                    quietTicks = 1;
+                    continue;
+                }
+                if (expectToolJson && !ContainsCompleteJsonObject(best) && quietTicks < 36)
                 {
                     quietTicks = 1;
                     continue;
@@ -1522,9 +1849,78 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         }
 
         var fallback = NormalizeAssistantCandidate(best.Length > 0 ? best : networkCapture.LatestCandidate());
-        if (fallback.Length > 0 && !LooksIncompleteAssistantResponse(fallback)) return fallback;
+        if (fallback.Length > 0 && !LooksIncompleteAssistantResponse(fallback) && (!expectToolJson || ContainsCompleteJsonObject(fallback))) return fallback;
         throw new TimeoutException("Timed out waiting for Copilot response.");
     }
+
+    private static bool ContainsCompleteJsonObject(string text)
+    {
+        if (LooksLikeCompleteLenientWriteObject(text)) return true;
+
+        var start = text.IndexOf('{');
+        if (start < 0) return false;
+
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        for (var index = start; index < text.Length; index++)
+        {
+            var c = text[index];
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"') inString = false;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+            if (c == '{')
+            {
+                depth++;
+                continue;
+            }
+            if (c == '}')
+            {
+                depth--;
+                if (depth == 0) return true;
+                if (depth < 0) return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static TimeSpan GetReplyTimeout()
+    {
+        var raw = Environment.GetEnvironmentVariable("RELAY_COPILOT_REPLY_TIMEOUT_SECONDS");
+        if (!int.TryParse(raw, CultureInfo.InvariantCulture, out var seconds))
+        {
+            seconds = 300;
+        }
+
+        return TimeSpan.FromSeconds(Math.Clamp(seconds, 30, 900));
+    }
+
+    private static bool LooksLikeCompleteLenientWriteObject(string text) =>
+        text.Contains("\"action\"", StringComparison.Ordinal) &&
+        text.Contains("\"tool\"", StringComparison.Ordinal) &&
+        text.Contains("\"write\"", StringComparison.Ordinal) &&
+        text.Contains("\"content\"", StringComparison.Ordinal) &&
+        (text.LastIndexOf("\"}}", StringComparison.Ordinal) > text.IndexOf("\"content\"", StringComparison.Ordinal) ||
+         text.LastIndexOf("\"}\n}", StringComparison.Ordinal) > text.IndexOf("\"content\"", StringComparison.Ordinal));
 
     private static Task<AssistantSnapshot> ExtractAssistantSnapshotAsync(CdpSession session, string prompt, CancellationToken cancellationToken)
     {
@@ -1569,6 +1965,20 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     }
     return false;
   }
+  function elementText(el) {
+    const inner = String(el?.innerText || '');
+    const text = String(el?.textContent || '');
+    if (text.length > inner.length + 200 &&
+        (text.includes('```json') ||
+         text.includes('"action"') ||
+         text.includes('\\"action\\"') ||
+         text.includes('<!DOCTYPE') ||
+         text.includes('<!doctype') ||
+         text.includes('<style'))) {
+      return text;
+    }
+    return inner || text;
+  }
   function stripChrome(text) {
     let s = String(text || '').replace(/\r/g, '\n').trim();
     s = s.replace(/^Copilot said:\s*/i, '');
@@ -1583,6 +1993,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
       if (/^display options$/i.test(line)) return false;
       if (/^more actions$/i.test(line)) return false;
       if (/^feedback$/i.test(line)) return false;
+      if (/^reasoning\b.*$/i.test(line)) return false;
       if (/AI-generated content may be incorrect/i.test(line)) return false;
       if (/^(generating|thinking|creating response|応答を生成しています|応答を作成しています|考えています)[.\u2026…\s]*$/i.test(line)) return false;
       return true;
@@ -1600,6 +2011,10 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
       if (/stop\s+generating|stop\s+response|\bstop\b|cancel\s+response|生成を停止|停止|中断/i.test(label)) {
         return true;
       }
+    }
+    const bodyText = document.body ? String(document.body.innerText || document.body.textContent || '') : '';
+    if (/(\n|^)\s*(Generating response|Creating response|Thinking|応答を生成しています|応答を作成しています|考えています)[.\u2026…\s]*(\n|$)/i.test(bodyText)) {
+      return true;
     }
     return false;
   }
@@ -1642,19 +2057,25 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
   for (const sel of conversationRoots) {
     for (const el of document.querySelectorAll(sel)) {
       if (!visible(el)) continue;
-      const text = String(el.innerText || el.textContent || '').trim();
+      const text = elementText(el).trim();
       if (text.length > conversation.length) conversation = text;
     }
   }
-  if (!conversation && document.body) conversation = document.body.innerText || '';
+  if (!conversation && document.body) conversation = elementText(document.body);
 
   const candidates = [];
   for (const sel of assistantSelectors) {
     for (const el of document.querySelectorAll(sel)) {
-      if (!visible(el) || inNoise(el)) continue;
-      const text = stripChrome(el.innerText || el.textContent || '');
+      if (inNoise(el)) continue;
+      if (!visible(el) && sel !== '[data-testid="markdown-reply"]' && sel !== '[data-testid="copilot-message-reply-div"]') continue;
+      const text = stripChrome(elementText(el));
       if (text.length > 0) candidates.push(text);
     }
+  }
+  for (const el of document.querySelectorAll('[data-testid="markdown-reply"], [data-testid="lastChatMessage"]')) {
+    if (inNoise(el)) continue;
+    const text = stripChrome(String(el.innerText || el.textContent || ''));
+    if (text.length > 0 && !candidates.includes(text)) candidates.push(text);
   }
   let reply = candidates.length ? candidates[candidates.length - 1] : latestMarkerReply(conversation);
   const markerReply = latestMarkerReply(conversation);
@@ -1711,6 +2132,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     {
         var text = (candidate ?? "").Trim();
         if (text.Length == 0) return true;
+        if (LooksLikeCompleteLenientWriteObject(text)) return false;
         if (Regex.IsMatch(text, @"(?i)(Generating response|Creating response|Thinking|Please wait|応答を生成しています|応答を作成しています|考えています)[.\u2026…\s]*$")) return true;
         if (!text.StartsWith('{') && !text.StartsWith('[') && !text.Contains("{\"")) return false;
 
@@ -1755,6 +2177,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .Where(line => !line.Equals("Copilot", StringComparison.OrdinalIgnoreCase))
+            .Where(line => !Regex.IsMatch(line, @"^Reasoning\b", RegexOptions.IgnoreCase))
             .Where(line => !line.Contains("AI-generated content may be incorrect", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         return string.Join("\n", lines).Trim();
@@ -1767,7 +2190,6 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         if (markerIndex < 0) return "";
 
         var answer = new List<string>();
-        var started = false;
         for (var index = markerIndex + 1; index < lines.Length; index++)
         {
             var line = lines[index];
@@ -1783,11 +2205,9 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             }
             if (line.Length == 0)
             {
-                if (started) break;
                 continue;
             }
 
-            started = true;
             answer.Add(line);
         }
 
@@ -1825,7 +2245,6 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     {
         var lines = text.Replace("\r", "\n").Split('\n').Select(line => line.Trim()).ToArray();
         var answer = new List<string>();
-        var started = false;
         foreach (var line in lines)
         {
             if (line.Equals("You said:", StringComparison.OrdinalIgnoreCase) ||
@@ -1840,11 +2259,9 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             }
             if (line.Length == 0)
             {
-                if (started) break;
                 continue;
             }
 
-            started = true;
             answer.Add(line);
         }
         return string.Join("\n", answer).Trim();
