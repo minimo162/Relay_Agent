@@ -1,6 +1,6 @@
 # Relay_Agent Completion Plan
 
-Date: 2026-05-16
+Date: 2026-05-17
 
 ## Product Direction
 
@@ -16,37 +16,121 @@ workspace, one task composer, one agent trace, and one result/approval surface.
 M365 Copilot chooses which local tools are needed from the user's natural
 language request; Relay validates and executes those tools locally.
 
-The product no longer treats AionUi, OpenCode/OpenWork, or Tauri as active
-product architecture. The active architecture is a browser-hosted local web
-workbench served by the Relay sidecar. Linux/Windows parity, repeatable testing
-from Linux, and simpler distribution make this the primary and only target
-path.
+The product no longer treats AionUi, OpenCode/OpenWork, Codex app-server,
+custom Relay run streams, or Tauri as active product architecture. The active
+architecture is a **framework-native Agent Framework + AG-UI workbench**:
+Microsoft Agent Framework owns agent turns, tool invocation, sessions,
+middleware, approvals, and streaming run lifecycle; AG-UI owns the
+Workbench-facing event/state/tool/approval protocol; Relay adds only the
+minimum adapters needed for M365 Copilot over Edge CDP, local tool function
+bodies, workspace policy, packaging, and diagnostics.
 
 The active product target is a **generic Relay Workbench**:
 
 - natural-language task input;
 - Copilot-led step planning and tool selection;
-- Relay-owned validation, approvals, execution, backups, diffs, and logs;
+- Relay-owned validation, local function bodies, approval policy/audit,
+  backups, diffs, and logs around Agent Framework execution;
 - generic local tools such as ripgrep-backed search, file read, OfficeCLI, and
   exact file edits;
 - AG-UI-first user experience and event protocol, with a minimal visual surface
   and no diagnostic-first clutter.
 
+Framework adoption rule:
+
+- Prefer official Microsoft Agent Framework and AG-UI concepts before adding
+  any Relay-owned protocol, schema, event, tool catalog, or workflow state.
+- If Agent Framework or AG-UI already has a concept, Relay must use or adapt
+  that concept instead of creating a parallel Relay abstraction.
+- If a gap exists because M365 Copilot is only reachable through Edge CDP,
+  isolate the gap in the Copilot provider adapter or a narrow middleware layer.
+  Do not compensate by building a second agent runtime.
+- OpenCode, Codex app-server, GitHub Copilot, Claude Code, and AionUi may be
+  used only as comparative prior art. They are not runtime substrates, public
+  contracts, or naming authorities for Relay's active architecture.
+
+Plan-coherence rule for older sections in this file:
+
+- Any older task text that names Relay-specific run/event contracts,
+  `RunEvent`, `RelayTurnState` as the canonical runtime state, OpenCode-
+  compatible contracts, or `rg_files`/`rg_search` as public tool names is
+  superseded by the framework-native direction in this section.
+- Public Workbench traffic must be AG-UI. Public tool/runtime semantics must be
+  Agent Framework function/MCP/client tools plus middleware and approvals.
+- Legacy names may remain only as internal provider aliases during migration:
+  `rg_files` maps to the Agent Framework `glob` function tool, and
+  `rg_search` maps to the Agent Framework `grep` function tool. New plan tasks
+  must use the canonical names `glob` and `grep`.
+
+Root prevention guarantees:
+
+- This plan can prevent `local tools unavailable`, unnecessary `ask_user`, and
+  premature `final` only if those states are made structurally impossible before
+  Copilot is called. Prompt wording alone is not an acceptable control.
+- `local tools unavailable` prevention:
+  - Agent Framework tool registration is the source of truth for local
+    capabilities. Run admission must verify that required function tools or
+    approved MCP/client tools are registered, enabled, and policy-allowed before
+    the Copilot provider call.
+  - If the required tool family is missing or blocked, Relay fails the Agent
+    Framework run with an AG-UI error before Copilot can answer. Copilot must
+    never be asked to explain that local tools are unavailable as a normal
+    final answer.
+  - Copilot prompts/tool schemas are generated from the actual Agent Framework
+    tool inventory and session metadata, not from hand-written static prompt
+    text.
+- Unnecessary `ask_user` prevention:
+  - `ask_user` is an AG-UI client tool / HITL state, not a backend execution
+    fallback and not a globally visible action.
+  - Agent Framework admission and middleware may expose `ask_user` only when a
+    required field is genuinely missing or the user must make a required
+    safety/product choice. Known workspace + known objective + available local
+    tools means `ask_user` is absent from the model-facing tool set.
+  - If Copilot still emits a clarification request outside an allowed
+    clarification state, middleware rejects it as a protocol defect and records
+    diagnostics; it must not be shown as normal UX.
+- Premature `final` prevention:
+  - Final assistant output is allowed only when Agent Framework session state
+    says terminal criteria are satisfied: required observations exist, required
+    reads were performed, required mutations completed or were rejected, and
+    pending approvals/clarifications are resolved.
+  - Before terminal eligibility, Copilot can only continue through valid
+    Agent Framework tool calls, AG-UI client-tool/HITL requests, or a visible
+    protocol error. A final-style response while local work is pending is a
+    provider/middleware defect, not a user-facing answer.
+  - Prevention-clean tests must assert zero guard repairs for normal local
+    search, file read, Office edit, and code edit paths. Guard-hit tests remain
+    separate regression fixtures.
+
 ## Immediate Task Queue: Relay Protocol State Machine
 
 The live Copilot E2E runs exposed a root reliability issue: M365 Copilot can
-still answer as if local tools are unavailable because it only sees Relay tools
-through prompt projection, not as native Microsoft 365 UI tools. Prompt wording
-and one-off repair rules are not enough. Relay must own the turn protocol
-deterministically, while Copilot remains responsible for reasoning, query
-expansion, summaries, and choosing among the tool options Relay has made
-available for the current state.
+still answer as if local tools are unavailable because it only sees local tools
+through Relay's Copilot adapter, not as native Microsoft 365 UI tools. Prompt
+wording and one-off repair rules are not enough. The active fix is to make
+Agent Framework and AG-UI own the deterministic turn/session/event protocol,
+while Relay contributes only the Copilot transport adapter, local function
+bodies, policy middleware, and diagnostics. Copilot remains responsible for
+reasoning, query expansion, summaries, and choosing among the Agent Framework
+tools available for the current session state.
 
-This queue replaces ad hoc guard clauses with a small state machine around
-Copilot turns. The goal is that local-work requests cannot finish with
-`tools unavailable`, `ask_user`, or `final` before Relay has executed the
-required local tool path. Failures should be explicit protocol errors with
-diagnostic artifacts, not silent fallback behavior.
+The completed RPSM01-RPSM07 slice added the first state-machine safety net.
+That is necessary, but it is not the final design. The product target is
+**prevention first**: Relay should shape the Copilot turn so invalid responses
+are not natural to produce in the first place. `tools unavailable`, unnecessary
+`ask_user`, and premature `final` should be treated as design failures in the
+prompt/action contract, not normal outputs that the guard routinely catches.
+
+The guard remains only as a last line of defense. The primary path should be:
+
+1. Agent Framework middleware admits the run before each Copilot provider call.
+2. Agent Framework exposes only tools valid for the session state.
+3. AG-UI state/capability events expose the same valid next actions to the UI.
+4. Relay function tools supply required safe local observations before Copilot
+   is asked for a conclusion.
+5. If Copilot still violates the contract, Relay fails the Agent Framework run
+   visibly and the adapter/tool/middleware contract is fixed; it should not
+   silently compensate with an unrelated fallback.
 
 1. **RPSM01: Capture protocol-state baseline and failure taxonomy.**
    - Status: completed 2026-05-17.
@@ -157,6 +241,399 @@ diagnostic artifacts, not silent fallback behavior.
      no hidden fallback runner or duplicated legacy path.
    - Verification: `pnpm check`; live Copilot search and file-writing E2E;
      `git diff --check`.
+
+### Framework-Native Prevention Queue
+
+These tasks correct the design direction after RPSM01-RPSM07. They should be
+implemented before adding more feature breadth. The goal is to make invalid
+Copilot actions unlikely by construction, not merely intercepted after the
+fact.
+
+Research checked on 2026-05-17:
+
+- Microsoft Agent Framework workflows distinguish LLM-driven agents from
+  explicitly defined workflows, and support typed executors, conditional
+  routing, events, checkpointing, and HITL.
+- Microsoft Agent Framework tools expose explicit function schemas, can hide
+  runtime-only context from model-visible parameters, and support
+  declaration-only tools when execution is supplied by the application.
+- Microsoft Agent Framework middleware provides the official interception
+  points for run-level, function-call, and chat-call validation, telemetry, and
+  policy.
+- The Agent Framework + AG-UI HITL pattern routes sensitive actions through
+  approval events instead of letting the model directly execute them.
+- AG-UI defines streaming lifecycle, state, activity, and tool-call events, and
+  its capabilities model lets the UI adapt to the tools and state an agent
+  actually supports at runtime.
+- Microsoft's Agent Framework samples and DevUI examples structure advanced
+  features as agents, tools, RAG/file-search, workflows, tracing/evaluation,
+  and DevUI-compatible entities rather than a separate app-specific run
+  protocol.
+- Prior AG-UI integrations such as Pydantic AI demonstrate the same pattern:
+  keep the backend agent/framework-specific, then expose it through AG-UI
+  events and tools for the frontend.
+
+Reference URLs:
+
+- `https://learn.microsoft.com/en-us/agent-framework/workflows/`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/function-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/middleware/`
+- `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop`
+- `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/`
+- `https://github.com/microsoft/Agent-Framework-Samples`
+- `https://learn.microsoft.com/en-us/agent-framework/devui/samples`
+- `https://docs.ag-ui.com/concepts/events`
+- `https://docs.ag-ui.com/concepts/tools`
+- `https://docs.ag-ui.com/concepts/capabilities`
+- `https://docs.ag-ui.com/concepts/state`
+- `https://docs.ag-ui.com/concepts/middleware`
+- `https://pydantic.dev/docs/ai/examples/ag-ui/`
+
+Design correction from that research:
+
+- Relay should stop growing a Relay-owned run protocol. The canonical run
+  lifecycle should be Agent Framework `Agent` / `AgentSession` /
+  tool-middleware state projected to AG-UI lifecycle, tool, state, approval,
+  and error events.
+- Local work should be represented as Agent Framework functions, approval
+  wrappers, middleware, and, only when the sequence is truly fixed, Workflow
+  executors/edges. Relay-specific state should be a projection/cache of that
+  canonical framework state, not the authority.
+- Copilot remains the reasoning controller through a custom Agent
+  Framework-compatible chat provider. That provider is the only place where
+  Relay compensates for M365 Copilot's non-API browser transport.
+- AG-UI state/capability events should describe valid next actions to the UI;
+  the model-facing tools should come from the same Agent Framework tool set and
+  middleware decisions, not from a parallel prompt-only catalog.
+- The prompt guard remains a last-line invariant. Guard hits in normal
+  scenarios are bugs in the Agent Framework tool registration, middleware,
+  AG-UI projection, or Copilot provider adapter.
+
+1. **PFP01: Move run admission into Agent Framework middleware.**
+   - Status: complete.
+   - Goal: prevent generic Copilot chat turns without introducing a parallel
+     Relay runtime.
+   - Changes:
+     - Implement admission as Agent Framework run/chat middleware that validates
+       workspace, objective, session, available tools, and policy before the
+       Copilot provider is called.
+     - Store admission metadata in Agent Framework session/context metadata and
+       AG-UI state snapshots, not in a separate Relay-only run-state authority.
+     - Fail the Agent Framework run with an AG-UI error event if admission
+       cannot determine a safe local-work context.
+   - Acceptance: every local-work prompt dump and AG-UI state snapshot has the
+     same Agent Framework session/run identity; no prompt is emitted outside an
+     admitted Agent Framework run; missing local tools fail before Copilot is
+     called and never become a Copilot-authored final answer.
+   - Verification: middleware fixture tests for search, exact read, Office
+     edit, code edit, missing workspace, and ambiguous destructive intent;
+     `pnpm check`.
+
+2. **PFP02: Use Agent Framework tools as the single model-facing catalog.**
+   - Status: complete.
+   - Goal: remove Relay's separate action schema as a competing tool system.
+   - Changes:
+     - Register local capabilities as Agent Framework function tools or
+       approved MCP tools with typed schemas and descriptions.
+     - Use Agent Framework middleware to filter or terminate unavailable tools
+       by session state instead of maintaining an independent Relay
+       prompt-only catalog.
+     - Use AG-UI client tools only for user-facing interaction such as approval
+       or clarification, following the AG-UI tool/HITL pattern.
+     - Keep any Copilot JSON repair limited to adapting browser text into
+       Agent Framework-compatible tool calls; it must not define a second
+       product contract.
+   - Acceptance: there is one exported tool inventory, derived from Agent
+     Framework registrations and AG-UI client tools; prompt dumps cannot name a
+     tool absent from that inventory; `ask_user` is absent unless the admitted
+     state explicitly requires clarification.
+   - Verification: Agent Framework tool inventory snapshots; AG-UI capability
+     snapshots; live Copilot search/code E2E.
+
+3. **PFP03: Project Agent Framework state to AG-UI state/capabilities.**
+   - Status: complete.
+   - Goal: make UI state and model state share the same source of truth.
+   - Changes:
+     - Emit AG-UI `STATE_SNAPSHOT` and `STATE_DELTA` from Agent Framework
+       session/run metadata, tool observations, pending approvals, artifacts,
+       and terminal state.
+     - Use AG-UI capabilities to expose supported tool families, HITL support,
+       streaming support, and state support to the Workbench.
+     - Remove Workbench dependencies on Relay-only run-state fields where an
+       AG-UI event/state field can express the same fact.
+   - Acceptance: the main Workbench UI can be reconstructed from AG-UI
+     lifecycle/text/tool/state/error events plus capabilities, without a Relay
+     custom run event union; the UI can determine whether the run is
+     non-terminal, waiting for HITL, failed, or final from AG-UI state alone.
+   - Verification: AG-UI replay fixture; browser E2E from recorded AG-UI
+     events; `pnpm check`.
+
+4. **PFP04: Use Agent Framework approval primitives for mutations.**
+   - Status: complete.
+   - Goal: remove custom approval state machines from normal mutation flow.
+   - Changes:
+     - Wrap write/edit/apply-patch/Office mutation functions with Agent
+       Framework approval primitives such as `ApprovalRequiredAIFunction` or
+       `approval_mode="always_require"` where applicable.
+     - Convert approval requests to AG-UI client-tool or HITL events using the
+       official Agent Framework AG-UI integration path where available.
+     - Resume the same Agent Framework session with the approval response.
+       Relay may persist an audit copy, but that copy is not the runtime source
+       of truth.
+   - Acceptance: a mutation can pause, render approval, approve/reject, resume,
+     and complete using Agent Framework + AG-UI approval flow without the old
+     Relay approval stream.
+   - Verification: approval smoke for exact text edit and OfficeCLI mutation;
+     `pnpm check`.
+
+5. **PFP05: Express deterministic local sequences as workflows only when real.**
+   - Status: complete.
+   - Goal: use Agent Framework workflows for fixed business processes without
+     turning every task into a custom Relay planner.
+   - Changes:
+     - Keep open-ended work as Agent Framework agents with tools.
+     - Use Workflow executors/edges only for fixed sequences such as
+       `inspect Office file -> propose mutation -> approval -> execute ->
+       verify`, or `discover files -> read selected evidence -> summarize`.
+     - Document each workflow's entry condition, exit condition, approval
+       point, and emitted AG-UI state before implementation.
+   - Acceptance: no new Relay scheduler or mini-workflow engine is added; fixed
+     local sequences are either Agent Framework workflows or ordinary
+     agent+tool runs.
+   - Verification: workflow admission matrix; workflow smoke if a workflow is
+     implemented; `pnpm check`.
+
+6. **PFP06: Move prevention checks into middleware and tests.**
+   - Status: complete.
+   - Goal: turn `tools unavailable`, premature `final`, and unnecessary
+     `ask_user` into framework-level test failures instead of prompt folklore.
+   - Changes:
+     - Implement run/chat/function middleware that records tool availability,
+       local-observation requirements, approval requirements, and terminal
+       eligibility.
+     - Fail prevention-clean tests if the Copilot provider emits a response
+       that bypasses required Agent Framework tool/approval flow.
+     - Keep prompt repair only as a compatibility adapter for M365 Copilot's
+     browser transport, with counters proving it is not the normal path.
+   - Acceptance: deterministic smokes assert zero guard replacements for normal
+     local search, file creation, Office inspect, and code edit paths; explicit
+     fixtures prove `local_tools_unavailable_final`, unnecessary `ask_user`,
+     and premature `final` are rejected before user-visible completion.
+   - Verification: Agent Framework middleware tests; AG-UI replay tests;
+     `pnpm check`.
+
+7. **PFP07: Add live Copilot framework-native acceptance.**
+   - Status: complete.
+   - Goal: prove the official-framework path works with real signed-in M365
+     Copilot.
+   - Changes:
+     - Store prompt/response dumps and AG-UI event logs for live local search,
+       exact read, Office inspect/mutation approval, and file-creation canaries.
+     - Assert each live run uses Agent Framework session/tool/approval flow and
+       emits replayable AG-UI events.
+     - Treat missing official-framework projection, Copilot transport drift,
+       or invalid schema as a failing run requiring code changes.
+   - Acceptance: live Copilot can complete the local-work canaries through the
+     Agent Framework + AG-UI path without falling back to a Relay custom run
+     protocol.
+   - Verification: `pnpm workbench:live-copilot-e2e` plus tracked live
+     local-work E2E when signed-in Edge CDP is available.
+
+### Executable Task Queue: Framework-Native Prevention Cutover
+
+This is the implementation breakdown for the framework-native prevention plan
+above. Execute in order unless a task explicitly states that it can run in
+parallel. Each task must leave an artifact and a verification entry in
+`docs/IMPLEMENTATION.md` before it can be marked complete.
+
+1. **FNP00: Capture the current framework/protocol baseline.**
+   - Status: complete.
+   - Goal: make the migration measurable before code changes.
+   - Scope:
+     - Inventory the active Agent Framework registrations, local tool function
+       names, AG-UI event endpoints, Relay-only run/event fields, Copilot prompt
+       builders, and guard/repair counters.
+     - Mark each item as `keep`, `replace-with-framework`, `adapter-only`, or
+       `remove`.
+   - Artifact: `docs/FRAMEWORK_NATIVE_CUTOVER.md` with the baseline matrix.
+   - Acceptance: the matrix identifies every active path that can still emit
+     `local tools unavailable`, unnecessary `ask_user`, or premature `final`.
+   - Verification: `git diff --check`; `pnpm check` if code fixtures are added.
+
+2. **FNP01: Add Agent Framework run-admission middleware.**
+   - Status: complete.
+   - Goal: stop invalid local-work runs before the Copilot provider is called.
+   - Scope:
+     - Add middleware that validates workspace, user objective, session id,
+       enabled tool families, policy scope, and whether a local observation or
+       approval is required.
+     - Persist admission state in Agent Framework session/context metadata and
+       project it to AG-UI state.
+     - If required local tools are missing, fail with an AG-UI error before
+       calling Copilot.
+   - Acceptance: missing `glob`/`grep`/`read`/OfficeCLI/edit tools cannot become
+     a Copilot-authored final answer.
+   - Verification: admission unit tests for search, exact read, Office edit,
+     code edit, missing workspace, and missing tool family; `pnpm check`.
+
+3. **FNP02: Make Agent Framework tool registration the single catalog.**
+   - Status: complete.
+   - Goal: remove the separate Relay prompt-only tool catalog as a source of
+     truth.
+   - Scope:
+     - Export one tool inventory from Agent Framework function tools plus AG-UI
+       client tools.
+     - Ensure prompt projection, support bundles, AG-UI capabilities, and tests
+       all read from that inventory.
+     - Keep legacy provider names only behind descriptors; public names are
+       `glob`, `grep`, `read`, `officecli`, `officecli_mutate`, `edit`,
+       `write`, `apply_patch`, `workspace_status`, `diff`, `bash`, and AG-UI
+       `ask_user`.
+   - Acceptance: no prompt or AG-UI capability can mention a tool absent from
+     Agent Framework registration.
+   - Verification: tool inventory snapshot test; AG-UI capability snapshot
+     test; `pnpm check`.
+
+4. **FNP03: Convert `ask_user` into a state-scoped AG-UI client tool.**
+   - Status: complete.
+   - Goal: make unnecessary clarification structurally unavailable.
+   - Scope:
+     - Remove `ask_user` from the global backend tool set.
+     - Expose it only as an AG-UI client/HITL tool when admission middleware
+       marks required clarification as valid.
+     - Add middleware rejection for clarification attempts outside that state.
+   - Acceptance: known workspace + known objective + available local tools
+     produces no model-visible `ask_user`.
+   - Verification: prompt/tool snapshot tests for search, Office edit, code
+     edit, and missing-workspace clarification; `pnpm check`.
+
+5. **FNP04: Add terminal-eligibility middleware.**
+   - Status: complete.
+   - Goal: prevent premature final answers while local work is pending.
+   - Scope:
+     - Track required observations, required exact reads, pending approvals,
+       mutation completion/rejection, and tool errors in Agent Framework session
+       metadata.
+     - Reject final-style Copilot responses until terminal criteria are true.
+     - Emit AG-UI state updates for `non_terminal`, `waiting_for_tool`,
+       `waiting_for_approval`, `failed`, and `terminal`.
+   - Acceptance: a final answer cannot reach the Workbench before required
+     local observations or approval outcomes exist.
+   - Verification: middleware tests for file search, exact read, Office
+     mutation, code edit, and failed tool preflight; AG-UI replay test;
+     `pnpm check`.
+
+6. **FNP05: Project Agent Framework state to AG-UI state and capabilities.**
+   - Status: complete.
+   - Goal: remove Relay-only state from the main Workbench path.
+   - Scope:
+     - Emit `STATE_SNAPSHOT` / `STATE_DELTA` from Agent Framework session/run
+       metadata and tool observations.
+     - Emit AG-UI capabilities for streaming, tools, state, HITL, and supported
+       local tool families.
+     - Update Workbench rendering to use AG-UI state/capability data for main
+       status, tool activity, approval state, and final output.
+   - Acceptance: a recorded AG-UI event stream can replay the visible run
+     without custom Relay run-event fields.
+   - Verification: AG-UI replay fixture; browser E2E from recorded events;
+     `pnpm check`.
+
+7. **FNP06: Cut mutating tools to Agent Framework approval primitives.**
+   - Status: complete.
+   - Goal: remove the custom approval stream from normal mutation flow.
+   - Scope:
+     - Wrap `edit`, `write`, `apply_patch`, and `officecli_mutate` using Agent
+       Framework approval primitives.
+     - Project approval requests to AG-UI HITL/client-tool events.
+     - Resume the same Agent Framework session with approve/reject responses and
+       keep Relay backups/diffs/audit records as side effects.
+   - Acceptance: approve/reject for text edit and Office mutation works without
+     the old Relay custom approval path.
+   - Verification: approval smoke for text edit; approval smoke for
+     OfficeCLI mutation; AG-UI event replay; `pnpm check`.
+
+8. **FNP07: Convert remaining local-tool observations to Agent Framework
+   function results.**
+   - Status: complete.
+   - Goal: make local observations part of the framework run, not a separate
+     Relay continuation system.
+   - Scope:
+     - Ensure `glob`, `grep`, `read`, `officecli`, `workspace_status`, `diff`,
+       and bounded `bash` return typed Agent Framework function results.
+     - Keep output caps, path redaction, evidence states, and artifact ids in
+       result payloads and AG-UI state.
+     - Remove any remaining Workbench dependency on a Relay-only observation
+       channel for these tools.
+   - Acceptance: Copilot continuation receives observations through Agent
+     Framework tool results, and the UI receives them through AG-UI events/state.
+   - Verification: golden smokes for `glob -> read`, `grep -> read`,
+     `read -> edit -> diff`, Office inspect, and bounded test command;
+     `pnpm check`.
+
+9. **FNP08: Define workflow admission criteria and implement only proven
+   workflows.**
+   - Status: complete.
+   - Goal: use Agent Framework workflows where sequences are fixed, without
+     inventing a Relay scheduler.
+   - Scope:
+     - Add a workflow admission matrix for open-ended agent runs vs fixed
+       workflows.
+     - Define entry/exit/approval/state emissions for any implemented workflow.
+     - Start with at most two fixed workflows if justified by current usage:
+       Office mutation flow and evidence-backed file summary flow.
+   - Acceptance: no new workflow can be added without documented entry/exit
+     criteria and AG-UI state emissions.
+   - Verification: workflow admission matrix in
+     `docs/FRAMEWORK_NATIVE_CUTOVER.md`; workflow smoke only if implemented;
+     `pnpm check`.
+
+10. **FNP09: Add prevention-clean and guard-regression test suites.**
+    - Status: complete.
+    - Goal: prove the three failure classes are structurally blocked.
+    - Scope:
+      - Create prevention-clean fixtures that must produce zero guard repairs
+        for normal search, exact read, Office edit, code edit, and file
+        creation.
+      - Create explicit guard-regression fixtures for
+        `local_tools_unavailable_final`, unnecessary `ask_user`, premature
+        `final`, unsupported tool, and final-before-approval.
+      - Add counters to support bundles and test output.
+    - Acceptance: normal paths fail the test if they require guard repair;
+      regression paths fail before user-visible completion.
+    - Verification: prevention-clean suite; guard-regression suite;
+      `pnpm check`.
+
+11. **FNP10: Run live Copilot framework-native E2E.**
+    - Status: complete.
+    - Goal: verify the design against real M365 Copilot, not only fixtures.
+    - Scope:
+      - Run live canaries for local file search, exact file read, Office
+        inspect/mutation approval, and file creation/code edit.
+      - Save prompt dumps, Copilot response dumps, Agent Framework session/tool
+        logs, AG-UI event logs, and screenshots where applicable.
+      - Treat any `local tools unavailable`, unnecessary `ask_user`, premature
+        `final`, schema drift, send failure, or response extraction failure as a
+        blocking defect.
+    - Acceptance: live canaries complete through Agent Framework + AG-UI with
+      zero prevention-clean guard repairs.
+    - Verification: `pnpm workbench:live-copilot-e2e`; tracked live local-work
+      E2E artifacts; `git diff --check`.
+
+12. **FNP11: Remove superseded Relay-only protocol paths and update docs.**
+    - Status: complete.
+    - Goal: prevent future contributors from reusing old custom paths.
+    - Scope:
+      - Remove or clearly quarantine Relay-only run streams, custom approval
+        paths, stale prompt-only catalogs, and old protocol guard entry points
+        superseded by Agent Framework/AG-UI.
+      - Update `README.md`, `AGENTS.md`, `docs/IMPLEMENTATION.md`,
+        `docs/AGENT_EVALUATION_CRITERIA.md`, and support-bundle documentation.
+      - Keep the hard-cut guard aligned with the new canonical architecture.
+    - Acceptance: docs and active code agree that Agent Framework + AG-UI is
+      the only run/event/tool protocol, with Relay-specific code limited to the
+      Copilot adapter, local function bodies, policy, packaging, and diagnostics.
+    - Verification: `node scripts/check-hard-cut-guard.mjs`; `pnpm check`;
+      `git diff --check`.
 
 ## UI/UX Direction
 
@@ -422,24 +899,28 @@ surfaces while executing this queue.
   Relay-owned adapter/runtime boundary. Branding cleanup is allowed only for
   Relay-owned files and user-facing product surfaces; third-party dependency
   notices, licenses, and integration names must remain accurate.
-- Next agentic direction: Copilot becomes the manager for intent
+- Next agentic direction: Copilot becomes the reasoning source for intent
   understanding, next-step planning, tool choice, observation review, and final
-  synthesis. Relay remains the execution harness for validation, permissions,
-  local tool execution, backups, diffs, and trace logging.
-- Agent loop: fixed one-shot pipelines will be replaced by a bounded
-  `Copilot step -> Relay tool -> observation -> Copilot step` loop. The loop
-  must be capped, traceable, and schema-validated. Validation failures stop the
-  run and surface a visible UI error; there is no fallback execution.
-- Agent loop simplicity: the shipped UX should expose one reasoning path:
-  Copilot step -> Relay tool -> observation -> Copilot step. No secondary model
-  or alternate harness is part of the current product path.
+  synthesis, but the **run loop is Agent Framework**. Relay is the function
+  body/policy layer for validation, permissions, local execution, backups,
+  diffs, and trace logging.
+- Agent loop: fixed one-shot pipelines will be replaced by a bounded Agent
+  Framework run loop: `Copilot provider response -> Agent Framework tool call
+  -> Relay function body -> Agent Framework observation -> Copilot provider
+  response`. The loop must be capped, traceable, and schema-validated.
+  Validation failures stop the Agent Framework run and surface an AG-UI error;
+  there is no fallback execution.
+- Agent loop simplicity: the shipped UX should expose one reasoning path backed
+  by Agent Framework and AG-UI. No secondary model, alternate run stream, or
+  Relay-specific planner is part of the current product path.
 - Tool broker: move from domain-specific high-level tools to a small generic
-  tool set. The catalog should support many local business tasks; local file
-  search, Office editing, and coding are high-frequency recipes that use the
-  same primitives, not separate product modes. Initial target tools are:
-  - `rg_files`: enumerate likely files using ripgrep's file listing and glob
+  Agent Framework tool set. The catalog should support many local business
+  tasks; local file search, Office editing, and coding are high-frequency
+  recipes that use the same primitives, not separate product modes. Initial
+  target tools are:
+  - `glob`: enumerate likely files using ripgrep's file listing and glob
     filters;
-  - `rg_search`: search plaintext/code content using ripgrep;
+  - `grep`: search plaintext/code content using ripgrep;
   - `read`: read exact files, including Relay-supported plaintext extraction
     for Office/PDF where available;
   - `officecli`: inspect or mutate Office files through validated OfficeCLI
@@ -451,18 +932,20 @@ surfaces while executing this queue.
     anything;
   - `diff`: show pending or applied text/Office/code changes in a stable,
     reviewable format;
-  - `run_command`: execute bounded verification commands such as build, test,
-    lint, typecheck, format-check, or explicit user-approved project commands;
-  - `ask_user`: ask for missing information;
-  - `final`: end the run with a user-facing answer.
-- Tool schema policy: keep the initial Copilot context small. Advertise concise
-  tool summaries first and inject detailed schemas only when Copilot selects a
-  tool family. Validation failures stop the run and surface a clear UI error.
-  Do not silently execute fallback tools when Copilot emits invalid arguments.
+  - `bash` or `run_command`: execute bounded verification commands such as
+    build, test, lint, typecheck, format-check, or explicit user-approved
+    project commands;
+  - `ask_user`: AG-UI client tool for missing information;
+  - final answer: normal Agent Framework assistant output, not a Relay backend
+    tool.
+- Tool schema policy: keep the initial Copilot context small by relying on
+  Agent Framework tool schemas, middleware, and session context. Validation
+  failures stop the Agent Framework run and surface a clear AG-UI error. Do
+  not silently execute fallback tools when Copilot emits invalid arguments.
 - Search direction: do not keep investing in a custom high-level search product
-  as the main UX. Search becomes a generic agent capability built on ripgrep
-  (`rg_files` and `rg_search`), exact `read`, and Copilot synthesis over
-  Relay-provided observations. Relay still owns path constraints, timeout
+  as the main UX. Search becomes a generic Agent Framework capability built on
+  ripgrep-backed `glob`/`grep`, exact `read`, and Copilot synthesis over
+  Agent Framework tool observations. Relay still owns path constraints, timeout
   budgets, result caps, and evidence packaging.
 - Search quality policy: Relay should report evidence states, not overclaim
   relevance. Use `filename_only`, `path_match`, `content_confirmed`,
@@ -1107,136 +1590,56 @@ Design target:
     naming and tests, but no OpenCode/Codex process, package, generated schema,
     or auth flow is part of the active product.
 
-Tool contract benchmark decision after comparing OpenCode, GitHub Copilot,
-Codex app-server, Microsoft Agent Framework/MCP, and the removed AionUi path:
+Framework-native tool contract target:
 
-- **Top-level framework anchor: Microsoft Agent Framework tool taxonomy.**
-  Agent Framework does not provide a single canonical filesystem/code-editing
-  schema such as `glob/read/edit`. Its standardization is one layer higher:
-  tool types, tool-call orchestration, function tools, MCP tools, provider
-  hosted tools, approval, sessions, middleware, and telemetry. Relay should use
-  that as the primary architecture:
-  - `function` tools for Relay-owned local policy and tightly governed local
-    capabilities;
-  - `local_mcp` tools for approved standalone tool servers discovered through
-    the Agent Framework/MCP bridge;
-  - `client` tools for AG-UI human-in-the-loop interactions such as approval
-    and questions;
-  - `provider_hosted` tools are disabled for local workspace files because they
-    upload or execute outside the user's local environment;
-  - every tool descriptor records its Agent Framework tool type, capability
-    family, mutation class, approval policy, provider, and output contract.
-- **How other Agent Framework users appear to structure tools.** Microsoft's
-  guidance is: start with function tools for custom/local logic, connect to MCP
-  when a prebuilt server already provides the capability, mix tool categories
-  when needed, and write precise descriptions because the model selects tools
-  from names, descriptions, and schemas. Production-style Microsoft samples put
-  reusable capabilities in independent MCP servers discovered at startup, then
-  pass those tools to agents. Microsoft's MCP governance guidance also treats
-  MCP as discovery/invocation, not policy; a deterministic control plane must
-  sit between the model's intent and execution.
-- **Primary low-level tool contract anchor: OpenCode-compatible.** OpenCode has
-  the closest public, concrete, local-codebase tool vocabulary for Relay's
-  needs: `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`, `bash`,
-  `skill`, and permission categories that map cleanly to read/search/edit/
-  command operations. It also treats MCP as an extension mechanism rather than
-  as the core local file contract. This makes it the best anchor for
-  model-facing tool names, argument shapes, behavior semantics, permissions,
-  error classes, and golden fixtures.
-- **Secondary category cross-check: GitHub Copilot custom agents.** GitHub
-  Copilot's custom-agent documentation groups tools into `execute`, `read`,
-  `edit`, `search`, `agent`, `web`, and `todo`, and maps aliases such as
-  `Grep`/`Glob` into `search`. This is useful to validate the broad categories
-  and future delegation/task concepts, but it is too product-specific and too
-  alias-oriented to be Relay's concrete tool contract. Its exact tool arguments
-  can vary, and Copilot CLI/cloud/VS Code are separate product surfaces.
-- **Runtime/protocol reference only: Codex app-server.** Codex app-server is a
-  harness protocol for Codex threads, turns, accounts, model lists, approvals,
-  skills, apps, and event streams. It is useful as a reference for rich agent
-  lifecycle ideas, but it is not a suitable Relay tool contract because it
-  would import a second runtime/controller and Codex auth surface.
-- **Rejected tool substrate: Codex MCP server.** It exposes a local Codex
-  engine over MCP and is documented as experimental. Relay needs local business
-  tools, not a tool that invokes another coding agent.
-- **Execution framework, not vocabulary source: Microsoft Agent Framework and
-  MCP.** Agent Framework remains the production run loop, approval/session
-  mechanism, and MCP bridge. MCP remains the provider protocol for approved
-  standalone tools. Neither supplies a single canonical filesystem/editing
-  schema, so they should not replace the OpenCode-compatible contract layer.
-- **Historical UX only: AionUi.** AionUi is not an active runtime and does not
-  provide a stable, public low-level tool contract. Do not use it as a target
-  for future tool semantics.
-
-OpenCode-compatible tool contract target:
-
-- This is **not** a name-only rename. Relay should align with OpenCode's tool
-  system as far as possible at the contract level while keeping the
-  implementation and safety boundary local to Relay.
-- This is also **not** a replacement for Agent Framework. The contract is
-  nested inside an Agent Framework-native tool descriptor. In other words:
-  Agent Framework owns the tool type and lifecycle; the OpenCode-compatible
-  contract owns the low-level local workspace vocabulary.
-- Adopt OpenCode-compatible public tool names and permission categories:
-  `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`, and a `bash`
-  permission category. Because unrestricted shell is prohibited, Relay's
-  prompt-facing command tool remains a bounded build/test/lint command provider
-  unless a later plan proves a safer `bash` facade. The permission category may
-  be named `bash`; the executable behavior must remain Relay-bounded.
-- Adopt OpenCode-compatible argument shapes where they fit Relay:
-  - `glob`: `pattern`, optional `path`.
-  - `grep`: `pattern`, optional `path`, optional `glob`,
-    optional `case_insensitive`.
-  - `read`: `file_path`, optional `offset`, optional `limit`.
-  - `edit`: `file_path`, `old_string`, `new_string`, optional `replace_all`.
-  - `write`: `file_path`, `content`.
-  - `apply_patch`: one patch payload using the established patch grammar, plus
-    Relay metadata only outside the model-facing schema.
-  - bounded command execution: structured argv, cwd/workspace, timeout, and
-    allowed command family; no raw unrestricted shell string.
-- Adopt OpenCode-compatible behavior semantics:
-  - `glob` discovers files by name/path only and returns capped path candidates
-    sorted deterministically.
-  - `grep` searches plaintext/code content only and rejects Office/PDF
-    containers with guidance to use `glob` then exact `read`.
-  - `read` requires an exact file path and can return bounded text or supported
-    Office/PDF extracted text.
-  - `edit` performs exact string replacement and fails on ambiguous matches
-    unless `replace_all` is explicitly true.
-  - `write` creates new files or complete overwrites, but existing-file
-    overwrites require prior read evidence plus approval.
-  - `apply_patch` applies a structured diff and is preferred for multi-hunk
-    code/text edits.
-- Adopt OpenCode-compatible error classes and user-visible wording where
-  practical: unknown tool, invalid arguments, path outside workspace, missing
-  file, binary/container unsupported for `grep`, multiple edit matches,
-  timeout/output cap, missing executable, denied/approval-required mutation,
-  and repeated-call guard.
-- Adopt OpenCode-style permission grouping while keeping Relay enforcement:
-  `read` covers exact reads, `glob` covers file discovery, `grep` covers content
-  search, `edit` covers `edit`/`write`/`apply_patch`, `bash` covers bounded
-  command execution, and `external_directory` remains denied unless explicitly
-  approved by Relay workspace policy.
-- Add OpenCode-contract golden fixtures. Tests must prove Copilot naturally
-  selects `glob -> read`, `grep -> read`, `read -> edit -> diff`,
-  `apply_patch -> diff`, Office `read -> officecli`, and bounded
-  build/test/lint command flows without needing Relay-specific tool names.
-- Keep Relay-owned differences explicit and tested. Differences are allowed
-  only for enterprise-local requirements: workspace containment, mutation
-  approval, backups, audit logs, redaction, Office/PDF extraction through exact
-  `read`, OfficeCLI semantic safety, and fail-fast diagnostics.
+- **Primary anchor: Microsoft Agent Framework function/MCP/client tool model.**
+  Relay's model-facing and runtime-facing tools should be Agent Framework
+  function tools, approved Agent Framework MCP tools, or AG-UI client tools.
+  Do not maintain a separate Relay or OpenCode tool contract as the product
+  source of truth.
+- **Function tools by default.** Local file search, exact read, text/code edit,
+  OfficeCLI operations, workspace status, diff, and bounded build/test/lint
+  commands are Agent Framework function tools with typed parameters,
+  descriptions, runtime-only context, middleware validation, and explicit output
+  contracts.
+- **Approval through Agent Framework, display through AG-UI.** Mutating
+  functions are wrapped with Agent Framework approval primitives and projected
+  to AG-UI HITL/client-tool events. Relay stores audit records, backups, and
+  diffs, but it does not own a second approval protocol.
+- **MCP only when it reduces Relay code.** If an approved standalone local MCP
+  server provides a capability with acceptable licensing, packaging, offline
+  behavior, and policy hooks, consume it through Agent Framework's MCP bridge.
+  MCP is not a replacement for workspace policy or approval middleware.
+- **AG-UI client tools only for user interaction.** `ask_user`, approvals, and
+  any future UI-only choices are AG-UI client tools/HITL states, not backend
+  local execution tools.
+- **Prior-art tools are references, not contracts.** OpenCode, Codex
+  app-server, GitHub Copilot custom agents, Claude Code, and AionUi can inform
+  naming familiarity and test scenarios, but Relay must not import their tool
+  protocols, generated schemas, runtime assumptions, or permission systems as
+  active architecture.
+- **Names stay plain, authority moves to Agent Framework.** Familiar names such
+  as `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`, and `bash` may be
+  retained because they are concise and model-friendly, but their schema,
+  availability, approval, execution, and telemetry are defined by Agent
+  Framework tool registration and middleware.
+- **Keep Relay-owned residue explicit and minimal.** Relay-owned code is
+  limited to local function bodies, workspace containment, mutation
+  classification, backups, diffs, redaction, Office/PDF extraction helpers,
+  OfficeCLI semantic validation, packaging, and fail-fast diagnostics.
 
 Mapping target:
 
 | Current Relay tool | Desired substrate | Relay-owned residue |
 | --- | --- | --- |
-| `rg_files` | OpenCode-compatible `glob` contract backed by Relay's ripgrep provider, or an approved standalone local MCP file tool if one passes policy | workspace scope, ignore rules, result caps, ranking hints |
-| `rg_search` | OpenCode-compatible `grep` contract backed by Relay's ripgrep provider, or an approved standalone local MCP search tool if one passes policy | binary/Office rejection policy, output caps, sensitive-path redaction |
-| `read` | OpenCode-compatible exact-read contract plus approved parsers for Office/PDF extraction | Office/PDF extraction fallback, snippet caps, redaction |
-| `edit` / `write` | OpenCode-compatible edit/write/apply-patch contracts implemented through Relay providers | backups, approval, exact-match validation, diff generation |
-| `officecli` / `officecli_mutate` | OfficeCLI executable plus generated capability schema/help metadata | semantic operation registry, argv compilation, backup, post-check |
-| `workspace_status` / `diff` | git/status provider or local MCP git tool when approved | dirty-worktree policy, path filtering, output caps |
-| `run_command` | OpenCode `bash` permission category mapped to a bounded task runner/provider for build/test/lint only | allowlist, timeout, cancellation, destructive-command denial |
-| `ask_user` | AG-UI client tool / Agent Framework human-in-the-loop pattern | request wording, run ledger persistence |
+| `rg_files` / `glob` | Agent Framework function tool backed by ripgrep file listing, or approved local MCP file discovery tool | workspace scope, ignore rules, result caps, ranking hints |
+| `rg_search` / `grep` | Agent Framework function tool backed by ripgrep content search, or approved local MCP search tool | binary/Office rejection policy, output caps, sensitive-path redaction |
+| `read` | Agent Framework function tool for exact reads plus approved parsers for Office/PDF extraction | Office/PDF extraction fallback, snippet caps, redaction |
+| `edit` / `write` / `apply_patch` | Agent Framework function tools wrapped in approval for mutations | backups, approval metadata, exact-match validation, diff generation |
+| `officecli` / `officecli_mutate` | Agent Framework function tools around bundled OfficeCLI; mutation tools require approval | semantic operation registry, argv compilation, backup, post-check |
+| `workspace_status` / `diff` | Agent Framework function tool or approved local MCP git/status tool | dirty-worktree policy, path filtering, output caps |
+| `run_command` / `bash` | Agent Framework function tool for bounded build/test/lint command families only | allowlist, timeout, cancellation, destructive-command denial |
+| `ask_user` | AG-UI client tool / Agent Framework human-in-the-loop request | request wording, run ledger persistence |
 
 Implementation status (2026-05-16):
 
@@ -1244,6 +1647,10 @@ Implementation status (2026-05-16):
   sidecar/workbench path. The model-facing catalog is now `glob`, `grep`,
   `read`, `officecli`, `officecli_mutate`, `edit`, `write`, `apply_patch`,
   `workspace_status`, `diff`, `bash`, and `ask_user`.
+- 2026-05-17 correction: these tool names are no longer treated as an
+  OpenCode-compatible product contract. They are plain Agent Framework function
+  tool names, with availability, approval, execution, telemetry, and AG-UI
+  projection owned by Agent Framework registrations and middleware.
 - TOOLSUB08 is closed as a descriptor-boundary decision rather than a new
   runtime dependency: the catalog now models `RelayFrameworkToolType.LocalMcp`
   for future approved standalone MCP tools, but this milestone does not add a
@@ -1322,20 +1729,25 @@ Executable task queue:
      `pnpm agent:officecli-registry-smoke`;
      `pnpm agent:office-pdf-read-smoke`; `pnpm check`.
 
-5. **TOOLSUB04: Write the OpenCode-compatible contract spec.**
+5. **TOOLSUB04: Write the Agent Framework tool contract spec.**
    - Scope: docs and golden fixtures first; no runtime cutover yet.
    - Changes:
-     - Add `docs/OPENCODE_TOOL_CONTRACT.md` defining Relay's supported
-       contract for `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`,
-       and bounded command execution under the `bash` permission category.
-     - Include exact argument shapes, behavior semantics, output summaries,
-       error classes, permission groups, Relay-owned deviations, and examples.
+     - Add `docs/AGENT_FRAMEWORK_TOOL_CONTRACT.md` defining Relay's supported
+       Agent Framework function/client/MCP tool model for `glob`, `grep`,
+       `read`, `edit`, `write`, `apply_patch`, OfficeCLI operations, AG-UI
+       client tools, and bounded command execution.
+     - Include typed argument schemas, behavior semantics, output summaries,
+       error classes, approval policy, middleware checks, AG-UI projections,
+       Relay-owned residue, and examples.
      - Add golden fixture expectations for:
        `glob -> read`, `grep -> read`, `read -> edit -> diff`,
        `apply_patch -> diff`, Office `read -> officecli`, and bounded
        build/test/lint command flow.
-   - Artifact: `docs/OPENCODE_TOOL_CONTRACT.md` plus golden fixture files.
-   - Acceptance: the spec states that a name-only migration is invalid.
+   - Artifact: `docs/AGENT_FRAMEWORK_TOOL_CONTRACT.md` plus golden fixture
+     files.
+   - Acceptance: the spec states that Agent Framework registrations,
+     middleware, approval primitives, and AG-UI projection are the contract;
+     prior-art tool names are not a separate contract.
    - Verification: `git diff --check`; catalog/golden fixture smoke if present.
 
 6. **TOOLSUB05: Cut over read-only file tools to `glob`, `grep`, and `read`.**
@@ -1343,8 +1755,9 @@ Executable task queue:
    - Changes:
      - Replace prompt-facing `rg_files` with `glob`.
      - Replace prompt-facing `rg_search` with `grep`.
-     - Normalize `read` to the OpenCode-compatible exact-read schema:
-       `file_path`, optional `offset`, optional `limit`.
+     - Normalize `read` to the Agent Framework exact-read function schema:
+       `file_path`, optional `offset`, optional `limit`, with runtime-only
+       workspace/session context injected by middleware.
      - Update Copilot prompt projection, repair/validation, AG-UI labels,
        support-bundle labels, golden tests, and docs.
      - Do not expose prompt-visible dual names after the task is complete.
@@ -1369,13 +1782,15 @@ Executable task queue:
      reviewable diff.
    - Verification: approval smoke; mutation golden smoke; `pnpm check`.
 
-8. **TOOLSUB07: Map command execution to the `bash` permission category without
-   exposing unrestricted shell.**
+8. **TOOLSUB07: Map command execution to a bounded Agent Framework function
+   tool without exposing unrestricted shell.**
    - Scope: command tool naming and policy.
    - Changes:
      - Keep the executable behavior bounded to structured build/test/lint argv.
-     - Expose the permission/category as `bash` for OpenCode compatibility, but
-       do not expose raw arbitrary shell strings in the default catalog.
+     - Keep `bash` only as a familiar tool name if needed; the authoritative
+       contract is an Agent Framework function schema with allowed command
+       family, argv, cwd/workspace, timeout, and approval policy.
+     - Do not expose raw arbitrary shell strings in the default catalog.
      - Update denial messages so the user sees "bounded command execution" and
        support details explain why unrestricted shell is unavailable.
    - Acceptance: build/test/lint commands still run; destructive or arbitrary
@@ -1416,8 +1831,8 @@ Executable task queue:
     - Changes:
       - Update `README.md`, `AGENTS.md`, `docs/IMPLEMENTATION.md`,
         `docs/AGENT_EVALUATION_CRITERIA.md`, and support-bundle notes to
-        describe the Agent Framework descriptor model and OpenCode-compatible
-        local workspace contract.
+        describe the Agent Framework tool model, middleware policy, AG-UI
+        projection, and local workspace contract.
       - Document that OpenCode/Codex processes are not bundled or launched.
     - Acceptance: docs match the active catalog and packaging inventory.
     - Verification: `node scripts/check-hard-cut-guard.mjs`; `pnpm check`.

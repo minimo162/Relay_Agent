@@ -574,7 +574,9 @@ public static class RelayAgentToolCatalog
             "ag-ui",
             RelayMutationClass.Read,
             "client_response",
-            "question"),
+            "question",
+            RelayFrameworkToolType.Client,
+            "state_scoped"),
         Tool(
             nameof(RelayAgentFunctionSet.OfficeCliMutateAsync),
             "officecli_mutate",

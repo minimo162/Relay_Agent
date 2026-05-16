@@ -6,9 +6,10 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:tool-catalog-smoke && pnpm agent:golden-smoke && pnpm agent:protocol-state-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:tool-catalog-smoke && pnpm agent:golden-smoke && pnpm agent:protocol-state-smoke && pnpm agent:framework-native-prevention-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "agent:agui-client-tool-smoke": "node scripts/agui-client-tool-smoke.mjs",
     "agent:golden-smoke": "node scripts/agent-golden-smoke.mjs",
+    "agent:framework-native-prevention-smoke": "node scripts/framework-native-prevention-smoke.mjs",
     "agent:office-pdf-read-smoke": "node scripts/office-pdf-read-smoke.mjs",
     "agent:officecli-registry-smoke": "node scripts/officecli-registry-smoke.mjs",
     "agent:protocol-state-smoke": "node scripts/protocol-state-smoke.mjs",

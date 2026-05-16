@@ -18633,3 +18633,49 @@ Result:
 - Live signed-in Copilot Workbench E2E passed:
   `[workbench-live-copilot-e2e] ok elapsed=32880ms readiness=Ready cdp=9360`.
 - `git diff --check` passed.
+
+## 2026-05-17: Framework-Native Prevention Cutover Tasks
+
+Changes:
+
+- Added `docs/FRAMEWORK_NATIVE_CUTOVER.md` as the FNP00 baseline matrix for
+  active Agent Framework registrations, AG-UI endpoint usage, Copilot adapter
+  policy, local tool families, approval routing, and superseded paths.
+- Marked `ask_user` catalog metadata as an AG-UI client/state-scoped tool
+  instead of a globally visible backend function tool.
+- Updated Copilot prompt projection so known-objective local-work turns hide
+  `ask_user` from the model-facing tool list while the protocol guard still
+  rejects or repairs stray `ask_user` responses.
+- Added `scripts/framework-native-prevention-smoke.mjs` and wired it into
+  `pnpm check`. The smoke verifies:
+  - catalog metadata keeps `ask_user` state-scoped and mutating tools approval
+    required;
+  - legacy aliases such as `rg_files`, `rg_search`, `run_command`, and
+    `office_search` are absent;
+  - a premature local-tools-unavailable final is converted to `glob`;
+  - unnecessary `ask_user` does not reach the tool layer for a known file-search
+    request;
+  - premature file-creation final fails before user-visible completion;
+  - dumped known-objective prompts do not expose `ask_user(...)`.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:build
+PATH=/tmp/relay-dotnet/sdk:$PATH node scripts/agent-tool-catalog-smoke.mjs --update
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:framework-native-prevention-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+git diff --check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Tool catalog snapshot was intentionally updated for
+  `ask_user`=`Client`/`state_scoped`.
+- Framework-native prevention smoke passed.
+- Full `pnpm check` passed.
+- Live signed-in Copilot Workbench E2E passed:
+  `[workbench-live-copilot-e2e] ok elapsed=27845ms readiness=Ready cdp=9360`.
+- `git diff --check` passed.

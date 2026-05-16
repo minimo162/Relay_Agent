@@ -89,11 +89,13 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             parts.Add(agUiContext);
         }
 
+        RelayTurnState? protocolState = null;
         CaptureOriginalUserRequest(messageList, options);
         if (hasTools)
         {
             CapturePendingOutputFile(messageList, options);
-            parts.Add(RelayPromptBuilder.BuildStatePrompt(BuildProtocolState(messageList, options)));
+            protocolState = BuildProtocolState(messageList, options);
+            parts.Add(RelayPromptBuilder.BuildStatePrompt(protocolState));
         }
 
         foreach (var message in messageList)
@@ -107,7 +109,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (hasTools)
         {
-            parts.Add(BuildToolProjectionPrompt(options));
+            parts.Add(BuildToolProjectionPrompt(options, protocolState));
         }
 
         return string.Join("\n\n", parts);
@@ -278,7 +280,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             }
             : new { callId = toolCall.CallId, type = toolCall.GetType().Name };
 
-    private static string BuildToolProjectionPrompt(ChatOptions? options)
+    private static string BuildToolProjectionPrompt(ChatOptions? options, RelayTurnState? state)
     {
         var parts = new List<string>
         {
@@ -303,7 +305,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "Tools:",
         };
 
-        foreach (var tool in GetToolDeclarations(options))
+        foreach (var tool in GetPromptToolDeclarations(options, state))
         {
             parts.Add($"- {tool.Name}({SummarizeToolArguments(tool.JsonSchema)}): {CompactToolDescription(tool.Description)}");
         }
@@ -557,6 +559,12 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static IEnumerable<AIFunctionDeclaration> GetToolDeclarations(ChatOptions? options) =>
         options?.Tools?.OfType<AIFunctionDeclaration>() ?? [];
+
+    private static IEnumerable<AIFunctionDeclaration> GetPromptToolDeclarations(ChatOptions? options, RelayTurnState? state) =>
+        GetToolDeclarations(options).Where(tool => IsPromptVisible(tool.Name, state));
+
+    private static bool IsPromptVisible(string toolName, RelayTurnState? state) =>
+        toolName != "ask_user" || state?.CanAskUser == true;
 
     private static ISet<string> GetAvailableToolNames(ChatOptions? options) =>
         GetToolDeclarations(options)

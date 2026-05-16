@@ -84,13 +84,13 @@
       "description": "Ask the user for missing information.",
       "executorTool": "ask_user",
       "safety": "ReadOnly",
-      "frameworkToolType": "Function",
+      "frameworkToolType": "Client",
       "capabilityFamily": "agent.ask",
       "providerKey": "ag-ui",
       "mutationClass": "Read",
       "approvalPolicy": "client_response",
       "outputContract": "question",
-      "promptVisibility": "visible"
+      "promptVisibility": "state_scoped"
     },
     {
       "name": "officecli_mutate",
