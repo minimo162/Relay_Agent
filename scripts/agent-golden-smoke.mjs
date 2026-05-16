@@ -18,13 +18,13 @@ const port = 17892;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-agent-golden-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-agent-golden-workspace-"));
 const responses = [
-  `${JSON.stringify({ action: "tool", tool: "rg_files", args: { contains: "seed", limit: 5 } })}\n\nSure.`,
-  `${JSON.stringify({ action: "final", answer: "検索は rg_files を使いました。" })}\n\nDone.`,
-  JSON.stringify({ action: "tool", tool: "write", args: { path: "approval.txt", content: "approved write" } }),
+  `${JSON.stringify({ action: "tool", tool: "glob", args: { pattern: "**/*seed*", limit: 5 } })}\n\nSure.`,
+  `${JSON.stringify({ action: "final", answer: "検索は glob を使いました。" })}\n\nDone.`,
+  JSON.stringify({ action: "tool", tool: "write", args: { file_path: "approval.txt", content: "approved write" } }),
   JSON.stringify({ action: "final", answer: "承認済みの書き込みを実行しました。" }),
   JSON.stringify({ action: "tool", tool: "workspace_status", args: { limit: 100 } }),
   JSON.stringify({ action: "tool", tool: "diff", args: {} }),
-  JSON.stringify({ action: "tool", tool: "run_command", args: { argv: ["node", "--version"], timeoutMs: 30000 } }),
+  JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["node", "--version"], timeoutMs: 30000 } }),
   JSON.stringify({ action: "final", answer: "状態確認と検証を完了しました。" }),
 ];
 
@@ -74,9 +74,9 @@ try {
     runId: "golden-search",
     instruction: "seed を探して",
   });
-  collectToolCall(search.events, "rg_files");
+  collectToolCall(search.events, "glob");
   if (!hasRunFinished(search.events)) throw new Error(`search run did not finish: ${JSON.stringify(search.events)}`);
-  if (assistantText(search.events) !== "検索は rg_files を使いました。") {
+  if (assistantText(search.events) !== "検索は glob を使いました。") {
     throw new Error(`search run final answer mismatch: ${assistantText(search.events)}`);
   }
 
@@ -123,8 +123,8 @@ try {
   collectToolCall(verificationStart.events, "diff");
   const commandApprovalCall = collectToolCall(verificationStart.events, "request_approval");
   const commandApproval = readApprovalRequest(commandApprovalCall).request;
-  if (commandApproval.functionName !== "run_command") {
-    throw new Error(`verification run did not pause for run_command approval: ${JSON.stringify(commandApproval)}`);
+  if (commandApproval.functionName !== "bash") {
+    throw new Error(`verification run did not pause for bash approval: ${JSON.stringify(commandApproval)}`);
   }
   const approvedVerification = await postAgUi({
     port,

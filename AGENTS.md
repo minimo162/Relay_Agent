@@ -15,16 +15,16 @@
   Framework is the target backend agent runtime inside the .NET sidecar. Relay
   owns the M365 Copilot provider adapter, local tool validation, execution,
   approvals, backups, diffs, logs, and app storage.
-- The active generic tool catalog is `rg_files`, `rg_search`, `read`,
-  `officecli`, `edit`, `write`, `workspace_status`, `diff`, `run_command`,
-  and `ask_user`. Final answers are normal Agent Framework assistant responses,
-  not a Relay tool.
+- The active generic tool catalog is `glob`, `grep`, `read`, `officecli`,
+  `officecli_mutate`, `edit`, `write`, `apply_patch`, `workspace_status`,
+  `diff`, `bash`, and `ask_user`. Final answers are normal Agent Framework
+  assistant responses, not a Relay tool.
 - Current implementation focus is the review remediation plan in `PLANS.md`:
   Microsoft Agent Framework backend adoption, AG-UI full adoption for the
   Workbench-facing UX/event contract, fail-fast Copilot provider behavior,
   Office/PDF `read` extraction, semantic OfficeCLI operations, generic
   workspace/diff/verification tools, explicit redacted support-bundle export,
-  ripgrep streaming/capping, `rg_search` argument hardening, and Workbench
+  ripgrep streaming/capping, `grep` argument hardening, and Workbench
   official `/agui/relay` execution with AG-UI client-tool approvals.
 
 ## Source of Truth
@@ -76,11 +76,11 @@ decisions, verification runs, and known limitations.
   selector drift must fail the run with AG-UI error events and diagnostics.
   Short bounded readiness waits inside the same CDP operation are allowed; a
   fallback model, fallback planner, old runner, or weaker tool path is not.
-- `rg_files` and `rg_search` are generic local exploration tools. Push filters
-  into ripgrep where possible, stream/cap output before buffering, and keep
-  workspace containment, timeout, cancellation, and result caps enforced by
-  Relay.
-- `rg_search` must pass a `--` separator before the pattern so user/model
+- `glob` and `grep` are generic local exploration tools backed by ripgrep.
+  Push filters into ripgrep where possible, stream/cap output before buffering,
+  and keep workspace containment, timeout, cancellation, and result caps
+  enforced by Relay.
+- `grep` must pass a `--` separator before the pattern so user/model
   patterns beginning with `-` cannot become ripgrep options.
 - `read` must support exact file reads for plaintext/code and Relay-supported
   Office/PDF extraction. Do not revive `RelayDocumentSearch*`, SQLite/FTS, or
@@ -94,8 +94,8 @@ decisions, verification runs, and known limitations.
 - `workspace_status` and `diff` are generic read-only review tools. Use them to
   expose dirty state, changed paths, pending mutations, and applied changes
   before final answers.
-- `run_command` is a bounded verification tool, not unrestricted shell. It must
-  use structured argv, workspace containment, timeout/output caps,
+- `bash` is a bounded verification permission category, not unrestricted shell.
+  It must use structured argv, workspace containment, timeout/output caps,
   cancellation, and deny rules for destructive, network, package-install,
   secret-reading, or cross-workspace behavior unless the user explicitly
   approves a narrowly displayed command.

@@ -218,7 +218,8 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "Rules:",
             "- Use one tool at most in a single response.",
             "- Relay executes tools locally. Do not claim execution without a tool result.",
-            "- Do not return tool_uses, recipient_name, bash, shell, markdown, prose, or code fences.",
+            "- Do not return tool_uses, recipient_name, raw shell text, markdown, prose, or code fences.",
+            "- If you need bounded command verification, use only the advertised bash tool schema with structured argv.",
             "- Use the JSON schema and descriptions below. Unknown fields are invalid.",
             "- Prefer forward slashes in paths when possible, or escape Windows backslashes correctly.",
             "Available Relay function tools:",
@@ -294,6 +295,10 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         if (tool == "officecli" && (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs")))
         {
             throw new InvalidOperationException("officecli raw argv is not allowed. Use semantic operation fields.");
+        }
+        if (tool == "bash" && (args.ContainsKey("command") || args.ContainsKey("shell") || args.ContainsKey("script")))
+        {
+            throw new InvalidOperationException("bash raw command strings are not allowed. Use argv as a string array.");
         }
     }
 

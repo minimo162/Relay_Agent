@@ -12,16 +12,16 @@ const workspace = mkdtempSync(join(tmpdir(), "relay-agui-client-tool-workspace-"
 const outputPath = join(workspace, "agui-approved.txt");
 const rejectedPath = join(workspace, "agui-rejected.txt");
 const responses = [
-  JSON.stringify({ action: "tool", tool: "read", args: { path: "seed.txt" } }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "seed.txt" } }),
   JSON.stringify({ action: "final", answer: "AG-UI read completed." }),
   JSON.stringify({ action: "tool", tool: "officecli", args: { operation: "capabilities" } }),
   JSON.stringify({ action: "final", answer: "AG-UI OfficeCLI read-only completed." }),
-  JSON.stringify({ action: "tool", tool: "write", args: { path: "agui-approved.txt", content: "approved by ag-ui" } }),
+  JSON.stringify({ action: "tool", tool: "write", args: { file_path: "agui-approved.txt", content: "approved by ag-ui" } }),
   JSON.stringify({ action: "final", answer: "AG-UI approved write completed." }),
-  JSON.stringify({ action: "tool", tool: "write", args: { path: "agui-rejected.txt", content: "this must not be written" } }),
+  JSON.stringify({ action: "tool", tool: "write", args: { file_path: "agui-rejected.txt", content: "this must not be written" } }),
   JSON.stringify({ action: "final", answer: "AG-UI rejected write was not executed." }),
-  JSON.stringify({ action: "tool", tool: "edit", args: { path: "seed.txt", oldString: "seed", newString: "changed" } }),
-  JSON.stringify({ action: "tool", tool: "run_command", args: { argv: ["git", "status"] } }),
+  JSON.stringify({ action: "tool", tool: "edit", args: { file_path: "seed.txt", old_string: "seed", new_string: "changed" } }),
+  JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["git", "status"] } }),
   JSON.stringify({ action: "tool", tool: "officecli", args: { operation: "set", filePath: "book.xlsx", target: "/Sheet1/A1", properties: { value: "x" } } }),
 ];
 
@@ -245,7 +245,7 @@ try {
   }
 
   const commandStart = await postAgUi(runInput("agui-client-tool-command-start", "git status を実行して"));
-  assertApprovalFor(commandStart.events, "run_command");
+  assertApprovalFor(commandStart.events, "bash");
 
   const officeMutateStart = await postAgUi(runInput("agui-client-tool-office-mutate-start", "book.xlsx の Sheet1 A1 を x にして"));
   assertApprovalFor(officeMutateStart.events, "officecli_mutate");

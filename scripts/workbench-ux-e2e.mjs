@@ -18,9 +18,9 @@ mkdirSync(artifactDir, { recursive: true });
 writeFileSync(join(workspace, "seed.txt"), "部品売上 seed\n", "utf8");
 
 const responses = [
-  JSON.stringify({ action: "tool", tool: "rg_files", args: { contains: "seed", limit: 5 } }),
-  JSON.stringify({ action: "final", answer: "検索は rg_files を使いました。" }),
-  JSON.stringify({ action: "tool", tool: "write", args: { path: "approval.txt", content: "approved write" } }),
+  JSON.stringify({ action: "tool", tool: "glob", args: { pattern: "**/*seed*", limit: 5 } }),
+  JSON.stringify({ action: "final", answer: "検索は glob を使いました。" }),
+  JSON.stringify({ action: "tool", tool: "write", args: { file_path: "approval.txt", content: "approved write" } }),
   JSON.stringify({ action: "final", answer: "承認済みの書き込みを実行しました。" }),
 ];
 
@@ -231,7 +231,7 @@ async function runBrowserFlow() {
   const searchStarted = Date.now();
   await click("#send");
   await waitForExpression("document.querySelector('#run-state')?.textContent === 'Running' || Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('受け付けました'))", 2000, "visible running progress");
-  await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('検索は rg_files を使いました。'))", 6000, "search final event");
+  await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('検索は glob を使いました。'))", 6000, "search final event");
   const searchMs = Date.now() - searchStarted;
   if (searchMs > 6000) throw new Error(`mock search UX took too long: ${searchMs}ms`);
   const resultUx = await evaluate(`(() => ({
@@ -239,7 +239,7 @@ async function runBrowserFlow() {
     summaryText: document.querySelector('#summary-text')?.textContent,
     runState: document.querySelector('#run-state')?.textContent,
   }))()`);
-  if (resultUx.summaryVisible !== true || !resultUx.summaryText.includes('検索は rg_files')) {
+  if (resultUx.summaryVisible !== true || !resultUx.summaryText.includes('検索は glob')) {
     throw new Error(`final answer should be visible above activity: ${JSON.stringify(resultUx)}`);
   }
   if (resultUx.runState !== "Done") throw new Error(`run state should be Done: ${JSON.stringify(resultUx)}`);

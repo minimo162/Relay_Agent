@@ -71,6 +71,9 @@ assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the 
 assert(!sidecarSource.includes("Run" + "Manager"), "Sidecar must not retain the legacy RunManager runtime");
 assert(!sidecarSource.includes("Run" + "Response"), "Sidecar must not retain the legacy RunResponse protocol");
 assert(!sidecarSource.includes("Pending" + "Approval"), "Sidecar must not retain the legacy PendingApproval protocol");
+assert(!sidecarSource.includes('"rg_files"'), "Sidecar model-facing catalog must not expose rg_files");
+assert(!sidecarSource.includes('"rg_search"'), "Sidecar model-facing catalog must not expose rg_search");
+assert(!sidecarSource.includes('"run_command"'), "Sidecar model-facing catalog must not expose run_command");
 assert(!workbenchSource.includes("/agui-events"), "Workbench must not consume the old custom AG-UI run stream");
 assert(!workbenchSource.includes("/api/runs"), "Workbench must not use the legacy run REST product path");
 assert(!/\/events[`'"]/.test(workbenchSource), "Workbench must not consume the old custom run-event stream");

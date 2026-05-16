@@ -33,7 +33,7 @@ chmodSync(fakeRg, 0o755);
 writeFileSync(join(workspace, "seed.txt"), "seed", "utf8");
 
 const responses = [
-  JSON.stringify({ action: "tool", tool: "rg_files", args: { contains: "file-", limit: 5, timeoutMs: 30000 } }),
+  JSON.stringify({ action: "tool", tool: "glob", args: { pattern: "**/*file-*", limit: 5, timeoutMs: 30000 } }),
   JSON.stringify({ action: "final", answer: "rg stream cap ok" }),
 ];
 
@@ -93,9 +93,9 @@ try {
   if (!hasRunFinished(run.events)) throw new Error(`run did not finish: ${JSON.stringify(run.events)}`);
   if (elapsed > 2500) throw new Error(`rg stream cap took too long: ${elapsed}ms`);
   if (existsSync(sentinel)) throw new Error("fake rg reached line 50; output was not capped before buffering");
-  const rgFiles = collectToolCall(run.events, "rg_files");
+  const rgFiles = collectToolCall(run.events, "glob");
   if (!rgFiles.results.some((result) => String(result).includes("truncated at limit"))) {
-    throw new Error(`rg_files did not report truncation: ${JSON.stringify(run.events)}`);
+    throw new Error(`glob did not report truncation: ${JSON.stringify(run.events)}`);
   }
 
   console.log(`[rg-stream-cap-smoke] ok elapsed=${elapsed}ms`);

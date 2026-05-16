@@ -115,6 +115,96 @@ git diff --check
 
 Result: passed.
 
+### 2026-05-16 Tool Substrate Reduction Plan Revision
+
+Reviewed the active sidecar tool implementation and revised `PLANS.md` to make
+tool ownership more explicit.
+
+- Current state: `RelayAgentFunctionSet` registers tool wrappers through
+  `AIFunctionFactory.Create`, and `RelayToolExecutor` still owns validation and
+  dispatch for `rg_files`, `rg_search`, `read`, `officecli`,
+  `officecli_mutate`, `edit`, `write`, `workspace_status`, `diff`,
+  `run_command`, and `ask_user`.
+- Decision: reduce Relay-owned tool code through a descriptor-driven provider
+  registry, local MCP/provider bridges, and existing tool schemas where they
+  can run locally and remain auditable.
+- Decision: do not restore OpenCode/OpenWork/Codex app-server as active
+  runtimes.
+- Decision after the follow-up investigation: do not adopt Codex app-server or
+  Codex MCP server as a provider substrate either. Codex app-server controls
+  Codex threads, turns, account/auth, model lists, approvals, and event
+  streams; Codex MCP server controls a local Codex engine and is documented as
+  experimental. Both conflict with Relay's requirement that M365 Copilot remain
+  the controller and Microsoft Agent Framework remain the run loop.
+- Decision: do not embed OpenCode as a runtime. Adopt the OpenCode-style tool
+  contract as far as practical: names, argument shapes, behavior semantics,
+  error classes, permission grouping, and golden fixtures for `glob`, `grep`,
+  `read`, `edit`, `write`, `apply_patch`, and bounded command execution. Relay
+  providers or approved standalone local MCP servers still execute the tools.
+- Decision: this must not be a name-only migration. `rg_files -> glob` and
+  `rg_search -> grep` are acceptable only when the public schemas, semantics,
+  error handling, permission categories, and regression tests move with them.
+- Decision after comparing alternatives: use OpenCode-compatible tool
+  contracts as the primary low-level local tool anchor. GitHub Copilot custom
+  agents are useful as a category cross-check (`execute`, `read`, `edit`,
+  `search`, `agent`, `web`, `todo`) but do not define stable concrete
+  argument schemas for Relay. Codex app-server is a rich Codex harness protocol,
+  not a local-tool contract. Microsoft Agent Framework and MCP remain the
+  execution and provider layers, not the model-facing file/edit vocabulary.
+  AionUi remains historical UX/runtime material only.
+- Decision after reviewing Microsoft Agent Framework usage patterns: the
+  framework's standard tool structure is at the tool-type/lifecycle layer, not
+  at the local filesystem schema layer. Relay should model every tool with an
+  Agent Framework-native descriptor: function tool, local MCP tool, AG-UI client
+  tool, or disabled provider-hosted tool; capability family; provider; mutation
+  class; approval policy; output contract; and prompt visibility. The
+  OpenCode-compatible contract then fills the lower-level workspace
+  search/read/edit vocabulary inside that descriptor.
+- Planning follow-up: decomposed the tool-substrate plan into an executable
+  queue `TOOLSUB00` through `TOOLSUB10`. The queue starts with a current-state
+  matrix and descriptor model, then moves registration to descriptors, splits
+  providers, writes the OpenCode-compatible contract spec, cuts over read-only
+  tools, cuts over mutation tools, maps bounded commands to the `bash`
+  permission category, proves the local MCP bridge with fixtures, removes
+  superseded catalog code, and updates docs/support bundles.
+- Reason: Microsoft Agent Framework documents function tools for custom local
+  logic and MCP tools for capabilities already provided by an MCP server.
+  OpenCode also exposes built-in tools and MCP extension points. Relay should
+  reuse those boundaries instead of growing a bespoke executor for every tool,
+  while keeping enterprise-local policy enforcement in Relay.
+
+Research sources:
+
+- Microsoft Agent Framework "Adding Tools":
+  https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools
+- Microsoft Agent Framework "Tools Overview":
+  https://learn.microsoft.com/en-us/agent-framework/agents/tools/
+- Microsoft Agent Framework local MCP tools:
+  https://learn.microsoft.com/en-us/agent-framework/agents/tools/local-mcp-tools
+- GitHub Copilot custom agents configuration:
+  https://docs.github.com/en/copilot/reference/custom-agents-configuration
+- GitHub Copilot CLI custom agents and MCP:
+  https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/invoke-custom-agents
+- OpenCode tools:
+  https://opencode.ai/docs/tools
+- OpenCode MCP servers:
+  https://dev.opencode.ai/docs/mcp-servers/
+- OpenAI Codex app-server background:
+  https://openai.com/index/unlocking-the-codex-harness/
+- Codex app-server README:
+  https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md
+- Codex MCP server interface:
+  https://github.com/openai/codex/blob/main/codex-rs/docs/codex_mcp_interface.md
+
+Verification for this plan-only change:
+
+```bash
+git diff --check
+node scripts/check-hard-cut-guard.mjs
+```
+
+Result: passed.
+
 ### 2026-05-16 Microsoft Agent Framework Runner Slice
 
 Implemented the next backend-runtime slice:
@@ -17969,3 +18059,62 @@ Result:
   `workbench-approval.png`.
 - Full `pnpm check` passed after the Workbench state fix and documentation
   updates.
+
+## 2026-05-16: OpenCode-Compatible Tool Contract Cutover
+
+Changes:
+
+- Added `docs/TOOL_SUBSTRATE_MATRIX.md` to document the active local tool
+  substrate decision: Microsoft Agent Framework remains the run loop, Relay
+  keeps policy/execution ownership, OpenCode/Codex runtimes stay rejected, and
+  the low-level model-facing vocabulary aligns with OpenCode-compatible tool
+  names where they fit Relay.
+- Added `docs/OPENCODE_TOOL_CONTRACT.md` for the supported `glob`, `grep`,
+  `read`, `edit`, `write`, `apply_patch`, and bounded `bash` contract. The
+  spec records Relay-owned deviations for workspace containment, approvals,
+  backups, Office/PDF exact-read extraction, OfficeCLI semantic safety, and
+  diagnostics.
+- Replaced the prompt-facing `rg_files`, `rg_search`, and `run_command`
+  catalog with `glob`, `grep`, and bounded `bash`. `read`, `edit`, and `write`
+  now advertise OpenCode-compatible snake_case file arguments, and
+  `apply_patch` is available for structured text/code edits.
+- Introduced a descriptor-driven tool catalog with framework/tool-family
+  metadata and a provider registry inside `RelayToolExecutor`, so validation,
+  description, approval requirement, and execution are now registered through a
+  single provider boundary instead of a central execution switch.
+- Hardened Copilot tool projection so `officecli` still rejects raw argv and
+  `bash` rejects raw command/shell/script strings. Command execution remains
+  structured argv only and approval-gated.
+- Updated AG-UI golden/client-tool/ripgrep/Office-PDF smokes and the hard-cut
+  guard to enforce the new model-facing names. The guard now fails if active
+  sidecar source re-exposes `"rg_files"`, `"rg_search"`, or `"run_command"`.
+- Updated `AGENTS.md` and support-bundle redaction fields for the current
+  catalog and snake_case mutation arguments.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+node scripts/check-hard-cut-guard.mjs
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:golden-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:agui-client-tool-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:rg-stream-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:office-pdf-read-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+git diff --check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Hard-cut guard passed with new catalog-name assertions.
+- Golden agent smoke, AG-UI client-tool approval smoke, ripgrep stream cap
+  smoke, and Office/PDF read smoke passed individually.
+- Full `pnpm check` passed, including Workbench typecheck/build, sidecar
+  build/smoke, all agent smokes, security smoke, and release inventory/SBOM.
+- Workbench UX E2E passed:
+  `search=434ms`, `approval=130ms`, screenshots
+  `workbench-empty.png`, `workbench-completed.png`, and
+  `workbench-approval.png`.
+- `git diff --check` passed.

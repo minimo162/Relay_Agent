@@ -522,9 +522,10 @@ Framework-first revision after current Microsoft documentation review:
   instead register Relay capabilities as Agent Framework tools.
 - Relay-owned custom code should narrow to:
   - the M365 Copilot Edge/CDP `IChatClient` adapter;
-  - local function implementations for `rg`, `read`, `officecli`, `edit`,
-    `write`, `workspace_status`, `diff`, `run_command`, and `ask_user`;
-  - policy validation inside those functions and middleware;
+  - tool policy, workspace containment, approval, backup, redaction, and audit
+    middleware;
+  - thin local provider adapters only where an approved existing tool substrate
+    does not already provide the capability;
   - packaging, diagnostics, and support-bundle generation.
 - The Copilot adapter is the required seam because M365 Copilot is reached
   through browser automation, not through a native provider API. It must project
@@ -540,10 +541,375 @@ Framework-first revision after current Microsoft documentation review:
   middleware for validation/telemetry,
   and `MapAGUI` / AG-UI middleware for Workbench streaming and approvals.
 - Do not use provider-hosted file search or code interpreter for local
-  workspaces. Relay's local files and Office documents must stay local, so the
-  Agent Framework tools call local Relay functions. Local MCP is a future option
-  only if an approved local MCP server already provides a capability better than
-  a small in-process function.
+  workspaces. Relay's local files and Office documents must stay local, so tool
+  execution must remain local and auditable. Prefer existing local tool
+  substrates in this order:
+  1. Agent Framework tool primitives and approval/session middleware.
+  2. Approved local MCP servers or provider bridges that expose real existing
+     tools and can be wrapped by Relay policy.
+  3. Existing CLI/library tools such as ripgrep and OfficeCLI behind typed
+     schemas.
+  4. Relay-owned in-process functions only for the remaining gaps.
+
+#### Tool Substrate Reduction Plan
+
+Current state: the active tool surface is mostly Relay-owned function wrappers.
+`RelayAgentFunctionSet` registers `rg_files`, `rg_search`, `read`,
+`officecli`, `officecli_mutate`, `edit`, `write`, `workspace_status`, `diff`,
+`run_command`, and `ask_user` through `AIFunctionFactory.Create`, while
+`RelayToolExecutor` validates and dispatches those calls. Some tools already
+delegate to established executables such as ripgrep and OfficeCLI, but the
+catalog, validation, and dispatch shape are still Relay-specific. This is
+acceptable for the current MVP, but the next architectural step is to reduce
+custom tool code without regressing to the removed OpenCode/OpenWork/Codex
+runtime model.
+
+Design target:
+
+- Keep **M365 Copilot as the only reasoning/controller model** and Microsoft
+  Agent Framework as the run loop.
+- Keep **Relay as the policy boundary** for local paths, approvals, backups,
+  destructive-action classification, logging, redaction, and fail-fast errors.
+- Move tool declarations to a **descriptor-driven provider registry** so Relay
+  does not need one bespoke method and one bespoke switch branch for every
+  tool.
+- Reuse existing tool schemas, local MCP tools, and CLI/library
+  implementations whenever they can run locally, be packaged legally, and pass
+  Relay policy.
+- **Decision after 2026-05-16 investigation:** do not adopt OpenCode, Codex
+  app-server, or Codex MCP server as Relay runtime or provider substrate.
+  - OpenCode is useful as a compatibility reference for generic tool names and
+    permission categories (`glob`, `grep`, `read`, `edit`, `write`,
+    `apply_patch`, bounded `bash`), but Relay must not launch or embed the
+    OpenCode runtime.
+  - Codex app-server is rejected for Relay's production path. It is designed to
+    control Codex threads, turns, accounts, models, approvals, and events; it
+    also has version-specific generated schemas and auth surfaces. That would
+    duplicate Agent Framework, compete with M365 Copilot as the controller, and
+    reintroduce Codex branding/runtime dependency.
+  - Codex MCP server is also rejected as a tool substrate. Its documented
+    interface controls a local Codex engine and is explicitly experimental; it
+    is not a stable standalone local-tool bundle for Relay.
+  - The only concrete adoption path is **Agent Framework local MCP consumption
+    of standalone tool servers**, plus direct CLI/library providers for
+    ripgrep and OfficeCLI. OpenCode/Codex documentation may inform schema
+    naming and tests, but no OpenCode/Codex process, package, generated schema,
+    or auth flow is part of the active product.
+
+Tool contract benchmark decision after comparing OpenCode, GitHub Copilot,
+Codex app-server, Microsoft Agent Framework/MCP, and the removed AionUi path:
+
+- **Top-level framework anchor: Microsoft Agent Framework tool taxonomy.**
+  Agent Framework does not provide a single canonical filesystem/code-editing
+  schema such as `glob/read/edit`. Its standardization is one layer higher:
+  tool types, tool-call orchestration, function tools, MCP tools, provider
+  hosted tools, approval, sessions, middleware, and telemetry. Relay should use
+  that as the primary architecture:
+  - `function` tools for Relay-owned local policy and tightly governed local
+    capabilities;
+  - `local_mcp` tools for approved standalone tool servers discovered through
+    the Agent Framework/MCP bridge;
+  - `client` tools for AG-UI human-in-the-loop interactions such as approval
+    and questions;
+  - `provider_hosted` tools are disabled for local workspace files because they
+    upload or execute outside the user's local environment;
+  - every tool descriptor records its Agent Framework tool type, capability
+    family, mutation class, approval policy, provider, and output contract.
+- **How other Agent Framework users appear to structure tools.** Microsoft's
+  guidance is: start with function tools for custom/local logic, connect to MCP
+  when a prebuilt server already provides the capability, mix tool categories
+  when needed, and write precise descriptions because the model selects tools
+  from names, descriptions, and schemas. Production-style Microsoft samples put
+  reusable capabilities in independent MCP servers discovered at startup, then
+  pass those tools to agents. Microsoft's MCP governance guidance also treats
+  MCP as discovery/invocation, not policy; a deterministic control plane must
+  sit between the model's intent and execution.
+- **Primary low-level tool contract anchor: OpenCode-compatible.** OpenCode has
+  the closest public, concrete, local-codebase tool vocabulary for Relay's
+  needs: `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`, `bash`,
+  `skill`, and permission categories that map cleanly to read/search/edit/
+  command operations. It also treats MCP as an extension mechanism rather than
+  as the core local file contract. This makes it the best anchor for
+  model-facing tool names, argument shapes, behavior semantics, permissions,
+  error classes, and golden fixtures.
+- **Secondary category cross-check: GitHub Copilot custom agents.** GitHub
+  Copilot's custom-agent documentation groups tools into `execute`, `read`,
+  `edit`, `search`, `agent`, `web`, and `todo`, and maps aliases such as
+  `Grep`/`Glob` into `search`. This is useful to validate the broad categories
+  and future delegation/task concepts, but it is too product-specific and too
+  alias-oriented to be Relay's concrete tool contract. Its exact tool arguments
+  can vary, and Copilot CLI/cloud/VS Code are separate product surfaces.
+- **Runtime/protocol reference only: Codex app-server.** Codex app-server is a
+  harness protocol for Codex threads, turns, accounts, model lists, approvals,
+  skills, apps, and event streams. It is useful as a reference for rich agent
+  lifecycle ideas, but it is not a suitable Relay tool contract because it
+  would import a second runtime/controller and Codex auth surface.
+- **Rejected tool substrate: Codex MCP server.** It exposes a local Codex
+  engine over MCP and is documented as experimental. Relay needs local business
+  tools, not a tool that invokes another coding agent.
+- **Execution framework, not vocabulary source: Microsoft Agent Framework and
+  MCP.** Agent Framework remains the production run loop, approval/session
+  mechanism, and MCP bridge. MCP remains the provider protocol for approved
+  standalone tools. Neither supplies a single canonical filesystem/editing
+  schema, so they should not replace the OpenCode-compatible contract layer.
+- **Historical UX only: AionUi.** AionUi is not an active runtime and does not
+  provide a stable, public low-level tool contract. Do not use it as a target
+  for future tool semantics.
+
+OpenCode-compatible tool contract target:
+
+- This is **not** a name-only rename. Relay should align with OpenCode's tool
+  system as far as possible at the contract level while keeping the
+  implementation and safety boundary local to Relay.
+- This is also **not** a replacement for Agent Framework. The contract is
+  nested inside an Agent Framework-native tool descriptor. In other words:
+  Agent Framework owns the tool type and lifecycle; the OpenCode-compatible
+  contract owns the low-level local workspace vocabulary.
+- Adopt OpenCode-compatible public tool names and permission categories:
+  `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`, and a `bash`
+  permission category. Because unrestricted shell is prohibited, Relay's
+  prompt-facing command tool remains a bounded build/test/lint command provider
+  unless a later plan proves a safer `bash` facade. The permission category may
+  be named `bash`; the executable behavior must remain Relay-bounded.
+- Adopt OpenCode-compatible argument shapes where they fit Relay:
+  - `glob`: `pattern`, optional `path`.
+  - `grep`: `pattern`, optional `path`, optional `glob`,
+    optional `case_insensitive`.
+  - `read`: `file_path`, optional `offset`, optional `limit`.
+  - `edit`: `file_path`, `old_string`, `new_string`, optional `replace_all`.
+  - `write`: `file_path`, `content`.
+  - `apply_patch`: one patch payload using the established patch grammar, plus
+    Relay metadata only outside the model-facing schema.
+  - bounded command execution: structured argv, cwd/workspace, timeout, and
+    allowed command family; no raw unrestricted shell string.
+- Adopt OpenCode-compatible behavior semantics:
+  - `glob` discovers files by name/path only and returns capped path candidates
+    sorted deterministically.
+  - `grep` searches plaintext/code content only and rejects Office/PDF
+    containers with guidance to use `glob` then exact `read`.
+  - `read` requires an exact file path and can return bounded text or supported
+    Office/PDF extracted text.
+  - `edit` performs exact string replacement and fails on ambiguous matches
+    unless `replace_all` is explicitly true.
+  - `write` creates new files or complete overwrites, but existing-file
+    overwrites require prior read evidence plus approval.
+  - `apply_patch` applies a structured diff and is preferred for multi-hunk
+    code/text edits.
+- Adopt OpenCode-compatible error classes and user-visible wording where
+  practical: unknown tool, invalid arguments, path outside workspace, missing
+  file, binary/container unsupported for `grep`, multiple edit matches,
+  timeout/output cap, missing executable, denied/approval-required mutation,
+  and repeated-call guard.
+- Adopt OpenCode-style permission grouping while keeping Relay enforcement:
+  `read` covers exact reads, `glob` covers file discovery, `grep` covers content
+  search, `edit` covers `edit`/`write`/`apply_patch`, `bash` covers bounded
+  command execution, and `external_directory` remains denied unless explicitly
+  approved by Relay workspace policy.
+- Add OpenCode-contract golden fixtures. Tests must prove Copilot naturally
+  selects `glob -> read`, `grep -> read`, `read -> edit -> diff`,
+  `apply_patch -> diff`, Office `read -> officecli`, and bounded
+  build/test/lint command flows without needing Relay-specific tool names.
+- Keep Relay-owned differences explicit and tested. Differences are allowed
+  only for enterprise-local requirements: workspace containment, mutation
+  approval, backups, audit logs, redaction, Office/PDF extraction through exact
+  `read`, OfficeCLI semantic safety, and fail-fast diagnostics.
+
+Mapping target:
+
+| Current Relay tool | Desired substrate | Relay-owned residue |
+| --- | --- | --- |
+| `rg_files` | OpenCode-compatible `glob` contract backed by Relay's ripgrep provider, or an approved standalone local MCP file tool if one passes policy | workspace scope, ignore rules, result caps, ranking hints |
+| `rg_search` | OpenCode-compatible `grep` contract backed by Relay's ripgrep provider, or an approved standalone local MCP search tool if one passes policy | binary/Office rejection policy, output caps, sensitive-path redaction |
+| `read` | OpenCode-compatible exact-read contract plus approved parsers for Office/PDF extraction | Office/PDF extraction fallback, snippet caps, redaction |
+| `edit` / `write` | OpenCode-compatible edit/write/apply-patch contracts implemented through Relay providers | backups, approval, exact-match validation, diff generation |
+| `officecli` / `officecli_mutate` | OfficeCLI executable plus generated capability schema/help metadata | semantic operation registry, argv compilation, backup, post-check |
+| `workspace_status` / `diff` | git/status provider or local MCP git tool when approved | dirty-worktree policy, path filtering, output caps |
+| `run_command` | OpenCode `bash` permission category mapped to a bounded task runner/provider for build/test/lint only | allowlist, timeout, cancellation, destructive-command denial |
+| `ask_user` | AG-UI client tool / Agent Framework human-in-the-loop pattern | request wording, run ledger persistence |
+
+Implementation status (2026-05-16):
+
+- TOOLSUB00-07 and TOOLSUB09-10 are implemented in the active
+  sidecar/workbench path. The model-facing catalog is now `glob`, `grep`,
+  `read`, `officecli`, `officecli_mutate`, `edit`, `write`, `apply_patch`,
+  `workspace_status`, `diff`, `bash`, and `ask_user`.
+- TOOLSUB08 is closed as a descriptor-boundary decision rather than a new
+  runtime dependency: the catalog now models `RelayFrameworkToolType.LocalMcp`
+  for future approved standalone MCP tools, but this milestone does not add a
+  production or test MCP server because no approved reusable local MCP substrate
+  has been selected. Future MCP adoption must be a separate plan with a named
+  server, threat model, packaging impact, and acceptance smoke.
+- Verification for this cutover is recorded in `docs/IMPLEMENTATION.md` under
+  "2026-05-16: OpenCode-Compatible Tool Contract Cutover".
+
+Executable task queue:
+
+1. **TOOLSUB00: Capture current tool baseline.**
+   - Scope: documentation and tests only.
+   - Changes:
+     - Add `docs/TOOL_SUBSTRATE_MATRIX.md` with the current active catalog:
+       `rg_files`, `rg_search`, `read`, `officecli`, `officecli_mutate`,
+       `edit`, `write`, `workspace_status`, `diff`, `run_command`, and
+       `ask_user`.
+     - Record current prompt-facing names, JSON arguments, approval behavior,
+       output shape, implementation method, external executable dependency, and
+       current tests.
+   - Artifact: `docs/TOOL_SUBSTRATE_MATRIX.md`.
+   - Acceptance: no runtime behavior changes; the matrix clearly marks
+     OpenCode runtime, Codex app-server, and Codex MCP server as rejected.
+   - Verification: `git diff --check`; `node scripts/check-hard-cut-guard.mjs`.
+
+2. **TOOLSUB01: Define the Agent Framework-native descriptor model.**
+   - Scope: sidecar metadata only; no tool behavior changes.
+   - Changes:
+     - Add descriptor types for `frameworkToolType`, `capabilityFamily`,
+       `providerKey`, `mutationClass`, `approvalPolicy`, `outputContract`,
+       `promptVisibility`, JSON schema, output cap, and audit labels.
+     - Model the current tools with descriptors while keeping the existing
+       public tool names for this task.
+   - Suggested files: `apps/sidecar/ToolDescriptors.cs`,
+     `apps/sidecar/AgentRunner.cs`, sidecar tests/smokes.
+   - Acceptance: current tools still register and execute exactly as before;
+     descriptor snapshots prove the catalog is stable.
+   - Verification: `pnpm sidecar:build`; `pnpm agent:golden-smoke`;
+     `pnpm check`.
+
+3. **TOOLSUB02: Generate Agent Framework tools from descriptors.**
+   - Scope: registration path only; execution still uses existing handlers.
+   - Changes:
+     - Replace hand-written read-only/mutating registration lists with
+       descriptor-driven `AITool` generation.
+     - Keep `ApprovalRequiredAIFunction` wrapping driven by descriptor
+       `approvalPolicy`.
+     - Add a catalog snapshot smoke that fails if prompt-facing schemas drift
+       unexpectedly.
+   - Suggested files: `apps/sidecar/AgentRunner.cs`,
+     `apps/sidecar/ToolDescriptors.cs`, smoke scripts under `apps/sidecar` or
+     `scripts/`.
+   - Acceptance: no public name/schema changes yet; all approvals and AG-UI
+     approval cards still work.
+   - Verification: `pnpm agent:agui-client-tool-smoke`;
+     `pnpm agent:golden-smoke`; `pnpm check`.
+
+4. **TOOLSUB03: Split execution into provider classes.**
+   - Scope: internal dispatch boundary only.
+   - Changes:
+     - Replace the central `RelayToolExecutor` switch with providers:
+       `RipgrepProvider`, `FileReadProvider`, `FileMutationProvider`,
+       `OfficeCliProvider`, `WorkspaceProvider`, `CommandProvider`, and
+       `HumanInputProvider`.
+     - Providers receive validated typed args and return the existing
+       `ToolObservation` contract.
+     - Keep Relay policy, path containment, approval, backup, output caps, and
+       redaction outside provider internals.
+   - Suggested files: split from `apps/sidecar/AgentRunner.cs` into
+     `apps/sidecar/Tools/*.cs`.
+   - Acceptance: behavior and prompt-facing catalog remain unchanged; missing
+     ripgrep/OfficeCLI, unsafe path, and mutation-without-approval failures
+     still fail closed.
+   - Verification: `pnpm agent:rg-stream-smoke`;
+     `pnpm agent:officecli-registry-smoke`;
+     `pnpm agent:office-pdf-read-smoke`; `pnpm check`.
+
+5. **TOOLSUB04: Write the OpenCode-compatible contract spec.**
+   - Scope: docs and golden fixtures first; no runtime cutover yet.
+   - Changes:
+     - Add `docs/OPENCODE_TOOL_CONTRACT.md` defining Relay's supported
+       contract for `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`,
+       and bounded command execution under the `bash` permission category.
+     - Include exact argument shapes, behavior semantics, output summaries,
+       error classes, permission groups, Relay-owned deviations, and examples.
+     - Add golden fixture expectations for:
+       `glob -> read`, `grep -> read`, `read -> edit -> diff`,
+       `apply_patch -> diff`, Office `read -> officecli`, and bounded
+       build/test/lint command flow.
+   - Artifact: `docs/OPENCODE_TOOL_CONTRACT.md` plus golden fixture files.
+   - Acceptance: the spec states that a name-only migration is invalid.
+   - Verification: `git diff --check`; catalog/golden fixture smoke if present.
+
+6. **TOOLSUB05: Cut over read-only file tools to `glob`, `grep`, and `read`.**
+   - Scope: prompt-facing read-only workspace tools.
+   - Changes:
+     - Replace prompt-facing `rg_files` with `glob`.
+     - Replace prompt-facing `rg_search` with `grep`.
+     - Normalize `read` to the OpenCode-compatible exact-read schema:
+       `file_path`, optional `offset`, optional `limit`.
+     - Update Copilot prompt projection, repair/validation, AG-UI labels,
+       support-bundle labels, golden tests, and docs.
+     - Do not expose prompt-visible dual names after the task is complete.
+       Internal provider names may remain `RipgrepProvider`.
+   - Acceptance: Copilot chooses `glob`/`grep`/`read` naturally; old
+     `rg_files`/`rg_search` names are absent from the model-facing catalog.
+   - Verification: `pnpm agent:golden-smoke`; `pnpm agent:rg-stream-smoke`;
+     `pnpm agent:office-pdf-read-smoke`; `pnpm check`.
+
+7. **TOOLSUB06: Cut over mutation tools to `edit`, `write`, and `apply_patch`.**
+   - Scope: text/code mutation tools.
+   - Changes:
+     - Normalize `edit` to exact replacement args:
+       `file_path`, `old_string`, `new_string`, optional `replace_all`.
+     - Normalize `write` to `file_path`, `content`.
+     - Add `apply_patch` as the preferred multi-hunk text/code edit tool with
+       the established patch grammar.
+     - Keep mutation approval, backup creation, diff generation, and
+       post-write verification mandatory.
+   - Acceptance: no mutation can run without approval; ambiguous `edit`
+     matches fail unless `replace_all` is true; `apply_patch` produces a
+     reviewable diff.
+   - Verification: approval smoke; mutation golden smoke; `pnpm check`.
+
+8. **TOOLSUB07: Map command execution to the `bash` permission category without
+   exposing unrestricted shell.**
+   - Scope: command tool naming and policy.
+   - Changes:
+     - Keep the executable behavior bounded to structured build/test/lint argv.
+     - Expose the permission/category as `bash` for OpenCode compatibility, but
+       do not expose raw arbitrary shell strings in the default catalog.
+     - Update denial messages so the user sees "bounded command execution" and
+       support details explain why unrestricted shell is unavailable.
+   - Acceptance: build/test/lint commands still run; destructive or arbitrary
+     commands fail before execution.
+   - Verification: bounded command smoke; security smoke; `pnpm check`.
+
+9. **TOOLSUB08: Close MCP bridge as descriptor-ready, no runtime dependency.**
+   - Scope: MCP integration proof boundary only.
+   - Changes:
+     - Keep `RelayFrameworkToolType.LocalMcp` in the descriptor model so
+       approved standalone MCP tools can be represented later.
+     - Do not add a bundled/test MCP server in this milestone. A fixture that
+       does not represent an approved real provider would add misleading
+       complexity and would not reduce Relay-owned execution code.
+     - Do not add any OpenCode/Codex MCP server.
+   - Acceptance: the descriptor registry has a LocalMcp type and the substrate
+     matrix documents MCP as conditional; active runtime and release inventory
+     do not add MCP processes.
+   - Verification: `pnpm agent:agui-client-tool-smoke`; `pnpm check`.
+
+10. **TOOLSUB09: Remove superseded custom catalog code.**
+    - Scope: cleanup after TOOLSUB05-08 pass.
+    - Changes:
+      - Remove obsolete `rg_files`/`rg_search` prompt projection, repair logic,
+        tests, labels, and docs.
+      - Remove any method-per-tool registration code superseded by descriptors.
+      - Keep only Relay-owned providers and policy middleware required for
+        workspace containment, approval, backups, audit, redaction, Office/PDF
+        exact-read extraction, OfficeCLI semantic safety, and diagnostics.
+    - Acceptance: release inventory shows no active AionUi/OpenCode/OpenWork/
+      Codex app-server runtime fallback and no prompt-facing `rg_files` or
+      `rg_search`.
+    - Verification: `pnpm check`; `pnpm workbench:ux-e2e`;
+      release inventory.
+
+11. **TOOLSUB10: Documentation and support-bundle alignment.**
+    - Scope: user/developer docs and diagnostics.
+    - Changes:
+      - Update `README.md`, `AGENTS.md`, `docs/IMPLEMENTATION.md`,
+        `docs/AGENT_EVALUATION_CRITERIA.md`, and support-bundle notes to
+        describe the Agent Framework descriptor model and OpenCode-compatible
+        local workspace contract.
+      - Document that OpenCode/Codex processes are not bundled or launched.
+    - Acceptance: docs match the active catalog and packaging inventory.
+    - Verification: `node scripts/check-hard-cut-guard.mjs`; `pnpm check`.
 
 ### P0: AG-UI Full Adoption
 

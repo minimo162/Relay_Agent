@@ -93,7 +93,7 @@ const cases = [
   ["filtered.pdf", "pdf"],
 ];
 const responses = cases.flatMap(([path]) => [
-  JSON.stringify({ action: "tool", tool: "read", args: { path } }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: path } }),
   JSON.stringify({ action: "final", answer: `${path} read` }),
 ]);
 
@@ -134,7 +134,7 @@ try {
     if (!detail.includes(`${kind} extracted`)) {
       throw new Error(`${path} did not use extracted ${kind} read path: ${JSON.stringify(run.events)}`);
     }
-    if (!new RegExp(`${kind} extracted, [1-9][0-9]* chars read`).test(detail)) {
+    if (!new RegExp(`${kind} extracted, [1-9][0-9]* chars (read|returned)`).test(detail)) {
       throw new Error(`${path} extracted no text: ${detail}`);
     }
     if (detail.includes("warnings=")) {

@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,7 +18,7 @@ public sealed class RelayAgentFrameworkRunner
         M365 Copilot provides reasoning. Relay validates and executes local tools through the provided function catalog.
         Use tools when local workspace evidence, Office inspection/editing, or repository verification is needed.
         Do not claim local execution yourself; use tools and then summarize the observed results.
-        Prefer rg_files or rg_search before read unless the exact file path is known.
+        Prefer glob or grep before read unless the exact file path is known.
         Use read for exact files only. read can extract bounded text from txt/md/csv/code plus docx/xlsx/xlsm/pptx/text-layer pdf.
         Use officecli for Office inspection or mutation. Mutating tools require user approval.
         Use workspace_status before code changes when repository state matters, and diff before summarizing code or text edits.
@@ -261,77 +262,47 @@ public sealed class RelayAgentFunctionSet(
     string? workspace,
     RelayToolExecutor tools)
 {
-    private static readonly RelayAgentToolRegistration[] ReadOnlyToolRegistrations =
-    [
-        Tool(nameof(RgFilesAsync), "rg_files", "List workspace files with optional rg glob filters and filename substring matching.", "rg_files"),
-        Tool(nameof(RgSearchAsync), "rg_search", "Search plaintext/code content with ripgrep fixed-string matching.", "rg_search"),
-        Tool(nameof(ReadAsync), "read", "Read an exact workspace file. Office/PDF text is extracted when supported.", "read"),
-        Tool(nameof(OfficeCliAsync), "officecli", "Inspect Office files using semantic officecli operations that do not modify files.", "officecli"),
-        Tool(nameof(WorkspaceStatusAsync), "workspace_status", "Inspect workspace file count and git status.", "workspace_status"),
-        Tool(nameof(DiffAsync), "diff", "Show git diff for the workspace or a path.", "diff"),
-        Tool(nameof(AskUserAsync), "ask_user", "Ask the user for missing information.", "ask_user"),
-    ];
-
-    private static readonly RelayAgentToolRegistration[] MutatingToolRegistrations =
-    [
-        Tool(nameof(OfficeCliMutateAsync), "officecli_mutate", "Edit Office files using semantic officecli operations. Requires user approval.", "officecli", RelayAgentToolSafety.Mutating),
-        Tool(nameof(EditAsync), "edit", "Replace one exact string in a workspace file. Requires user approval.", "edit", RelayAgentToolSafety.Mutating),
-        Tool(nameof(WriteAsync), "write", "Create or overwrite a workspace file. Requires user approval.", "write", RelayAgentToolSafety.Mutating),
-        Tool(nameof(RunCommandAsync), "run_command", "Run bounded verification commands such as tests, builds, lint, typecheck, or git status/diff. Requires user approval.", "run_command", RelayAgentToolSafety.Mutating),
-    ];
-
     private int _toolSequence;
 
     public IList<AITool> CreateTools()
     {
-        var tools = new List<AITool>(ReadOnlyToolRegistrations.Length + MutatingToolRegistrations.Length);
-        tools.AddRange(ReadOnlyToolRegistrations.Select(Function));
-        tools.AddRange(MutatingToolRegistrations.Select(Function));
-        return tools;
+        return RelayAgentToolCatalog.All.Select(registration => (AITool)Function(registration)).ToList();
     }
 
-    private static RelayAgentToolRegistration Tool(
-        string methodName,
-        string name,
-        string description,
-        string executorTool,
-        RelayAgentToolSafety safety = RelayAgentToolSafety.ReadOnly) =>
-        new(methodName, name, description, executorTool, safety);
-
-    public Task<ToolObservation> RgFilesAsync(
-        string? contains = null,
-        string? glob = null,
-        string? excludeGlob = null,
-        int? maxDepth = null,
-        int? limit = null,
-        int? timeoutMs = null,
-        CancellationToken cancellationToken = default) =>
-        InvokeAsync("rg_files", Args(
-            ("contains", contains),
-            ("glob", glob),
-            ("excludeGlob", excludeGlob),
-            ("maxDepth", maxDepth),
-            ("limit", limit),
-            ("timeoutMs", timeoutMs)), cancellationToken);
-
-    public Task<ToolObservation> RgSearchAsync(
+    public Task<ToolObservation> GlobAsync(
         string pattern,
-        string? glob = null,
-        string? excludeGlob = null,
-        int? maxDepth = null,
+        string? path = null,
         int? limit = null,
         int? timeoutMs = null,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("rg_search", Args(
+        InvokeAsync("glob", Args(
             ("pattern", pattern),
-            ("glob", glob),
-            ("excludeGlob", excludeGlob),
-            ("maxDepth", maxDepth),
+            ("path", path),
             ("limit", limit),
             ("timeoutMs", timeoutMs)), cancellationToken);
 
-    public Task<ToolObservation> ReadAsync(string path, CancellationToken cancellationToken = default) =>
-        InvokeAsync("read", Args(("path", path)), cancellationToken);
+    public Task<ToolObservation> GrepAsync(
+        string pattern,
+        string? path = null,
+        string? glob = null,
+        bool? case_insensitive = null,
+        int? limit = null,
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("grep", Args(
+            ("pattern", pattern),
+            ("path", path),
+            ("glob", glob),
+            ("case_insensitive", case_insensitive),
+            ("limit", limit),
+            ("timeoutMs", timeoutMs)), cancellationToken);
+
+    public Task<ToolObservation> ReadAsync(
+        string file_path,
+        int? offset = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("read", Args(("file_path", file_path), ("offset", offset), ("limit", limit)), cancellationToken);
 
     public Task<ToolObservation> OfficeCliAsync(
         string filePath,
@@ -398,17 +369,27 @@ public sealed class RelayAgentFunctionSet(
             ("content", content)), cancellationToken);
 
     public Task<ToolObservation> EditAsync(
-        string path,
-        string oldString,
-        string newString,
+        string file_path,
+        string old_string,
+        string new_string,
+        bool? replace_all = null,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("edit", Args(("path", path), ("oldString", oldString), ("newString", newString)), cancellationToken);
+        InvokeAsync("edit", Args(
+            ("file_path", file_path),
+            ("old_string", old_string),
+            ("new_string", new_string),
+            ("replace_all", replace_all)), cancellationToken);
 
     public Task<ToolObservation> WriteAsync(
-        string path,
+        string file_path,
         string content,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("write", Args(("path", path), ("content", content)), cancellationToken);
+        InvokeAsync("write", Args(("file_path", file_path), ("content", content)), cancellationToken);
+
+    public Task<ToolObservation> ApplyPatchAsync(
+        string patch,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("apply_patch", Args(("patch", patch)), cancellationToken);
 
     public Task<ToolObservation> WorkspaceStatusAsync(int? limit = null, CancellationToken cancellationToken = default) =>
         InvokeAsync("workspace_status", Args(("limit", limit)), cancellationToken);
@@ -416,12 +397,12 @@ public sealed class RelayAgentFunctionSet(
     public Task<ToolObservation> DiffAsync(string? path = null, CancellationToken cancellationToken = default) =>
         InvokeAsync("diff", Args(("path", path)), cancellationToken);
 
-    public Task<ToolObservation> RunCommandAsync(
+    public Task<ToolObservation> BashAsync(
         string[] argv,
         string? cwd = null,
         int? timeoutMs = null,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("run_command", Args(("argv", argv), ("cwd", cwd), ("timeoutMs", timeoutMs)), cancellationToken);
+        InvokeAsync("bash", Args(("argv", argv), ("cwd", cwd), ("timeoutMs", timeoutMs)), cancellationToken);
 
     public Task<ToolObservation> AskUserAsync(string question, CancellationToken cancellationToken = default) =>
         InvokeAsync("ask_user", Args(("question", question)), cancellationToken);
@@ -479,12 +460,200 @@ public enum RelayAgentToolSafety
     Mutating,
 }
 
+public enum RelayFrameworkToolType
+{
+    Function,
+    LocalMcp,
+    Client,
+    ProviderHostedDisabled,
+}
+
+public enum RelayMutationClass
+{
+    Read,
+    Write,
+    SideEffect,
+}
+
 public sealed record RelayAgentToolRegistration(
     string MethodName,
     string Name,
     string Description,
     string ExecutorTool,
-    RelayAgentToolSafety Safety);
+    RelayAgentToolSafety Safety,
+    RelayFrameworkToolType FrameworkToolType,
+    string CapabilityFamily,
+    string ProviderKey,
+    RelayMutationClass MutationClass,
+    string ApprovalPolicy,
+    string OutputContract,
+    string PromptVisibility);
+
+public static class RelayAgentToolCatalog
+{
+    public static readonly RelayAgentToolRegistration[] All =
+    [
+        Tool(
+            nameof(RelayAgentFunctionSet.GlobAsync),
+            "glob",
+            "Find workspace files by glob pattern. Use before read when the exact file is unknown.",
+            "glob",
+            RelayAgentToolSafety.ReadOnly,
+            "workspace.search",
+            "ripgrep",
+            RelayMutationClass.Read,
+            "none",
+            "capped_path_list"),
+        Tool(
+            nameof(RelayAgentFunctionSet.GrepAsync),
+            "grep",
+            "Search plaintext/code content with ripgrep. Do not use for Office/PDF containers; use glob then exact read.",
+            "grep",
+            RelayAgentToolSafety.ReadOnly,
+            "workspace.search",
+            "ripgrep",
+            RelayMutationClass.Read,
+            "none",
+            "capped_match_lines"),
+        Tool(
+            nameof(RelayAgentFunctionSet.ReadAsync),
+            "read",
+            "Read an exact workspace file. Office/PDF text is extracted when supported.",
+            "read",
+            RelayAgentToolSafety.ReadOnly,
+            "workspace.read",
+            "file_read",
+            RelayMutationClass.Read,
+            "none",
+            "bounded_text_or_document_extract"),
+        Tool(
+            nameof(RelayAgentFunctionSet.OfficeCliAsync),
+            "officecli",
+            "Inspect Office files using semantic officecli operations that do not modify files.",
+            "officecli",
+            RelayAgentToolSafety.ReadOnly,
+            "office.inspect",
+            "officecli",
+            RelayMutationClass.Read,
+            "none",
+            "officecli_observation"),
+        Tool(
+            nameof(RelayAgentFunctionSet.WorkspaceStatusAsync),
+            "workspace_status",
+            "Inspect workspace file count and git status.",
+            "workspace_status",
+            RelayAgentToolSafety.ReadOnly,
+            "workspace.verify",
+            "workspace",
+            RelayMutationClass.Read,
+            "none",
+            "workspace_status"),
+        Tool(
+            nameof(RelayAgentFunctionSet.DiffAsync),
+            "diff",
+            "Show git diff for the workspace or a path.",
+            "diff",
+            RelayAgentToolSafety.ReadOnly,
+            "workspace.verify",
+            "workspace",
+            RelayMutationClass.Read,
+            "none",
+            "git_diff"),
+        Tool(
+            nameof(RelayAgentFunctionSet.AskUserAsync),
+            "ask_user",
+            "Ask the user for missing information.",
+            "ask_user",
+            RelayAgentToolSafety.ReadOnly,
+            "agent.ask",
+            "ag-ui",
+            RelayMutationClass.Read,
+            "client_response",
+            "question"),
+        Tool(
+            nameof(RelayAgentFunctionSet.OfficeCliMutateAsync),
+            "officecli_mutate",
+            "Edit Office files using semantic officecli operations. Requires user approval.",
+            "officecli",
+            RelayAgentToolSafety.Mutating,
+            "office.mutate",
+            "officecli",
+            RelayMutationClass.Write,
+            "required",
+            "officecli_mutation_observation"),
+        Tool(
+            nameof(RelayAgentFunctionSet.EditAsync),
+            "edit",
+            "Replace exact text in a workspace file. Requires user approval.",
+            "edit",
+            RelayAgentToolSafety.Mutating,
+            "workspace.mutate",
+            "file_mutation",
+            RelayMutationClass.Write,
+            "required",
+            "replacement_summary"),
+        Tool(
+            nameof(RelayAgentFunctionSet.WriteAsync),
+            "write",
+            "Create or overwrite a workspace file. Requires user approval.",
+            "write",
+            RelayAgentToolSafety.Mutating,
+            "workspace.mutate",
+            "file_mutation",
+            RelayMutationClass.Write,
+            "required",
+            "write_summary"),
+        Tool(
+            nameof(RelayAgentFunctionSet.ApplyPatchAsync),
+            "apply_patch",
+            "Apply a structured multi-file patch. Requires user approval.",
+            "apply_patch",
+            RelayAgentToolSafety.Mutating,
+            "workspace.mutate",
+            "file_mutation",
+            RelayMutationClass.Write,
+            "required",
+            "patch_summary"),
+        Tool(
+            nameof(RelayAgentFunctionSet.BashAsync),
+            "bash",
+            "Run bounded build/test/lint/typecheck/git-inspection commands through structured argv. Requires user approval; raw shell is unavailable.",
+            "bash",
+            RelayAgentToolSafety.Mutating,
+            "workspace.verify",
+            "command",
+            RelayMutationClass.SideEffect,
+            "required",
+            "bounded_command_output"),
+    ];
+
+    private static RelayAgentToolRegistration Tool(
+        string methodName,
+        string name,
+        string description,
+        string executorTool,
+        RelayAgentToolSafety safety,
+        string capabilityFamily,
+        string providerKey,
+        RelayMutationClass mutationClass,
+        string approvalPolicy,
+        string outputContract,
+        RelayFrameworkToolType frameworkToolType = RelayFrameworkToolType.Function,
+        string promptVisibility = "visible") =>
+        new(
+            methodName,
+            name,
+            description,
+            executorTool,
+            safety,
+            frameworkToolType,
+            capabilityFamily,
+            providerKey,
+            mutationClass,
+            approvalPolicy,
+            outputContract,
+            promptVisibility);
+}
 
 public sealed record AgUiApprovalRequest(
     string ApprovalId,
@@ -789,10 +958,12 @@ public static class RelayWorkspaceContext
         } : null;
 }
 
-public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolResolver)
+public sealed class RelayToolExecutor
 {
-    private static readonly HashSet<string> ReadTools = ["rg_files", "rg_search", "read", "workspace_status", "diff", "ask_user"];
-    private static readonly HashSet<string> WriteTools = ["officecli", "edit", "write", "run_command"];
+    private readonly string dataDirectory;
+    private readonly ToolResolver toolResolver;
+    private readonly IReadOnlyDictionary<string, RelayToolProvider> providers;
+
     private static readonly HashSet<string> AllowedCommands = [
         "cargo",
         "dotnet",
@@ -836,56 +1007,29 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         "update",
     ];
 
+    public RelayToolExecutor(string dataDirectory, ToolResolver toolResolver)
+    {
+        this.dataDirectory = dataDirectory;
+        this.toolResolver = toolResolver;
+        providers = CreateProviders();
+    }
+
     public bool RequiresApproval(RelayToolCall call) =>
-        call.Tool == "officecli"
-            ? OfficeCliCapabilityRegistry.RequiresApproval(call.Args)
-            : call.Tool == "run_command"
-                ? true
-            : WriteTools.Contains(call.Tool);
+        providers.TryGetValue(call.Tool, out var provider) && provider.RequiresApproval(call);
 
     public ToolValidation Validate(string workspace, RelayToolCall call)
     {
-        if (!ReadTools.Contains(call.Tool) && !WriteTools.Contains(call.Tool))
+        if (!providers.TryGetValue(call.Tool, out var provider))
         {
             return ToolValidation.Fail($"Unknown tool: {call.Tool}");
         }
         if (!Directory.Exists(workspace)) return ToolValidation.Fail("Workspace does not exist.");
 
-        return call.Tool switch
-        {
-            "rg_files" => ToolValidation.Pass(),
-            "rg_search" => string.IsNullOrWhiteSpace(GetString(call.Args, "pattern"))
-                ? ToolValidation.Fail("rg_search requires pattern.")
-                : ToolValidation.Pass(),
-            "read" => ValidateWorkspacePath(workspace, call.Args, mustExist: true),
-            "officecli" => OfficeCliCapabilityRegistry.TryCompile(workspace, call.Args, out _, out var officeError)
-                ? ToolValidation.Pass()
-                : ToolValidation.Fail(officeError ?? "Invalid officecli operation."),
-            "edit" => ValidateWorkspacePath(workspace, call.Args, mustExist: true),
-            "write" => ValidateWorkspacePath(workspace, call.Args, mustExist: false),
-            "workspace_status" => ToolValidation.Pass(),
-            "diff" => ValidateOptionalWorkspacePath(workspace, call.Args),
-            "run_command" => ValidateRunCommand(workspace, call.Args),
-            "ask_user" => ToolValidation.Pass(),
-            _ => ToolValidation.Fail($"Unsupported tool: {call.Tool}"),
-        };
+        return provider.Validate(workspace, call.Args);
     }
 
     public string Describe(RelayToolCall call) =>
-        call.Tool switch
-        {
-            "rg_files" => $"files contains={GetString(call.Args, "contains") ?? "*"}",
-            "rg_search" => $"pattern={GetString(call.Args, "pattern")}",
-            "read" => $"path={GetString(call.Args, "path")}",
-            "officecli" => OfficeCliCapabilityRegistry.Describe(call.Args),
-            "edit" => $"path={GetString(call.Args, "path")}",
-            "write" => $"path={GetString(call.Args, "path")}",
-            "workspace_status" => "inspect workspace and git status",
-            "diff" => $"diff path={GetString(call.Args, "path") ?? "."}",
-            "run_command" => $"verify command={string.Join(" ", GetStringArray(call.Args, "argv") ?? [])}",
-            "ask_user" => GetString(call.Args, "question") ?? "追加情報が必要です。",
-            _ => call.Tool,
-        };
+        providers.TryGetValue(call.Tool, out var provider) ? provider.Describe(call) : call.Tool;
 
     public async Task<ToolObservation> ExecuteAsync(
         string workspace,
@@ -900,20 +1044,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
         try
         {
-            return call.Tool switch
-            {
-                "rg_files" => await RgFilesAsync(workspace, call, cancellationToken),
-                "rg_search" => await RgSearchAsync(workspace, call, cancellationToken),
-                "read" => await ReadAsync(workspace, call, cancellationToken),
-                "officecli" => await OfficeCliAsync(workspace, call, cancellationToken),
-                "edit" => await EditAsync(workspace, call, cancellationToken),
-                "write" => await WriteAsync(workspace, call, cancellationToken),
-                "workspace_status" => await WorkspaceStatusAsync(workspace, call, cancellationToken),
-                "diff" => await DiffAsync(workspace, call, cancellationToken),
-                "run_command" => await RunCommandAsync(workspace, call, cancellationToken),
-                "ask_user" => ToolObservation.Ok(call.Id, call.Tool, GetString(call.Args, "question") ?? "追加情報が必要です。", null),
-                _ => ToolObservation.Fail(call.Id, call.Tool, $"Unknown tool: {call.Tool}"),
-            };
+            return providers.TryGetValue(call.Tool, out var provider)
+                ? await provider.Execute(workspace, call, cancellationToken)
+                : ToolObservation.Fail(call.Id, call.Tool, $"Unknown tool: {call.Tool}");
         }
         catch (Exception ex)
         {
@@ -921,7 +1054,88 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         }
     }
 
-    private async Task<ToolObservation> RgFilesAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    private IReadOnlyDictionary<string, RelayToolProvider> CreateProviders()
+    {
+        var items = new RelayToolProvider[]
+        {
+            ToolProvider(
+                "glob",
+                (_, args) => string.IsNullOrWhiteSpace(GetString(args, "pattern"))
+                    ? ToolValidation.Fail("glob requires pattern.")
+                    : ToolValidation.Pass(),
+                call => $"glob pattern={GetString(call.Args, "pattern")}",
+                GlobAsync),
+            ToolProvider(
+                "grep",
+                ValidateGrep,
+                call => $"grep pattern={GetString(call.Args, "pattern")}",
+                GrepAsync),
+            ToolProvider(
+                "read",
+                (workspace, args) => ValidateWorkspacePath(workspace, args, mustExist: true, key: "file_path", fallbackKey: "path"),
+                call => $"file_path={GetPathArg(call.Args, "file_path", "path")}",
+                ReadAsync),
+            ToolProvider(
+                "officecli",
+                (workspace, args) => OfficeCliCapabilityRegistry.TryCompile(workspace, args, out _, out var officeError)
+                    ? ToolValidation.Pass()
+                    : ToolValidation.Fail(officeError ?? "Invalid officecli operation."),
+                call => OfficeCliCapabilityRegistry.Describe(call.Args),
+                OfficeCliAsync,
+                call => OfficeCliCapabilityRegistry.RequiresApproval(call.Args)),
+            ToolProvider(
+                "edit",
+                (workspace, args) => ValidateWorkspacePath(workspace, args, mustExist: true, key: "file_path", fallbackKey: "path"),
+                call => $"file_path={GetPathArg(call.Args, "file_path", "path")}",
+                EditAsync,
+                _ => true),
+            ToolProvider(
+                "write",
+                (workspace, args) => ValidateWorkspacePath(workspace, args, mustExist: false, key: "file_path", fallbackKey: "path"),
+                call => $"file_path={GetPathArg(call.Args, "file_path", "path")}",
+                WriteAsync,
+                _ => true),
+            ToolProvider(
+                "apply_patch",
+                ValidatePatch,
+                _ => "apply structured patch",
+                ApplyPatchAsync,
+                _ => true),
+            ToolProvider(
+                "workspace_status",
+                (_, _) => ToolValidation.Pass(),
+                _ => "inspect workspace and git status",
+                WorkspaceStatusAsync),
+            ToolProvider(
+                "diff",
+                (workspace, args) => ValidateOptionalWorkspacePath(workspace, args),
+                call => $"diff path={GetString(call.Args, "path") ?? "."}",
+                DiffAsync),
+            ToolProvider(
+                "bash",
+                ValidateRunCommand,
+                call => $"bounded command={string.Join(" ", GetStringArray(call.Args, "argv") ?? [])}",
+                RunCommandAsync,
+                _ => true),
+            ToolProvider(
+                "ask_user",
+                (_, _) => ToolValidation.Pass(),
+                call => GetString(call.Args, "question") ?? "追加情報が必要です。",
+                (workspace, call, _) => Task.FromResult(ToolObservation.Ok(call.Id, call.Tool, GetString(call.Args, "question") ?? "追加情報が必要です。", null))),
+        };
+
+        return items.ToDictionary(provider => provider.Name, StringComparer.Ordinal);
+    }
+
+    private static RelayToolProvider ToolProvider(
+        string name,
+        Func<string, JsonObject, ToolValidation> validate,
+        Func<RelayToolCall, string> describe,
+        Func<string, RelayToolCall, CancellationToken, Task<ToolObservation>> execute,
+        Func<RelayToolCall, bool>? requiresApproval = null) =>
+        new(name, validate, describe, execute, requiresApproval ?? (_ => false));
+
+    private async Task<ToolObservation> GlobAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
         var rg = toolResolver.ResolveRipgrep();
         if (!rg.Available || string.IsNullOrWhiteSpace(rg.ExecutablePath))
@@ -929,17 +1143,19 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
             return ToolObservation.Fail(call.Id, call.Tool, rg.Detail);
         }
 
-        var contains = GetString(call.Args, "contains");
+        var pattern = GetString(call.Args, "pattern") ?? "**/*";
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 50, 1, 200);
         var args = new List<string> { "--files" };
+        AddGlob(args, pattern);
         AddRipgrepFilters(args, call.Args);
+        var workingDirectory = ResolveSearchDirectory(workspace, call.Args);
         var result = await RunLineProcessAsync(
             rg.ExecutablePath,
             args,
-            workspace,
+            workingDirectory,
             cancellationToken,
             maxLines: limit,
-            includeLine: line => string.IsNullOrWhiteSpace(contains) || line.Contains(contains, StringComparison.OrdinalIgnoreCase),
+            includeLine: null,
             timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
 
@@ -949,7 +1165,7 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         return ToolObservation.Ok(call.Id, call.Tool, summary, result.Lines);
     }
 
-    private async Task<ToolObservation> RgSearchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    private async Task<ToolObservation> GrepAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
         var rg = toolResolver.ResolveRipgrep();
         if (!rg.Available || string.IsNullOrWhiteSpace(rg.ExecutablePath))
@@ -960,12 +1176,17 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         var pattern = GetString(call.Args, "pattern") ?? "";
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 80, 1, 200);
         var args = new List<string> { "--line-number", "--color", "never", "--fixed-strings" };
+        if (GetBool(call.Args, "case_insensitive") == true)
+        {
+            args.Add("--ignore-case");
+        }
         AddRipgrepFilters(args, call.Args);
         args.AddRange(["--", pattern]);
+        var workingDirectory = ResolveSearchDirectory(workspace, call.Args);
         var result = await RunLineProcessAsync(
             rg.ExecutablePath,
             args,
-            workspace,
+            workingDirectory,
             cancellationToken,
             maxLines: limit,
             includeLine: null,
@@ -981,22 +1202,27 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
     private static async Task<ToolObservation> ReadAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
-        var path = ResolveWorkspacePath(workspace, GetString(call.Args, "path") ?? "");
+        var path = ResolveWorkspacePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
+        var offset = Math.Max(GetInt(call.Args, "offset") ?? 0, 0);
+        var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 8000, 1, 12000);
         var info = new FileInfo(path);
         if (DocumentTextExtractor.IsSupported(path))
         {
             var document = await DocumentTextExtractor.ExtractAsync(path, maxChars: 12000, cancellationToken);
+            var documentText = SliceText(document.Text, offset, limit);
             var suffix = document.Truncated ? " (truncated)" : "";
             var warningSuffix = document.Warnings.Count > 0 ? $"; warnings={document.Warnings.Count}" : "";
             return ToolObservation.Ok(
                 call.Id,
                 call.Tool,
-                $"{document.Kind} extracted, {document.Text.Length} chars read{suffix}{warningSuffix}",
+                $"{document.Kind} extracted, {documentText.Length} chars returned{suffix}{warningSuffix}",
                 new
                 {
                     kind = document.Kind,
-                    text = document.Text,
+                    text = documentText,
                     truncated = document.Truncated,
+                    offset,
+                    limit,
                     warnings = document.Warnings,
                 });
         }
@@ -1011,7 +1237,8 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
             return ToolObservation.Ok(call.Id, call.Tool, $"Binary file, {bytes.Length} bytes", null);
         }
         var text = Encoding.UTF8.GetString(bytes);
-        return ToolObservation.Ok(call.Id, call.Tool, $"{Math.Min(text.Length, 8000)} chars read", text.Length > 8000 ? text[..8000] : text);
+        var sliced = SliceText(text, offset, limit);
+        return ToolObservation.Ok(call.Id, call.Tool, $"{sliced.Length} chars read", sliced);
     }
 
     private async Task<ToolObservation> OfficeCliAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -1081,26 +1308,77 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
     private async Task<ToolObservation> EditAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
-        var path = ResolveWorkspacePath(workspace, GetString(call.Args, "path") ?? "");
-        var oldString = GetString(call.Args, "oldString") ?? "";
-        var newString = GetString(call.Args, "newString") ?? "";
-        if (oldString.Length == 0) return ToolObservation.Fail(call.Id, call.Tool, "oldString is required.");
+        var path = ResolveWorkspacePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
+        var oldString = GetString(call.Args, "old_string") ?? GetString(call.Args, "oldString") ?? "";
+        var newString = GetString(call.Args, "new_string") ?? GetString(call.Args, "newString") ?? "";
+        var replaceAll = GetBool(call.Args, "replace_all") == true || GetBool(call.Args, "replaceAll") == true;
+        if (oldString.Length == 0) return ToolObservation.Fail(call.Id, call.Tool, "old_string is required.");
         var text = await File.ReadAllTextAsync(path, cancellationToken);
         var count = CountOccurrences(text, oldString);
-        if (count != 1) return ToolObservation.Fail(call.Id, call.Tool, $"oldString must match exactly once; matches={count}.");
+        if (count == 0) return ToolObservation.Fail(call.Id, call.Tool, "old_string was not found.");
+        if (count != 1 && !replaceAll) return ToolObservation.Fail(call.Id, call.Tool, $"old_string must match exactly once unless replace_all=true; matches={count}.");
         var backupPath = await CreateBackupAsync(path, cancellationToken);
         await File.WriteAllTextAsync(path, text.Replace(oldString, newString), cancellationToken);
-        return ToolObservation.Ok(call.Id, call.Tool, $"1 replacement applied; backup={backupPath}", path);
+        return ToolObservation.Ok(call.Id, call.Tool, $"{(replaceAll ? count : 1)} replacement(s) applied; backup={backupPath}", path);
     }
 
     private async Task<ToolObservation> WriteAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
-        var path = ResolveWorkspacePath(workspace, GetString(call.Args, "path") ?? "");
+        var path = ResolveWorkspacePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
         var content = GetString(call.Args, "content") ?? "";
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var backupPath = File.Exists(path) ? await CreateBackupAsync(path, cancellationToken) : null;
         await File.WriteAllTextAsync(path, content, cancellationToken);
         return ToolObservation.Ok(call.Id, call.Tool, backupPath is null ? "file written" : $"file written; backup={backupPath}", path);
+    }
+
+    private async Task<ToolObservation> ApplyPatchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    {
+        var patch = GetString(call.Args, "patch") ?? "";
+        if (string.IsNullOrWhiteSpace(patch)) return ToolObservation.Fail(call.Id, call.Tool, "patch is required.");
+
+        if (!RelayPatch.TryParse(patch, out var operations, out var error))
+        {
+            return ToolObservation.Fail(call.Id, call.Tool, error ?? "Invalid patch.");
+        }
+
+        var changed = new List<string>();
+        var backups = new List<string>();
+        foreach (var operation in operations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = ResolveWorkspacePath(workspace, operation.Path);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            switch (operation.Kind)
+            {
+                case RelayPatchOperationKind.Add:
+                    if (File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Add file already exists: {operation.Path}");
+                    await File.WriteAllTextAsync(path, operation.NewText ?? "", cancellationToken);
+                    changed.Add(path);
+                    break;
+                case RelayPatchOperationKind.Delete:
+                    if (!File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Delete file does not exist: {operation.Path}");
+                    backups.Add(await CreateBackupAsync(path, cancellationToken));
+                    File.Delete(path);
+                    changed.Add(path);
+                    break;
+                case RelayPatchOperationKind.Update:
+                    if (!File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Update file does not exist: {operation.Path}");
+                    var original = await File.ReadAllTextAsync(path, cancellationToken);
+                    var oldText = operation.OldText ?? "";
+                    var newText = operation.NewText ?? "";
+                    if (oldText.Length == 0 || !original.Contains(oldText, StringComparison.Ordinal))
+                    {
+                        return ToolObservation.Fail(call.Id, call.Tool, $"Patch context was not found: {operation.Path}");
+                    }
+                    backups.Add(await CreateBackupAsync(path, cancellationToken));
+                    await File.WriteAllTextAsync(path, original.Replace(oldText, newText, StringComparison.Ordinal), cancellationToken);
+                    changed.Add(path);
+                    break;
+            }
+        }
+
+        return ToolObservation.Ok(call.Id, call.Tool, $"{changed.Count} file(s) patched", new { changed, backups });
     }
 
     private static async Task<ToolObservation> WorkspaceStatusAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -1814,9 +2092,70 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         return backupPath;
     }
 
-    private static ToolValidation ValidateWorkspacePath(string workspace, JsonObject args, bool mustExist, string key = "path")
+    private static ToolValidation ValidateGrep(string workspace, JsonObject args)
     {
-        var path = GetString(args, key);
+        if (string.IsNullOrWhiteSpace(GetString(args, "pattern")))
+        {
+            return ToolValidation.Fail("grep requires pattern.");
+        }
+
+        var path = GetPathArg(args, "path");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            try
+            {
+                var full = ResolveWorkspacePath(workspace, path);
+                if (File.Exists(full) && DocumentTextExtractor.IsSupported(full))
+                {
+                    return ToolValidation.Fail("grep supports plaintext/code only for direct file targets. Use glob then exact read for Office/PDF containers.");
+                }
+            }
+            catch (Exception ex)
+            {
+                return ToolValidation.Fail(ex.Message);
+            }
+        }
+
+        var glob = GetString(args, "glob");
+        if (LooksLikeOfficeOrPdfGlob(glob))
+        {
+            return ToolValidation.Fail("grep supports plaintext/code only. Use glob then exact read for Office/PDF containers.");
+        }
+
+        return ToolValidation.Pass();
+    }
+
+    private static ToolValidation ValidatePatch(string workspace, JsonObject args)
+    {
+        var patch = GetString(args, "patch");
+        if (string.IsNullOrWhiteSpace(patch))
+        {
+            return ToolValidation.Fail("apply_patch requires patch.");
+        }
+
+        if (!RelayPatch.TryParse(patch, out var operations, out var error))
+        {
+            return ToolValidation.Fail(error ?? "Invalid patch.");
+        }
+
+        foreach (var operation in operations)
+        {
+            try
+            {
+                ResolveWorkspacePath(workspace, operation.Path);
+            }
+            catch (Exception ex)
+            {
+                return ToolValidation.Fail(ex.Message);
+            }
+        }
+
+        return ToolValidation.Pass();
+    }
+
+    private static ToolValidation ValidateWorkspacePath(string workspace, JsonObject args, bool mustExist, string key = "path", string? fallbackKey = null)
+    {
+        var path = GetPathArg(args, key, fallbackKey);
         if (string.IsNullOrWhiteSpace(path)) return ToolValidation.Fail($"{key} is required.");
         try
         {
@@ -1850,19 +2189,19 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         var argv = GetStringArray(args, "argv");
         if (argv is null || argv.Length == 0 || string.IsNullOrWhiteSpace(argv[0]))
         {
-            return ToolValidation.Fail("run_command requires argv as a non-empty string array.");
+            return ToolValidation.Fail("bash requires argv as a non-empty string array.");
         }
 
         var executable = Path.GetFileNameWithoutExtension(argv[0]).ToLowerInvariant();
         if (!AllowedCommands.Contains(executable))
         {
-            return ToolValidation.Fail($"run_command executable is not allowed for verification: {argv[0]}");
+            return ToolValidation.Fail($"bash executable is not allowed for verification: {argv[0]}");
         }
 
         var normalized = argv.Skip(1).Select(arg => arg.Trim().ToLowerInvariant()).ToArray();
         if (normalized.Any(arg => BlockedCommandTokens.Contains(arg)))
         {
-            return ToolValidation.Fail("run_command contains a blocked mutation, network, or package-management token.");
+            return ToolValidation.Fail("bash contains a blocked mutation, network, or package-management token.");
         }
 
         if (executable == "git")
@@ -1870,7 +2209,7 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
             var subcommand = normalized.FirstOrDefault(arg => !arg.StartsWith('-'));
             if (string.IsNullOrWhiteSpace(subcommand) || !AllowedGitSubcommands.Contains(subcommand))
             {
-                return ToolValidation.Fail("run_command git usage is limited to status, diff, show, log, branch, rev-parse, and ls-files.");
+                return ToolValidation.Fail("bash git usage is limited to status, diff, show, log, branch, rev-parse, and ls-files.");
             }
         }
 
@@ -1915,6 +2254,16 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         return full;
     }
 
+    private static string ResolveSearchDirectory(string workspace, JsonObject args)
+    {
+        var path = GetPathArg(args, "path");
+        if (string.IsNullOrWhiteSpace(path)) return Path.GetFullPath(workspace);
+        var full = ResolveWorkspacePath(workspace, path);
+        if (File.Exists(full)) return Path.GetDirectoryName(full) ?? Path.GetFullPath(workspace);
+        if (!Directory.Exists(full)) throw new InvalidOperationException("path does not exist or is not a directory.");
+        return full;
+    }
+
     private static string? FindGitRoot(string start)
     {
         var current = new DirectoryInfo(start);
@@ -1931,6 +2280,9 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
     private static string? GetString(JsonObject args, string key) =>
         args.TryGetPropertyValue(key, out var value) ? value?.GetValue<string>() : null;
+
+    private static string? GetPathArg(JsonObject args, string key, string? fallbackKey = null) =>
+        GetString(args, key) ?? (fallbackKey is null ? null : GetString(args, fallbackKey));
 
     private static string[]? GetStringArray(JsonObject args, string key)
     {
@@ -1958,6 +2310,19 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         try
         {
             return value.GetValue<int>();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool? GetBool(JsonObject args, string key)
+    {
+        if (!args.TryGetPropertyValue(key, out var value) || value is null) return null;
+        try
+        {
+            return value.GetValue<bool>();
         }
         catch
         {
@@ -1996,6 +2361,19 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
     }
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
+
+    private static string SliceText(string value, int offset, int limit)
+    {
+        if (offset >= value.Length) return "";
+        var length = Math.Min(limit, value.Length - offset);
+        return value.Substring(offset, length);
+    }
+
+    private static bool LooksLikeOfficeOrPdfGlob(string? glob)
+    {
+        if (string.IsNullOrWhiteSpace(glob)) return false;
+        return Regex.IsMatch(glob, @"\.(xlsx|xlsm|xls|docx|doc|pptx|ppt|pdf)(\W|$)", RegexOptions.IgnoreCase);
+    }
 
     private static void AddRipgrepFilters(List<string> args, JsonObject callArgs)
     {
@@ -2164,7 +2542,163 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
     }
 }
 
+public enum RelayPatchOperationKind
+{
+    Add,
+    Delete,
+    Update,
+}
+
+public sealed record RelayPatchOperation(
+    RelayPatchOperationKind Kind,
+    string Path,
+    string? OldText,
+    string? NewText);
+
+public static class RelayPatch
+{
+    public static bool TryParse(string patch, out IReadOnlyList<RelayPatchOperation> operations, out string? error)
+    {
+        operations = [];
+        error = null;
+        var normalized = patch.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
+        var lines = normalized.Split('\n');
+        if (lines.Length < 2 || lines[0] != "*** Begin Patch" || lines[^1] != "*** End Patch")
+        {
+            error = "patch must start with *** Begin Patch and end with *** End Patch.";
+            return false;
+        }
+
+        var result = new List<RelayPatchOperation>();
+        for (var index = 1; index < lines.Length - 1;)
+        {
+            var line = lines[index];
+            if (line.StartsWith("*** Add File: ", StringComparison.Ordinal))
+            {
+                var path = line["*** Add File: ".Length..].Trim();
+                if (!IsSafePatchPath(path, out error)) return false;
+                index++;
+                var builder = new StringBuilder();
+                while (index < lines.Length - 1 && !lines[index].StartsWith("*** ", StringComparison.Ordinal))
+                {
+                    if (!lines[index].StartsWith('+'))
+                    {
+                        error = $"Add file lines must start with '+': {path}";
+                        return false;
+                    }
+                    builder.AppendLine(lines[index][1..]);
+                    index++;
+                }
+                result.Add(new RelayPatchOperation(RelayPatchOperationKind.Add, path, null, TrimFinalNewline(builder.ToString())));
+                continue;
+            }
+
+            if (line.StartsWith("*** Delete File: ", StringComparison.Ordinal))
+            {
+                var path = line["*** Delete File: ".Length..].Trim();
+                if (!IsSafePatchPath(path, out error)) return false;
+                result.Add(new RelayPatchOperation(RelayPatchOperationKind.Delete, path, null, null));
+                index++;
+                continue;
+            }
+
+            if (line.StartsWith("*** Update File: ", StringComparison.Ordinal))
+            {
+                var path = line["*** Update File: ".Length..].Trim();
+                if (!IsSafePatchPath(path, out error)) return false;
+                index++;
+                if (index < lines.Length - 1 && lines[index].StartsWith("*** Move to: ", StringComparison.Ordinal))
+                {
+                    error = "apply_patch move operations are not supported yet.";
+                    return false;
+                }
+
+                var oldText = new StringBuilder();
+                var newText = new StringBuilder();
+                var sawChange = false;
+                while (index < lines.Length - 1 && !lines[index].StartsWith("*** ", StringComparison.Ordinal))
+                {
+                    var current = lines[index];
+                    if (current.StartsWith("@@", StringComparison.Ordinal))
+                    {
+                        index++;
+                        continue;
+                    }
+                    if (current.Length == 0)
+                    {
+                        error = $"Patch line is missing a prefix in {path}.";
+                        return false;
+                    }
+
+                    switch (current[0])
+                    {
+                        case ' ':
+                            oldText.AppendLine(current[1..]);
+                            newText.AppendLine(current[1..]);
+                            break;
+                        case '-':
+                            oldText.AppendLine(current[1..]);
+                            sawChange = true;
+                            break;
+                        case '+':
+                            newText.AppendLine(current[1..]);
+                            sawChange = true;
+                            break;
+                        default:
+                            error = $"Unsupported patch line prefix '{current[0]}' in {path}.";
+                            return false;
+                    }
+                    index++;
+                }
+                if (!sawChange)
+                {
+                    error = $"Update file has no changed lines: {path}";
+                    return false;
+                }
+                result.Add(new RelayPatchOperation(
+                    RelayPatchOperationKind.Update,
+                    path,
+                    TrimFinalNewline(oldText.ToString()),
+                    TrimFinalNewline(newText.ToString())));
+                continue;
+            }
+
+            error = $"Unsupported patch hunk: {line}";
+            return false;
+        }
+
+        operations = result;
+        return true;
+    }
+
+    private static bool IsSafePatchPath(string path, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(path) || path.IndexOf('\0') >= 0)
+        {
+            error = "patch path is invalid.";
+            return false;
+        }
+        if (path.StartsWith('/') || path.StartsWith('\\') || Path.IsPathRooted(path))
+        {
+            error = "patch paths must be relative to the workspace.";
+            return false;
+        }
+        return true;
+    }
+
+    private static string TrimFinalNewline(string value) =>
+        value.EndsWith('\n') ? value[..^1] : value;
+}
+
 public sealed record RelayToolCall(string Id, string Tool, JsonObject Args);
+
+public sealed record RelayToolProvider(
+    string Name,
+    Func<string, JsonObject, ToolValidation> Validate,
+    Func<RelayToolCall, string> Describe,
+    Func<string, RelayToolCall, CancellationToken, Task<ToolObservation>> Execute,
+    Func<RelayToolCall, bool> RequiresApproval);
 
 public sealed record ToolObservation(string ToolCallId, string Tool, bool Success, string Summary, object? Data)
 {
