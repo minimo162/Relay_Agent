@@ -417,10 +417,15 @@ Current completed tasks:
   primitives.** Relay now has an explicit Agent Framework tool catalog split
   between read-only automatic functions and mutating
   `ApprovalRequiredAIFunction` tools projected to AG-UI `request_approval`.
+- **AFAGUI03: Move Workbench primary execution to official AG-UI transport.**
+  Workbench now starts and resumes runs through the official `/agui/relay`
+  HTTP/SSE endpoint with `@ag-ui/client` `HttpAgent`, derives approval cards
+  from AG-UI `request_approval` client-tool calls, and no longer uses legacy
+  `/api/runs` routes as its product execution path.
 
 Next task after this checkpoint:
 
-- **AFAGUI03: Move Workbench primary execution to official AG-UI transport.**
+- **AFAGUI04: Remove legacy run stream and approval compatibility routes.**
 
 1. Add a proof slice for AG-UI client-tool approvals.
    - Confirm the current Agent Framework AG-UI package surface. If a future

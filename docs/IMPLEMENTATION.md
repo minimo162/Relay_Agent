@@ -17846,3 +17846,46 @@ Result:
 - AG-UI client-tool smoke passed with the expanded read-only/mutating policy
   assertions.
 - Full `pnpm check` passed.
+
+## 2026-05-16: AFAGUI03 Workbench Official AG-UI Transport Cutover
+
+Changes:
+
+- Replaced the Workbench product execution path from legacy `/api/runs` plus
+  `/api/runs/{runId}/agui-events` to the official Agent Framework AG-UI
+  endpoint at `/agui/relay`.
+- Replaced the custom `RelayEventSourceAgent` with `@ag-ui/client` `HttpAgent`
+  and standard `RunAgentInput` construction for user runs and approval resume
+  turns.
+- Added AG-UI tool-call draft tracking in the Workbench so
+  `request_approval` client-tool calls are parsed into the existing approval
+  card, while approve/reject now resumes the run by sending an AG-UI tool
+  result message instead of calling the old `/approve` or `/reject` routes.
+- Updated Workbench event handling to consume standard AG-UI lifecycle, text,
+  reasoning, tool-call, state, error, and completion events directly. Assistant
+  text is accumulated from `TEXT_MESSAGE_CONTENT` events for the summary panel.
+- Updated the hard-cut guard so active Workbench source must reference
+  `/agui/relay` and must not reference the old `/api/runs` product path or
+  `/agui-events` stream.
+- Marked `AFAGUI03` complete in Task Master and updated `PLANS.md` so
+  `AFAGUI04` is the next checkpoint.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+node scripts/check-hard-cut-guard.mjs
+pnpm --filter @relay-agent/workbench build
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Workbench typecheck passed.
+- Hard-cut guard passed with the new official AG-UI endpoint assertions.
+- Workbench production build passed.
+- Full `pnpm check` passed, including Workbench build and sidecar asset
+  preparation, sidecar Release build/smoke, golden agent smoke, AG-UI
+  client-tool approval smoke, ripgrep stream cap smoke, Office/PDF read smoke,
+  OfficeCLI registry smoke, sidecar security smoke, and release inventory
+  generation.

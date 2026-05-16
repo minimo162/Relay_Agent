@@ -36,6 +36,11 @@ export type RunEvent = {
 
 export type ApprovalState = {
   approvalId: string;
+  clientToolCall?: {
+    id: string;
+    name: string;
+    args: string;
+  };
   toolCall: {
     id: string;
     tool: string;

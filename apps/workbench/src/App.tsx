@@ -8,17 +8,22 @@ import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import {
-  approvalFromEvents,
+  approvalFromToolCall,
+  buildApprovalMessages,
+  buildRunAgentInput,
+  createRelayAgUiAgent,
   eventKey,
   normalizeApproval,
-  RelayEventSourceAgent,
   runEventFromAgUi,
+  updateToolCallDraft,
   type RelayAgUiEvent,
+  type RelayAgUiToolCallDraft,
 } from "./lib/relay-ag-ui";
-import type { ApprovalState, RunEvent, RunResponse, RunStatus, StatusResponse } from "./types";
+import type { ApprovalState, RunEvent, RunStatus, StatusResponse } from "./types";
 
 const workspaceStorageKey = "relay.workbench.workspace";
 const workspaceHistoryKey = "relay.workbench.workspaceHistory";
+const threadStorageKey = "relay.workbench.threadId";
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
 
 type ReadinessState = {
@@ -39,6 +44,7 @@ export function App() {
   const [instruction, setInstruction] = useState("");
   const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [assistantText, setAssistantText] = useState("");
   const [raw, setRaw] = useState("");
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [currentStatus, setCurrentStatus] = useState<RunStatus | "idle">("idle");
@@ -46,10 +52,18 @@ export function App() {
   const [sendDisabled, setSendDisabled] = useState(false);
 
   const eventKeysRef = useRef(new Set<string>());
+  const eventSequenceRef = useRef(0);
   const streamRef = useRef<Subscription | null>(null);
+  const agentRef = useRef<ReturnType<typeof createRelayAgUiAgent> | null>(null);
   const statusRef = useRef<RunStatus | "idle">("idle");
   const runIdRef = useRef<string | null>(null);
+  const cancelledRunRef = useRef<string | null>(null);
   const instructionRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastInstructionRef = useRef("");
+  const threadIdRef = useRef(loadThreadId());
+  const agUiEventsRef = useRef<RelayAgUiEvent[]>([]);
+  const activeInputRef = useRef<unknown>(null);
+  const toolCallDraftsRef = useRef(new Map<string, RelayAgUiToolCallDraft>());
 
   useEffect(() => {
     statusRef.current = currentStatus;
@@ -66,9 +80,11 @@ export function App() {
     return token ? { ...extra, "X-Relay-Token": token } : extra;
   }, []);
 
-  const closeEventStream = useCallback(() => {
+  const closeEventStream = useCallback((abort = true) => {
+    if (abort) agentRef.current?.abortRun();
     streamRef.current?.unsubscribe();
     streamRef.current = null;
+    agentRef.current = null;
   }, []);
 
   const setRunChrome = useCallback((status: RunStatus | "idle", runId: string | null) => {
@@ -89,6 +105,7 @@ export function App() {
 
   const replaceEvents = useCallback((nextEvents: readonly RunEvent[]) => {
     eventKeysRef.current = new Set();
+    eventSequenceRef.current = 0;
     const deduped: RunEvent[] = [];
     for (const event of nextEvents) {
       const key = eventKey(event);
@@ -99,25 +116,24 @@ export function App() {
     setEvents(deduped);
   }, []);
 
-  const renderRun = useCallback((result: RunResponse) => {
-    setRunChrome(result.status, result.runId);
-    replaceEvents(result.events);
-    setCurrentApproval(approvalFromEvents(result.events, result.status));
-    setRaw(JSON.stringify(result, null, 2));
-  }, [replaceEvents, setRunChrome]);
+  const setRawSnapshot = useCallback(() => {
+    setRaw(JSON.stringify({
+      transport: "/agui/relay",
+      input: activeInputRef.current,
+      events: agUiEventsRef.current,
+    }, null, 2));
+  }, []);
 
-  const loadRun = useCallback(async (runId: string) => {
-    const response = await fetch(api(`/api/runs/${encodeURIComponent(runId)}`), {
-      headers: authHeaders(),
-    });
-    if (!response.ok) return;
-    const result = (await response.json()) as RunResponse;
-    renderRun(result);
-    if (result.status !== "running") closeEventStream();
-  }, [api, authHeaders, closeEventStream, renderRun]);
+  const resetRunTranscript = useCallback(() => {
+    toolCallDraftsRef.current = new Map();
+    agUiEventsRef.current = [];
+    activeInputRef.current = null;
+    setAssistantText("");
+    replaceEvents([]);
+  }, [replaceEvents]);
 
   const applyEventState = useCallback((runId: string, event: RunEvent) => {
-    if (event.type === "completed" || event.type === "final") {
+    if (event.type === "completed") {
       setRunChrome("completed", runId);
     } else if (event.type === "error") {
       setRunChrome("failed", runId);
@@ -135,51 +151,86 @@ export function App() {
     setCurrentApproval(normalizeApproval(event.state.approval));
   }, []);
 
-  const connectEvents = useCallback((runId: string) => {
-    closeEventStream();
-    const agent = new RelayEventSourceAgent((id) => api(`/api/runs/${encodeURIComponent(id)}/agui-events`));
-    const subscription = agent.run({
+  const consumeAgUiEvent = useCallback((runId: string, event: RelayAgUiEvent) => {
+    const enrichedEvent: RelayAgUiEvent = {
+      ...event,
       runId,
-      threadId: "relay-workbench",
-      state: {},
-      messages: [],
-      tools: [],
-      context: [],
-    }).subscribe({
+      sequence: ++eventSequenceRef.current,
+      timestamp: event.timestamp ?? new Date().toISOString(),
+    };
+
+    agUiEventsRef.current = [...agUiEventsRef.current, enrichedEvent].slice(-200);
+    setRawSnapshot();
+
+    if (enrichedEvent.type === "TEXT_MESSAGE_CONTENT" && enrichedEvent.delta) {
+      setAssistantText((current) => current + enrichedEvent.delta);
+    }
+
+    const draft = updateToolCallDraft(enrichedEvent, toolCallDraftsRef.current);
+    if (draft) {
+      const approval = approvalFromToolCall(draft);
+      if (approval) {
+        setCurrentApproval(approval);
+        setRunChrome("approval_required", runId);
+      }
+    }
+
+    const runEvent = runEventFromAgUi(enrichedEvent);
+    const added = appendRunEvent(runEvent);
+    if (!added) return;
+    applyEventState(runId, runEvent);
+    applyAgUiState(enrichedEvent);
+  }, [appendRunEvent, applyAgUiState, applyEventState, setRawSnapshot, setRunChrome]);
+
+  const startAgUiRun = useCallback((input: ReturnType<typeof buildRunAgentInput>, resetTranscript: boolean) => {
+    closeEventStream();
+    cancelledRunRef.current = null;
+    if (resetTranscript) resetRunTranscript();
+    activeInputRef.current = input;
+    setRunChrome("running", input.runId);
+    setSendDisabled(false);
+    setRawSnapshot();
+
+    const agent = createRelayAgUiAgent(api("/agui/relay"), authHeaders());
+    agentRef.current = agent;
+    const subscription = agent.run(input).subscribe({
       next: (event) => {
-        const agUiEvent = event as RelayAgUiEvent;
-        const runEvent = runEventFromAgUi(agUiEvent);
-        const added = appendRunEvent(runEvent);
-        if (!added) return;
-        applyEventState(runId, runEvent);
-        applyAgUiState(agUiEvent);
-        if (
-          runEvent.type === "final" ||
-          runEvent.type === "completed" ||
-          runEvent.type === "error" ||
-          runEvent.type === "approval_requested"
-        ) {
-          window.setTimeout(() => void loadRun(runId), 120);
-        }
+        consumeAgUiEvent(input.runId, event as RelayAgUiEvent);
       },
       error: (error: unknown) => {
-        appendRunEvent({
+        if (cancelledRunRef.current === input.runId) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        const failureEvent: RunEvent = {
           type: "error",
-          message: "AG-UI stream failed",
-          detail: error instanceof Error ? error.message : String(error),
-        });
-        if (runIdRef.current === runId && statusRef.current === "running") {
-          window.setTimeout(() => void loadRun(runId), 180);
-        }
+          message: "AG-UI run failed",
+          detail,
+          runId: input.runId,
+          sequence: ++eventSequenceRef.current,
+          timestamp: new Date().toISOString(),
+        };
+        appendRunEvent(failureEvent);
+        setRunChrome("failed", input.runId);
+        setRaw(JSON.stringify({ transport: "/agui/relay", error: detail }, null, 2));
       },
       complete: () => {
-        if (runIdRef.current === runId && statusRef.current === "running") {
-          window.setTimeout(() => void loadRun(runId), 180);
+        streamRef.current = null;
+        agentRef.current = null;
+        if (runIdRef.current === input.runId && statusRef.current === "running") {
+          setRunChrome("completed", input.runId);
         }
       },
     });
     streamRef.current = subscription;
-  }, [api, appendRunEvent, applyAgUiState, applyEventState, closeEventStream, loadRun]);
+  }, [
+    api,
+    appendRunEvent,
+    authHeaders,
+    closeEventStream,
+    consumeAgUiEvent,
+    resetRunTranscript,
+    setRawSnapshot,
+    setRunChrome,
+  ]);
 
   const refreshStatus = useCallback(async () => {
     const response = await fetch(api("/api/status"), {
@@ -224,114 +275,85 @@ export function App() {
     });
   }, [refreshStatus]);
 
+  const cancelRun = useCallback(async () => {
+    const runId = runIdRef.current;
+    if (!runId) return;
+    setSendDisabled(true);
+    cancelledRunRef.current = runId;
+    closeEventStream(true);
+    const event: RunEvent = {
+      type: "cancelled",
+      message: "Stopped",
+      runId,
+      sequence: ++eventSequenceRef.current,
+      timestamp: new Date().toISOString(),
+    };
+    appendRunEvent(event);
+    setRunChrome("cancelled", runId);
+    setSendDisabled(false);
+  }, [appendRunEvent, closeEventStream, setRunChrome]);
+
   const runTask = useCallback(async () => {
-    if (statusRef.current === "running" && runIdRef.current) {
-      await cancelRun(runIdRef.current);
+    if (statusRef.current === "running") {
+      await cancelRun();
       return;
     }
 
-    closeEventStream();
-    setCurrentApproval(null);
-    setRunChrome("running", null);
-    replaceEvents([]);
+    const userText = instruction.trim();
+    if (!userText) return;
+
     saveWorkspace(workspace, setWorkspaceHistory);
-
-    try {
-      const response = await fetch(api("/api/runs"), {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          instruction,
-          workspace,
-        }),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const result = (await response.json()) as RunResponse;
-      renderRun(result);
-      if (result.status === "running") {
-        connectEvents(result.runId);
-      }
-    } catch (error) {
-      setRunChrome("failed", null);
-      replaceEvents([{
-        type: "error",
-        message: "完了できませんでした",
-        detail: error instanceof Error ? error.message : String(error),
-      }]);
-    }
-  }, [
-    api,
-    authHeaders,
-    closeEventStream,
-    connectEvents,
-    instruction,
-    renderRun,
-    replaceEvents,
-    setRunChrome,
-    workspace,
-  ]);
-
-  const approveRun = useCallback(async (runId: string) => {
     setCurrentApproval(null);
-    setRunChrome("running", runId);
+    lastInstructionRef.current = userText;
+
+    const runId = createRunId("run");
+    const input = buildRunAgentInput({
+      runId,
+      threadId: threadIdRef.current,
+      workspace,
+      instruction: userText,
+    });
+    startAgUiRun(input, true);
+  }, [cancelRun, instruction, startAgUiRun, workspace]);
+
+  const respondToApproval = useCallback(async (approved: boolean) => {
+    const approval = currentApproval;
+    if (!approval) return;
+
+    setCurrentApproval(null);
+    const parentRunId = currentRunId ?? undefined;
+    const runId = createRunId(approved ? "approve" : "reject");
     try {
-      const response = await fetch(api(`/api/runs/${encodeURIComponent(runId)}/approve`), {
-        method: "POST",
-        headers: authHeaders(),
+      const messages = buildApprovalMessages({
+        runId,
+        userText: lastInstructionRef.current || instruction,
+        approval,
+        approved,
       });
-      if (!response.ok) throw new Error(await response.text());
-      const result = (await response.json()) as RunResponse;
-      renderRun(result);
-      if (result.status === "running") connectEvents(result.runId);
+      const input = buildRunAgentInput({
+        runId,
+        parentRunId,
+        threadId: threadIdRef.current,
+        workspace,
+        messages,
+      });
+      startAgUiRun(input, false);
     } catch (error) {
-      setRunChrome("failed", runId);
+      setRunChrome("failed", parentRunId ?? null);
       appendRunEvent({
         type: "error",
-        message: "承認後の実行に失敗しました",
+        message: approved ? "承認後の実行に失敗しました" : "却下に失敗しました",
         detail: error instanceof Error ? error.message : String(error),
+        runId: parentRunId,
+        sequence: ++eventSequenceRef.current,
+        timestamp: new Date().toISOString(),
       });
     }
-  }, [api, appendRunEvent, authHeaders, connectEvents, renderRun, setRunChrome]);
-
-  const rejectRun = useCallback(async (runId: string) => {
-    setCurrentApproval(null);
-    try {
-      const response = await fetch(api(`/api/runs/${encodeURIComponent(runId)}/reject`), {
-        method: "POST",
-        headers: authHeaders(),
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const result = (await response.json()) as RunResponse;
-      renderRun(result);
-    } catch (error) {
-      setRunChrome("failed", runId);
-      appendRunEvent({
-        type: "error",
-        message: "却下に失敗しました",
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }, [api, appendRunEvent, authHeaders, renderRun, setRunChrome]);
-
-  const cancelRun = useCallback(async (runId: string) => {
-    setSendDisabled(true);
-    try {
-      const response = await fetch(api(`/api/runs/${encodeURIComponent(runId)}/cancel`), {
-        method: "POST",
-        headers: authHeaders(),
-      });
-      if (response.ok) {
-        const result = (await response.json()) as RunResponse;
-        renderRun(result);
-      }
-    } finally {
-      setSendDisabled(false);
-    }
-  }, [api, authHeaders, renderRun]);
+  }, [appendRunEvent, currentApproval, currentRunId, instruction, setRunChrome, startAgUiRun, workspace]);
 
   useEffect(() => {
     handleRefresh();
-    return closeEventStream;
+    return () => closeEventStream(true);
   }, [closeEventStream, handleRefresh]);
 
   useEffect(() => {
@@ -342,10 +364,18 @@ export function App() {
   }, [instruction]);
 
   const summaryEvent = useMemo(() => {
+    const text = assistantText.trim();
+    if (text) {
+      return {
+        type: "final",
+        message: "Result",
+        detail: text,
+      } satisfies RunEvent;
+    }
     const finalEvent = [...events].reverse().find((event) => event.type === "final" || event.type === "completed");
     const errorEvent = [...events].reverse().find((event) => event.type === "error");
     return finalEvent ?? (currentStatus === "failed" ? errorEvent : undefined);
-  }, [currentStatus, events]);
+  }, [assistantText, currentStatus, events]);
 
   const compactWorkspace = workspace ? compactPath(workspace) : "";
   const running = currentStatus === "running";
@@ -459,8 +489,8 @@ export function App() {
             approval={currentApproval}
             currentRunId={currentRunId}
             currentStatus={currentStatus}
-            onApprove={approveRun}
-            onReject={rejectRun}
+            onApprove={() => respondToApproval(true)}
+            onReject={() => respondToApproval(false)}
           />
 
           <Card className="run-panel" aria-live="polite">
@@ -500,8 +530,8 @@ function ApprovalPanel({
   approval: ApprovalState | null;
   currentRunId: string | null;
   currentStatus: RunStatus | "idle";
-  onApprove: (runId: string) => Promise<void>;
-  onReject: (runId: string) => Promise<void>;
+  onApprove: () => Promise<void>;
+  onReject: () => Promise<void>;
 }) {
   const hidden = !approval || currentStatus !== "approval_required" || !currentRunId;
   const toolCall = approval?.toolCall;
@@ -527,11 +557,11 @@ function ApprovalPanel({
             <pre>{JSON.stringify(toolCall, null, 2)}</pre>
           </details>
           <div className="approval-actions">
-            <Button variant="secondary" type="button" onClick={() => void onReject(currentRunId)}>
+            <Button variant="secondary" type="button" onClick={() => void onReject()}>
               <X size={15} aria-hidden="true" />
               実行しない
             </Button>
-            <Button type="button" onClick={() => void onApprove(currentRunId)}>
+            <Button type="button" onClick={() => void onApprove()}>
               <Check size={15} aria-hidden="true" />
               許可して続行
             </Button>
@@ -582,6 +612,19 @@ function loadWorkspaceHistory(): string[] {
   } catch {
     return [];
   }
+}
+
+function loadThreadId(): string {
+  const existing = localStorage.getItem(threadStorageKey);
+  if (existing) return existing;
+  const next = createRunId("thread");
+  localStorage.setItem(threadStorageKey, next);
+  return next;
+}
+
+function createRunId(prefix: string): string {
+  const random = Math.random().toString(36).slice(2, 9);
+  return `relay-${prefix}-${Date.now().toString(36)}-${random}`;
 }
 
 function compactPath(path: string): string {
