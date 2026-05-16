@@ -180,6 +180,7 @@ export function App() {
     }
 
     const runEvent = runEventFromAgUi(enrichedEvent);
+    if (runEvent.type === "completed" && statusRef.current === "approval_required") return;
     const added = appendRunEvent(runEvent);
     if (!added) return;
     applyEventState(runId, runEvent);
@@ -376,7 +377,7 @@ export function App() {
         detail: text,
       } satisfies RunEvent;
     }
-    const finalEvent = [...events].reverse().find((event) => event.type === "final" || event.type === "completed");
+    const finalEvent = [...events].reverse().find((event) => event.type === "final");
     const errorEvent = [...events].reverse().find((event) => event.type === "error");
     return finalEvent ?? (currentStatus === "failed" ? errorEvent : undefined);
   }, [assistantText, currentStatus, events]);
@@ -540,7 +541,7 @@ function ApprovalPanel({
   const hidden = !approval || currentStatus !== "approval_required" || !currentRunId;
   const toolCall = approval?.toolCall;
   const target = toolCall ? approvalTarget(toolCall.args) : "";
-  const operation = toolCall ? String(toolCall.args.operation ?? toolCall.args.command ?? toolCall.tool) : "";
+  const operation = toolCall ? approvalOperation(toolCall.tool, toolCall.args) : "";
 
   return (
     <Card id="approval" className="approval-panel" hidden={hidden}>
@@ -550,6 +551,7 @@ function ApprovalPanel({
             <strong>確認が必要です</strong>
             <Badge tone="warning">{toolCall.tool}</Badge>
           </div>
+          <p className="approval-copy">許可すると、この操作をローカルワークスペースで実行します。</p>
           <dl className="approval-facts">
             <dt>操作</dt>
             <dd>{operation || "-"}</dd>
@@ -577,12 +579,13 @@ function ApprovalPanel({
 }
 
 function EventItem({ event }: { event: RunEvent }) {
+  const display = eventDisplay(event);
   return (
     <li className={`event event-${event.type}`}>
-      <span className="event-marker">{event.type}</span>
+      <span className="event-marker">{display.marker}</span>
       <div>
-        <strong>{event.message}</strong>
-        {event.detail ? <p>{event.detail}</p> : null}
+        <strong>{display.message}</strong>
+        {display.detail ? <p>{display.detail}</p> : null}
       </div>
     </li>
   );
@@ -639,8 +642,122 @@ function compactPath(path: string): string {
 }
 
 function approvalTarget(args: Record<string, unknown>): string {
-  const value = args.filePath ?? args.path ?? args.target ?? args.command ?? "";
+  const value =
+    args.filePath ??
+    args.file_path ??
+    args.path ??
+    args.target ??
+    args.oldPath ??
+    args.old_path ??
+    args.command ??
+    "";
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function approvalOperation(tool: string, args: Record<string, unknown>): string {
+  const value = args.operation ?? args.command ?? args.action ?? tool;
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function eventDisplay(event: RunEvent): { marker: string; message: string; detail?: string } {
+  if (event.type === "tool_call_started") {
+    return {
+      marker: "tool",
+      message: `${event.message} を準備しています`,
+      detail: compactIdentifier(event.detail),
+    };
+  }
+
+  if (event.type === "tool_call_completed") {
+    return {
+      marker: "tool",
+      message: "Tool completed",
+      detail: summarizeToolResult(event.detail),
+    };
+  }
+
+  if (event.type === "approval_requested") {
+    return {
+      marker: "wait",
+      message: "Approval requested",
+      detail: compactIdentifier(event.detail),
+    };
+  }
+
+  if (event.type === "completed") {
+    return { marker: "done", message: "Done" };
+  }
+
+  if (event.type === "cancelled") {
+    return { marker: "stop", message: "Stopped" };
+  }
+
+  if (event.type === "error") {
+    return {
+      marker: "error",
+      message: "Failed",
+      detail: event.detail || event.message,
+    };
+  }
+
+  if (event.type === "final") {
+    return {
+      marker: "answer",
+      message: "Assistant",
+      detail: event.detail,
+    };
+  }
+
+  if (event.type === "status") {
+    if (event.message === "Run started") return { marker: "run", message: "Run started" };
+    if (event.message === "Assistant response started") return { marker: "reply", message: "Response started" };
+    if (event.message === "Assistant response completed") return { marker: "reply", message: "Response completed" };
+    if (event.message === "Tool arguments") return { marker: "tool", message: "Tool arguments ready" };
+    if (event.message === "Tool call prepared") {
+      return { marker: "tool", message: "Tool call prepared", detail: compactIdentifier(event.detail) };
+    }
+    if (event.message === "State updated") return { marker: "state", message: "State updated" };
+  }
+
+  return {
+    marker: shortMarker(event.type),
+    message: event.message,
+    detail: event.detail,
+  };
+}
+
+function shortMarker(value: string): string {
+  const normalized = value.replaceAll("_", " ");
+  if (normalized.length <= 10) return normalized;
+  return normalized.split(" ").map((part) => part[0]).join("").slice(0, 8);
+}
+
+function compactIdentifier(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (value.length <= 42) return value;
+  return `${value.slice(0, 20)}...${value.slice(-12)}`;
+}
+
+function summarizeToolResult(detail: string | undefined): string | undefined {
+  if (!detail) return undefined;
+  try {
+    const parsed = JSON.parse(detail) as {
+      tool?: unknown;
+      success?: unknown;
+      summary?: unknown;
+      data?: unknown;
+      error?: unknown;
+    };
+    const parts = [];
+    if (typeof parsed.tool === "string") parts.push(parsed.tool);
+    if (typeof parsed.summary === "string") parts.push(parsed.summary);
+    if (Array.isArray(parsed.data)) parts.push(`${parsed.data.length} item${parsed.data.length === 1 ? "" : "s"}`);
+    if (typeof parsed.error === "string") parts.push(parsed.error);
+    if (parts.length > 0) return parts.join(" · ");
+  } catch {
+    // Non-JSON tool results are already bounded upstream.
+  }
+  return detail.length > 180 ? `${detail.slice(0, 180)}...` : detail;
 }
 
 function statusLabel(status: RunStatus | "idle"): string {

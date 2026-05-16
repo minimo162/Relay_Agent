@@ -1848,6 +1848,153 @@
           "verification": "git diff --check; pnpm check"
         }
       ]
+    },
+    {
+      "id": "workbench_uiux_refinement",
+      "name": "Workbench UI/UX Refinement",
+      "description": "Executable UI/UX refinement phase for the generic Relay Workbench. The goal is a spacious, quiet, professional agent work surface with one workspace, one task composer, one run state, one result area, and one approval/evidence surface. Diagnostics and raw payloads stay behind progressive disclosure.",
+      "tasks": [
+        {
+          "id": "WBUX01",
+          "title": "Capture current Workbench UX baseline",
+          "description": "Run the existing Workbench UX E2E flow and record baseline notes covering first paint, composer, activity, result, approval, details, and mobile risk before visual changes begin.",
+          "files": [
+            "scripts/workbench-ux-e2e.mjs",
+            "dist/e2e/",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Baseline Workbench UX screenshots captured by pnpm workbench:ux-e2e and recorded in docs/IMPLEMENTATION.md",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e; git diff --check",
+          "completedAt": "2026-05-16"
+        },
+        {
+          "id": "WBUX02",
+          "title": "Refine visual tokens and whitespace layout",
+          "description": "Update Workbench spacing, shell width, vertical rhythm, typography scale, border strength, and shadow usage through --ra-* tokens and local utilities while avoiding decorative or dashboard-heavy chrome.",
+          "files": [
+            "apps/workbench/src/styles.css",
+            "apps/workbench/src/App.tsx",
+            "scripts/workbench-ux-e2e.mjs",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "apps/workbench/src/styles.css spacious warm-light token/layout refinement and updated screenshots",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "WBUX01"
+          ],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e; pnpm check",
+          "completedAt": "2026-05-16"
+        },
+        {
+          "id": "WBUX03",
+          "title": "Simplify composer and first-run surface",
+          "description": "Remove permanent explanatory text that does not serve the current action while keeping workspace, task input, readiness, refresh, and send/stop controls. Keep limited/first-run errors concise and non-diagnostic by default.",
+          "files": [
+            "apps/workbench/src/App.tsx",
+            "apps/workbench/src/styles.css",
+            "scripts/workbench-ux-e2e.mjs",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Simplified Workbench composer/first-run surface preserving only workspace, task, readiness, refresh, and send/stop controls",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "WBUX02"
+          ],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e; pnpm check",
+          "completedAt": "2026-05-16"
+        },
+        {
+          "id": "WBUX04",
+          "title": "Improve activity and result hierarchy",
+          "description": "Make agent progress and final output obvious without turning the Workbench into a log viewer. Keep concise state/tool rows visible and raw AG-UI payloads behind collapsed details.",
+          "files": [
+            "apps/workbench/src/App.tsx",
+            "apps/workbench/src/lib/relay-ag-ui.ts",
+            "apps/workbench/src/styles.css",
+            "scripts/workbench-ux-e2e.mjs"
+          ],
+          "artifact": "Primary Activity/Result hierarchy hides raw AG-UI JSON and shows concise run/tool/result labels",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "WBUX03"
+          ],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e; pnpm check",
+          "completedAt": "2026-05-16"
+        },
+        {
+          "id": "WBUX05",
+          "title": "Refine approval, diff, and evidence surfaces",
+          "description": "Improve the approval card hierarchy for operation, target, consequence, backup/diff pointers when available, and approve/reject controls. Keep raw tool arguments collapsed and verify rejection is non-destructive.",
+          "files": [
+            "apps/workbench/src/App.tsx",
+            "apps/workbench/src/styles.css",
+            "scripts/workbench-ux-e2e.mjs",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Approval surface shows operation, target, consequence copy, approve/reject controls, and collapsed raw arguments",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "WBUX04"
+          ],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e approval/rejection assertions; pnpm check",
+          "completedAt": "2026-05-16"
+        },
+        {
+          "id": "WBUX06",
+          "title": "Complete responsive and accessibility pass",
+          "description": "Verify 375px, 768px, 1024px, and 1440px layouts; ensure real labels, aria-live dynamic updates, visible focus, stable click targets, reduced motion, and no horizontal scroll or overlapping text.",
+          "files": [
+            "apps/workbench/src/App.tsx",
+            "apps/workbench/src/styles.css",
+            "scripts/workbench-ux-e2e.mjs",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Desktop/mobile responsive and accessibility assertions added to scripts/workbench-ux-e2e.mjs",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "WBUX05"
+          ],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e desktop/mobile overflow and collapsed-details assertions; pnpm check",
+          "completedAt": "2026-05-16"
+        },
+        {
+          "id": "WBUX07",
+          "title": "Lock refined UX with acceptance artifacts",
+          "description": "Update Workbench UX E2E assertions for first paint, surface budget, run-state clarity, approval clarity, collapsed details, and responsive screenshots; record final screenshots and commands in docs/IMPLEMENTATION.md.",
+          "files": [
+            "scripts/workbench-ux-e2e.mjs",
+            "dist/e2e/",
+            "docs/IMPLEMENTATION.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Final Workbench UX acceptance screenshots and regression assertions in scripts/workbench-ux-e2e.mjs",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "WBUX06"
+          ],
+          "status": "completed",
+          "verification": "pnpm workbench:ux-e2e; pnpm check; git diff --check",
+          "completedAt": "2026-05-16"
+        }
+      ]
     }
   ]
 }

@@ -18271,3 +18271,118 @@ Result:
   smoke, ripgrep stream cap smoke, Office/PDF read smoke, OfficeCLI registry
   smoke, support-bundle security smoke, and release inventory/SBOM generation.
 - `git diff --check` passed.
+
+## 2026-05-16: Workbench UI/UX Direction Plan
+
+Changes:
+
+- Added a dedicated `UI/UX Direction` section to `PLANS.md`.
+- The plan now defines the Workbench visual target as a spacious, quiet,
+  professional agent surface: one workspace, one task composer, one visible run
+  state, one result area, and one approval/diff surface.
+- The plan explicitly treats whitespace as the main grouping mechanism,
+  requires progressive disclosure for diagnostics/raw AG-UI payloads, and
+  rejects diagnostic-first chrome, card-heavy dashboards, playful visuals,
+  emoji icons, AI purple/pink gradients, and marketing hero layouts.
+- Added a surface budget for header, composer, activity, result, approval, and
+  details areas, plus acceptance criteria for first paint, state clarity,
+  evidence visibility, responsive polish, and E2E coverage.
+
+Verification commands run locally:
+
+```bash
+git diff --check
+```
+
+Result:
+
+- `git diff --check` passed.
+
+## 2026-05-16: Workbench UI/UX Task Breakdown
+
+Changes:
+
+- Converted the Workbench UI/UX direction into an executable task queue in
+  `PLANS.md`:
+  `WBUX01` baseline capture, `WBUX02` visual tokens and whitespace layout,
+  `WBUX03` composer and first-run simplification, `WBUX04` activity/result
+  hierarchy, `WBUX05` approval/diff/evidence surfaces, `WBUX06` responsive and
+  accessibility pass, and `WBUX07` final UX acceptance artifacts.
+- Added a matching Task Master phase, `workbench_uiux_refinement`, with those
+  seven tasks as pending work. Each task includes files, artifact, effort,
+  priority, blockers, status, and verification fields.
+- Kept the task order deliberately sequential so baseline screenshots exist
+  before visual changes, layout and composer simplification happen before
+  state/result polishing, and final E2E/visual artifacts lock the refined UX.
+
+Verification commands run locally:
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"
+node -e "const j=JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); const phase=j.phases.find(p=>p.id==='workbench_uiux_refinement'); console.log(JSON.stringify((phase?.tasks||[]).map(t=>[t.id,t.status,t.blockedBy]), null, 2))"
+git diff --check
+```
+
+Result:
+
+- Task Master JSON parses successfully.
+- New `WBUX01` through `WBUX07` tasks are present and pending with sequential
+  blockers.
+- `git diff --check` passed.
+
+## 2026-05-16: Workbench UI/UX Refinement Completion
+
+Changes:
+
+- Completed `WBUX01` by running the baseline Workbench UX E2E flow and
+  reviewing screenshots for `workbench-empty.png`, `workbench-completed.png`,
+  and `workbench-approval.png`. Baseline issues were: Activity exposed raw
+  AG-UI/tool JSON too prominently, the result area could show internal
+  completion payloads during approval, and approval targets were not always
+  human-readable.
+- Completed `WBUX02` by refining `apps/workbench/src/styles.css`: tighter
+  focused shell width, more deliberate page margins and vertical rhythm,
+  calmer warm-light background, 8px surface radius, subtle borders, restrained
+  shadows, and stable input/button dimensions.
+- Completed `WBUX03` by keeping the composer surface minimal: workspace,
+  compact workspace history, task input, readiness, refresh, and send/stop
+  remain visible; implementation/provider details remain out of the primary
+  flow.
+- Completed `WBUX04` by changing the primary Activity rendering to concise
+  human-facing run/tool/result labels. Raw AG-UI JSON and long tool payloads no
+  longer appear in the primary activity list.
+- Completed `WBUX05` by improving the approval surface: operation, target,
+  consequence copy, approve/reject actions, and collapsed raw arguments are
+  visible in the right hierarchy. Snake-case `file_path` targets are now shown
+  correctly.
+- Completed `WBUX06` by extending browser E2E assertions for desktop and mobile
+  horizontal overflow, comfortable mobile control width, collapsed details, and
+  visible run/approval states.
+- Completed `WBUX07` by expanding `scripts/workbench-ux-e2e.mjs` to lock first
+  paint, stale-result hiding during approval, primary Activity JSON suppression,
+  approval target clarity, rejection non-mutation, cancellation, and mobile
+  screenshot capture.
+- Marked all `WBUX01` through `WBUX07` Task Master tasks as completed. No
+  pending Task Master tasks remain.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+node -e "const j=JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); const p=[]; for (const ph of j.phases||[]) for (const t of ph.tasks||[]) if (t.status==='pending') p.push(t.id); console.log(JSON.stringify(p));"
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+git diff --check
+```
+
+Result:
+
+- Workbench UX E2E passed:
+  `search=370ms`, `approval=114ms`, screenshots
+  `workbench-empty.png`, `workbench-completed.png`,
+  `workbench-approval.png`, and `workbench-mobile.png`.
+- Task Master pending-task query returned `[]`.
+- Full `pnpm check` passed, including hard-cut guard, Workbench typecheck/build,
+  sidecar build/smoke, tool catalog smoke, golden smoke, AG-UI client-tool
+  smoke, ripgrep stream cap smoke, Office/PDF read smoke, OfficeCLI registry
+  smoke, support-bundle security smoke, and release inventory/SBOM generation.
+- `git diff --check` passed.

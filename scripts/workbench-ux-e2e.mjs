@@ -159,6 +159,15 @@ async function captureScreenshot(name) {
   writeFileSync(join(artifactDir, name), Buffer.from(screenshot.data, "base64"));
 }
 
+async function setViewport(width, height, mobile = false) {
+  await cdpSend("Emulation.setDeviceMetricsOverride", {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile,
+  });
+}
+
 async function runBrowserFlow() {
   edge = spawn(edgePath, [
     "--headless=new",
@@ -201,12 +210,7 @@ async function runBrowserFlow() {
 
   await cdpSend("Runtime.enable");
   await cdpSend("Page.enable");
-  await cdpSend("Emulation.setDeviceMetricsOverride", {
-    width: 1440,
-    height: 1000,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
+  await setViewport(1440, 1000);
   await cdpSend("Page.navigate", { url: `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}` });
 
   await waitForExpression("document.readyState === 'complete'", 5000, "page load");
@@ -220,6 +224,9 @@ async function runBrowserFlow() {
     sendText: document.querySelector('#send')?.textContent,
     shellWidth: Math.round(document.querySelector('.shell')?.getBoundingClientRect().width ?? 0),
     runState: document.querySelector('#run-state')?.textContent,
+    visibleRaw: Array.from(document.querySelectorAll('summary')).filter((el) => el.offsetParent !== null).map((el) => el.textContent),
+    bodyWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
   }))()`);
   if (initialUx.title !== "Workbench") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
   if (initialUx.detailsOpen !== false) throw new Error(`details should be collapsed by default: ${JSON.stringify(initialUx)}`);
@@ -228,6 +235,7 @@ async function runBrowserFlow() {
   if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
   if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
   if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for focused workbench UX: ${JSON.stringify(initialUx)}`);
+  if (initialUx.bodyWidth > initialUx.viewportWidth) throw new Error(`initial UI has horizontal overflow: ${JSON.stringify(initialUx)}`);
 
   await captureScreenshot("workbench-empty.png");
 
@@ -261,10 +269,15 @@ async function runBrowserFlow() {
   const approvalUx = await evaluate(`(() => ({
     hasApprove: Array.from(document.querySelectorAll('#approval button')).some((button) => button.textContent.includes('許可')),
     hasReject: Array.from(document.querySelectorAll('#approval button')).some((button) => button.textContent.includes('実行しない')),
+    targetText: document.querySelector('#approval')?.textContent ?? '',
+    summaryHidden: document.querySelector('#summary')?.hidden,
     runState: document.querySelector('#run-state')?.textContent,
   }))()`);
   if (approvalUx.hasApprove !== true || approvalUx.hasReject !== true || approvalUx.runState !== "Waiting") {
     throw new Error(`approval UX is incomplete: ${JSON.stringify(approvalUx)}`);
+  }
+  if (!approvalUx.targetText.includes('approval.txt') || approvalUx.summaryHidden !== true) {
+    throw new Error(`approval UX should show target and hide stale result summary: ${JSON.stringify(approvalUx)}`);
   }
 
   await captureScreenshot("workbench-approval.png");
@@ -297,12 +310,37 @@ async function runBrowserFlow() {
     approvalHidden: document.querySelector('#approval')?.hidden,
     detailsOpen: document.querySelector('.details')?.open,
     eventCount: document.querySelectorAll('#events li').length,
+    rawPrimaryText: document.querySelector('#events')?.innerText ?? '',
+    bodyWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
   }))()`);
   if (finalUx.approvalHidden !== true) throw new Error(`approval panel should hide after completion: ${JSON.stringify(finalUx)}`);
   if (finalUx.detailsOpen !== false) throw new Error(`details should remain collapsed: ${JSON.stringify(finalUx)}`);
   if (finalUx.eventCount < 3) throw new Error(`expected visible event trace: ${JSON.stringify(finalUx)}`);
+  if (finalUx.rawPrimaryText.includes('"toolCallId"') || finalUx.rawPrimaryText.includes('"threadId"')) {
+    throw new Error(`primary activity should not expose raw AG-UI JSON: ${JSON.stringify(finalUx)}`);
+  }
+  if (finalUx.bodyWidth > finalUx.viewportWidth) throw new Error(`desktop UI has horizontal overflow: ${JSON.stringify(finalUx)}`);
 
-  return { searchMs, approvalMs, screenshots: ["workbench-empty.png", "workbench-completed.png", "workbench-approval.png"] };
+  await setViewport(390, 900, true);
+  await waitForExpression("Boolean(document.querySelector('.shell') && document.querySelector('#send'))", 2000, "mobile layout");
+  const mobileUx = await evaluate(`(() => ({
+    bodyWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    sendWidth: Math.round(document.querySelector('#send')?.getBoundingClientRect().width ?? 0),
+    composerWidth: Math.round(document.querySelector('.composer-panel')?.getBoundingClientRect().width ?? 0),
+    detailsOpen: document.querySelector('.details')?.open,
+  }))()`);
+  if (mobileUx.bodyWidth > mobileUx.viewportWidth) throw new Error(`mobile UI has horizontal overflow: ${JSON.stringify(mobileUx)}`);
+  if (mobileUx.sendWidth < 240 || mobileUx.composerWidth < 300) throw new Error(`mobile controls are not comfortably sized: ${JSON.stringify(mobileUx)}`);
+  if (mobileUx.detailsOpen !== false) throw new Error(`details should remain collapsed on mobile: ${JSON.stringify(mobileUx)}`);
+  await captureScreenshot("workbench-mobile.png");
+
+  return {
+    searchMs,
+    approvalMs,
+    screenshots: ["workbench-empty.png", "workbench-completed.png", "workbench-approval.png", "workbench-mobile.png"],
+  };
 }
 
 try {

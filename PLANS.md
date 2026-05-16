@@ -32,6 +32,183 @@ The active product target is a **generic Relay Workbench**:
 - AG-UI-first user experience and event protocol, with a minimal visual surface
   and no diagnostic-first clutter.
 
+## UI/UX Direction
+
+The Workbench must feel like a focused professional work surface, not a
+general chat demo, dashboard, or diagnostics console. The visual goal is:
+
+> **A spacious, quiet agent workbench where the user sees only the next useful
+> action, the current agent state, and the evidence needed to trust a result.**
+
+Design principles:
+
+- **Maximize whitespace as structure.** Use generous page margins, vertical
+  rhythm, and a narrow reading/composition width before adding borders, cards,
+  or explanatory panels. Empty space is the primary grouping tool.
+- **One primary path.** Keep one workspace selector, one task composer, one
+  visible run state, one result area, and one approval/diff surface. Do not
+  reintroduce separate `資料を探す`, `Officeファイルを編集する`, or `コードを書く`
+  modes as top-level UX.
+- **Progressive disclosure only.** Diagnostics, raw AG-UI payloads, support
+  bundle facts, tool JSON, and implementation detail belong behind collapsed
+  `Details` or support export surfaces. They must not compete with the main
+  work area.
+- **Concise state over explanatory copy.** Prefer short labels such as
+  `Ready`, `Running`, `Waiting`, `Done`, `Failed`, and `Stopped` plus visible
+  activity rows. Avoid permanent instructional text that explains the product
+  instead of helping the current task.
+- **Beautiful minimalism, not sparse incompleteness.** The UI may be quiet, but
+  it must still show agent progress, tool calls, approvals, errors, final
+  answers, and diff/backup consequences clearly.
+- **Trust through restraint.** Use a professional warm-light default theme,
+  subtle borders, restrained shadows, Inter typography, and the existing
+  `--ra-*` token system in `apps/workbench/src/styles.css`. Avoid playful
+  visuals, emoji icons, AI purple/pink gradients, marketing hero layouts,
+  decorative blobs, and card-heavy dashboard chrome.
+- **Stable interaction.** Buttons, inputs, approvals, and result rows must have
+  fixed dimensions or responsive constraints so text, loading states, hover
+  states, and icons do not shift layout.
+- **Accessibility is part of the aesthetic.** Inputs need real labels, dynamic
+  run updates need `aria-live`, keyboard focus must remain visible, and reduced
+  motion must be respected. Minimal UI is not allowed to hide focus, status, or
+  errors.
+
+Surface budget:
+
+| Surface | Visible by default | Hidden by default |
+| --- | --- | --- |
+| Header | Product mark/name and compact readiness pill | version/build diagnostics |
+| Composer | Workspace path, task input, send/stop action | provider internals |
+| Activity | short agent/tool/status rows | raw payload, full traces |
+| Result | final answer or error summary | support-only metadata |
+| Approval | action summary, target, approve/reject | raw tool arguments |
+| Details | collapsed entry point | raw AG-UI events, status JSON |
+
+Acceptance criteria for future UI work:
+
+- First paint shows a calm Workbench, not a setup/debug screen, when the sidecar
+  is reachable.
+- A new user can identify the workspace, write a task, and send it without
+  reading explanatory blocks.
+- During a run, the user can distinguish thinking/executing, waiting for
+  approval, failed, stopped, and completed states without opening details.
+- Result and approval surfaces preserve enough evidence to trust the action
+  while keeping raw JSON and local diagnostics out of the primary view.
+- The layout remains polished at 375px, 768px, 1024px, and 1440px without
+  horizontal scroll, overlapping text, or layout jumps.
+- Every UI change that affects the primary flow should update
+  `scripts/workbench-ux-e2e.mjs` or an equivalent visual/behavioral check.
+
+### Executable Task Queue: Workbench UI/UX Refinement
+
+These tasks convert the UI/UX direction into implementable work. They should be
+done in order because each task narrows the visible surface before the next one
+polishes interaction detail. Do not add new product modes or diagnostic-first
+surfaces while executing this queue.
+
+1. **WBUX01: Capture the current Workbench UX baseline.**
+   - Status: completed 2026-05-16.
+   - Goal: make the current state measurable before visual changes.
+   - Changes:
+     - Run the existing Workbench UX E2E flow and keep the generated
+       screenshots as the comparison baseline.
+     - Add a short baseline note to `docs/IMPLEMENTATION.md` covering first
+       paint, composer, activity, result, approval, details, and mobile risk.
+     - Identify any visible explanatory or diagnostic text that should move
+       behind disclosure in later tasks.
+   - Acceptance: baseline screenshots and notes exist before style changes.
+   - Verification: `pnpm workbench:ux-e2e`; `git diff --check`.
+
+2. **WBUX02: Refine visual tokens and whitespace layout.**
+   - Status: completed 2026-05-16.
+   - Goal: make the Workbench spacious, quiet, and professional at the token
+     and layout level.
+   - Changes:
+     - Update `apps/workbench/src/styles.css` spacing, shell width, section
+       rhythm, typography scale, border strength, and shadow usage through
+       `--ra-*` tokens and local utilities.
+     - Reduce dense card framing; keep cards only where they frame an actual
+       tool surface such as composer, result, approval, activity, or details.
+     - Preserve warm-light default theme and avoid decorative gradients, blobs,
+       emoji icons, and dashboard-like chrome.
+   - Acceptance: first paint reads as a calm work surface with clear hierarchy
+     and no crowded panels.
+   - Verification: `pnpm workbench:ux-e2e`; screenshots at desktop and mobile
+     widths; `pnpm check`.
+
+3. **WBUX03: Simplify composer and first-run surface.**
+   - Status: completed 2026-05-16.
+   - Goal: keep only the minimum visible controls needed to start work.
+   - Changes:
+     - Review `apps/workbench/src/App.tsx` composer/header copy and remove
+       permanent explanatory text that is not needed for the current action.
+     - Keep workspace, task input, readiness, refresh, and send/stop controls.
+     - Keep workspace history compact and non-dominant.
+     - Ensure first-run/limited states show concise errors without exposing raw
+       provider internals by default.
+   - Acceptance: a new user can choose or confirm workspace, type a task, and
+     send without reading instructions.
+   - Verification: `pnpm workbench:ux-e2e`; `pnpm check`.
+
+4. **WBUX04: Improve activity and result hierarchy.**
+   - Status: completed 2026-05-16.
+   - Goal: make agent progress and final output obvious without turning the UI
+     into a log viewer.
+   - Changes:
+     - Rework activity rows so status, tool calls, approval waits, failures,
+       cancellation, and completion have short, scannable labels.
+     - Keep final answer/error summary visually above raw activity details.
+     - Move raw AG-UI payloads and verbose traces behind the existing collapsed
+       details surface.
+   - Acceptance: users can distinguish `Running`, `Waiting`, `Failed`,
+     `Stopped`, and `Done` without opening details.
+   - Verification: `pnpm workbench:ux-e2e`; `pnpm check`.
+
+5. **WBUX05: Refine approval, diff, and evidence surfaces.**
+   - Status: completed 2026-05-16.
+   - Goal: make risky actions understandable without showing raw tool JSON by
+     default.
+   - Changes:
+     - Improve the approval card hierarchy for operation, target, consequence,
+       backup/diff pointers when available, and approve/reject controls.
+     - Keep raw arguments collapsed.
+     - Ensure mutating actions never execute before approval and that rejection
+       is visibly non-destructive.
+   - Acceptance: the user can understand what will change and can reject it
+     confidently from the primary surface.
+   - Verification: `pnpm workbench:ux-e2e`; approval/rejection assertions;
+     `pnpm check`.
+
+6. **WBUX06: Complete responsive and accessibility pass.**
+   - Status: completed 2026-05-16.
+   - Goal: make the minimal UI usable and polished across desktop and mobile.
+   - Changes:
+     - Verify layout at 375px, 768px, 1024px, and 1440px.
+     - Ensure labels use `htmlFor`, dynamic updates use `aria-live`, keyboard
+       focus is visible, click targets are stable, and reduced motion is
+       respected.
+     - Prevent horizontal scroll, overlapping text, layout shifts, and
+       truncated critical labels.
+   - Acceptance: primary task execution remains comfortable on small and large
+     screens with keyboard and screen-reader basics intact.
+   - Verification: `pnpm workbench:ux-e2e`; targeted accessibility assertions
+     or documented manual checks; `pnpm check`.
+
+7. **WBUX07: Lock the refined UX with acceptance artifacts.**
+   - Status: completed 2026-05-16.
+   - Goal: prevent regressions back to cluttered or diagnostic-first UI.
+   - Changes:
+     - Update `scripts/workbench-ux-e2e.mjs` assertions for first paint,
+       visible surface budget, run-state clarity, approval clarity, collapsed
+       details, and responsive screenshots.
+     - Record the final screenshots and verification commands in
+       `docs/IMPLEMENTATION.md`.
+     - Add any necessary guard text to `PLANS.md` if implementation reveals a
+       recurring anti-pattern.
+   - Acceptance: future UI regressions fail automated checks or have an
+     explicit documented reason.
+   - Verification: `pnpm workbench:ux-e2e`; `pnpm check`; `git diff --check`.
+
 ## Architecture
 
 - Chosen UI shell: AG-UI-first browser-hosted local web workbench served by the
@@ -207,12 +384,9 @@ The active product target is a **generic Relay Workbench**:
   declared purpose. Relay blocks shell metacharacters, network/package-install
   commands, destructive commands, cross-workspace paths, and secret-reading
   patterns unless the user explicitly approves a narrowly displayed command.
-- UX direction: a minimal professional workbench using the existing `--ra-*`
-  token system in `apps/workbench/src/styles.css`. Design guidance now belongs
-  in Workbench-owned docs/source only; the deleted desktop tree is not a design
-  dependency. The UI should maximize whitespace, remove explanatory clutter,
-  and show only workspace, task input, concise agent status, result cards,
-  approval/diff surfaces, and collapsible details.
+- UX direction: follow the dedicated **UI/UX Direction** section above. Design
+  guidance belongs in Workbench-owned docs/source only; the deleted desktop
+  tree is not a design dependency.
 - Target release artifact: self-contained Relay sidecar plus static web assets,
   with a Windows user-scope NSIS installer and a Linux archive/launcher that
   open the local workbench URL. The Windows installer packages the sidecar

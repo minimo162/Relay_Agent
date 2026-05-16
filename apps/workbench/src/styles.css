@@ -2,11 +2,11 @@
 
 :root {
   color-scheme: light;
-  --ra-bg: #f7f4ee;
+  --ra-bg: #f8f5ef;
   --ra-surface: #fffdf8;
   --ra-surface-strong: #ffffff;
-  --ra-border: #ddd4c6;
-  --ra-border-soft: #ebe4d9;
+  --ra-border: #ded6c9;
+  --ra-border-soft: #ede6dc;
   --ra-text: #221f1a;
   --ra-muted: #70685d;
   --ra-muted-soft: #9c9284;
@@ -34,9 +34,7 @@ body {
   margin: 0;
   min-height: 100vh;
   color: var(--ra-text);
-  background:
-    linear-gradient(180deg, rgba(255, 253, 248, 0.78), rgba(247, 244, 238, 0) 280px),
-    var(--ra-bg);
+  background: var(--ra-bg);
 }
 
 button,
@@ -54,17 +52,17 @@ button:disabled {
 }
 
 .shell {
-  width: min(100%, 1060px);
+  width: min(100%, 1000px);
   margin: 0 auto;
-  padding: 72px 44px 80px;
+  padding: 76px 48px 88px;
 }
 
 .topbar {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 32px;
-  margin-bottom: 48px;
+  gap: 40px;
+  margin-bottom: 52px;
 }
 
 .eyebrow {
@@ -82,7 +80,7 @@ h2 {
 }
 
 h1 {
-  font-size: 38px;
+  font-size: 40px;
   line-height: 1.1;
 }
 
@@ -130,7 +128,7 @@ h2 {
 
 .workspace-layout {
   display: grid;
-  gap: 28px;
+  gap: 30px;
 }
 
 .ra-card,
@@ -140,14 +138,14 @@ h2 {
 .run-panel,
 .details {
   border: 1px solid var(--ra-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--ra-surface) 92%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ra-surface) 94%, transparent);
 }
 
 .composer-panel {
   display: grid;
-  gap: 24px;
-  padding: 30px;
+  gap: 28px;
+  padding: 32px;
 }
 
 .ra-card[hidden] {
@@ -156,7 +154,7 @@ h2 {
 
 .field-group {
   display: grid;
-  gap: 10px;
+  gap: 11px;
 }
 
 .field-row,
@@ -204,14 +202,14 @@ h2 {
 }
 
 .workspace-input {
-  height: 44px;
+  height: 46px;
   padding: 0 14px;
 }
 
 .task-input {
   resize: none;
-  min-height: 132px;
-  padding: 15px;
+  min-height: 136px;
+  padding: 16px;
   line-height: 1.65;
 }
 
@@ -353,8 +351,8 @@ h2 {
 
 .summary-panel {
   display: grid;
-  gap: 10px;
-  padding: 24px 28px;
+  gap: 12px;
+  padding: 26px 30px;
   background: var(--ra-ok-soft);
 }
 
@@ -379,7 +377,7 @@ h2 {
 }
 
 .run-panel {
-  padding: 26px 30px;
+  padding: 28px 32px;
 }
 
 .run-state {
@@ -409,22 +407,26 @@ h2 {
 
 .events {
   display: grid;
-  gap: 14px;
-  margin: 24px 0 0;
+  gap: 16px;
+  margin: 26px 0 0;
   padding: 0;
   list-style: none;
 }
 
 .event {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 20px;
   padding: 2px 0;
+  min-width: 0;
 }
 
 .event-marker {
+  align-self: start;
   padding-top: 2px;
   color: var(--ra-muted-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .event strong {
@@ -434,10 +436,12 @@ h2 {
 }
 
 .event p {
+  max-width: 72ch;
   margin: 6px 0 0;
   color: var(--ra-muted);
   line-height: 1.58;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .event-final strong {
@@ -460,7 +464,7 @@ h2 {
 .approval-panel {
   display: grid;
   gap: 18px;
-  padding: 24px 28px;
+  padding: 28px 30px;
   border-color: color-mix(in srgb, var(--ra-warn) 36%, var(--ra-border));
   background: var(--ra-warn-soft);
 }
@@ -471,6 +475,13 @@ h2 {
 
 .approval-header strong {
   font-size: 17px;
+}
+
+.approval-copy {
+  max-width: 60ch;
+  margin: -4px 0 0;
+  color: var(--ra-muted);
+  line-height: 1.6;
 }
 
 .approval-facts {
@@ -494,6 +505,12 @@ h2 {
 .details summary {
   cursor: pointer;
   color: var(--ra-muted);
+  outline: none;
+}
+
+.approval-raw summary:focus-visible,
+.details summary:focus-visible {
+  color: var(--ra-accent);
 }
 
 .approval-raw pre,
@@ -516,7 +533,7 @@ h2 {
 
 @media (max-width: 720px) {
   .shell {
-    padding: 38px 20px 52px;
+    padding: 42px 20px 56px;
   }
 
   .topbar {
