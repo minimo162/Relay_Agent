@@ -13,9 +13,26 @@ type StatusResponse = {
 };
 
 type RunEvent = {
-  type: "status" | "tool" | "approval" | "final" | "error";
+  type:
+    | "status"
+    | "tool"
+    | "approval"
+    | "final"
+    | "copilot_turn_started"
+    | "copilot_turn_completed"
+    | "tool_call_started"
+    | "tool_call_completed"
+    | "approval_requested"
+    | "approval_resolved"
+    | "artifact_created"
+    | "completed"
+    | "cancelled"
+    | "error";
   message: string;
   detail?: string;
+  runId?: string;
+  sequence?: number;
+  timestamp?: string;
 };
 
 type PendingApproval = {
@@ -199,7 +216,7 @@ function emptyActivity(): HTMLLIElement {
 }
 
 function renderSummary(): void {
-  const finalEvent = [...events].reverse().find((event) => event.type === "final");
+  const finalEvent = [...events].reverse().find((event) => event.type === "final" || event.type === "completed");
   const errorEvent = [...events].reverse().find((event) => event.type === "error");
   const event = finalEvent ?? (currentStatus === "failed" ? errorEvent : undefined);
   if (!event) {
@@ -211,7 +228,7 @@ function renderSummary(): void {
 
   summaryEl.hidden = false;
   summaryEl.dataset.kind = event.type;
-  summaryLabelEl.textContent = event.type === "final" ? "Result" : "Error";
+  summaryLabelEl.textContent = event.type === "final" || event.type === "completed" ? "Result" : "Error";
   summaryTextEl.textContent = event.detail || event.message;
 }
 
@@ -378,7 +395,7 @@ function connectEvents(runId: string): void {
     if (!data) return;
     const runEvent = JSON.parse(data) as RunEvent;
     appendEvent(runEvent);
-    if (runEvent.type === "final" || runEvent.type === "error" || runEvent.type === "approval") {
+    if (runEvent.type === "final" || runEvent.type === "completed" || runEvent.type === "error" || runEvent.type === "approval_requested") {
       window.setTimeout(() => void loadRun(runId), 120);
     }
   });

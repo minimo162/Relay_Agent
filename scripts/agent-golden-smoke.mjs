@@ -84,10 +84,10 @@ try {
   const searchStart = await postRun("seed を探して");
   const searchRun = await waitForRun(searchStart.runId, ["completed", "failed", "cancelled"]);
   if (searchRun.status !== "completed") throw new Error(`search run did not complete: ${JSON.stringify(searchRun)}`);
-  if (!searchRun.events.some((event) => event.type === "tool" && event.message === "rg_files")) {
+  if (!searchRun.events.some((event) => event.type === "tool_call_started" && event.message === "rg_files")) {
     throw new Error(`search run did not execute rg_files: ${JSON.stringify(searchRun)}`);
   }
-  if (!searchRun.events.some((event) => event.type === "final" && event.detail === "検索は rg_files を使いました。")) {
+  if (!searchRun.events.some((event) => event.type === "completed" && event.detail === "検索は rg_files を使いました。")) {
     throw new Error(`search run final answer mismatch: ${JSON.stringify(searchRun)}`);
   }
 

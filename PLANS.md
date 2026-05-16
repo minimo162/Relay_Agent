@@ -43,8 +43,8 @@ The next architecture target is a **generic Relay Workbench**:
   runtime launch paths during the cutover.
 - Relay sidecar role: host the local web UI, expose local HTTP/WebSocket APIs,
   run the agent harness, validate and execute tools, manage app-local storage,
-  and supervise the Copilot CDP bridge. The preferred implementation is a
-  self-contained .NET sidecar using Microsoft Agent Framework.
+  and supervise the Copilot CDP bridge. The active implementation is the
+  Relay-owned self-contained .NET sidecar and its bounded agent runner.
 - Sidecar Copilot transport: the active sidecar owns the first
   OpenAI-compatible `/v1/chat/completions` surface and routes it through the
   sidecar Copilot transport. The historical Node/Tauri-era bridge is no longer
@@ -55,28 +55,21 @@ The next architecture target is a **generic Relay Workbench**:
   so the workbench does not interfere with Copilot automation.
 - Primary LLM controller: M365 Copilot via Edge CDP, started on demand rather
   than during first paint.
-- Candidate agent harness: Microsoft Agent Framework **.NET sidecar**. The
-  .NET path has been locally validated against both a mock
-  `/v1/chat/completions` endpoint and the live Relay `copilot_server.js` ->
-  signed-in Edge/CDP -> M365 Copilot bridge. Prefer .NET over Python if Agent
-  Framework is adopted for productization, because it avoids bundling Python
-  and fits Windows enterprise deployment better while preserving a Linux path
-  through self-contained .NET publishing.
-- Agent Framework integration shape: use a Relay-owned Chat
-  Completions-compatible Copilot transport. The current `copilot_server.js`
-  behavior may be ported, but the final product should not keep a separate
-  Node/Tauri-era bridge as an alternate runtime path.
-- Corporate-approved LLM posture: because M365 Copilot and Ollama are the only
-  approved AI surfaces, Relay should use M365 Copilot as the single primary
-  reasoning engine. Do not introduce a two-brain UX or make local Ollama models
-  responsible for business reasoning by default.
-- Ollama role: treat Ollama as an approved local AI service surface and possible
-  utility substrate, not as the primary head of the agent. Ollama may be used
-  only where it reduces packaging/compliance risk without creating a second
-  user-visible planning path, such as local API compatibility experiments,
-  structured-output smoke tests, or an optional adapter for approved future
-  harness components. Relay must not depend on OpenAI API keys, OpenAI
-  subscriptions, Codex authentication, or unapproved agent binaries.
+- Agent harness: the production path is the Relay-owned sidecar runner. It
+  sends bounded structured prompts to M365 Copilot, validates Copilot output,
+  executes exactly one approved local tool step at a time, records the
+  observation, and asks Copilot for the next step or final answer. Microsoft
+  Agent Framework remains a reference design for typed tools, approvals, and
+  sessions, not an active dependency or required migration target.
+- Copilot transport shape: use the sidecar-owned Chat Completions-compatible
+  Copilot transport. Stable behavior from the historical Node/Tauri bridge may
+  be ported into the sidecar transport, but the final product must not keep a
+  separate Node/Tauri-era bridge as an alternate runtime path.
+- Corporate-approved LLM posture: Relay uses M365 Copilot as the single primary
+  reasoning engine. Do not introduce a two-brain UX, OpenAI API dependency,
+  Codex authentication dependency, or unapproved third-party agent binary.
+  Ollama is out of current release scope; it may be reconsidered only by a
+  future ADR that does not create a second user-visible planning path.
 - Rebranding policy: user-facing Relay-owned files, docs, labels, generated
   artifacts, and release surfaces should use `Relay` / `relay` naming. Keep
   upstream or integration names such as `Codex app-server`, `codex` CLI
@@ -87,7 +80,7 @@ The next architecture target is a **generic Relay Workbench**:
   deceptively rename third-party binaries or metadata to evade internal local
   file checks. If direct use or redistribution of upstream Codex artifacts is
   not acceptable for the corporate environment, the product plan is to remove
-  those artifacts from the shipped installer or replace them with an approved
+  those artifacts from the shipped release or replace them with an approved
   Relay-owned adapter/runtime boundary. Branding cleanup is allowed only for
   Relay-owned files and user-facing product surfaces; third-party dependency
   notices, licenses, and integration names must remain accurate.
@@ -100,10 +93,8 @@ The next architecture target is a **generic Relay Workbench**:
   must be capped, traceable, and schema-validated. Validation failures stop the
   run and surface a visible UI error; there is no fallback execution.
 - Agent loop simplicity: the shipped UX should expose one reasoning path:
-  Copilot step -> Relay tool -> observation -> Copilot step. Any Ollama-related
-  component must sit below this line as an implementation utility and must not
-  create a second user-facing model choice unless a future compliance decision
-  explicitly requires it.
+  Copilot step -> Relay tool -> observation -> Copilot step. No secondary model
+  or alternate harness is part of the current product path.
 - Tool broker: move from domain-specific high-level tools to a small generic
   tool set. Initial target tools are:
   - `rg_files`: enumerate likely files using ripgrep's file listing and glob
@@ -145,16 +136,106 @@ The next architecture target is a **generic Relay Workbench**:
   unique `oldString` matches, file boundaries, and user approval before writing.
   Arbitrary unrestricted shell is not part of the default tool catalog.
 - UX direction: a minimal professional workbench using the existing `--ra-*`
-  token system and `apps/desktop/DESIGN.md`. The UI should maximize whitespace,
-  remove explanatory clutter, and show only workspace, task input, concise
-  agent status, result cards, approval/diff surfaces, and collapsible details.
-- Ollama UX direction: do not expose Ollama as a normal end-user model toggle.
-  If an Ollama-backed utility is adopted, surface it only as a concise
-  diagnostics/readiness detail, not as a second workflow choice.
+  token system in `apps/workbench/src/styles.css`. Design guidance now belongs
+  in Workbench-owned docs/source only; the deleted desktop tree is not a design
+  dependency. The UI should maximize whitespace, remove explanatory clutter,
+  and show only workspace, task input, concise agent status, result cards,
+  approval/diff surfaces, and collapsible details.
 - Target release artifact: self-contained Relay sidecar plus static web assets,
-  with Windows and Linux launch scripts/installers that open the local
-  workbench URL. Do not keep the Tauri NSIS installer as a supported release
+  with a Windows user-scope NSIS installer and a Linux archive/launcher that
+  open the local workbench URL. The Windows installer packages the sidecar
+  Workbench architecture; the Tauri NSIS installer is not a supported release
   path after the cutover.
+
+### Architecture Specification
+
+This specification is added after reviewing current Microsoft Edge DevTools
+Protocol, ASP.NET Core, .NET deployment, AG-UI, Microsoft Agent Framework,
+OWASP LLM, NSIS, and ripgrep documentation. It is the target contract for the
+hard cutover.
+
+- Process topology:
+  - `Relay.Launcher` is the user-facing entrypoint on Windows and Linux.
+  - `Relay.Sidecar` is the only long-lived backend process. It hosts the
+    Workbench static assets, local APIs, event stream, Copilot CDP transport,
+    tool broker, run ledger, and package diagnostics.
+  - The Workbench browser opens the sidecar URL with a per-launch token. It is
+    not the same browser automation context as the Copilot CDP tab.
+  - Edge/Copilot is started or attached lazily for model turns only. Workbench
+    first paint must not wait for Copilot readiness.
+- Local HTTP surface:
+  - Bind only to loopback using an explicit localhost URL and dynamic or
+    conflict-checked port; never bind to `0.0.0.0`, `*`, `+`, or LAN
+    interfaces.
+  - Every API, SSE stream, and state-changing request requires the launch
+    token. Validate `Host` and `Origin`; reject missing or foreign origins.
+  - Serve only the built Workbench bundle. Directory browsing must remain
+    disabled, and arbitrary workspace files must never be served as static
+    assets.
+  - Required endpoints: `/` for Workbench, `/api/status`,
+    `/api/workspace`, `/api/runs`, `/api/runs/{id}`,
+    `/api/runs/{id}/events`, `/api/runs/{id}/approve`,
+    `/api/runs/{id}/cancel`, `/api/support-bundle`, and `/api/shutdown`.
+- Event stream:
+  - Use one Relay typed SSE stream per run, modeled on AG-UI event classes but
+    owned by Relay. Do not maintain a second UI event protocol.
+  - Required event classes: `run_started`, `status`, `copilot_turn_started`,
+    `copilot_turn_completed`, `tool_call_started`, `tool_call_completed`,
+    `approval_requested`, `approval_resolved`, `artifact_created`, `error`,
+    `cancelled`, and `completed`.
+  - Every event includes `runId`, monotonic `sequence`, timestamp, concise
+    user-facing message, and structured metadata for replay/support export.
+- Run lifecycle:
+  - State machine: `created -> preparing -> waiting_copilot -> validating ->
+    executing_tool -> waiting_approval -> synthesizing -> completed`.
+    Terminal states are `completed`, `cancelled`, and `failed`.
+  - Each Copilot step may emit exactly one validated tool call, `ask_user`, or
+    `final`. Relay executes at most one local action before returning an
+    observation to Copilot.
+  - Invalid JSON, unknown tool names, invalid arguments, missing capability,
+    stale approval, or workspace-scope violation stops the run with a visible
+    `failed` state. Do not route to a weaker fallback tool.
+  - Bounded retry is allowed only inside the same transport for paste/send
+    readiness, response extraction settling, or one JSON repair turn.
+- Tool contract:
+  - Tool arguments are validated against Relay-owned schemas before execution.
+  - Read-only tools may run after validation; mutation tools pause for explicit
+    approval with exact target paths, diff/command summary, backup location,
+    and rollback/no-rollback note.
+  - `rg_files` maps to ripgrep file enumeration with explicit root, include,
+    exclude, depth, cap, timeout, and hidden/binary policy.
+  - `rg_search` maps to ripgrep content search for plaintext/code only, with
+    explicit root, pattern, include/exclude globs, cap, timeout, and encoding
+    policy. Office/PDF containers are discovered by filename and inspected by
+    exact `read`, not plaintext grep.
+  - `read` returns bounded extracted text or structured metadata for exact
+    files, including Office/PDF extraction where Relay supports it.
+  - `officecli` accepts semantic Office operations compiled by Relay to argv;
+    direct arbitrary shell is not exposed.
+  - `edit` requires exact old/new replacement validation; `write` requires an
+    explicit target and approval.
+- Copilot transport:
+  - The sidecar owns the Chat-Completions-compatible adapter over Edge CDP.
+    This is an adapter contract for Relay; it is not a Microsoft 365 product
+    API guarantee.
+  - DOM selectors, paste/insert behavior, send-button lifecycle detection, and
+    response extraction rules must be versioned against saved successful
+    Copilot fixtures.
+  - Response extraction must reject prompt echoes, sidebar/history text,
+    suggestions, empty answers, stale prior answers, and incomplete JSON.
+- Storage and privacy:
+  - Runtime data lives under user-local Relay data directories only.
+  - Shared folders and selected workspaces must not receive Relay caches,
+    indexes, snapshots, logs, or temp files.
+  - Run ledgers store bounded observations and metadata by default. Support
+    bundles omit document contents unless the user explicitly opts in.
+- Packaging:
+  - Publish the sidecar as self-contained, platform-specific artifacts.
+  - Windows distribution is a per-user NSIS installer with user execution
+    level, current-user install location, Start Menu shortcut, optional desktop
+    shortcut, uninstall entry, and no UAC/password requirement.
+  - Bundle required runtime tools from sidecar-owned resource directories and
+    list them in the release inventory/SBOM-style metadata.
 
 ## Hard Cutover Rules
 
@@ -163,15 +244,18 @@ The next architecture target is a **generic Relay Workbench**:
   product path.
 - No simplified throwaway MVP. The first implementation slice must be shaped as
   the final architecture: sidecar-hosted UI, local HTTP/WebSocket APIs, Agent
-  Framework harness, Copilot bridge, generic tool catalog, approval flow, and
+  runner, Copilot bridge, generic tool catalog, approval flow, and
   packaging plan.
 - No AionUi, OpenCode/OpenWork, Codex app-server, or Tauri runtime fallback in
   active product code. Historical docs may remain archived, but active source,
-  package scripts, workflows, installer resources, runtime launchers, and UI
+  package scripts, workflows, release resources, runtime launchers, and UI
   code must not depend on those paths.
-- No silent fallbacks. If Copilot output, tool arguments, tool availability,
-  workspace access, OfficeCLI readiness, or CDP automation fails validation,
-  the run stops with a clear user-visible error.
+- No silent fallback runtimes. If Copilot output, tool arguments, tool
+  availability, workspace access, OfficeCLI readiness, or CDP automation fails
+  validation, the run stops with a clear user-visible error. Bounded retries
+  inside the same Copilot transport, such as paste retry, response candidate
+  scoring, or one JSON repair turn, are allowed when they are logged and do not
+  switch to an alternate runtime or weaker tool path.
 - No hidden compatibility shims. Compatibility code is allowed only as a
   temporary migration aid inside a single branch while replacing callers; it
   must be removed before the cutover is marked complete.
@@ -184,20 +268,20 @@ The next architecture target is a **generic Relay Workbench**:
 ## Prior-Art-Informed Additions
 
 The browser-hosted sidecar design should incorporate the following lessons from
-Microsoft Agent Framework, AG-UI, ASP.NET Core, and established agent tools.
+Microsoft Agent Framework, AG-UI, ASP.NET Core, and established agent tools,
+without adopting those frameworks as mandatory runtime dependencies.
 
 ### Agent UI protocol
 
-- Prefer AG-UI-style event streaming for the workbench/agent boundary instead
-  of inventing an ad hoc event protocol. Microsoft Agent Framework documents
-  AG-UI integration for web clients, real-time streaming, session management,
-  human-in-the-loop approvals, and custom UI rendering. If the .NET package
-  path is practical, expose the agent run through AG-UI-compatible HTTP/SSE
-  endpoints.
+- Prefer a typed Server-Sent Events stream for the workbench/agent boundary
+  instead of an unstructured ad hoc log stream. AG-UI event naming and
+  human-in-the-loop patterns are useful references, but Relay keeps one
+  sidecar-owned run event protocol unless a later ADR explicitly adopts AG-UI.
 - Keep plain local HTTP APIs for non-agent app operations such as workspace
   selection, app status, logs export, static file serving, and shutdown.
-- Use SignalR or raw WebSockets only for gaps AG-UI/SSE does not cover. Do not
-  maintain parallel event protocols for the same run lifecycle.
+- Use SignalR or raw WebSockets only if SSE cannot satisfy a specific future
+  requirement. Do not maintain parallel event protocols for the same run
+  lifecycle.
 
 ### Local web app security
 
@@ -231,9 +315,9 @@ Microsoft Agent Framework, AG-UI, ASP.NET Core, and established agent tools.
 - Add first-class run IDs and trace IDs. Every Copilot request, tool call,
   approval, validation failure, and file mutation should be tied to the same
   run ID.
-- Capture Agent Framework / Relay traces in an OpenTelemetry-compatible shape
-  where practical, while keeping the user UI minimal. The visible UI shows only
-  concise progress; detailed traces live behind a collapsed details panel and
+- Capture Relay traces in an OpenTelemetry-compatible shape where practical,
+  while keeping the user UI minimal. The visible UI shows only concise
+  progress; detailed traces live behind a collapsed details panel and
   support-log export.
 - Add a local support bundle export that redacts or clearly flags sensitive
   file paths and does not include document contents unless the user explicitly
@@ -287,6 +371,9 @@ Microsoft Agent Framework, AG-UI, ASP.NET Core, and established agent tools.
   not need to install .NET separately.
 - Include static web assets in the sidecar package or alongside it with
   integrity checks.
+- Windows distribution should use a user-scope NSIS installer for the sidecar
+  Workbench. The installer must not require administrator rights, elevation,
+  or the user's personal password.
 - Produce a release inventory/SBOM-style artifact listing bundled binaries,
   licenses, hashes, and removed legacy components.
 - Package ripgrep and OfficeCLI explicitly where licensing and platform support
@@ -297,10 +384,18 @@ Microsoft Agent Framework, AG-UI, ASP.NET Core, and established agent tools.
 
 The following requirements are added after reviewing current Microsoft Agent
 Framework, AG-UI, Edge DevTools Protocol, MCP, OWASP LLM security, and SBOM
-guidance. These are product requirements, not optional polish.
+guidance. These are product requirements where they describe Relay-owned
+behavior; third-party framework adoption remains optional unless a later ADR
+promotes it.
 
 Reference anchors:
 
+- ASP.NET Core Minimal APIs and localhost URL binding:
+  `https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis`
+- ASP.NET Core static files and directory browsing behavior:
+  `https://learn.microsoft.com/en-us/aspnet/core/fundamentals/static-files`
+- .NET self-contained deployment:
+  `https://learn.microsoft.com/en-us/dotnet/core/deploying/`
 - Microsoft Agent Framework human-in-the-loop approval docs:
   `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`
 - Microsoft Agent Framework 1.0 announcement:
@@ -311,6 +406,8 @@ Reference anchors:
   `https://devblogs.microsoft.com/agent-framework/ag-ui-multi-agent-workflow-demo/`
 - AG-UI protocol overview:
   `https://docs.ag-ui.com/introduction`
+- AG-UI event model:
+  `https://docs.ag-ui.com/sdk/js/core/events`
 - Microsoft Edge DevTools Protocol docs:
   `https://learn.microsoft.com/en-us/microsoft-edge/devtools/protocol/`
 - ASP.NET Core host filtering docs:
@@ -323,34 +420,42 @@ Reference anchors:
   `https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices`
 - OWASP LLM06 Excessive Agency:
   `https://genai.owasp.org/llmrisk/llm062025-excessive-agency/`
+- OWASP Top 10 for LLM Applications project:
+  `https://owasp.org/www-project-top-10-for-large-language-model-applications/`
 - OpenAI prompt-injection safety overview:
   `https://openai.com/safety/prompt-injections/`
+- ripgrep user guide:
+  `https://ripgrep.dev/docs/guide/`
+- NSIS `RequestExecutionLevel` docs:
+  `https://nsis.sourceforge.io/Reference/RequestExecutionLevel`
+- NSIS `MultiUser.nsh` per-user installation docs:
+  `https://nsis.sourceforge.io/Docs/MultiUser/Readme.html`
 - NIST SBOM guidance:
   `https://www.nist.gov/itl/executive-order-14028-improving-nations-cybersecurity/software-security-supply-chains-software-1`
 
 ### Agent harness and event protocol requirements
 
-- Adopt Microsoft Agent Framework in the .NET sidecar as the production harness
-  for the generic agent loop. The sidecar may keep its
-  `/v1/chat/completions` Copilot transport, but the run lifecycle should be
-  owned by Agent Framework sessions, tools, middleware, and approvals rather
-  than by one-off HTTP handlers.
-- Implement the human-in-the-loop contract as a loop, not as a single callback:
-  after each agent run, Relay must inspect whether the framework returned a
-  user-input / approval request; if so, the UI must pause the run, present the
-  approval, and resume the same session only after approve/reject.
-- Use AG-UI-compatible Server-Sent Events for the Workbench run stream unless
-  a specific .NET support gap blocks it. Required event classes:
-  `run_started`, `text_delta`, `tool_call_started`, `tool_call_completed`,
-  `approval_requested`, `approval_resolved`, `artifact_created`, `error`,
-  `cancelled`, and `completed`.
+- Use the Relay sidecar runner as the production harness for the generic agent
+  loop. Its responsibilities are bounded Copilot turns, schema validation,
+  local tool governance, approval pause/resume, durable run records, and final
+  answer synthesis.
+- Treat Microsoft Agent Framework as a reference for tool approvals, typed
+  tools, sessions, and middleware. Do not add it as a second runner or runtime
+  dependency without a focused ADR that explains why the sidecar runner should
+  be replaced.
+- Implement human-in-the-loop approval as a loop, not as a single callback:
+  when Relay reaches a mutation step, the UI pauses the same run, presents the
+  approval, and resumes only after approve/reject.
+- Use typed Server-Sent Events for the Workbench run stream. Required event
+  classes are `run_started`, `status`, `tool_call_started`,
+  `tool_call_completed`, `approval_requested`, `approval_resolved`,
+  `artifact_created`, `error`, `cancelled`, and `completed`.
 - Keep the visible UI minimal, but preserve enough typed event metadata for
-  replay, support export, and evaluation. Do not create a second proprietary
-  event stream for the same run.
-- Treat MAF durable execution as an architectural reference, not an Azure
-  dependency. Relay should implement local durable-equivalent behavior first:
-  append-only run ledger, checkpointed session state, pause/resume,
-  cancellation, terminal states, and retention/TTL cleanup in user-local data.
+  replay, support export, and evaluation. Do not create a second event stream
+  for the same run.
+- Implement local durable-equivalent behavior: append-only run ledger,
+  checkpointed observations, pause/resume, cancellation, terminal states, and
+  retention/TTL cleanup in user-local data.
 
 ### Governance, security, and prompt-injection requirements
 
@@ -634,165 +739,48 @@ same Workbench flow can drive a signed-in M365 Copilot session.
   selected workspace. Copilot may not execute tools or edit files directly.
 - Agentic workflows must keep Copilot's authority limited to structured
   planning and synthesis. Relay is the only component that executes tools.
-- Microsoft Agent Framework adoption, if implemented, should use the .NET
-  sidecar path unless a later review finds a stronger reason to use Python.
 - The installed application must be able to run without bundled Codex
   app-server, bundled OpenAI clients that require external credentials, or
   hidden third-party agent binaries.
-- Ollama is not a release gate unless a specific adopted utility requires it.
-  If used, Relay must record the Ollama version/API capability and fail visibly
-  when the optional utility is unavailable.
+- Ollama is out of current release scope. It must not appear as a readiness
+  gate, model picker, hidden reasoning path, or fallback harness.
 - Write actions for Office and code require explicit user approval in the UI.
 - Runtime errors must be visible in the UI. Silent stalls are release blockers.
 - Installer generation must not use the AionUi release workflow.
 
 ## Historical Work And Deletion Context
 
-The items below describe work already present in the repository. They are not
-permission to keep the old architecture. Anything tied to AionUi,
-OpenCode/OpenWork, Tauri IPC, Tauri packaging, or old per-mode workflow runners
-must be deleted or archived when the hard cutover reaches parity.
+The repository still contains historical Tauri/AionUi/OpenCode/OpenWork and
+document-search-specific code. These artifacts are inputs for deletion and
+archival only; they are not a source of product direction.
 
-- Relay dedicated SolidJS workbench replaces the legacy diagnostic-first shell.
-- Startup no longer autostarts the legacy OpenCode/AionUi path by default.
-- `run_relay_document_search` Tauri IPC executes the Relay document-search
-  engine from the Relay desktop UI and stores caches under app-local data.
-- `inspect_office_file` and `execute_officecli_command` Tauri IPC expose
-  OfficeCLI inspection/execution with backup support.
-- Tauri packaging prepares a document-search runtime bundle and includes
-  OfficeCLI as a resource.
-- The primary Windows release workflow now builds the Relay Tauri installer.
-- The AionUi Windows release workflow has been removed.
-- Document search IPC now runs through an async Tauri boundary, exposes visible
-  loading/error states in the Relay UI, fixes search mode to detailed search,
-  and automatically prunes app-local job snapshots and orphan temp files.
-- The desktop UI now asks M365 Copilot only for strict JSON search/Office
-  plans, validates those plans in Relay, and then executes local ripgrep-backed
-  document search or OfficeCLI operations itself.
-- Document search receives the bundled/user-local ripgrep path explicitly and
-  fails visibly if ripgrep is unavailable instead of falling back to a silent
-  slow scan.
-- Search and Office editing no longer depend on the historical OpenCode
-  provider-gateway warmup path. The current UI prewarms the dedicated Node
-  Copilot bridge and sends planning prompts through that bridge so Relay uses
-  the robust Copilot submit/wait/failure-classification harness instead of the
-  lightweight diagnostic CDP send path.
-- The Office workflow now separates file inspection from edit execution and
-  presents the two user actions as `変更内容を確認` and
-  `バックアップを作成して適用`.
-- Document search now uses Copilot twice through strict JSON contracts: first
-  to expand the natural-language query into validated search terms, then after
-  local search to summarize and dynamically categorize only the returned
-  evidence pack/candidate facts.
-- Compound business searches now distinguish direct concept evidence from
-  loose hybrid matches. For example, `部品売上` requires direct phrases such
-  as `部品売上` / `部品他売上` / `パーツ売上` or equivalent content evidence
-  before a candidate is treated as concept-confirmed; company/entity-name
-  matches remain recall candidates and are not allowed to overrank confirmed
-  business-concept files.
-- OfficeCLI resolution now checks packaged resources, sidecar locations,
-  user-local caches, dev caches, and PATH separately, and reports whether the
-  tool is missing or present but not runnable instead of collapsing both cases
-  into a generic not-found error.
-- The search UI shows one fixed snapshot per search. It does not stream partial
-  result lists or silently update displayed results after Copilot result
-  organization completes. Additional exploration is an explicit
-  `さらに詳しく調べる` action that replaces the snapshot.
-- The desktop search execution path disables durable metadata caches,
-  persistent filename indexes, SQLite/FTS, parsed-document caches,
-  derived-content caches, background/index coordinators, job-store snapshots,
-  sync journals, and user-memory writes. Search work stays in-memory plus
-  bounded temp files under Relay app-local data.
-- Copilot result organization no longer returns local Windows paths. Relay
-  sends stable candidate IDs to Copilot, validates returned IDs, and maps them
-  back to paths locally. If Copilot result organization fails, the already
-  completed local search snapshot remains visible with a warning instead of
-  being treated as a search failure.
-- Compound business queries such as `部品売上` now use Relay-owned semantic
-  gating: direct aliases rank highest, component matches must include both the
-  parts concept and the sales concept, and support/workflow terms can only
-  boost already relevant candidates.
-- Copilot prompt delivery now tolerates Microsoft 365 composer DOM changes:
-  Relay reads prompt text from nested textbox/value/lexical candidates, waits
-  longer before submit, and proceeds when the send button is ready even if the
-  composer text cannot be read back through CDP.
-- Compound document-search evidence now distinguishes concept-confirmed,
-  partial-content, generic-content, and filename-only states so business
-  concepts such as `部品売上` rank direct parts-sales workbooks above generic
-  sales files.
-- OfficeCLI packaging now pins the current Windows x64 artifact and validates
-  real `view outline --json` capability with a small workbook smoke test, not
-  just `--version`, before enabling Office workflows.
-- The desktop UI now includes `コードを書く`. Relay collects a bounded set of
-  local code files, sends only that context to Copilot, validates a strict
-  `RelayCodePatchPlan.v3` JSON response, and applies only unique exact-string
-  replacements inside the workspace.
-- The frontend planner module now defines and validates `RelayAgentStep.v1`.
-  Copilot can describe the next step only through a mode-scoped JSON contract,
-  and Relay rejects tools outside the selected UI mode.
-- The desktop workbench shows a concise Flow trace for Copilot planning and
-  Relay execution steps across search, Office, and code workflows.
-- OfficeCLI smoke readiness now writes the test workbook to a unique app-local
-  `.xlsx` path, closes the file before invoking OfficeCLI, retries transient
-  sharing violations, cleans stale smoke files, and classifies remaining lock
-  failures as readiness/smoke failures rather than missing-tool errors.
-- The desktop UI has been tightened around a whitespace-forward workbench and
-  the Office actions have been simplified to `変更を確認` and `変更を適用`;
-  backups remain automatic during mutation execution.
-- The document-search TypeScript implementation has been copied into
-  `apps/desktop/document-search-src/`, and the desktop bundle builder plus
-  test module loader now use that Relay-owned source path.
-- Copilot structured-response waiting now treats complete Relay schema JSON as
-  a strong completion signal and promotes the Copilot composer Stop -> Send
-  button lifecycle to an explicit completion path. This restores the useful
-  AionUi-era button-state signal without reintroducing AionUi.
-- Document search now has a bounded reflection step before showing the fixed
-  snapshot. When the first local result set is dominated by weak
-  entity/context candidates, Copilot may return a validated
-  `RelayDocumentSearchReflection.v1` refinement and Relay runs one additional
-  local search with stricter concept terms.
-- Office editing uses `RelayOfficeEditPlan.v3`: Copilot returns only safe
-  semantic operations, while Relay injects the selected file path and compiles
-  OfficeCLI argv locally. Legacy Copilot-returned paths/argv are rejected.
-- Code patch planning uses `RelayCodePatchPlan.v3` and no longer asks Copilot
-  to echo the workspace path or raw instruction. Relay supplies the workspace
-  locally and validates edits only against collected context files.
-- Code context collection no longer includes README/docs merely because they
-  are project metadata. README/docs are included only when the instruction or
-  explicit target asks for documentation context.
-- Document search query planning now uses `RelayDocumentSearchCopilotQueryPlan.v3`.
-  Copilot may define core concepts, required term groups, and entity-risk terms,
-  but Relay validates the JSON and owns all search execution, scoring, and
-  entity-context demotion. This keeps compound concepts such as `部品売上`
-  anchored to both dimensions instead of overranking company-name or folder-name
-  matches such as `Mパーツ`.
-- Document-search reflection and result organization consume the v3 concept
-  hints and candidate IDs only. Copilot can refine or group the local evidence
-  pack, but it cannot introduce paths, files, or unsupported classifications.
-- Office editing now accepts `RelayOfficeEditPlan.v3`, including explicit
-  ambiguity notes. The UI presents semantic operations instead of raw OfficeCLI
-  argv, and Relay still compiles and executes the concrete OfficeCLI command
-  locally only after user approval.
-- Code editing now accepts `RelayCodePatchPlan.v3`, including done criteria
-  for the user-visible review. Relay still applies only validated exact-string
-  patches inside the workspace.
-- Search, Office, and Code workflows now share a simple agent phase model
-  (`understanding`, `planning`, `executing`, `observing`, `reflecting`,
-  `finalizing`, `failed`) so the UI can show one concise workflow state without
-  exposing internal harness noise.
-- Microsoft Agent Framework feasibility was checked:
-  - Python SDK confirmed the framework can perform function-tool loops and
-    approval requests against Relay's Chat Completions bridge.
-  - .NET SDK 8.0 was locally installed under `/tmp/relay-dotnet/sdk` for
-    verification.
-  - `Microsoft.Agents.AI.OpenAI` 1.6.1 wrapped `OpenAI.Chat.ChatClient` with
-    `AsAIAgent` and succeeded against both a local mock and the live
-    `copilot_server.js` -> Edge CDP -> M365 Copilot path.
-  - Productization preference is .NET sidecar over Python sidecar.
-- The active .NET sidecar now includes an initial Copilot CDP transport and
-  sidecar-owned `/v1/models` / `/v1/chat/completions` endpoints. Smoke tests
-  cover this path with an explicit mock transport; live signed-in Copilot CDP
-  validation remains a release-readiness gate.
+Active cutover facts:
+
+- `apps/workbench/` is the active browser Workbench UI.
+- `apps/sidecar/` is the active .NET sidecar, Copilot transport, run manager,
+  and local tool executor.
+- The active runtime exposes one generic agent loop and a small generic tool
+  catalog. Search, Office editing, and code editing are capabilities within
+  that loop, not separate product modes.
+- Stable Copilot bridge behavior may be ported from old commits only when it
+  improves the current sidecar transport. Do not revive the old Node/Tauri
+  bridge, AionUi shell, per-mode prompt contracts, or document-search engine.
+
+Historical material that must not remain on the active path:
+
+- Tauri IPC commands, Tauri resource packaging, and Tauri release workflows.
+- AionUi overlays, AionUi provider configuration, and OpenCode/OpenWork gateway
+  scripts.
+- `RelayDocumentSearch*` high-level engines, SQLite/FTS/index coordinators,
+  reflection prompts, and search-specific ranking/classification contracts.
+- UI mode runners for `資料を探す`, `Officeファイルを編集する`, and `コードを書く`.
+- Archive prompt files or historical design docs that are not required at
+  runtime.
+
+The only search-related behavior to preserve in the active plan is the generic
+principle: Copilot may plan local exploration, Relay executes `rg_files`,
+`rg_search`, and exact `read`, and Relay returns structured observations for
+Copilot to synthesize.
 
 ## Cutover Implementation Tasks
 
@@ -801,6 +789,9 @@ must be deleted or archived when the hard cutover reaches parity.
      app-server, Tauri, Tauri IPC, Tauri resources, and release workflows.
    - Classify each reference as `active product`, `test`, `archived historical
      doc`, or `third-party factual reference`.
+   - Strengthen the hard-cut guard so it scans active source, workflows,
+     scripts, release inputs, and packaged assets, not only root package
+     scripts.
    - Update `AGENTS.md` and any source-of-truth docs that still instruct Relay
      to keep OpenCode/OpenWork or Tauri as active substrate.
 2. Build the final Relay sidecar foundation, not a temporary prototype:
@@ -810,7 +801,11 @@ must be deleted or archived when the hard cutover reaches parity.
      logs, workspace selection, and shutdown.
    - Port or replace the Copilot Edge/CDP bridge inside the sidecar boundary so
      there is one Copilot transport path.
-   - Integrate Microsoft Agent Framework as the agent harness.
+   - Keep the Relay-owned sidecar runner as the only active agent harness unless
+     a future ADR explicitly replaces it.
+   - Move required runtime resources such as OfficeCLI or ripgrep bundles out
+     of `apps/desktop/src-tauri` into a sidecar-owned `tools/` or
+     `third_party/` location before deleting the desktop tree.
 3. Build the final browser-hosted Workbench UI:
    - One natural-language composer, no visible task-mode buttons.
    - Workspace selector.
@@ -820,6 +815,8 @@ must be deleted or archived when the hard cutover reaches parity.
    - Collapsed diagnostics/details only.
    - No AionUi, OpenCode, Tauri, provider, model, runtime, feedback, or debug
      chrome.
+   - Keep reusable design guidance in `apps/workbench/` or `docs/`; do not
+     depend on deleted desktop design files.
 4. Implement the generic progressive tool catalog:
    - `rg_files`, `rg_search`, `read`, `officecli`, `edit`, `write`,
      `ask_user`, and `final`.
@@ -828,16 +825,15 @@ must be deleted or archived when the hard cutover reaches parity.
      observations.
    - Stop on validation failure; do not route to old search, Office, or code
      runners as fallback.
-5. Implement the Agent Framework runner, approval loop, and governance layer:
-   - Replace the current one-shot `/api/runs` placeholder flow with a bounded
-     Agent Framework session loop that uses the sidecar Copilot transport.
-   - Add Agent Framework tool wrappers for the generic Relay tools.
+5. Implement the sidecar runner, approval loop, and governance layer:
+   - Replace any one-shot or per-mode flow with a bounded sidecar session loop
+     that uses the sidecar Copilot transport.
+   - Add sidecar tool wrappers for the generic Relay tools.
    - Add middleware/policy checks for allowed tools, workspace scope, mutation
      approval, rate limits, and audit logging.
-   - Implement framework approval-request handling as a pause/resume flow in
-     the same run session.
-   - Stream run events to the Workbench through the AG-UI-compatible event
-     envelope.
+   - Implement approval handling as a pause/resume flow in the same run
+     session.
+   - Stream run events to the Workbench through the Relay typed SSE envelope.
 6. Add durable local run state:
    - Append every user message, Copilot step, tool call, observation,
      approval, artifact, error, and final answer to a run ledger under
@@ -866,9 +862,25 @@ must be deleted or archived when the hard cutover reaches parity.
    - Prove support bundle export redacts or omits sensitive content by default.
 10. Replace packaging:
    - Remove Tauri release workflow as an active release path.
-   - Package the .NET sidecar and static web assets for Windows and Linux.
-   - Provide launchers that start the sidecar, open the localhost workbench,
-     and shut down cleanly.
+   - Package the .NET sidecar and static web assets for Windows as a
+     user-scope NSIS installer. The installer must install under a user-writable
+     location such as `%LOCALAPPDATA%\Programs\Relay Agent`, must not require
+     administrator rights or UAC elevation, and must not ask for the user's
+     personal Windows password.
+   - Package Linux as a self-contained archive plus launcher.
+   - Provide a Windows launcher that starts the sidecar, starts or checks the
+     signed-in Edge CDP session, opens the localhost workbench, and shuts down
+     cleanly.
+   - Bundle required Windows runtime tools in the installer where licensing and
+     platform support allow: `Relay.Sidecar.exe`, Workbench static assets,
+     `rg.exe`, `officecli.exe`, launcher files, default config, license/notice
+     files, release inventory, and SBOM-style metadata.
+   - Add a dedicated packaging command such as
+     `pnpm sidecar:installer:windows` and a GitHub Release workflow that uses
+     that command instead of any Tauri installer workflow.
+   - The installer must create Start Menu and optional desktop shortcuts, an
+     uninstall entry, and per-user registry/app metadata only. It must not write
+     machine-wide registry keys or require Program Files installation.
    - Keep all app data, cache, logs, and temp files in user-local Relay
      directories.
    - Generate SBOM/SBOM-style release inventory with hashes, versions,
@@ -877,6 +889,9 @@ must be deleted or archived when the hard cutover reaches parity.
    - Remove AionUi overlay code, OpenCode/OpenWork provider gateway code,
      Tauri shell/IPC/resources/workflows, and old high-level workflow runners
      once the new path is wired.
+   - Remove `apps/desktop/document-search-src` and any active
+     `RelayDocumentSearch*` code after confirming the generic `rg_*`/`read`
+     tools cover the active search path.
    - Archive historical docs only when useful; do not keep active package
      scripts or tests that exercise removed runtime paths.
 12. Verify the hard cutover:
@@ -917,7 +932,7 @@ must be deleted or archived when the hard cutover reaches parity.
    - Add a verification note showing the remaining `codex` / `Codex` matches
      are only upstream references or intentionally archived historical wording.
 14. Add a corporate-compliance packaging review:
-   - Inventory every installer resource, executable, npm package, generated
+   - Inventory every release resource, executable, npm package, generated
      file, config directory, environment variable, and runtime process name that
      contains `codex`, `Codex`, OpenAI, OpenCode, or OpenWork terminology.
    - Classify each match as `Relay-owned branding`, `upstream dependency`,
@@ -927,30 +942,19 @@ must be deleted or archived when the hard cutover reaches parity.
      unless they are explicitly needed at runtime.
    - Do not bundle upstream `codex` CLI/app-server, OpenCode, or OpenWork in
      the release.
-   - Implement Relay/Copilot integration through the approved Relay sidecar and
-     Microsoft Agent Framework path instead of hidden third-party agent
-     artifacts.
+   - Implement Relay/Copilot integration through the approved Relay sidecar
+     runner instead of hidden third-party agent artifacts.
    - Add a release verification artifact that lists remaining matches and their
      classification, plus the reason each one is acceptable for installation.
-15. Evaluate Ollama as an optional approved local utility, without making it a
-   second agent brain:
-   - Confirm which Ollama capabilities are approved for use in the corporate
-     environment: local REST API, OpenAI-compatible endpoints, structured
-     outputs, tool calling, model management, and any bundled/adjacent harness
-     components.
-   - Treat Ollama itself as a local model server/API surface. Do not assume it
-     provides a full agent harness; Relay remains the harness unless a specific
-     approved Ollama-adjacent component is identified and reviewed.
-   - Prototype only non-user-visible utility uses first: capability detection,
-     schema/JSON smoke testing, local mock-provider compatibility, or internal
-     adapter tests.
-   - Do not route production business reasoning, file search planning, Office
-     edit planning, or code patch planning to Ollama by default. Those remain
-     M365 Copilot responsibilities.
-   - If an Ollama utility is adopted, keep the UI simple: one Copilot-led agent
-     path, with Ollama status shown only in diagnostics.
-   - Add a compliance note explaining why the adopted Ollama component is
-     permitted and what it does not do.
+15. Keep out-of-scope model/harness options outside the cutover:
+   - Do not add Ollama, Microsoft Agent Framework, MCP, shell execution, or a
+     second agent harness to the current release scope.
+   - If one of those options is reconsidered later, require a separate ADR with
+     threat model, packaging impact, UX impact, verification gates, and removal
+     criteria for any replaced code path.
+   - The current cutover completes only when the Relay sidecar runner, M365
+     Copilot transport, generic local tools, and browser Workbench are the
+     single active product path.
 
 ## Verification Gates
 
@@ -980,16 +984,18 @@ must be deleted or archived when the hard cutover reaches parity.
   - OfficeCLI smoke file cleanup and retry on transient sharing violations.
 - Release supply-chain gates:
   - sidecar Windows/Linux self-contained publish;
+  - Windows user-scope NSIS installer build;
+  - installer smoke proving no administrator rights, UAC elevation, personal
+    password prompt, Program Files install, or machine-wide registry writes;
   - release inventory;
   - SBOM/SBOM-style dependency and binary inventory;
   - legacy runtime exclusion inventory.
-- .NET Agent Framework sidecar smoke, if adopted:
+- Sidecar runner smoke:
   - local mock `/v1/chat/completions` returns expected agent response;
-  - live `copilot_server.js` -> Edge CDP -> M365 Copilot returns expected
-    response;
+  - live Edge CDP -> M365 Copilot exact-response canary passes when a signed-in
+    session is available;
   - generic tool-choice smoke covers `rg_files`/`rg_search`, `officecli`, and
     `edit` approval.
-- Optional Ollama utility smoke, only if adopted: local or mock Ollama service
-  responds and the specific utility contract passes without becoming the
-  user-facing reasoning path.
-- Windows release workflow: `.github/workflows/release-windows-installer.yml`
+- Sidecar release workflow: Windows publishes the user-scope NSIS installer;
+  Linux publishes the sidecar archive/launcher. Neither path may package the
+  removed Tauri/AionUi/OpenCode/OpenWork runtime.

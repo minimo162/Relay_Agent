@@ -1,69 +1,84 @@
 # Relay Agent Packaging Policy
 
-Date: 2026-03-29
+Date: 2026-05-16
 
 ## Purpose
 
-This document is the concrete artifact for Task Master subtask `11.1`:
-define the first end-user packaging target, installer type, update path, and
-data-retention expectations for non-engineer operators.
+This document defines the active packaging target for the hard-cutover Relay
+Workbench architecture. It replaces the older Windows/Tauri/NSIS packaging
+policy. The Windows installer remains NSIS-based, but it packages the sidecar
+Workbench architecture rather than the removed Tauri shell.
 
 ## Decision Summary
 
-- First supported packaged end-user OS: Windows 10/11 x64
-- First official build target: `x86_64-pc-windows-msvc`
-- First official installer type: NSIS
-- Official user launch story: install the packaged desktop app, then open it
-  from the Windows Start menu or desktop shortcut
-- Developer-only startup paths such as `pnpm` or `tauri dev` remain outside the
-  supported end-user workflow
+- Active product shape: browser-hosted Relay Workbench served by the
+  self-contained .NET sidecar.
+- Supported release artifacts for the current cutover:
+  - Windows x64 user-scope NSIS installer for the sidecar Workbench.
+  - Linux x64 self-contained sidecar archive plus launcher.
+- Unsupported active release paths:
+  - Tauri NSIS installer for the old desktop shell.
+  - AionUi overlay installer.
+  - OpenCode/OpenWork bundled runtime.
+  - Codex app-server or upstream Codex CLI bundle.
+- The Windows installer must not require administrator rights, UAC elevation,
+  machine-wide installation, or the user's personal Windows password.
 
 ## Update Policy
 
-- The first non-engineer release track uses manual installer-driven updates
-- In-app auto-update is out of scope for this phase
-- Windows installer assets should be distributed from GitHub Releases rather
-  than committed into the repository
-- Users should download the newer signed Windows installer from GitHub Releases
-  and run it over the existing install
-- Release notes must call out any version that changes storage layout or
-  requires a migration step
+- The current Windows release track uses a GitHub Release NSIS installer asset
+  containing the sidecar Workbench, required runtime tools, and
+  release inventory/SBOM-style metadata.
+- The current Linux release track uses a GitHub Release archive plus launcher
+  and the same release inventory/SBOM-style metadata.
+- In-app auto-update is out of scope for this phase.
+- Release notes must call out any version that changes storage layout, ledger
+  format, cache retention, or launcher behavior.
 
 ## Data Retention Expectations
 
-- Upgrade installs must preserve Relay Agent's app-local storage so sessions,
-  turns, local artifacts, and logs remain available after an update
-- This expectation depends on keeping the existing Tauri app identifier
-  `com.relayagent.desktop`
-- Save-copy outputs remain in the user-selected destination and are not moved
-  into app-local storage
-- Uninstall should not be treated as the primary data-deletion workflow; future
-  explicit reset or deletion UX will handle operator-facing cleanup
+- App data, run ledgers, traces, backups, temp files, and support bundles live
+  under user-local Relay data directories.
+- Windows installs must target a user-writable location such as
+  `%LOCALAPPDATA%\Programs\Relay Agent`; app data should live under a separate
+  user-local Relay data directory such as `%LOCALAPPDATA%\Relay Agent`.
+- Shared folders and searched folders must not receive Relay caches, indexes,
+  or temp artifacts.
+- Upgrade installs or archive replacements should preserve user-local Relay
+  data. Uninstall/delete of the application bundle should not be treated as the
+  primary data-deletion workflow unless the user explicitly opts into removing
+  local data.
 
 ## Packaging Config Mapping
 
-- Base cross-platform development config remains in
-  `apps/desktop/src-tauri/tauri.conf.json`
-- Windows-specific packaging expectations are defined in
-  `apps/desktop/src-tauri/tauri.windows.conf.json`
-- The Windows override narrows the bundle target to `nsis` so the release path
-  matches the first supported non-engineer distribution story
-- GitHub Actions release automation for Windows installer publication lives in
-  `.github/workflows/release-windows-installer.yml`
-- Repo-specific Azure Trusted Signing / Artifact Signing setup now lives in
-  `docs/TRUSTED_SIGNING_SETUP.md`
-- Until Azure signing credentials are fully configured, the release workflow
-  may still publish an unsigned fallback installer to preserve the current
-  GitHub Releases path
-- Internal-only self-signed Authenticode testing with OpenSSL and
-  `signtool.exe` is documented in `docs/WINDOWS_SELF_SIGNED_SIGNING.md`; those
-  outputs are local `artifacts/` files or manually dispatched prerelease assets,
-  and must not be published as formal public releases
+- Required publish commands after the packaging milestone:
+  - `pnpm sidecar:publish:windows`
+  - `pnpm sidecar:publish:linux`
+  - `pnpm sidecar:installer:windows`
+  - `pnpm release:inventory`
+- The active Windows release workflow should publish the sidecar Workbench NSIS
+  installer and should keep installer terminology because it builds an actual
+  installer.
+- The active Linux release workflow should publish a sidecar archive and
+  launcher, not an installer.
+- Runtime resources such as ripgrep and OfficeCLI must be bundled from
+  sidecar-owned `tools/` or `third_party/` locations, not from
+  `apps/desktop/src-tauri`.
+- The Windows installer bundle must include, where licensing and platform
+  support allow, `Relay.Sidecar.exe`, Workbench static assets, `rg.exe`,
+  `officecli.exe`, launcher files, default config, license/notice files,
+  release inventory, and SBOM-style metadata.
+- The installer must create Start Menu shortcuts, optional desktop shortcuts,
+  an uninstall entry, and per-user registry/app metadata only. It must not
+  write machine-wide registry keys or require Program Files installation.
+- Release inventory must list bundled files, hashes, versions, source/license
+  notes, intentionally excluded legacy runtimes, and installer configuration
+  proving user-scope installation.
 
 ## Deferred
 
-- macOS packaged distribution
-- Linux packaged distribution for end users
-- MSI-based enterprise rollout
-- In-app updater channels and background update UX
-- First fully signed Windows release verification with real Azure credentials
+- MSI/MSIX enterprise rollout.
+- macOS packaged distribution.
+- In-app updater channels and background update UX.
+- Formal code-signing and enterprise trust distribution for the Windows
+  installer.

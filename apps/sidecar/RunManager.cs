@@ -138,7 +138,7 @@ public sealed class RunManager(
             foreach (var check in checks)
             {
                 var requiredLabel = check.Required ? "required" : "optional";
-                await AppendEventAsync(state, RunEvent.Tool(check.Name, check.Ready ? $"ready ({requiredLabel})" : $"{check.Detail} ({requiredLabel})"), state.CancellationToken);
+                await AppendEventAsync(state, RunEvent.ToolCallCompleted(check.Name, check.Ready ? $"ready ({requiredLabel})" : $"{check.Detail} ({requiredLabel})"), state.CancellationToken);
             }
 
             var requiredFailures = checks.Where(check => check.Required && !check.Ready).ToArray();
@@ -202,9 +202,15 @@ public sealed class RunManager(
         RunRecord run;
         lock (state.Gate)
         {
+            var enveloped = runEvent with
+            {
+                RunId = state.Run.RunId,
+                Sequence = state.Run.Events.Count + 1,
+                Timestamp = DateTimeOffset.UtcNow,
+            };
             state.Run = state.Run with
             {
-                Events = state.Run.Events.Concat([runEvent]).ToArray(),
+                Events = state.Run.Events.Concat([enveloped]).ToArray(),
             };
             subscribers = state.Subscribers.ToArray();
             run = state.Run;
@@ -213,7 +219,7 @@ public sealed class RunManager(
         await ledger.AppendAsync(run, cancellationToken);
         foreach (var subscriber in subscribers)
         {
-            subscriber.Writer.TryWrite(runEvent);
+            subscriber.Writer.TryWrite(run.Events[^1]);
         }
     }
 

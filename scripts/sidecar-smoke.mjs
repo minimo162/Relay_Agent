@@ -111,7 +111,7 @@ try {
   if (completedRun.status !== "completed") {
     throw new Error(`run did not complete through mock Copilot transport: ${JSON.stringify(completedRun)}`);
   }
-  if (!completedRun.events.some((event) => event.type === "final" && event.detail === "mock Copilot response from sidecar transport")) {
+  if (!completedRun.events.some((event) => event.type === "completed" && event.detail === "mock Copilot response from sidecar transport")) {
     throw new Error(`run did not return final mock answer: ${JSON.stringify(completedRun)}`);
   }
   console.log("[sidecar-smoke] ok");

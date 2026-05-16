@@ -9,10 +9,14 @@ const inventoryPath = resolve(outDir, "relay-release-inventory.json");
 const sbomPath = resolve(outDir, "relay-sbom.json");
 const inputs = [
   "apps/sidecar/Relay.Sidecar.csproj",
+  "apps/launcher/Relay.Launcher.csproj",
   "apps/workbench/package.json",
   "apps/workbench/dist",
+  "tools/ripgrep",
+  "tools/officecli",
   "dist/relay-agent-win-x64/relay-tools",
   "dist/relay-agent-linux-x64/relay-tools",
+  "dist/installer",
 ];
 
 function walk(path) {
@@ -61,9 +65,12 @@ const sbom = {
     ...Object.entries(workbenchPackage.devDependencies ?? {}).map(([name, version]) => ({ type: "npm-dev", name, version })),
     ...dotnetPackages,
     { type: "dotnet", name: "Relay.Sidecar", version: sidecarProject.match(/<Version>([^<]+)<\/Version>/)?.[1] ?? "unknown" },
+    { type: "dotnet", name: "Relay.Launcher", version: readFileSync(resolve(root, "apps/launcher/Relay.Launcher.csproj"), "utf8").match(/<Version>([^<]+)<\/Version>/)?.[1] ?? "unknown" },
   ],
   bundledBinaries: [
     { name: "Relay.Sidecar", source: "self-contained dotnet publish" },
+    { name: "Relay.Launcher", source: "self-contained dotnet publish" },
+    { name: "ripgrep", source: "tools/ripgrep copied into relay-tools/ripgrep" },
     { name: "officecli", source: "Windows release bundle when dist/relay-agent-win-x64/relay-tools/officecli/officecli.exe is present", optional: true },
   ],
   intentionallyExcludedRuntimeFamilies: inventory.excludedLegacyActivePaths,

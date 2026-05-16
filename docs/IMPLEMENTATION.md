@@ -21,10 +21,57 @@
   - `docs/CLAW_CODE_ALIGNMENT.md`
 - Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
   task metadata. The current executable plan is `PLANS.md`.
-- Packaging policy: `docs/PACKAGING_POLICY.md` still fixes the packaged end-user release path to Windows 10/11 x64 via NSIS, with installer-driven updates and preserved app-local storage across upgrades.
+- Packaging policy: `docs/PACKAGING_POLICY.md` now fixes the active release
+  path to a Windows user-scope NSIS installer for the sidecar Workbench plus a
+  Linux sidecar archive/launcher. Tauri NSIS packaging is historical and not an
+  active release path.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-16 plan consistency cleanup
+
+Reviewed the new generic Workbench plan against the current repository shape
+and corrected the active roadmap to avoid ancestor-regressing into the old
+search-specific or desktop-specific architecture:
+
+- Microsoft Agent Framework is now recorded as a reference design, not a
+  required production dependency. The active harness remains the Relay-owned
+  .NET sidecar runner unless a future ADR replaces it.
+- Search precision work is framed as generic `rg_files` / `rg_search` /
+  exact `read` observation quality, not as a revival of the old
+  `RelayDocumentSearch*` engine, SQLite/FTS, reflection prompts, or per-mode
+  search runner.
+- Ollama is explicitly out of current release scope and must not become a
+  second reasoning path, model toggle, readiness gate, or fallback harness.
+- The plan now requires moving runtime resources such as OfficeCLI out of
+  `apps/desktop/src-tauri` before deleting the desktop tree, and moving useful
+  design guidance out of `apps/desktop/DESIGN.md` into Workbench-owned docs.
+- The plan now distinguishes forbidden fallback runtimes from allowed bounded
+  reliability retries inside the same Copilot transport.
+- `docs/PACKAGING_POLICY.md` was rewritten from the old Tauri/NSIS installer
+  policy to the active sidecar release policy: Windows user-scope NSIS
+  installer, Linux archive/launcher, required runtime tools bundled where
+  licensing allows, and no administrator rights, UAC elevation, or personal
+  Windows password prompt.
+- `PLANS.md` now includes a detailed architecture specification based on
+  current Edge CDP, ASP.NET Core, .NET self-contained deployment, AG-UI,
+  Agent Framework, OWASP LLM, ripgrep, and NSIS documentation. The spec fixes
+  the process topology, local HTTP surface, run event stream, run lifecycle,
+  tool contracts, Copilot transport, storage/privacy boundaries, and packaging
+  contract for the cutover.
+- Removed the tracked legacy `apps/desktop` Tauri/AionUi implementation and
+  old document-search/AionUi script tests from the active source tree. The
+  remaining active path is `apps/workbench`, `apps/sidecar`, `apps/launcher`,
+  and release/support scripts under `scripts/release`.
+- Added `Relay.Launcher`, sidecar packaging scripts, sidecar-owned runtime tool
+  fetch/bundle scripts, and a Windows user-scope NSIS installer workflow.
+
+Verification:
+
+- Documentation-only planning update; no runtime tests run.
+- `git diff --check -- PLANS.md docs/IMPLEMENTATION.md
+  docs/PACKAGING_POLICY.md`: passed.
 
 ### 2026-05-16 Copilot response extraction and live E2E hardening
 
@@ -16878,3 +16925,57 @@ Result:
   and approval states under `dist/e2e/`.
 - Full `pnpm check` passed after updating the sidecar and golden smoke tests
   for the asynchronous run lifecycle.
+
+## 2026-05-16: Hard Cutover Packaging and Release Topology
+
+Changes:
+
+- Removed the legacy Tauri/AionUi/OpenCode compatibility surface from the
+  active source tree and tightened the hard-cut guard so active code cannot
+  reintroduce the removed document-search or desktop paths.
+- Added a self-contained .NET launcher that starts the sidecar on a loopback
+  port, injects a launch token, points the sidecar at the bundled Workbench
+  assets, and opens the browser-hosted Relay Workbench.
+- Added deterministic sidecar packaging for `linux-x64` and `win-x64`.
+  Windows packages bundle `ripgrep` and `officecli` under `relay-tools/`; Linux
+  packages bundle `ripgrep` and leave OfficeCLI to the user's environment.
+- Added a user-scope NSIS Windows installer that installs under
+  `%LOCALAPPDATA%\Programs\Relay Agent`, writes only HKCU uninstall metadata,
+  creates a Start Menu shortcut, and does not request administrator elevation.
+- Added release workflow jobs for the Windows installer and Linux archive,
+  including installer policy checks, release inventory, and SBOM upload.
+- Added `/api/workspace` for explicit workspace normalization and
+  `/api/support-bundle` for a zipped diagnostic package containing run metadata
+  and event logs.
+- Changed run event JSON to include stable `runId`, `sequence`, and timestamp
+  fields, with typed lifecycle events for Copilot turns, tool calls, approvals,
+  and completion.
+
+Verification commands run locally:
+
+```bash
+node --check scripts/release/fetch-relay-tools.mjs
+node --check scripts/release/package-sidecar.mjs
+node --check scripts/release/build-windows-installer.mjs
+node --check scripts/check-hard-cut-guard.mjs
+pnpm typecheck
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/root/.dotnet:$PATH dotnet build apps/launcher/Relay.Launcher.csproj --configuration Release
+PATH=/root/.dotnet:$PATH pnpm check
+PATH=/root/.dotnet:$PATH pnpm sidecar:publish:linux
+PATH=/root/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=/root/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=/root/.dotnet:$PATH pnpm release:inventory
+```
+
+Result:
+
+- Script syntax checks, Workbench typecheck, sidecar release build, launcher
+  release build, and full `pnpm check` passed.
+- `pnpm check` covered hard-cut guard, Workbench build, sidecar smoke,
+  agent-golden smoke, sidecar security smoke, and release inventory generation.
+- Linux and Windows self-contained packages were produced under
+  `dist/relay-agent-linux-x64` and `dist/relay-agent-win-x64`.
+- The local NSIS build produced
+  `dist/installer/Relay.Agent-0.3.2-win-x64-setup.exe`; the generated NSIS
+  script uses `RequestExecutionLevel user` and the user-local install path.

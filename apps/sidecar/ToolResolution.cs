@@ -34,7 +34,6 @@ public sealed class ToolResolver(string dataDirectory)
             [
                 PlatformExecutable("relay-tools/officecli/officecli"),
                 PlatformExecutable("resources/relay-tools/officecli/officecli"),
-                "binaries/relay-officecli-win-x64.exe",
                 Path.Combine(dataDirectory, "tools", "officecli", OfficeCliVersion, WindowsExecutable("officecli")),
                 Path.Combine(dataDirectory, "tools", "officecli", WindowsExecutable("officecli")),
                 Path.Combine(

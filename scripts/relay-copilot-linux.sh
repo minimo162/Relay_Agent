@@ -45,15 +45,16 @@ fi
 
 PROFILE="$HOME/RelayAgentEdgeProfile"
 echo "[relay-copilot-linux] DISPLAY=$DISPLAY"
-echo "[relay-copilot-linux] Edge プロファイル（アプリ / copilot_server が使用）: $PROFILE"
+echo "[relay-copilot-linux] Edge プロファイル（Copilot CDP が使用）: $PROFILE"
 echo "[relay-copilot-linux] 初回はこの Edge で M365 にサインインしてください（noVNC の Chromium とは別プロファイルです）。"
 
-# Edge を先に立てておくと DevToolsActivePort 経由で Rust / Node が既存 CDP を再利用しやすい
+# Edge を先に立てておくと sidecar が既存 CDP を再利用しやすい
 if [[ "${RELAY_PRESTART_EDGE:-1}" == "1" ]]; then
   if [[ -x "$ROOT/scripts/start-relay-edge-cdp.sh" ]]; then
     "$ROOT/scripts/start-relay-edge-cdp.sh" || echo "[relay-copilot-linux] 警告: Edge 先起動に失敗しました（アプリ側の自動起動に任せます）" >&2
   fi
 fi
 
-cd "$ROOT/apps/desktop"
-exec pnpm exec tauri dev
+cd "$ROOT"
+export RELAY_COPILOT_CDP_PORT="${RELAY_COPILOT_CDP_PORT:-9360}"
+exec pnpm dev

@@ -31,6 +31,8 @@ bin/
 obj/
 **/bin/
 **/obj/
+tools/ripgrep/
+tools/officecli/
 apps/desktop/src-tauri/gen/schemas/windows-schema.json
 
 # Local signing artifacts

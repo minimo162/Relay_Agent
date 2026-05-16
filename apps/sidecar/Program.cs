@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -7,7 +8,7 @@ using Microsoft.Extensions.FileProviders;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseKestrel(options => options.AddServerHeader = false);
 
-var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.1";
+var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.2";
 var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);
@@ -74,6 +75,20 @@ app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
         Checks: checks));
 });
 
+app.MapPost("/api/workspace", (WorkspaceRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Path))
+    {
+        return Results.BadRequest(new ErrorResponse("Workspace path is required."));
+    }
+
+    var fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(request.Path));
+    return Results.Json(new WorkspaceResponse(
+        Path: fullPath,
+        Exists: Directory.Exists(fullPath),
+        DisplayPath: fullPath));
+});
+
 app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellationToken) =>
 {
     var run = await runManager.StartAsync(request, cancellationToken);
@@ -136,6 +151,12 @@ app.MapPost("/api/runs/{runId}/cancel", async (string runId, CancellationToken c
 {
     var run = await runManager.CancelAsync(runId, cancellationToken);
     return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
+});
+
+app.MapGet("/api/support-bundle", async (CancellationToken cancellationToken) =>
+{
+    var path = await SupportBundle.CreateAsync(options.DataDirectory, cancellationToken);
+    return Results.File(path, "application/zip", Path.GetFileName(path));
 });
 
 app.MapGet("/v1/models", () => Results.Json(new
@@ -204,7 +225,7 @@ await app.RunAsync();
 static async Task WriteSseAsync(HttpContext context, RunEvent runEvent, CancellationToken cancellationToken)
 {
     await context.Response.WriteAsync("event: run-event\n", cancellationToken);
-    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Default)}\n\n", cancellationToken);
+    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(runEvent, JsonOptions.Compact)}\n\n", cancellationToken);
     await context.Response.Body.FlushAsync(cancellationToken);
 }
 
@@ -337,6 +358,10 @@ public sealed class RunLedger(string dataDirectory)
 
 public sealed record RunRequest(string Instruction, string Workspace);
 
+public sealed record WorkspaceRequest(string Path);
+
+public sealed record WorkspaceResponse(string Path, bool Exists, string DisplayPath);
+
 public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events, PendingApproval? PendingApproval = null)
 {
     public static RunResponse FromRun(RunRecord run) => new(run.RunId, run.Status, run.Events, run.PendingApproval);
@@ -351,13 +376,20 @@ public sealed record ErrorResponse(string Error);
 public sealed record RunEvent(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("message")] string Message,
-    [property: JsonPropertyName("detail")] string? Detail = null)
+    [property: JsonPropertyName("detail")] string? Detail = null,
+    [property: JsonPropertyName("runId")] string? RunId = null,
+    [property: JsonPropertyName("sequence")] long Sequence = 0,
+    [property: JsonPropertyName("timestamp")] DateTimeOffset? Timestamp = null)
 {
     public static RunEvent Status(string message, string? detail = null) => new("status", message, detail);
-    public static RunEvent Tool(string message, string? detail = null) => new("tool", message, detail);
-    public static RunEvent Approval(string message, string? detail = null) => new("approval", message, detail);
+    public static RunEvent CopilotTurnStarted(string message, string? detail = null) => new("copilot_turn_started", message, detail);
+    public static RunEvent CopilotTurnCompleted(string message, string? detail = null) => new("copilot_turn_completed", message, detail);
+    public static RunEvent ToolCallStarted(string message, string? detail = null) => new("tool_call_started", message, detail);
+    public static RunEvent ToolCallCompleted(string message, string? detail = null) => new("tool_call_completed", message, detail);
+    public static RunEvent Approval(string message, string? detail = null) => new("approval_requested", message, detail);
+    public static RunEvent ApprovalResolved(string message, string? detail = null) => new("approval_resolved", message, detail);
     public static RunEvent Error(string message, string? detail = null) => new("error", message, detail);
-    public static RunEvent Final(string message, string? detail = null) => new("final", message, detail);
+    public static RunEvent Completed(string message, string? detail = null) => new("completed", message, detail);
 }
 
 public sealed record RunRecord(
@@ -384,4 +416,49 @@ public static class JsonOptions
     {
         WriteIndented = true,
     };
+
+    public static readonly JsonSerializerOptions Compact = new(JsonSerializerDefaults.Web);
+}
+
+public static class SupportBundle
+{
+    public static async Task<string> CreateAsync(string dataDirectory, CancellationToken cancellationToken)
+    {
+        var bundleRoot = Path.Combine(dataDirectory, "support-bundles");
+        Directory.CreateDirectory(bundleRoot);
+        var path = Path.Combine(bundleRoot, $"relay-support-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.zip");
+        if (File.Exists(path)) File.Delete(path);
+
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+        AddText(archive, "README.txt", string.Join("\n", [
+            "Relay Agent support bundle",
+            "This bundle contains run metadata, bounded observations, and event logs.",
+            "It does not include workspace documents by default.",
+            $"Created: {DateTimeOffset.UtcNow:O}",
+            "",
+        ]));
+
+        foreach (var directoryName in new[] { "runs", "run-events" })
+        {
+            var directory = Path.Combine(dataDirectory, directoryName);
+            if (!Directory.Exists(directory)) continue;
+            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var relative = Path.GetRelativePath(dataDirectory, file).Replace('\\', '/');
+                archive.CreateEntryFromFile(file, relative, CompressionLevel.Fastest);
+            }
+        }
+
+        await Task.CompletedTask;
+        return path;
+    }
+
+    private static void AddText(ZipArchive archive, string path, string content)
+    {
+        var entry = archive.CreateEntry(path, CompressionLevel.Fastest);
+        using var stream = entry.Open();
+        using var writer = new StreamWriter(stream);
+        writer.Write(content);
+    }
 }

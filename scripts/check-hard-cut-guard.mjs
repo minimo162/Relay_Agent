@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -17,6 +17,22 @@ function assert(condition, message) {
 
 function fileExists(path) {
   return existsSync(resolve(root, path)) && statSync(resolve(root, path)).isFile();
+}
+
+function walk(path) {
+  const full = resolve(root, path);
+  if (!existsSync(full)) return [];
+  const stat = statSync(full);
+  if (stat.isFile()) return [path];
+  return readdirSync(full).flatMap((entry) => walk(`${path}/${entry}`));
+}
+
+function assertNoForbidden(path, patterns) {
+  if (!fileExists(path)) return;
+  const text = read(path);
+  for (const { pattern, label } of patterns) {
+    assert(!pattern.test(text), `${path} still references ${label}`);
+  }
 }
 
 const rootPackage = JSON.parse(read("package.json"));
@@ -46,8 +62,30 @@ assert(!ci.includes("tauri"), "CI must not run Tauri in the active hard-cut path
 assert(!ci.toLowerCase().includes("opencode"), "CI must not run OpenCode/OpenWork in the active hard-cut path");
 
 const release = read(".github/workflows/release-windows-installer.yml");
-assert(release.includes("dotnet publish apps/sidecar/Relay.Sidecar.csproj"), "release workflow must publish the sidecar");
+assert(
+  release.includes("pnpm sidecar:publish:windows") && release.includes("pnpm sidecar:publish:linux"),
+  "release workflow must publish the sidecar for Windows and Linux",
+);
+assert(release.includes("pnpm sidecar:installer:windows"), "release workflow must build the sidecar NSIS installer");
+assert(release.includes("RequestExecutionLevel user"), "release workflow must verify user-scope NSIS policy");
 assert(!release.includes("tauri build"), "release workflow must not build the Tauri installer");
+assert(!release.includes("apps/desktop"), "release workflow must not package resources from apps/desktop");
+assert(!release.toLowerCase().includes("aionui"), "release workflow must not package AionUi resources");
+assert(!release.toLowerCase().includes("opencode"), "release workflow must not package OpenCode/OpenWork resources");
+
+const activeSourceFiles = [
+  ...walk("apps/sidecar").filter((path) => /\.(cs|csproj)$/.test(path)),
+  ...walk("apps/workbench/src").filter((path) => /\.(ts|tsx|css)$/.test(path)),
+  ...walk("scripts/release").filter((path) => /\.mjs$/.test(path)),
+];
+for (const path of activeSourceFiles) {
+  assertNoForbidden(path, [
+    { label: "Tauri active path", pattern: /src-tauri|tauri build/i },
+    { label: "AionUi overlay active path", pattern: /apply-aionui|aionui-relay/i },
+    { label: "RelayDocumentSearch active path", pattern: /RelayDocumentSearch|relay-document-search/ },
+    { label: "apps/desktop active path", pattern: /apps\/desktop|apps\\desktop/ },
+  ]);
+}
 
 if (process.exitCode) process.exit(process.exitCode);
 console.log("[hard-cut-guard] ok");

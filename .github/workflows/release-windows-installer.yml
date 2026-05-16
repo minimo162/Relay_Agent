@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to publish, for example v0.3.0"
+        description: "Release tag to publish, for example v0.3.2"
         required: true
         type: string
       release_name:
@@ -13,21 +13,11 @@ on:
         type: string
 
 jobs:
-  publish:
-    name: Publish ${{ matrix.rid }}
-    runs-on: ${{ matrix.os }}
+  publish-windows-installer:
+    name: Publish Windows installer
+    runs-on: windows-latest
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - rid: win-x64
-            os: windows-latest
-            archive: zip
-          - rid: linux-x64
-            os: ubuntu-latest
-            archive: tar
 
     steps:
       - name: Check out repository
@@ -49,17 +39,98 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis ripgrep -y --no-progress
+
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install ripgrep on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          tag="${{ inputs.release_tag }}"
+          release_name="${{ inputs.release_name }}"
+          version="$(node -p "require('./apps/workbench/package.json').version")"
+          if [[ "$tag" != "v${version}" && "$tag" != v${version}-* ]]; then
+            echo "Release tag '$tag' must match Relay version '$version'." >&2
+            exit 1
+          fi
+          if [ -z "$release_name" ]; then
+            release_name="Relay Agent ${tag}"
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Install ripgrep on Windows
-        if: runner.os == 'Windows'
+      - name: Run active acceptance gate
+        run: pnpm check
+
+      - name: Publish Windows sidecar package
+        run: pnpm sidecar:publish:windows
+
+      - name: Build user-scope NSIS installer
+        run: pnpm sidecar:installer:windows
+
+      - name: Verify installer policy
         shell: pwsh
-        run: choco install ripgrep -y --no-progress
+        run: |
+          $script = Get-Content dist/installer/relay-agent-win-x64.nsi -Raw
+          if ($script -notmatch 'RequestExecutionLevel user') { throw 'NSIS script must use user execution level' }
+          if ($script -match 'RequestExecutionLevel admin') { throw 'NSIS script must not request admin execution level' }
+          if ($script -match 'HKLM') { throw 'NSIS script must not write HKLM' }
+          if ($script.Contains('$PROGRAMFILES')) { throw 'NSIS script must not install under Program Files' }
+          if (!$script.Contains('$LOCALAPPDATA\Programs\Relay Agent')) { throw 'NSIS script must default to user-local install path' }
+
+      - name: Collect release inventory
+        run: pnpm release:inventory
+
+      - name: Upload Windows release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
+          VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar Workbench release."
+          gh release upload "$RELEASE_TAG" "dist/installer/Relay.Agent-${VERSION}-win-x64-setup.exe" --clobber
+          gh release upload "$RELEASE_TAG" "dist/release/relay-release-inventory.json" --clobber
+          gh release upload "$RELEASE_TAG" "dist/release/relay-sbom.json" --clobber
+
+  publish-linux-archive:
+    name: Publish Linux archive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install archive tools
+        run: sudo apt-get update && sudo apt-get install -y unzip ripgrep
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Resolve release metadata
         id: release_meta
@@ -81,43 +152,17 @@ jobs:
       - name: Run active acceptance gate
         run: pnpm check
 
-      - name: Publish sidecar
-        shell: bash
-        run: |
-          dotnet publish apps/sidecar/Relay.Sidecar.csproj \
-            --configuration Release \
-            --runtime "${{ matrix.rid }}" \
-            --self-contained true \
-            --output "dist/relay-agent-${{ matrix.rid }}"
+      - name: Publish Linux sidecar package
+        run: pnpm sidecar:publish:linux
 
-      - name: Bundle OfficeCLI on Windows
-        if: matrix.rid == 'win-x64'
-        shell: pwsh
-        run: |
-          $source = "apps/desktop/src-tauri/binaries/relay-officecli-win-x64.exe"
-          if (!(Test-Path $source)) {
-            throw "Bundled OfficeCLI source was not found: $source"
-          }
-          $target = "dist/relay-agent-${{ matrix.rid }}/relay-tools/officecli"
-          New-Item -ItemType Directory -Force -Path $target | Out-Null
-          Copy-Item $source "$target/officecli.exe" -Force
+      - name: Create Linux tar asset
+        shell: bash
+        run: tar -C dist/relay-agent-linux-x64 -czf dist/relay-agent-linux-x64.tar.gz .
 
       - name: Collect release inventory
         run: pnpm release:inventory
 
-      - name: Create zip asset
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "dist/relay-agent-${{ matrix.rid }}/*" -DestinationPath "dist/relay-agent-${{ matrix.rid }}.zip" -Force
-
-      - name: Create tar asset
-        if: matrix.archive == 'tar'
-        shell: bash
-        run: |
-          tar -C "dist/relay-agent-${{ matrix.rid }}" -czf "dist/relay-agent-${{ matrix.rid }}.tar.gz" .
-
-      - name: Upload release assets
+      - name: Upload Linux release asset
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -125,11 +170,5 @@ jobs:
           RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar workbench release."
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            gh release upload "$RELEASE_TAG" "dist/relay-agent-${{ matrix.rid }}.zip" --clobber
-          else
-            gh release upload "$RELEASE_TAG" "dist/relay-agent-${{ matrix.rid }}.tar.gz" --clobber
-          fi
-          gh release upload "$RELEASE_TAG" "dist/release/relay-release-inventory.json" --clobber
-          gh release upload "$RELEASE_TAG" "dist/release/relay-sbom.json" --clobber
+            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar Workbench release."
+          gh release upload "$RELEASE_TAG" "dist/relay-agent-linux-x64.tar.gz" --clobber

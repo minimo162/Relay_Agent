@@ -1,7 +1,0 @@
-pub mod cdp;
-pub mod copilot_adapter;
-pub mod copilot_port_reclaim;
-pub mod doctor;
-pub mod error;
-pub mod models;
-pub mod opencode_tools;
