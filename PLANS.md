@@ -344,11 +344,13 @@ Implementation status on 2026-05-16:
   returning the Workbench to the old `/events` stream; the
   `RelayCopilotChatClient` `IChatClient` adapter; POST-only support-bundle
   export with default redaction; streaming/capped ripgrep output for
-  `rg_files` and `rg_search`; and golden smoke coverage for those behaviors.
+  `rg_files` and `rg_search`; exact `read` extraction for `.docx`, `.xlsx`,
+  `.xlsm`, `.pptx`, and uncompressed text-layer `.pdf`; and golden smoke
+  coverage for those behaviors.
 - Still open for the next slice: full Microsoft Agent Framework runner
   replacement, full React/Tailwind/shadcn/Radix/`@ag-ui/client` Workbench
-  migration, exact Office/PDF `read` extraction, semantic OfficeCLI operation
-  registry, and deeper support-bundle redaction fixture coverage.
+  migration, semantic OfficeCLI operation registry, deeper support-bundle
+  redaction fixture coverage, and richer PDF extraction for filtered streams.
 
 ### P0: AG-UI Full Adoption
 

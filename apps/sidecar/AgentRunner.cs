@@ -165,7 +165,7 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "- If the user requested an exact phrase or exact JSON answer, put that exact requested content in `answer`.",
             "- Relay executes tools locally. You do not execute or claim execution.",
             "- Use rg_files or rg_search before read unless the exact file path is already known.",
-            "- Use read for exact files only.",
+            "- Use read for exact files only. read can extract bounded text from txt/md/csv/code plus docx/xlsx/xlsm/pptx/text-layer pdf.",
             "- Use officecli for Office inspection or mutation. Mutations require approval.",
             "- Use edit/write only for workspace-scoped file changes. They require approval.",
             "- Use workspace_status before code changes when repository state matters.",
@@ -407,6 +407,24 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
     {
         var path = ResolveWorkspacePath(workspace, GetString(call.Args, "path") ?? "");
         var info = new FileInfo(path);
+        if (DocumentTextExtractor.IsSupported(path))
+        {
+            var document = await DocumentTextExtractor.ExtractAsync(path, maxChars: 12000, cancellationToken);
+            var suffix = document.Truncated ? " (truncated)" : "";
+            var warningSuffix = document.Warnings.Count > 0 ? $"; warnings={document.Warnings.Count}" : "";
+            return ToolObservation.Ok(
+                call.Id,
+                call.Tool,
+                $"{document.Kind} extracted, {document.Text.Length} chars read{suffix}{warningSuffix}",
+                new
+                {
+                    kind = document.Kind,
+                    text = document.Text,
+                    truncated = document.Truncated,
+                    warnings = document.Warnings,
+                });
+        }
+
         if (info.Length > 512_000)
         {
             return ToolObservation.Fail(call.Id, call.Tool, $"File is too large to read directly: {info.Length} bytes.");

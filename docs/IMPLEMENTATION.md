@@ -113,6 +113,50 @@ Result:
 - `git diff --check` passed.
 - Full `pnpm check` passed with the new rg stream-cap smoke in the gate.
 
+### 2026-05-16 Office/PDF Exact Read Slice
+
+Continued the remediation plan without cutting a release:
+
+- Added `DocumentTextExtractor` in the sidecar. It extracts bounded text for
+  exact `read` calls on `.docx`, `.xlsx`, `.xlsm`, `.pptx`, and simple
+  uncompressed text-layer `.pdf` files.
+- Kept discovery model-facing as `rg_files` / `rg_search` first, followed by
+  exact `read`. No high-level document-search engine or hidden Office search
+  path was reintroduced.
+- `read` now returns structured document observations with `kind`, extracted
+  `text`, `truncated`, and `warnings`, while the visible tool event carries
+  only a short summary.
+- Added `scripts/office-pdf-read-smoke.mjs`, which generates minimal DOCX,
+  XLSX, PPTX, and PDF fixtures, asks the agent to `read` each exact path, and
+  verifies the sidecar takes the extracted document path instead of falling
+  back to binary reads.
+- Added `pnpm agent:office-pdf-read-smoke` to the root check gate.
+
+Known limitation:
+
+- PDF support is intentionally text-layer-only and currently extracts visible
+  uncompressed `Tj` / `TJ` text operators. Filtered/compressed streams surface a
+  warning and remain a follow-up item for a fuller PDF reader.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj
+node --check scripts/office-pdf-read-smoke.mjs
+git diff --check
+PATH=/root/.dotnet:$PATH pnpm sidecar:build
+PATH=/root/.dotnet:$PATH pnpm agent:office-pdf-read-smoke
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Debug and Release builds passed.
+- The Office/PDF exact-read smoke passed for generated `.docx`, `.xlsx`,
+  `.pptx`, and `.pdf` fixtures.
+- `git diff --check` passed.
+- Full `pnpm check` passed with the Office/PDF exact-read smoke in the gate.
+
 ### 2026-05-16 Generic Tool Runtime and AG-UI Stream Slice
 
 Implemented the first executable slice of the generic-agent remediation plan:
