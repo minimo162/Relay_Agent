@@ -130,7 +130,10 @@ async function setValue(selector, value) {
   await evaluate(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) throw new Error("missing selector: ${selector}");
-    el.value = ${JSON.stringify(value)};
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (!setter) throw new Error("missing native value setter: ${selector}");
+    setter.call(el, ${JSON.stringify(value)});
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     return true;

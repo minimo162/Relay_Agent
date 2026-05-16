@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   color-scheme: light;
   --ra-bg: #f7f4ee;
@@ -86,6 +88,9 @@ h1 {
 
 h2 {
   font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .status-pill {
@@ -128,6 +133,7 @@ h2 {
   gap: 28px;
 }
 
+.ra-card,
 .composer-panel,
 .summary-panel,
 .approval-panel,
@@ -142,6 +148,10 @@ h2 {
   display: grid;
   gap: 24px;
   padding: 30px;
+}
+
+.ra-card[hidden] {
+  display: none;
 }
 
 .field-group {
@@ -250,6 +260,10 @@ h2 {
 
 .primary-button,
 .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-width: 104px;
   height: 42px;
   border-radius: 8px;
@@ -291,6 +305,50 @@ h2 {
 .primary-button:disabled,
 .secondary-button:disabled {
   opacity: 0.55;
+}
+
+.badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  border: 1px solid var(--ra-border-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--ra-muted);
+  background: rgba(255, 255, 255, 0.54);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.badge-success {
+  border-color: color-mix(in srgb, var(--ra-ok) 34%, var(--ra-border));
+  color: var(--ra-ok);
+  background: var(--ra-ok-soft);
+}
+
+.badge-warning {
+  border-color: color-mix(in srgb, var(--ra-warn) 34%, var(--ra-border));
+  color: var(--ra-warn);
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.badge-danger {
+  border-color: color-mix(in srgb, var(--ra-danger) 34%, var(--ra-border));
+  color: var(--ra-danger);
+  background: var(--ra-danger-soft);
+}
+
+.tooltip-content {
+  z-index: 50;
+  max-width: 320px;
+  border: 1px solid var(--ra-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--ra-text);
+  background: var(--ra-surface-strong);
+  box-shadow: 0 12px 34px rgba(52, 45, 34, 0.16);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .summary-panel {

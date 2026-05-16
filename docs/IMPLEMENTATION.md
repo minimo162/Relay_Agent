@@ -4,14 +4,14 @@
 
 - Current phase: Relay_Agent now uses the unified browser-hosted Workbench and
   self-contained .NET sidecar as the active product path. The next work is
-  Microsoft Agent Framework backend adoption plus AG-UI-first Workbench
-  hardening: replace the custom runner/event protocol and custom visual flow
-  with Agent Framework sessions/tools/approvals plus AG-UI
-  message/tool/state/interrupt semantics. Relay implements the M365 Copilot CDP
-  provider adapter and local tool governance. File search, Office editing, and
-  coding are high-frequency recipes over one generic tool catalog, not product
-  modes or separate runners. AionUi, OpenCode/OpenWork, Tauri, Python workflow
-  wrappers, and hidden fallback runners are not fallback paths.
+  Microsoft Agent Framework backend hardening plus AG-UI-first Workbench
+  hardening: keep the custom runner/event protocol removed, keep the React
+  Workbench consuming AG-UI through `@ag-ui/client`, and continue narrowing
+  Relay code to Copilot CDP adaptation, local tools, policy, diagnostics, and
+  packaging. File search, Office editing, and coding are high-frequency recipes
+  over one generic tool catalog, not product modes or separate runners. AionUi,
+  OpenCode/OpenWork, Tauri, Python workflow wrappers, and hidden fallback
+  runners are not fallback paths.
 - Repository state: active source lives under `apps/workbench/`,
   `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
   docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
@@ -238,6 +238,45 @@ Results:
   sidecar Release build, sidecar smoke, golden Agent Framework approval
   resume, ripgrep streaming, Office/PDF read extraction, OfficeCLI registry
   smoke, security smoke, and release inventory generation.
+
+### 2026-05-16 React AG-UI Workbench Migration
+
+Completed the planned Workbench frontend migration:
+
+- Replaced the hand-written DOM `main.ts` Workbench with a React + Vite +
+  TypeScript application.
+- Added Tailwind CSS v4, shadcn-style local primitives (`Button`, `Card`,
+  `Input`, `Textarea`, `Badge`), Radix Tooltip, lucide icons, and shared
+  `cn()` class merging.
+- Added a `RelayEventSourceAgent` subclass of `@ag-ui/client` `AbstractAgent`
+  so Workbench stream consumption goes through the official AG-UI client
+  abstraction instead of direct component-level `EventSource` handling.
+- Kept a thin Relay normalizer at the stream boundary to map the current
+  sidecar AG-UI extension events, including `USER_CONFIRMATION_REQUEST`, into
+  the existing visible activity model and approval card.
+- Updated the hard-cut guard to scan all Workbench source files, require
+  `@ag-ui/client`, keep `/agui-events`, and prevent regression to
+  `RunResponse.pendingApproval`.
+- Regenerated the sidecar Workbench assets from the React build.
+
+Verification commands:
+
+```bash
+PATH=/tmp/dotnet:$PATH pnpm --filter @relay-agent/workbench typecheck
+PATH=/tmp/dotnet:$PATH pnpm build
+PATH=/tmp/dotnet:$PATH pnpm workbench:ux-e2e
+PATH=/tmp/dotnet:$PATH pnpm check
+```
+
+Results:
+
+- Workbench typecheck passed after the React/AG-UI migration.
+- `pnpm build` passed and regenerated sidecar Workbench assets.
+- Browser UX E2E passed through task submit, AG-UI progress, approval card,
+  approval resume, final answer, and screenshot capture.
+- Full `pnpm check` passed with the updated hard-cut guard, Workbench build,
+  sidecar build/smokes, agent smokes, Office/PDF read smoke, OfficeCLI smoke,
+  security smoke, and release inventory.
 
 ### 2026-05-16 OfficeCLI Capability Registry Implementation
 

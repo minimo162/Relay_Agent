@@ -361,11 +361,12 @@ Implementation status on 2026-05-16:
   `FunctionCallContent`; `FunctionInvokingChatClient` observation looping;
   `ApprovalRequiredAIFunction` wrapping for mutating tools; Agent Framework
   approval response resume/session serialization; Workbench approval rendering
-  from AG-UI state instead of `RunResponse.pendingApproval`; and golden smoke
-  coverage for those behaviors.
-- Still open for the next slices: full React/Tailwind/shadcn/Radix/
-  `@ag-ui/client` Workbench migration, deeper support-bundle redaction fixture
-  coverage, and richer PDF extraction for filtered streams.
+  from AG-UI state instead of `RunResponse.pendingApproval`; React + Vite +
+  TypeScript + Tailwind CSS + shadcn-style local components + Radix Tooltip
+  Workbench migration; `@ag-ui/client`-based Workbench stream consumption; and
+  golden smoke coverage for those behaviors.
+- Still open for the next slices: deeper support-bundle redaction fixture
+  coverage and richer PDF extraction for filtered streams.
 
 Framework-first revision after current Microsoft documentation review:
 
@@ -445,13 +446,15 @@ Framework-first revision after current Microsoft documentation review:
      session. Workbench approval cards are driven by AG-UI
      `USER_CONFIRMATION_REQUEST` state, while `PendingApproval` remains only as
      internal ledger state for `/approve`.
-   - Revised remaining slices:
-     1. Replace the custom Workbench event adapter with the official
-        `@ag-ui/client` consumer during the React/Tailwind/shadcn/Radix UI
-        migration.
-     2. Keep Relay tool functions small and deterministic. They validate
-        workspace scope, execute one local action, return structured
-        observations, and never call Copilot themselves.
+   - Current slice: the Workbench now runs on React + Vite + TypeScript,
+     Tailwind CSS, shadcn-style local UI components, Radix Tooltip, lucide
+     icons, and a `RelayEventSourceAgent` subclass of `@ag-ui/client`
+     `AbstractAgent` for AG-UI stream consumption. The thin Relay event
+     normalizer remains only to bridge current sidecar event extensions such as
+     `USER_CONFIRMATION_REQUEST` into the visible run trace.
+   - Revised remaining slice: keep Relay tool functions small and
+     deterministic. They validate workspace scope, execute one local action,
+     return structured observations, and never call Copilot themselves.
 
 4. Implement fail-fast Copilot provider behavior inside Agent Framework.
    - Current risk: hidden retries, fallback execution, or stale DOM extraction
