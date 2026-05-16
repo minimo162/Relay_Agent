@@ -18558,3 +18558,78 @@ Result:
 - Baseline live Copilot E2E passed:
   `[workbench-live-copilot-e2e] ok elapsed=9474ms readiness=Ready cdp=9360`.
 - Full `pnpm check` passed after the search hardening changes.
+
+## 2026-05-17: Relay Protocol State Machine Task Breakdown
+
+Planning update:
+
+- Converted the recurring live Copilot `local tools unavailable` failure into
+  an executable hardening queue in `PLANS.md` and Task Master.
+- The new queue is `RPSM01` through `RPSM07` and focuses on replacing ad hoc
+  prompt/regex guards with a Relay-owned protocol state machine.
+- Scope is deliberately narrow: Copilot remains the reasoning layer, while
+  Relay owns local-tool state, initial local-tool policy, invalid terminal
+  response rejection, stateful prompt construction, regression coverage, and
+  cleanup of replaced one-off guards.
+- No runtime code was changed in this planning step.
+
+Verification commands run locally:
+
+```bash
+node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"
+git diff --check
+```
+
+Result:
+
+- Task Master JSON parsed successfully after adding the
+  `relay_protocol_state_machine` phase.
+- `git diff --check` passed.
+
+## 2026-05-17: Relay Protocol State Machine Implementation
+
+Changes:
+
+- Added a typed Relay protocol state layer in `apps/sidecar/`:
+  - `RelayTurnState` records original request, workspace, inferred local
+    intent, completed tools, pending output file, exact file path, and terminal
+    eligibility.
+  - `RelayPromptBuilder` emits a compact `RELAY_TURN_STATE` prompt section for
+    every tool-enabled Copilot turn.
+  - `RelayInitialToolPolicy` deterministically chooses the first local action
+    for search, exact file read, Office inspect/edit, code work, and
+    verification when Copilot tries to finish or ask too early.
+  - `RelayProtocolGuard` validates Copilot `final`/tool responses before they
+    reach execution or the Workbench.
+- Refactored `RelayCopilotChatClient` to use the state machine instead of
+  scattered pending-mutation and original-request prompt fragments.
+- Kept deterministic mechanical normalizers, including `bash cat <file>` to
+  `read`, under the guarded response path.
+- Added `scripts/protocol-state-smoke.mjs` and included it in `pnpm check`.
+  The smoke proves:
+  - a premature `tools unavailable` final on local search is replaced with a
+    bounded `glob`;
+  - an unnecessary `ask_user` on known search scope is replaced with `glob`;
+  - `bash cat seed.txt` is normalized to `read`.
+  - a premature file-creation `final` fails as a protocol error until a
+    mutation tool succeeds.
+- Marked RPSM01 through RPSM07 complete in `PLANS.md` and Task Master.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:protocol-state-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+git diff --check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Protocol-state smoke passed: `[protocol-state-smoke] ok`.
+- Full `pnpm check` passed, including the new protocol-state smoke.
+- Live signed-in Copilot Workbench E2E passed:
+  `[workbench-live-copilot-e2e] ok elapsed=32880ms readiness=Ready cdp=9360`.
+- `git diff --check` passed.

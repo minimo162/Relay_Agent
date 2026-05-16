@@ -32,6 +32,132 @@ The active product target is a **generic Relay Workbench**:
 - AG-UI-first user experience and event protocol, with a minimal visual surface
   and no diagnostic-first clutter.
 
+## Immediate Task Queue: Relay Protocol State Machine
+
+The live Copilot E2E runs exposed a root reliability issue: M365 Copilot can
+still answer as if local tools are unavailable because it only sees Relay tools
+through prompt projection, not as native Microsoft 365 UI tools. Prompt wording
+and one-off repair rules are not enough. Relay must own the turn protocol
+deterministically, while Copilot remains responsible for reasoning, query
+expansion, summaries, and choosing among the tool options Relay has made
+available for the current state.
+
+This queue replaces ad hoc guard clauses with a small state machine around
+Copilot turns. The goal is that local-work requests cannot finish with
+`tools unavailable`, `ask_user`, or `final` before Relay has executed the
+required local tool path. Failures should be explicit protocol errors with
+diagnostic artifacts, not silent fallback behavior.
+
+1. **RPSM01: Capture protocol-state baseline and failure taxonomy.**
+   - Status: completed 2026-05-17.
+   - Goal: define the exact failure classes the state machine must prevent.
+   - Changes:
+     - Document observed failures such as `tools_unavailable_final`,
+       `ask_user_after_known_objective`, `final_before_required_tool`,
+       `mutation_final_without_mutation`, `bash_cat_instead_of_read`,
+       `directory_keyword_glob`, and `lost_original_request_after_tool`.
+     - Map each failure class to an expected Relay state transition and a
+       regression test or live E2E artifact.
+     - Record the taxonomy in `docs/IMPLEMENTATION.md` and, where useful,
+       `docs/AGENT_EVALUATION_CRITERIA.md`.
+   - Acceptance: every known live Copilot protocol failure has a named class,
+     expected behavior, and planned verification.
+   - Verification: `git diff --check`.
+
+2. **RPSM02: Introduce a typed Relay turn-state contract.**
+   - Status: completed 2026-05-17.
+   - Goal: keep the run objective, local-work intent, tool history, approval
+     state, and completion rules outside fragile prompt text.
+   - Changes:
+     - Add a small sidecar contract such as `RelayTurnState` with original user
+       request, workspace, inferred local intent, required next capability,
+       completed tool calls, pending approval/mutation state, pending output
+       target, and terminal eligibility.
+     - Derive initial state from the Workbench/AG-UI run input and update it
+       after every Copilot response and local tool observation.
+     - Keep the state serializable enough for diagnostics and regression
+       fixtures.
+   - Acceptance: a tool-result-only continuation still carries the original
+     objective and knows whether final output is allowed.
+   - Verification: sidecar unit/smoke coverage plus `pnpm check`.
+
+3. **RPSM03: Add a protocol guard for Copilot responses.**
+   - Status: completed 2026-05-17.
+   - Goal: validate Copilot output against the current turn state before the UI
+     or executor sees it.
+   - Changes:
+     - Reject or repair invalid `final`, `ask_user`, and unsupported tool
+       choices according to state.
+     - Convert known mechanical mistakes only when deterministic, such as
+       `bash cat <file>` to `read` and directory-style keyword glob patterns to
+       filename-oriented globs.
+     - Surface non-deterministic violations as protocol errors with prompt and
+       response dumps, rather than trying unrelated fallback paths.
+   - Acceptance: `tools unavailable` cannot reach the user as a final answer
+     while a local tool is required.
+   - Verification: protocol regression tests plus live Copilot smoke.
+
+4. **RPSM04: Move initial local-tool selection into Relay policy.**
+   - Status: completed 2026-05-17.
+   - Goal: make the first local action deterministic while still letting
+     Copilot reason over observations afterward.
+   - Changes:
+     - For local file search, Relay starts with bounded `glob`/`rg_files` and
+       optional `grep` policy based on the user request and workspace.
+     - For exact local files, Relay starts with `read`.
+     - For Office edits, Relay starts with OfficeCLI readiness/capability or
+       workbook inspection before allowing mutation planning.
+     - For code work, Relay starts with workspace status and file discovery
+       before edits.
+   - Acceptance: local-work runs never depend on Copilot deciding that local
+     tools exist on the first turn.
+   - Verification: deterministic planner tests and live file-search/code-work
+     E2E.
+
+5. **RPSM05: Centralize stateful prompt building.**
+   - Status: completed 2026-05-17.
+   - Goal: keep Copilot prompts concise but complete on every continuation.
+   - Changes:
+     - Generate prompt sections from `RelayTurnState`: original request,
+       current objective, available local tools for this state, completed tool
+       observations, required next action, and terminal criteria.
+     - Remove duplicated or stale prompt fragments that can cause Copilot to
+       echo the prompt or ignore the active objective.
+     - Keep prompt dumps tied to run id and state version for reproducibility.
+   - Acceptance: after a tool result, Copilot receives the original request and
+     cannot reasonably ask what task it should perform next.
+   - Verification: prompt fixture tests and live Copilot continuation E2E.
+
+6. **RPSM06: Add protocol regression and live E2E coverage.**
+   - Status: completed 2026-05-17.
+   - Goal: make the state machine measurable before removing old guards.
+   - Changes:
+     - Add non-live tests for invalid finals, invalid asks, unsupported tools,
+       mutation-without-approval, search continuation, and exact file read.
+     - Promote the useful live file-search scenario from temporary script to a
+       tracked smoke script if it can run without leaking user data.
+     - Record expected artifacts in `docs/IMPLEMENTATION.md`.
+   - Acceptance: `pnpm check` covers the deterministic protocol layer; live
+     Copilot E2E covers at least one search and one file-writing workflow.
+   - Verification: `pnpm check`; `pnpm workbench:live-copilot-e2e`; tracked
+     live search smoke when available.
+
+7. **RPSM07: Remove replaced ad hoc prompt guards.**
+   - Status: completed 2026-05-17.
+   - Goal: keep the final implementation understandable and prevent two
+     competing protocol systems.
+   - Changes:
+     - Replace scattered regex and prompt-only fixes in the Copilot bridge with
+       calls into the state machine, protocol guard, and initial-tool policy.
+     - Keep only small deterministic normalizers that have tests and are called
+       from the guard layer.
+     - Update README/AGENTS/implementation notes if user-visible behavior or
+       debugging instructions change.
+   - Acceptance: the local-tool protocol is enforced in one obvious place, with
+     no hidden fallback runner or duplicated legacy path.
+   - Verification: `pnpm check`; live Copilot search and file-writing E2E;
+     `git diff --check`.
+
 ## UI/UX Direction
 
 The Workbench must feel like a focused professional work surface, not a

@@ -29,6 +29,25 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
   and line anchor/startLine when available.
 - **No duplicate prose blocks** repeating the same “next steps” (per CDP session rules in the bundle).
 
+## Protocol-state failures (Relay sidecar)
+
+The active sidecar treats the following as protocol-state regressions. Copilot
+may reason, but Relay owns local-tool state and terminal eligibility.
+
+| Failure class | Regression signal | Expected Relay behavior |
+| --- | --- | --- |
+| `tools_unavailable_final` | Copilot says local tools cannot be used while the user requested local files, Office work, code work, or verification. | Relay must not surface that prose as final output. If no local tool has run, the initial-tool policy should emit the deterministic first tool. |
+| `ask_user_after_known_objective` | Copilot asks what to do even though the user gave an objective and workspace. | Relay should replace the ask with the deterministic first local tool when possible; otherwise fail with a protocol error. |
+| `final_before_required_tool` | Copilot returns `action=final` before required local observation. | Relay should route through `RelayProtocolGuard` and run the required first tool or fail visibly. |
+| `mutation_final_without_mutation` | Copilot claims a requested file/edit was completed without `write`, `edit`, `apply_patch`, or Office mutation result. | Relay must fail the run rather than present success. |
+| `bash_cat_instead_of_read` | Copilot requests `bash` with `cat <file>` for ordinary file reading. | Relay normalizes to `read` before execution. |
+| `directory_keyword_glob` | Copilot emits a directory-looking glob such as `**/security` for filename discovery. | Relay normalizes to a filename-oriented glob such as `**/*security*`. |
+| `lost_original_request_after_tool` | A continuation turn sees only tool results and loses the user's objective. | Relay must include `RELAY_ORIGINAL_USER_REQUEST` and state in every continuation prompt. |
+
+Default regression gate: `pnpm agent:protocol-state-smoke` plus `pnpm check`.
+Copilot-transport changes also require `pnpm workbench:live-copilot-e2e` when a
+signed-in Edge CDP session is available.
+
 ## Search behavior
 
 - English/Japanese query expansion should help common local lookup terms

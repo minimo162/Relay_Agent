@@ -1995,6 +1995,155 @@
           "completedAt": "2026-05-16"
         }
       ]
+    },
+    {
+      "id": "relay_protocol_state_machine",
+      "name": "Relay Protocol State Machine Hardening",
+      "description": "Executable hardening phase for live M365 Copilot reliability. Relay owns local-tool protocol state and terminal eligibility so Copilot cannot finish local-work runs with tools-unavailable, ask-user, or premature final answers before required local tool execution.",
+      "tasks": [
+        {
+          "id": "RPSM01",
+          "title": "Capture protocol-state baseline and failure taxonomy",
+          "description": "Document known live Copilot protocol failures, assign each one a named failure class, expected Relay state transition, and planned regression or live E2E artifact.",
+          "files": [
+            "docs/IMPLEMENTATION.md",
+            "docs/AGENT_EVALUATION_CRITERIA.md",
+            "PLANS.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Protocol failure taxonomy and verification map recorded in implementation/evaluation documentation",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [],
+          "status": "completed",
+          "verification": "git diff --check",
+          "completedAt": "2026-05-17"
+        },
+        {
+          "id": "RPSM02",
+          "title": "Introduce typed Relay turn-state contract",
+          "description": "Add a serializable sidecar state contract that carries original user request, workspace, inferred local intent, required next capability, completed tools, approval/mutation state, pending output target, and terminal eligibility across Copilot turns.",
+          "files": [
+            "apps/sidecar/RelayCopilotChatClient.cs",
+            "apps/sidecar/RelayProtocolState.cs",
+            "apps/sidecar.Tests/",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "RelayTurnState contract with smoke coverage showing tool-result continuations retain the original objective",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "RPSM01"
+          ],
+          "status": "completed",
+          "verification": "PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check",
+          "completedAt": "2026-05-17"
+        },
+        {
+          "id": "RPSM03",
+          "title": "Add Copilot response protocol guard",
+          "description": "Validate Copilot output against Relay turn state before the UI or executor sees it, rejecting invalid final/ask/tool choices and applying only deterministic normalizations such as bash-cat-to-read and directory keyword glob fixes.",
+          "files": [
+            "apps/sidecar/RelayCopilotChatClient.cs",
+            "apps/sidecar/RelayProtocolGuard.cs",
+            "apps/sidecar.Tests/",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Protocol guard prevents tools-unavailable final answers from reaching the user while local tools are required",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "RPSM02"
+          ],
+          "status": "completed",
+          "verification": "PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check; PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e",
+          "completedAt": "2026-05-17"
+        },
+        {
+          "id": "RPSM04",
+          "title": "Move initial local-tool selection into Relay policy",
+          "description": "Implement deterministic initial action policy for local search, exact file read, Office edit inspection, and code workspace status so the first tool call does not depend on Copilot deciding local tools exist.",
+          "files": [
+            "apps/sidecar/RelayCopilotChatClient.cs",
+            "apps/sidecar/RelayInitialToolPolicy.cs",
+            "apps/sidecar/AgentRunner.cs",
+            "apps/sidecar.Tests/",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Initial local-tool policy emits required first actions for search/read/office/code workflows",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "RPSM03"
+          ],
+          "status": "completed",
+          "verification": "PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check; live file-search and code-work E2E",
+          "completedAt": "2026-05-17"
+        },
+        {
+          "id": "RPSM05",
+          "title": "Centralize stateful Copilot prompt building",
+          "description": "Generate Copilot prompts from RelayTurnState so each continuation contains the original request, current objective, available tools for the state, completed observations, required next action, and terminal criteria without duplicated stale fragments.",
+          "files": [
+            "apps/sidecar/RelayCopilotChatClient.cs",
+            "apps/sidecar/RelayPromptBuilder.cs",
+            "apps/sidecar.Tests/",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Stateful prompt builder with fixtures proving tool-result continuations retain the objective and terminal rules",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "RPSM04"
+          ],
+          "status": "completed",
+          "verification": "PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check; PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e",
+          "completedAt": "2026-05-17"
+        },
+        {
+          "id": "RPSM06",
+          "title": "Add protocol regression and live E2E coverage",
+          "description": "Add non-live tests for invalid finals, invalid asks, unsupported tools, mutation-without-approval, search continuation, and exact file read; promote useful live file-search coverage to a tracked smoke script when it can avoid leaking user data.",
+          "files": [
+            "apps/sidecar.Tests/",
+            "scripts/",
+            "dist/e2e/",
+            "docs/IMPLEMENTATION.md",
+            "package.json"
+          ],
+          "artifact": "Protocol regression tests plus documented live Copilot search and file-writing E2E artifacts",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "RPSM05"
+          ],
+          "status": "completed",
+          "verification": "PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check; PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e; tracked live search smoke when available",
+          "completedAt": "2026-05-17"
+        },
+        {
+          "id": "RPSM07",
+          "title": "Remove replaced ad hoc prompt guards",
+          "description": "Replace scattered prompt-only and regex guard fixes with calls into the state machine, protocol guard, and initial-tool policy; keep only tested deterministic normalizers and update user-visible documentation if behavior changes.",
+          "files": [
+            "apps/sidecar/RelayCopilotChatClient.cs",
+            "apps/sidecar/CopilotTransport.cs",
+            "apps/sidecar/AgentRunner.cs",
+            "README.md",
+            "AGENTS.md",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "Single protocol enforcement path with obsolete ad hoc guards removed or documented as tested deterministic normalizers",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "RPSM06"
+          ],
+          "status": "completed",
+          "verification": "PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check; live Copilot search and file-writing E2E; git diff --check",
+          "completedAt": "2026-05-17"
+        }
+      ]
     }
   ]
 }

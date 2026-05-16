@@ -90,10 +90,10 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
 
         CaptureOriginalUserRequest(messageList, options);
-        var retainedRequest = BuildRetainedUserRequestPrompt(messageList, options);
-        if (!string.IsNullOrWhiteSpace(retainedRequest))
+        if (hasTools)
         {
-            parts.Add(retainedRequest);
+            CapturePendingOutputFile(messageList, options);
+            parts.Add(RelayPromptBuilder.BuildStatePrompt(BuildProtocolState(messageList, options)));
         }
 
         foreach (var message in messageList)
@@ -107,12 +107,6 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (hasTools)
         {
-            CapturePendingOutputFile(messageList, options);
-            var pendingMutationGuard = BuildPendingMutationGuard(messageList, options);
-            if (!string.IsNullOrWhiteSpace(pendingMutationGuard))
-            {
-                parts.Add(pendingMutationGuard);
-            }
             parts.Add(BuildToolProjectionPrompt(options));
         }
 
@@ -150,6 +144,8 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             return TextResponse(responseText, options);
         }
 
+        var availableTools = GetAvailableToolNames(options);
+        var state = BuildProtocolState(messages, options);
         RelayAgentPlan plan;
         try
         {
@@ -162,20 +158,10 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (plan.Action == "final")
         {
-            if (TryGetPendingOutputFile(messages, options, out var targetFile) && !HasMutationToolCall(messages))
+            var finalDecision = RelayProtocolGuard.ValidateFinal(state, availableTools);
+            if (TryApplyProtocolDecision(finalDecision, options, out var finalResponse))
             {
-                throw new InvalidOperationException(
-                    $"Copilot returned action=final before creating the requested file ({targetFile}). " +
-                    "The next response must call write/apply_patch/edit instead.");
-            }
-            if (IsLocalFileWorkRequest(messages) && !HasAnyToolResult(messages))
-            {
-                var bootstrapArgs = new JsonObject
-                {
-                    ["pattern"] = "**/*",
-                    ["limit"] = 200,
-                };
-                return ToolCallResponse("glob", bootstrapArgs, options);
+                return finalResponse;
             }
             return TextResponse(plan.Answer ?? "", options);
         }
@@ -188,13 +174,33 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         var planArgs = plan.Args ?? new JsonObject();
         var toolName = NormalizeRequestedTool(plan.Tool, planArgs);
         ValidateProjectedToolCall(toolName, planArgs);
-        var availableTools = GetToolDeclarations(options).Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
-        if (!availableTools.Contains(toolName))
+        var toolDecision = RelayProtocolGuard.ValidateTool(toolName, planArgs, state, availableTools);
+        if (TryApplyProtocolDecision(toolDecision, options, out var toolResponse))
         {
-            throw new InvalidOperationException($"Copilot requested an unavailable tool: {toolName}");
+            return toolResponse;
         }
 
         return ToolCallResponse(toolName, planArgs, options);
+    }
+
+    private static bool TryApplyProtocolDecision(
+        RelayProtocolDecision decision,
+        ChatOptions? options,
+        out ChatResponse response)
+    {
+        response = default!;
+        switch (decision.Kind)
+        {
+            case RelayProtocolDecisionKind.Allow:
+                return false;
+            case RelayProtocolDecisionKind.ReplaceWithTool when decision.ToolDirective is not null:
+                response = ToolCallResponse(decision.ToolDirective.Tool, decision.ToolDirective.Args, options);
+                return true;
+            case RelayProtocolDecisionKind.Reject:
+                throw new InvalidOperationException(decision.Error ?? "Copilot response violated Relay protocol state.");
+            default:
+                throw new InvalidOperationException("Invalid Relay protocol decision.");
+        }
     }
 
     private static ChatResponse ToolCallResponse(string toolName, JsonObject args, ChatOptions? options)
@@ -280,9 +286,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "This is a compiler task, not a chat-answer task.",
             "Do not solve the user's request in prose. Choose one local Relay tool or final JSON.",
             "Relay tools are available through this JSON compiler even if the Copilot web chat has no built-in local tools. Never answer that local tools are unavailable.",
-            "If local file/Office/code work is requested and no relevant tool result is already present, action=final is invalid; return action=tool.",
-            "If the user asks to create/update a file, action=final is invalid until a write/apply_patch/edit/office mutation tool result exists.",
-            "If the user names multiple source files, read each required named source file before write/final.",
+            "Follow RELAY_TURN_STATE. If it says final is invalid, return action=tool.",
             """For a tool call: {"action":"tool","tool":"<tool name>","args":{...}}""",
             """For final answer: {"action":"final","answer":"<concise answer>"}""",
             "If the user asks to create or overwrite a file, call write with file_path and complete content.",
@@ -307,25 +311,6 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         return string.Join("\n", parts);
     }
 
-    private static string BuildPendingMutationGuard(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
-    {
-        if (!TryGetPendingOutputFile(messages, options, out var targetFile) || HasMutationToolCall(messages))
-        {
-            return "";
-        }
-
-        return string.Join("\n", new[]
-        {
-            "RELAY_PENDING_MUTATION_GUARD",
-            $"The requested output file is exactly `{targetFile}`.",
-            "No write/apply_patch/edit/office mutation has been produced yet.",
-            HasAnyToolResult(messages)
-                ? "At least one local tool result exists, so your next response MUST be action=tool, normally with tool=write and complete file content."
-                : "If source files are named, first call read/glob for the needed source; if no source file is needed, call write with complete file content.",
-            "action=final is invalid until Relay reports a successful mutation tool result.",
-        });
-    }
-
     private static void CaptureOriginalUserRequest(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
     {
         var text = ExtractUserRequestBeforeTools(messages);
@@ -333,18 +318,6 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         {
             OriginalUserRequests[GetRunKey(options)] = text;
         }
-    }
-
-    private static string BuildRetainedUserRequestPrompt(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
-    {
-        if (messages.Any(message => message.Role == ChatRole.User && message.Contents.Any(content => content is TextContent)))
-        {
-            return "";
-        }
-
-        return OriginalUserRequests.TryGetValue(GetRunKey(options), out var request) && !string.IsNullOrWhiteSpace(request)
-            ? "RELAY_ORIGINAL_USER_REQUEST\n" + request
-            : "";
     }
 
     private static void CapturePendingOutputFile(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
@@ -364,6 +337,29 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         return PendingOutputFiles.TryGetValue(GetRunKey(options), out targetFile!) &&
             !string.IsNullOrWhiteSpace(targetFile);
+    }
+
+    private static RelayTurnState BuildProtocolState(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        CaptureOriginalUserRequest(messages, options);
+        CapturePendingOutputFile(messages, options);
+        var runKey = GetRunKey(options);
+        var request = ExtractUserRequestBeforeTools(messages);
+        if (string.IsNullOrWhiteSpace(request) &&
+            OriginalUserRequests.TryGetValue(runKey, out var retainedRequest))
+        {
+            request = retainedRequest;
+        }
+
+        TryGetPendingOutputFile(messages, options, out var pendingOutputFile);
+        return RelayTurnStateFactory.Create(
+            runKey,
+            request,
+            RelayWorkspaceContext.ResolveWorkspace(options),
+            HasAnyToolResult(messages),
+            HasMutationToolCall(messages),
+            pendingOutputFile,
+            GetCompletedToolNames(messages));
     }
 
     private static bool TryFindPendingOutputFile(IReadOnlyList<ChatMessage> messages, out string targetFile)
@@ -418,13 +414,20 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         messages.SelectMany(message => message.Contents).Any(content =>
             content is FunctionResultContent or ToolApprovalResponseContent);
 
-    private static bool IsLocalFileWorkRequest(IReadOnlyList<ChatMessage> messages)
+    private static IEnumerable<string> GetCompletedToolNames(IReadOnlyList<ChatMessage> messages)
     {
-        var text = GetInitialRequestText(messages);
-        return Regex.IsMatch(
-            text,
-            @"ファイル|フォルダ|資料|探し|検索|見つけ|workspace|file|folder|document|search|find|read|inspect",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        foreach (var content in messages.SelectMany(message => message.Contents))
+        {
+            switch (content)
+            {
+                case FunctionCallContent call:
+                    yield return call.Name;
+                    break;
+                case ToolApprovalResponseContent approval when approval.ToolCall is FunctionCallContent approvedCall:
+                    yield return approvedCall.Name;
+                    break;
+            }
+        }
     }
 
     private static string GetInitialRequestText(IReadOnlyList<ChatMessage> messages)
@@ -554,6 +557,11 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static IEnumerable<AIFunctionDeclaration> GetToolDeclarations(ChatOptions? options) =>
         options?.Tools?.OfType<AIFunctionDeclaration>() ?? [];
+
+    private static ISet<string> GetAvailableToolNames(ChatOptions? options) =>
+        GetToolDeclarations(options)
+            .Select(tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
 
     private static string? GetAdditionalPropertyString(ChatOptions? options, string key) =>
         options?.AdditionalProperties is not null && options.AdditionalProperties.TryGetValue(key, out var value)
