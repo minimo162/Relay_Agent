@@ -90,6 +90,29 @@ try {
     throw new Error(`unexpected completion response: ${JSON.stringify(completionJson)}`);
   }
 
+  const agui = await fetch(`http://127.0.0.1:${port}/agui/relay?token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Relay-Token": token,
+      "Origin": `http://127.0.0.1:${port}`,
+    },
+    body: JSON.stringify({
+      threadId: "sidecar-smoke-thread",
+      runId: "sidecar-smoke-run",
+      state: {},
+      messages: [{ id: "sidecar-smoke-message", role: "user", content: "ping" }],
+      tools: [],
+      context: [{ description: "workspace", value: process.cwd() }],
+      forwardedProperties: { workspace: process.cwd() },
+    }),
+  });
+  if (!agui.ok) throw new Error(`official AG-UI endpoint failed: ${agui.status} ${await agui.text()}`);
+  const aguiText = await agui.text();
+  if (!aguiText.includes('"type":"RUN_STARTED"') || !aguiText.includes('"type":"RUN_FINISHED"')) {
+    throw new Error(`official AG-UI stream did not emit run lifecycle events: ${aguiText}`);
+  }
+
   const run = await fetch(`http://127.0.0.1:${port}/api/runs?token=${encodeURIComponent(token)}`, {
     method: "POST",
     headers: {

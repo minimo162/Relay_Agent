@@ -1,7 +1,6 @@
 import { AbstractAgent, EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/client";
 import { Observable } from "rxjs";
 import type { ApprovalState, RunEvent } from "../types";
-import { runEventTypes } from "../types";
 
 export type RelayAgUiEvent = Omit<BaseEvent, "type" | "timestamp"> & {
   type: string;
@@ -14,7 +13,6 @@ export type RelayAgUiEvent = Omit<BaseEvent, "type" | "timestamp"> & {
   runId?: string;
   sequence?: number;
   timestamp?: string | number;
-  relayType?: string;
 };
 
 export class RelayEventSourceAgent extends AbstractAgent {
@@ -65,9 +63,8 @@ export class RelayEventSourceAgent extends AbstractAgent {
 }
 
 export function runEventFromAgUi(event: RelayAgUiEvent): RunEvent {
-  const mappedType = isRunEventType(event.relayType) ? event.relayType : runEventTypeFromAgUi(event.type);
   return {
-    type: mappedType,
+    type: runEventTypeFromAgUi(event.type),
     message: event.message || event.type,
     detail: event.detail,
     data: event.data,
@@ -114,10 +111,6 @@ export function eventKey(event: RunEvent): string {
     return `${event.runId}:${event.sequence}`;
   }
   return `${event.type}\u0000${event.message}\u0000${event.detail ?? ""}`;
-}
-
-function isRunEventType(value: unknown): value is RunEvent["type"] {
-  return typeof value === "string" && (runEventTypes as readonly string[]).includes(value);
 }
 
 function runEventTypeFromAgUi(type: string): RunEvent["type"] {

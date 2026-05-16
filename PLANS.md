@@ -367,6 +367,18 @@ Implementation status on 2026-05-16:
   Workbench migration; `@ag-ui/client`-based Workbench stream consumption;
   deeper support-bundle redaction fixture coverage; golden smoke coverage for
   those behaviors; and filtered PDF stream extraction coverage.
+- The official Agent Framework AG-UI ASP.NET Core hosting package is now
+  registered and exposed at `/agui/relay`. That endpoint is smoke-tested for
+  framework-native AG-UI lifecycle SSE while still using `RelayCopilotChatClient`
+  as the only model adapter and the same Relay tool functions.
+- Workbench-facing custom `/api/runs/{runId}/agui-events` remains the primary
+  approval-capable stream because the current official `MapAGUI` conversion
+  path does not surface `ToolApprovalRequestContent` as a user-confirmation
+  event. Relay therefore keeps the run ledger and approval/resume route for
+  mutating tools instead of weakening safety to force a premature cutover.
+- The Workbench AG-UI compatibility stream now emits `REASONING_*` rather than
+  deprecated `THINKING_*`, and Workbench event mapping no longer depends on the
+  Relay-only `relayType` field.
 - Still open for the next slice: no remaining implementation task is currently
   queued in this plan.
 

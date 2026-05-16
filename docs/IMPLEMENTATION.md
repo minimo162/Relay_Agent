@@ -30,6 +30,43 @@
 
 ## Milestone Log
 
+### 2026-05-16 Official AG-UI Hosting Cutover
+
+Implemented the next Agent Framework/AG-UI alignment slice:
+
+- Added `Microsoft.Agents.AI.Hosting.AGUI.AspNetCore` and registered
+  `AddAGUI()`.
+- Exposed the official Agent Framework AG-UI endpoint at `/agui/relay` through
+  `MapAGUI(...)`.
+- Kept `RelayCopilotChatClient` as the only model-provider adapter and made it
+  consume AG-UI forwarded workspace context so the same Relay tool functions
+  can run under the official host.
+- Added an official `/agui/relay` lifecycle check to `sidecar-smoke`.
+- Updated the compatibility stream to emit `REASONING_*` instead of deprecated
+  `THINKING_*`.
+- Removed Workbench dependence on the Relay-only `relayType` field.
+
+Decision: Workbench still uses `/api/runs/{runId}/agui-events` as the primary
+approval-capable stream. The current official `MapAGUI` converter maps chat
+response/tool events, but does not expose Agent Framework
+`ToolApprovalRequestContent` as a user-confirmation event. Keeping the Relay run
+ledger for approval/resume avoids weakening mutation safety.
+
+Verification:
+
+```bash
+PATH=/tmp/dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/dotnet:$PATH pnpm sidecar:smoke
+PATH=/tmp/dotnet:$PATH pnpm typecheck
+PATH=/tmp/dotnet:$PATH pnpm agent:golden-smoke
+PATH=/tmp/dotnet:$PATH pnpm agent:officecli-registry-smoke
+PATH=/tmp/dotnet:$PATH pnpm check
+PATH=/tmp/dotnet:$PATH pnpm workbench:ux-e2e
+git diff --check
+```
+
+Result: passed for the listed checks.
+
 ### 2026-05-16 Agent Framework-First Plan Revision
 
 Reviewed current Microsoft Agent Framework documentation and revised

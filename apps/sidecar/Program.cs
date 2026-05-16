@@ -4,11 +4,14 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseKestrel(options => options.AddServerHeader = false);
+builder.Services.AddAGUI();
 
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.3";
 var options = RelayOptions.FromEnvironment(args);
@@ -20,6 +23,7 @@ var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
 var runManager = new RunManager(ledger, tools, agentRunner);
+var agUiHostedAgent = agentRunner.CreateHostedAgent();
 
 var app = builder.Build();
 app.Lifetime.ApplicationStopping.Register(runManager.Dispose);
@@ -188,6 +192,8 @@ app.MapPost("/api/runs/{runId}/cancel", async (string runId, CancellationToken c
     return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
 });
 
+app.MapAGUI("/agui/relay", agUiHostedAgent);
+
 app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken cancellationToken) =>
 {
     var includeSensitive = false;
@@ -289,8 +295,8 @@ static object ToAgUiEvent(RunEvent runEvent)
     var type = runEvent.Type switch
     {
         "status" => "STATE_DELTA",
-        "copilot_turn_started" => "THINKING_START",
-        "copilot_turn_completed" => "THINKING_END",
+        "copilot_turn_started" => "REASONING_START",
+        "copilot_turn_completed" => "REASONING_END",
         "tool_call_started" => "TOOL_CALL_START",
         "tool_call_completed" => "TOOL_CALL_END",
         "approval_requested" => "USER_CONFIRMATION_REQUEST",
@@ -317,7 +323,6 @@ static object ToAgUiEvent(RunEvent runEvent)
         detail = runEvent.Detail,
         data = runEvent.Data,
         state,
-        relayType = runEvent.Type,
     };
 }
 
@@ -325,6 +330,7 @@ static bool RequiresToken(HttpRequest request)
 {
     if (request.Path == "/" || request.Path == "/index.html") return false;
     return request.Path.StartsWithSegments("/api")
+        || request.Path.StartsWithSegments("/agui")
         || request.Path.StartsWithSegments("/events")
         || request.Path.StartsWithSegments("/v1");
 }
@@ -511,9 +517,13 @@ public static class JsonOptions
     public static readonly JsonSerializerOptions Default = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
     };
 
-    public static readonly JsonSerializerOptions Compact = new(JsonSerializerDefaults.Web);
+    public static readonly JsonSerializerOptions Compact = new(JsonSerializerDefaults.Web)
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+    };
 }
 
 public static class SupportBundle

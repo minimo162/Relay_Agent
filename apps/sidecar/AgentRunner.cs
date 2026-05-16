@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -29,6 +30,12 @@ public sealed class RelayAgentFrameworkRunner
     {
         _chatClient = chatClient;
         _tools = tools;
+    }
+
+    public ChatClientAgent CreateHostedAgent()
+    {
+        var functionSet = new RelayAgentFunctionSet(null, _tools, _ => ValueTask.CompletedTask);
+        return CreateAgent(functionSet.CreateTools());
     }
 
     public async Task<AgentRunResult> RunAsync(
@@ -169,8 +176,9 @@ public sealed class RelayAgentFrameworkRunner
             null,
             null);
 
-    private IChatClient CreateFunctionInvokingClient() =>
-        _chatClient
+    private IChatClient CreateFunctionInvokingClient()
+    {
+        var functionInvokingClient = _chatClient
             .AsBuilder()
             .UseFunctionInvocation(
                 NullLoggerFactory.Instance,
@@ -181,6 +189,8 @@ public sealed class RelayAgentFrameworkRunner
                     client.TerminateOnUnknownCalls = true;
                 })
             .Build(null);
+        return new RelayWorkspaceScopeChatClient(functionInvokingClient);
+    }
 
     private static ChatClientAgentRunOptions CreateRunOptions() =>
         new(new ChatOptions
@@ -307,7 +317,7 @@ public sealed class RelayAgentFrameworkRunner
 }
 
 public sealed class RelayAgentFunctionSet(
-    string workspace,
+    string? workspace,
     RelayToolExecutor tools,
     Func<RunEvent, ValueTask> emit)
 {
@@ -468,8 +478,9 @@ public sealed class RelayAgentFunctionSet(
 
     private async Task<ToolObservation> InvokeAsync(string tool, JsonObject args, CancellationToken cancellationToken)
     {
+        var effectiveWorkspace = RelayWorkspaceContext.RequireWorkspace(workspace);
         var call = new RelayToolCall($"tool-{Interlocked.Increment(ref _toolSequence):00}", tool, args);
-        var validation = tools.Validate(workspace, call);
+        var validation = tools.Validate(effectiveWorkspace, call);
         if (!validation.Ok)
         {
             var failed = ToolObservation.Fail(call.Id, call.Tool, validation.Error ?? "Invalid tool call.");
@@ -478,7 +489,7 @@ public sealed class RelayAgentFunctionSet(
         }
 
         await emit(RunEvent.ToolCallStarted(call.Tool, tools.Describe(call)));
-        var observation = await tools.ExecuteAsync(workspace, call, cancellationToken, approvalGranted: true);
+        var observation = await tools.ExecuteAsync(effectiveWorkspace, call, cancellationToken, approvalGranted: true);
         await emit(observation.Success
             ? RunEvent.ToolCallCompleted($"{call.Tool} completed", observation.Summary)
             : RunEvent.Error($"{call.Tool} failed", observation.Summary));
@@ -506,6 +517,189 @@ public sealed class RelayAgentFunctionSet(
         }
         return result;
     }
+}
+
+public sealed class RelayWorkspaceScopeChatClient(IChatClient inner) : IChatClient
+{
+    public async Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var previous = RelayWorkspaceContext.Current;
+        RelayWorkspaceContext.Current = RelayWorkspaceContext.ResolveWorkspace(options) ?? previous;
+        try
+        {
+            return await inner.GetResponseAsync(messages, options, cancellationToken);
+        }
+        finally
+        {
+            RelayWorkspaceContext.Current = previous;
+        }
+    }
+
+    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var previous = RelayWorkspaceContext.Current;
+        RelayWorkspaceContext.Current = RelayWorkspaceContext.ResolveWorkspace(options) ?? previous;
+        try
+        {
+            await foreach (var update in inner.GetStreamingResponseAsync(messages, options, cancellationToken))
+            {
+                yield return update;
+            }
+        }
+        finally
+        {
+            RelayWorkspaceContext.Current = previous;
+        }
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null) =>
+        serviceKey is null && serviceType.IsInstanceOfType(this)
+            ? this
+            : inner.GetService(serviceType, serviceKey);
+
+    public void Dispose() => inner.Dispose();
+}
+
+public static class RelayWorkspaceContext
+{
+    private static readonly AsyncLocal<string?> Scope = new();
+
+    public static string? Current
+    {
+        get => Scope.Value;
+        set => Scope.Value = value;
+    }
+
+    public static string RequireWorkspace(string? fallback)
+    {
+        var workspace = string.IsNullOrWhiteSpace(fallback) ? Current : fallback;
+        if (string.IsNullOrWhiteSpace(workspace))
+        {
+            throw new InvalidOperationException("Workspace is required for Relay local tools.");
+        }
+        return workspace;
+    }
+
+    public static string? ResolveWorkspace(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties is null) return null;
+        if (TryGetWorkspace(options.AdditionalProperties, "workspace", out var direct)) return direct;
+        if (TryGetWorkspace(options.AdditionalProperties, "relay_workspace", out var relay)) return relay;
+        if (TryGetWorkspace(options.AdditionalProperties, "ag_ui_forwarded_properties", out var forwarded)) return forwarded;
+        if (TryGetWorkspace(options.AdditionalProperties, "ag_ui_state", out var state)) return state;
+        if (TryGetContextWorkspace(options.AdditionalProperties, out var context)) return context;
+        return null;
+    }
+
+    private static bool TryGetWorkspace(IDictionary<string, object?> properties, string key, out string? workspace)
+    {
+        workspace = null;
+        if (!properties.TryGetValue(key, out var value)) return false;
+        return TryReadWorkspace(value, out workspace);
+    }
+
+    private static bool TryReadWorkspace(object? value, out string? workspace)
+    {
+        workspace = null;
+        switch (value)
+        {
+            case null:
+                return false;
+            case string text when !string.IsNullOrWhiteSpace(text):
+                workspace = text;
+                return true;
+            case JsonElement element:
+                return TryReadWorkspace(element, out workspace);
+            case JsonObject obj:
+                return TryReadWorkspace(obj, out workspace);
+            case IDictionary<string, object?> dictionary:
+                return TryReadWorkspace(dictionary, out workspace);
+            default:
+                return false;
+        }
+    }
+
+    private static bool TryReadWorkspace(JsonElement element, out string? workspace)
+    {
+        workspace = null;
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            workspace = element.GetString();
+            return !string.IsNullOrWhiteSpace(workspace);
+        }
+        if (element.ValueKind != JsonValueKind.Object) return false;
+        foreach (var key in new[] { "workspace", "relayWorkspace", "relay_workspace" })
+        {
+            if (element.TryGetProperty(key, out var child) && TryReadWorkspace(child, out workspace))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool TryReadWorkspace(JsonObject obj, out string? workspace)
+    {
+        workspace = null;
+        foreach (var key in new[] { "workspace", "relayWorkspace", "relay_workspace" })
+        {
+            if (obj.TryGetPropertyValue(key, out var child) && child is not null)
+            {
+                if (child is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text))
+                {
+                    workspace = text;
+                    return true;
+                }
+                if (child is JsonObject nested && TryReadWorkspace(nested, out workspace))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static bool TryReadWorkspace(IDictionary<string, object?> dictionary, out string? workspace)
+    {
+        workspace = null;
+        foreach (var key in new[] { "workspace", "relayWorkspace", "relay_workspace" })
+        {
+            if (dictionary.TryGetValue(key, out var child) && TryReadWorkspace(child, out workspace))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool TryGetContextWorkspace(IDictionary<string, object?> properties, out string? workspace)
+    {
+        workspace = null;
+        if (!properties.TryGetValue("ag_ui_context", out var value) || value is null) return false;
+        if (value is IEnumerable<KeyValuePair<string, string>> pairs)
+        {
+            foreach (var pair in pairs)
+            {
+                if (IsWorkspaceKey(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+                {
+                    workspace = pair.Value;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static bool IsWorkspaceKey(string key) =>
+        key.Equals("workspace", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("relay_workspace", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("relayWorkspace", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolResolver)

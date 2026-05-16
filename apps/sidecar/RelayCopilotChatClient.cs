@@ -33,7 +33,13 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var response = await GetResponseAsync(messages, options, cancellationToken);
-        yield return new ChatResponseUpdate(ChatRole.Assistant, response.Text);
+        yield return new ChatResponseUpdate(ChatRole.Assistant, response.Text)
+        {
+            ConversationId = GetAdditionalPropertyString(options, "ag_ui_thread_id"),
+            ResponseId = GetAdditionalPropertyString(options, "ag_ui_run_id") ?? response.ResponseId,
+            MessageId = $"relay-message-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}",
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)
@@ -63,6 +69,12 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         if (!string.IsNullOrWhiteSpace(options?.Instructions))
         {
             parts.Add(options.Instructions);
+        }
+
+        var agUiContext = BuildAgUiContextPrompt(options);
+        if (!string.IsNullOrWhiteSpace(agUiContext))
+        {
+            parts.Add(agUiContext);
         }
 
         foreach (var message in messageList)
@@ -219,8 +231,58 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         return string.Join("\n", parts);
     }
 
+    private static string BuildAgUiContextPrompt(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties is null) return "";
+        var context = new JsonObject();
+        var workspace = RelayWorkspaceContext.ResolveWorkspace(options);
+        if (!string.IsNullOrWhiteSpace(workspace))
+        {
+            context["workspace"] = workspace;
+        }
+
+        if (options.AdditionalProperties.TryGetValue("ag_ui_thread_id", out var threadId))
+        {
+            context["threadId"] = threadId?.ToString();
+        }
+        if (options.AdditionalProperties.TryGetValue("ag_ui_run_id", out var runId))
+        {
+            context["runId"] = runId?.ToString();
+        }
+        if (options.AdditionalProperties.TryGetValue("ag_ui_forwarded_properties", out var forwarded))
+        {
+            var node = TrySerializeContextValue(forwarded);
+            if (node is not null)
+            {
+                context["forwardedProperties"] = node;
+            }
+        }
+
+        return context.Count == 0
+            ? ""
+            : "RELAY AG-UI CONTEXT\n" + context.ToJsonString(JsonOptions.Compact);
+    }
+
+    private static JsonNode? TrySerializeContextValue(object? value)
+    {
+        if (value is null) return null;
+        if (value is JsonElement element)
+        {
+            return element.ValueKind is JsonValueKind.Undefined
+                ? null
+                : JsonNode.Parse(element.GetRawText());
+        }
+        if (value is JsonNode node) return node.DeepClone();
+        return JsonSerializer.SerializeToNode(value, JsonOptions.Default);
+    }
+
     private static IEnumerable<AIFunctionDeclaration> GetToolDeclarations(ChatOptions? options) =>
         options?.Tools?.OfType<AIFunctionDeclaration>() ?? [];
+
+    private static string? GetAdditionalPropertyString(ChatOptions? options, string key) =>
+        options?.AdditionalProperties is not null && options.AdditionalProperties.TryGetValue(key, out var value)
+            ? value?.ToString()
+            : null;
 
     private static string NormalizeRequestedTool(string tool, JsonObject args)
     {

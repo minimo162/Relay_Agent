@@ -61,6 +61,7 @@ const workbenchSource = walk("apps/workbench/src")
   .join("\n");
 assert(workbenchSource.includes("@ag-ui/client"), "Workbench must consume AG-UI through @ag-ui/client");
 assert(workbenchSource.includes("/agui-events"), "Workbench must consume the AG-UI run stream");
+assert(read("apps/sidecar/Program.cs").includes("/agui/relay"), "Sidecar must expose the official Agent Framework AG-UI endpoint");
 assert(!/\/events[`'"]/.test(workbenchSource), "Workbench must not consume the old custom run-event stream");
 assert(!workbenchSource.includes("pendingApproval"), "Workbench approval UI must be driven by AG-UI state, not RunResponse.pendingApproval");
 
