@@ -1,38 +1,33 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 
 public sealed class RelayAgentFrameworkRunner
 {
-    private const int MaxSteps = 6;
-    private const string AllowedTools = "rg_files, rg_search, read, officecli, edit, write, workspace_status, diff, run_command, ask_user";
+    private const int MaxToolIterations = 8;
     private const string AgentInstructions = """
-        You are Relay Agent's Microsoft Agent Framework planner.
-        M365 Copilot provides reasoning. Relay validates and executes local tools.
-        Return only the JSON object requested by each Relay prompt.
-        Do not claim local execution yourself.
+        You are Relay Agent running through Microsoft Agent Framework.
+        M365 Copilot provides reasoning. Relay validates and executes local tools through the provided function catalog.
+        Use tools when local workspace evidence, Office inspection/editing, or repository verification is needed.
+        Do not claim local execution yourself; use tools and then summarize the observed results.
+        Prefer rg_files or rg_search before read unless the exact file path is known.
+        Use read for exact files only. read can extract bounded text from txt/md/csv/code plus docx/xlsx/xlsm/pptx/text-layer pdf.
+        Use officecli for Office inspection or mutation. Mutating tools require user approval.
+        Use workspace_status before code changes when repository state matters, and diff before summarizing code or text edits.
+        Keep final answers concise and in the user's language.
         """;
-    private readonly ChatClientAgent _agent;
-    private readonly ChatClientAgentRunOptions _runOptions = new(new ChatOptions
-    {
-        ModelId = "m365-copilot",
-    });
+    private readonly IChatClient _chatClient;
     private readonly RelayToolExecutor _tools;
 
     public RelayAgentFrameworkRunner(IChatClient chatClient, RelayToolExecutor tools)
     {
-        _agent = new ChatClientAgent(
-            chatClient,
-            "relay-agent",
-            "Relay Agent",
-            AgentInstructions,
-            new List<AITool>(),
-            null,
-            null);
+        _chatClient = chatClient;
         _tools = tools;
     }
 
@@ -43,7 +38,6 @@ public sealed class RelayAgentFrameworkRunner
         CancellationToken cancellationToken)
     {
         var events = new List<RunEvent>();
-        var observations = new List<ToolObservation>();
 
         async ValueTask Emit(RunEvent runEvent)
         {
@@ -54,87 +48,44 @@ public sealed class RelayAgentFrameworkRunner
             }
         }
 
-        var session = await _agent.CreateSessionAsync(cancellationToken);
+        var functionSet = new RelayAgentFunctionSet(request.Workspace, _tools, Emit);
+        var agent = CreateAgent(functionSet.CreateTools());
+        var session = await agent.CreateSessionAsync(cancellationToken);
         await Emit(RunEvent.Status(
             "Microsoft Agent Framework セッションを開始しました",
-            "Copilot turns are routed through ChatClientAgent; Relay still validates and executes local tools."));
+            "Tool planning and observation turns are handled by ChatClientAgent with function invocation middleware."));
 
-        for (var step = 1; step <= MaxSteps; step++)
+        try
         {
-            await Emit(RunEvent.CopilotTurnStarted("Copilot が次の手順を選択しています", $"step {step}/{MaxSteps}"));
-            var planText = await RunCopilotTurnAsync(BuildStepPrompt(request, observations), session, cancellationToken);
-            RelayAgentPlan plan;
-            try
-            {
-                plan = RelayAgentPlan.Parse(planText);
-                await Emit(RunEvent.CopilotTurnCompleted("Copilot の計画を受け取りました", plan.Action));
-            }
-            catch (Exception parseError)
-            {
-                await Emit(RunEvent.Status("Copilot のJSON形式を修復しています", parseError.Message));
-                var repairText = await RunCopilotTurnAsync(
-                    BuildPlanRepairPrompt(request, observations, planText, parseError.Message),
-                    session,
-                    cancellationToken);
-                try
-                {
-                    plan = RelayAgentPlan.Parse(repairText);
-                    await Emit(RunEvent.CopilotTurnCompleted("Copilot の計画を修復しました", plan.Action));
-                }
-                catch (Exception repairError)
-                {
-                    await Emit(RunEvent.Error("Copilot の計画を検証できません", $"repair failed: {repairError.Message}"));
-                    return new AgentRunResult("failed", events, null);
-                }
-            }
+            await Emit(RunEvent.CopilotTurnStarted("Copilot が実行方針を選択しています", "function-calling request"));
+            var response = await agent.RunAsync(
+                BuildUserPrompt(request),
+                session,
+                CreateRunOptions(),
+                cancellationToken);
 
-            if (plan.Action == "final")
+            var approval = TryCreatePendingApproval(request.Workspace, runId, response);
+            if (approval is not null)
             {
-                if (IsPlaceholderFinalAnswer(plan.Answer))
-                {
-                    await Emit(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
-                    return new AgentRunResult("failed", events, null);
-                }
-                await Emit(RunEvent.Completed("完了しました", plan.Answer ?? ""));
-                return new AgentRunResult("completed", events, null);
-            }
-
-            if (plan.Action != "tool" || string.IsNullOrWhiteSpace(plan.Tool))
-            {
-                await Emit(RunEvent.Error("Copilot の計画を検証できません", "action は final または tool である必要があります。"));
-                return new AgentRunResult("failed", events, null);
-            }
-
-            var toolCall = new RelayToolCall($"tool-{step:00}", plan.Tool, plan.Args ?? new JsonObject());
-            var validation = _tools.Validate(request.Workspace, toolCall);
-            if (!validation.Ok)
-            {
-                await Emit(RunEvent.Error("ツール引数を検証できません", validation.Error));
-                return new AgentRunResult("failed", events, null);
-            }
-
-            if (_tools.RequiresApproval(toolCall))
-            {
-                var approval = PendingApproval.FromToolCall(runId, toolCall);
-                await Emit(RunEvent.Approval("実行前に確認してください", _tools.Describe(toolCall)));
+                await Emit(RunEvent.CopilotTurnCompleted("Copilot が承認の必要な操作を選択しました", approval.ToolCall.Tool));
+                await Emit(RunEvent.Approval("実行前に確認してください", _tools.Describe(approval.ToolCall)));
                 return new AgentRunResult("approval_required", events, approval);
             }
 
-            await Emit(RunEvent.ToolCallStarted(toolCall.Tool, _tools.Describe(toolCall)));
-            var observation = await _tools.ExecuteAsync(request.Workspace, toolCall, cancellationToken);
-            observations.Add(observation);
-            await Emit(observation.Success
-                ? RunEvent.ToolCallCompleted($"{toolCall.Tool} completed", observation.Summary)
-                : RunEvent.Error($"{toolCall.Tool} failed", observation.Summary));
-
-            if (!observation.Success)
+            await Emit(RunEvent.CopilotTurnCompleted("Copilot の応答を受け取りました", "final"));
+            if (IsPlaceholderFinalAnswer(response.Text))
             {
+                await Emit(RunEvent.Error("Copilot の最終回答を検証できません", "placeholder final answer was returned instead of the user's requested answer."));
                 return new AgentRunResult("failed", events, null);
             }
+            await Emit(RunEvent.Completed("完了しました", response.Text.Trim()));
+            return new AgentRunResult("completed", events, null);
         }
-
-        await Emit(RunEvent.Error("手順上限に達しました", $"最大 {MaxSteps} step で停止しました。"));
-        return new AgentRunResult("failed", events, null);
+        catch (Exception ex)
+        {
+            await Emit(RunEvent.Error("Agent Framework 実行に失敗しました", ex.Message));
+            return new AgentRunResult("failed", events, null);
+        }
     }
 
     public async Task<AgentRunResult> ApproveAsync(
@@ -180,87 +131,326 @@ public sealed class RelayAgentFrameworkRunner
             "OBSERVATION JSON:",
             JsonSerializer.Serialize(observation, JsonOptions.Default),
         ]);
-        var session = await _agent.CreateSessionAsync(cancellationToken);
+        var agent = CreateFinalizerAgent();
+        var session = await agent.CreateSessionAsync(cancellationToken);
         await Emit(RunEvent.Status(
             "Microsoft Agent Framework セッションを再開しました",
             "Approved observation finalization is routed through ChatClientAgent."));
-        var final = await RunCopilotTurnAsync(finalPrompt, session, cancellationToken);
+        var final = await RunCopilotTurnAsync(agent, finalPrompt, session, cancellationToken);
         await Emit(RunEvent.Completed("完了しました", final));
         return new AgentRunResult("completed", events, null);
     }
 
-    private async Task<string> RunCopilotTurnAsync(string prompt, AgentSession session, CancellationToken cancellationToken)
+    private ChatClientAgent CreateAgent(IList<AITool> tools) =>
+        new(
+            CreateFunctionInvokingClient(),
+            "relay-agent",
+            "Relay Agent",
+            AgentInstructions,
+            tools,
+            null,
+            null);
+
+    private ChatClientAgent CreateFinalizerAgent() =>
+        new(
+            _chatClient,
+            "relay-agent-finalizer",
+            "Relay Agent",
+            "Summarize Relay tool observations accurately and concisely.",
+            new List<AITool>(),
+            null,
+            null);
+
+    private IChatClient CreateFunctionInvokingClient() =>
+        _chatClient
+            .AsBuilder()
+            .UseFunctionInvocation(
+                NullLoggerFactory.Instance,
+                client =>
+                {
+                    client.MaximumIterationsPerRequest = MaxToolIterations;
+                    client.AllowConcurrentInvocation = false;
+                    client.TerminateOnUnknownCalls = true;
+                })
+            .Build(null);
+
+    private static ChatClientAgentRunOptions CreateRunOptions() =>
+        new(new ChatOptions
+        {
+            ModelId = "m365-copilot",
+            AllowMultipleToolCalls = false,
+        });
+
+    private static string BuildUserPrompt(RunRequest request) =>
+        string.Join("\n", [
+            "RELAY AGENT USER TASK",
+            "Use the function tools exposed by Microsoft Agent Framework when local action or evidence is needed.",
+            "Relay-selected workspace:",
+            request.Workspace,
+            "User request:",
+            request.Instruction,
+        ]);
+
+    private async Task<string> RunCopilotTurnAsync(
+        ChatClientAgent agent,
+        string prompt,
+        AgentSession session,
+        CancellationToken cancellationToken)
     {
-        var response = await _agent.RunAsync(prompt, session, _runOptions, cancellationToken);
+        var response = await agent.RunAsync(prompt, session, new ChatClientAgentRunOptions(new ChatOptions
+        {
+            ModelId = "m365-copilot",
+        }), cancellationToken);
         return response.Text;
     }
 
-    private static string BuildStepPrompt(RunRequest request, IReadOnlyList<ToolObservation> observations) =>
-        string.Join("\n", [
-            "RELAY AGENT STEP PLANNER",
-            "Mode: choose exactly one next action for Relay.",
-            "Return exactly one JSON object and nothing else.",
-            """For a final answer, return fields: action="final", answer=<your actual concise answer to the user>.""",
-            """For a tool call, return fields: action="tool", tool=<one allowed tool name>, args=<JSON object>.""",
-            $"Allowed tool names: {AllowedTools}.",
-            "Rules:",
-            "- Do not copy placeholder text from these instructions.",
-            "- Never answer with placeholder text such as `Japanese answer`, `answer`, or `final answer`.",
-            "- If the user's request can be satisfied without tools, return action=\"final\" with the real user-facing answer immediately.",
-            "- If the user requested an exact phrase or exact JSON answer, put that exact requested content in `answer`.",
-            "- Relay executes tools locally. You do not execute or claim execution.",
-            "- Use rg_files or rg_search before read unless the exact file path is already known.",
-            "- Use read for exact files only. read can extract bounded text from txt/md/csv/code plus docx/xlsx/xlsm/pptx/text-layer pdf.",
-            "- Use officecli for Office inspection or mutation. Mutations require approval.",
-            "- officecli args must be semantic, never raw argv. Shape: { filePath, operation, target?, mode?, selector?, elementType?, properties?, depth?, format?, verb?, element? }.",
-            "- Useful officecli operations: capabilities, help, view, get, query, validate, dump, create, set, add, remove, move, copy, refresh, open, close, watch, unwatch, goto.",
-            "- For Excel cell formatting use operation=\"set\", target=\"/Sheet1/A1\", properties={\"fill\":\"FF0000\"}.",
-            "- For Office help/schema use operation=\"help\" with format/verb/element instead of guessing property names.",
-            "- Use edit/write only for workspace-scoped file changes. They require approval.",
-            "- Use workspace_status before code changes when repository state matters.",
-            "- Use diff to review local changes before summarizing a code or text edit.",
-            "- Use run_command only for bounded verification such as test, build, lint, typecheck, or git status/diff. It requires approval.",
-            "- If enough observations exist, return final.",
-            "- Never request shell/bash/powershell.",
-            $"WORKSPACE: {request.Workspace}",
-            "USER REQUEST:",
-            request.Instruction,
-            "OBSERVATIONS JSON:",
-            JsonSerializer.Serialize(observations, JsonOptions.Default),
-            "Return the next JSON object now.",
-        ]);
+    private PendingApproval? TryCreatePendingApproval(string workspace, string runId, AgentResponse response)
+    {
+        foreach (var content in response.Messages.SelectMany(message => message.Contents))
+        {
+            if (content is ToolApprovalRequestContent { ToolCall: FunctionCallContent call })
+            {
+                var executorTool = call.Name == "officecli_mutate" ? "officecli" : call.Name;
+                var toolCall = new RelayToolCall(call.CallId, executorTool, ArgumentsToJsonObject(call.Arguments ?? new Dictionary<string, object?>()));
+                var validation = _tools.Validate(workspace, toolCall);
+                if (!validation.Ok)
+                {
+                    throw new InvalidOperationException(validation.Error ?? "Invalid tool approval request.");
+                }
+                return PendingApproval.FromToolCall(runId, toolCall);
+            }
+        }
 
-    private static string BuildPlanRepairPrompt(
-        RunRequest request,
-        IReadOnlyList<ToolObservation> observations,
-        string invalidResponse,
-        string validationError) =>
-        string.Join("\n", [
-            "RELAY AGENT JSON REPAIR",
-            "Mode: repair only. Do not answer the user and do not call tools.",
-            "Return exactly one valid JSON object and nothing else.",
-            """For a final answer, return fields: action="final", answer=<actual concise Japanese answer>.""",
-            """For a tool call, return fields: action="tool", tool=<one allowed tool name>, args=<JSON object>.""",
-            $"Allowed tool names: {AllowedTools}.",
-            "Rules:",
-            "- Preserve the intent of the invalid response.",
-            "- Escape Windows backslashes correctly or prefer forward slashes inside JSON strings.",
-            "- Do not include markdown, prose, code fences, or fields outside action/tool/args/answer.",
-            $"- Validation error: {validationError}",
-            $"WORKSPACE: {request.Workspace}",
-            "USER REQUEST:",
-            request.Instruction,
-            "OBSERVATIONS JSON:",
-            JsonSerializer.Serialize(observations, JsonOptions.Default),
-            "INVALID RESPONSE:",
-            invalidResponse,
-            "Return the repaired JSON object now.",
-        ]);
+        return null;
+    }
+
+    private static JsonObject ArgumentsToJsonObject(IDictionary<string, object?> arguments)
+    {
+        var result = new JsonObject();
+        foreach (var (key, value) in arguments)
+        {
+            result[key] = ToJsonNode(value);
+        }
+        return result;
+    }
+
+    private static JsonNode? ToJsonNode(object? value)
+    {
+        if (value is null) return null;
+        return value switch
+        {
+            JsonNode node => node.DeepClone(),
+            JsonElement element => JsonNode.Parse(element.GetRawText()),
+            _ => JsonSerializer.SerializeToNode(value, JsonOptions.Default),
+        };
+    }
 
     private static bool IsPlaceholderFinalAnswer(string? answer)
     {
         var normalized = (answer ?? "").Trim().Trim('"').ToLowerInvariant();
         return normalized is "" or "answer" or "final answer" or "japanese answer" or "your actual concise answer to the user";
+    }
+}
+
+public sealed class RelayAgentFunctionSet(
+    string workspace,
+    RelayToolExecutor tools,
+    Func<RunEvent, ValueTask> emit)
+{
+    private int _toolSequence;
+
+    public IList<AITool> CreateTools()
+    {
+        return [
+            Function(nameof(RgFilesAsync), "rg_files", "List workspace files with optional rg glob filters and filename substring matching."),
+            Function(nameof(RgSearchAsync), "rg_search", "Search plaintext/code content with ripgrep fixed-string matching."),
+            Function(nameof(ReadAsync), "read", "Read an exact workspace file. Office/PDF text is extracted when supported."),
+            Function(nameof(OfficeCliAsync), "officecli", "Inspect Office files using semantic officecli operations that do not modify files."),
+            Function(nameof(OfficeCliMutateAsync), "officecli_mutate", "Edit Office files using semantic officecli operations. Requires user approval.", requiresApproval: true),
+            Function(nameof(EditAsync), "edit", "Replace one exact string in a workspace file.", requiresApproval: true),
+            Function(nameof(WriteAsync), "write", "Create or overwrite a workspace file.", requiresApproval: true),
+            Function(nameof(WorkspaceStatusAsync), "workspace_status", "Inspect workspace file count and git status."),
+            Function(nameof(DiffAsync), "diff", "Show git diff for the workspace or a path."),
+            Function(nameof(RunCommandAsync), "run_command", "Run bounded verification commands such as tests, builds, lint, typecheck, or git status/diff.", requiresApproval: true),
+            Function(nameof(AskUserAsync), "ask_user", "Ask the user for missing information."),
+        ];
+    }
+
+    public Task<ToolObservation> RgFilesAsync(
+        string? contains = null,
+        string? glob = null,
+        string? excludeGlob = null,
+        int? maxDepth = null,
+        int? limit = null,
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("rg_files", Args(
+            ("contains", contains),
+            ("glob", glob),
+            ("excludeGlob", excludeGlob),
+            ("maxDepth", maxDepth),
+            ("limit", limit),
+            ("timeoutMs", timeoutMs)), cancellationToken);
+
+    public Task<ToolObservation> RgSearchAsync(
+        string pattern,
+        string? glob = null,
+        string? excludeGlob = null,
+        int? maxDepth = null,
+        int? limit = null,
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("rg_search", Args(
+            ("pattern", pattern),
+            ("glob", glob),
+            ("excludeGlob", excludeGlob),
+            ("maxDepth", maxDepth),
+            ("limit", limit),
+            ("timeoutMs", timeoutMs)), cancellationToken);
+
+    public Task<ToolObservation> ReadAsync(string path, CancellationToken cancellationToken = default) =>
+        InvokeAsync("read", Args(("path", path)), cancellationToken);
+
+    public Task<ToolObservation> OfficeCliAsync(
+        string filePath,
+        string operation = "view",
+        string? target = null,
+        string? mode = null,
+        string? selector = null,
+        string? elementType = null,
+        JsonElement? properties = null,
+        int? depth = null,
+        string? format = null,
+        string? verb = null,
+        string? element = null,
+        string? content = null,
+        CancellationToken cancellationToken = default)
+    {
+        var args = Args(
+            ("filePath", filePath),
+            ("operation", operation),
+            ("target", target),
+            ("mode", mode),
+            ("selector", selector),
+            ("elementType", elementType),
+            ("properties", properties),
+            ("depth", depth),
+            ("format", format),
+            ("verb", verb),
+            ("element", element),
+            ("content", content));
+        var call = new RelayToolCall("validation", "officecli", args);
+        if (tools.RequiresApproval(call))
+        {
+            throw new InvalidOperationException("This officecli operation changes a file. Use officecli_mutate so Relay can request user approval.");
+        }
+        return InvokeAsync("officecli", args, cancellationToken);
+    }
+
+    public Task<ToolObservation> OfficeCliMutateAsync(
+        string filePath,
+        string operation,
+        string? target = null,
+        string? mode = null,
+        string? selector = null,
+        string? elementType = null,
+        JsonElement? properties = null,
+        int? depth = null,
+        string? format = null,
+        string? verb = null,
+        string? element = null,
+        string? content = null,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("officecli", Args(
+            ("filePath", filePath),
+            ("operation", operation),
+            ("target", target),
+            ("mode", mode),
+            ("selector", selector),
+            ("elementType", elementType),
+            ("properties", properties),
+            ("depth", depth),
+            ("format", format),
+            ("verb", verb),
+            ("element", element),
+            ("content", content)), cancellationToken);
+
+    public Task<ToolObservation> EditAsync(
+        string path,
+        string oldString,
+        string newString,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("edit", Args(("path", path), ("oldString", oldString), ("newString", newString)), cancellationToken);
+
+    public Task<ToolObservation> WriteAsync(
+        string path,
+        string content,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("write", Args(("path", path), ("content", content)), cancellationToken);
+
+    public Task<ToolObservation> WorkspaceStatusAsync(int? limit = null, CancellationToken cancellationToken = default) =>
+        InvokeAsync("workspace_status", Args(("limit", limit)), cancellationToken);
+
+    public Task<ToolObservation> DiffAsync(string? path = null, CancellationToken cancellationToken = default) =>
+        InvokeAsync("diff", Args(("path", path)), cancellationToken);
+
+    public Task<ToolObservation> RunCommandAsync(
+        string[] argv,
+        string? cwd = null,
+        int? timeoutMs = null,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("run_command", Args(("argv", argv), ("cwd", cwd), ("timeoutMs", timeoutMs)), cancellationToken);
+
+    public Task<ToolObservation> AskUserAsync(string question, CancellationToken cancellationToken = default) =>
+        InvokeAsync("ask_user", Args(("question", question)), cancellationToken);
+
+    private AIFunction Function(string methodName, string name, string description, bool requiresApproval = false)
+    {
+        var method = GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new InvalidOperationException($"Missing function method: {methodName}");
+        var function = AIFunctionFactory.Create(method, this, name, description, JsonOptions.Default);
+        return requiresApproval ? new ApprovalRequiredAIFunction(function) : function;
+    }
+
+    private async Task<ToolObservation> InvokeAsync(string tool, JsonObject args, CancellationToken cancellationToken)
+    {
+        var call = new RelayToolCall($"tool-{Interlocked.Increment(ref _toolSequence):00}", tool, args);
+        var validation = tools.Validate(workspace, call);
+        if (!validation.Ok)
+        {
+            var failed = ToolObservation.Fail(call.Id, call.Tool, validation.Error ?? "Invalid tool call.");
+            await emit(RunEvent.Error($"{tool} validation failed", failed.Summary));
+            throw new InvalidOperationException(failed.Summary);
+        }
+
+        await emit(RunEvent.ToolCallStarted(call.Tool, tools.Describe(call)));
+        var observation = await tools.ExecuteAsync(workspace, call, cancellationToken, approvalGranted: true);
+        await emit(observation.Success
+            ? RunEvent.ToolCallCompleted($"{call.Tool} completed", observation.Summary)
+            : RunEvent.Error($"{call.Tool} failed", observation.Summary));
+
+        if (!observation.Success)
+        {
+            throw new InvalidOperationException(observation.Summary);
+        }
+
+        return observation;
+    }
+
+    private static JsonObject Args(params (string Key, object? Value)[] values)
+    {
+        var result = new JsonObject();
+        foreach (var (key, value) in values)
+        {
+            if (value is null) continue;
+            result[key] = value switch
+            {
+                JsonNode node => node.DeepClone(),
+                JsonElement element => JsonNode.Parse(element.GetRawText()),
+                _ => JsonSerializer.SerializeToNode(value, JsonOptions.Default),
+            };
+        }
+        return result;
     }
 }
 

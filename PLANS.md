@@ -356,11 +356,44 @@ Implementation status on 2026-05-16:
   `.xlsm`, `.pptx`, and uncompressed text-layer `.pdf`; broad semantic
   OfficeCLI capability-registry compilation with raw-argv rejection; a
   Microsoft Agent Framework-backed `ChatClientAgent` runner path for Copilot
-  turns and per-run sessions; and golden smoke coverage for those behaviors.
-- Still open for the next slices: native Microsoft Agent Framework typed-tool
-  and approval middleware adoption, full React/Tailwind/shadcn/Radix/
+  turns and per-run sessions; Agent Framework function-tool dispatch through
+  `AIFunctionFactory.Create`; Copilot tool projection to
+  `FunctionCallContent`; `FunctionInvokingChatClient` observation looping;
+  `ApprovalRequiredAIFunction` wrapping for mutating tools; and golden smoke
+  coverage for those behaviors.
+- Still open for the next slices: full Agent Framework approval response
+  resume/session serialization, full React/Tailwind/shadcn/Radix/
   `@ag-ui/client` Workbench migration, deeper support-bundle redaction fixture
-  coverage, and richer PDF extraction for filtered streams.
+  coverage, richer PDF extraction for filtered streams, and replacement of the
+  temporary Workbench `PendingApproval` bridge.
+
+Framework-first revision after current Microsoft documentation review:
+
+- Agent Framework already owns the tool-calling loop. Relay must stop growing
+  the custom `RelayAgentPlan -> RelayToolExecutor -> observation` loop and
+  instead register Relay capabilities as Agent Framework tools.
+- Relay-owned custom code should narrow to:
+  - the M365 Copilot Edge/CDP `IChatClient` adapter;
+  - local function implementations for `rg`, `read`, `officecli`, `edit`,
+    `write`, `workspace_status`, `diff`, `run_command`, and `ask_user`;
+  - policy validation inside those functions and middleware;
+  - packaging, diagnostics, and support-bundle generation.
+- The Copilot adapter is the required seam because M365 Copilot is reached
+  through browser automation, not through a native provider API. It must project
+  Agent Framework tool schemas into Copilot prompts and convert Copilot's
+  selected action back into Microsoft.Extensions.AI tool-call content. This
+  adapter is allowed; a second Relay runner is not.
+- Prefer Agent Framework primitives before adding Relay code:
+  `AIFunctionFactory.Create` for typed function tools,
+  `ApprovalRequiredAIFunction` for mutating tools,
+  `AgentSession` serialization for run continuity,
+  middleware for validation/telemetry,
+  and `MapAGUI` / AG-UI middleware for Workbench streaming and approvals.
+- Do not use provider-hosted file search or code interpreter for local
+  workspaces. Relay's local files and Office documents must stay local, so the
+  Agent Framework tools call local Relay functions. Local MCP is a future option
+  only if an approved local MCP server already provides a capability better than
+  a small in-process function.
 
 ### P0: AG-UI Full Adoption
 
@@ -392,26 +425,43 @@ Implementation status on 2026-05-16:
      would continue the harness reinvention that this migration is meant to
      remove.
    - Target: use .NET Microsoft Agent Framework as the production backend
-     runtime. Agent Framework owns sessions, typed tools, approvals, streaming,
-     and lifecycle. Relay implements the M365 Copilot provider adapter and local
-     tool governance around that runtime.
+     runtime. Agent Framework owns the run loop, tool-call detection, typed
+     function dispatch, approvals, sessions, streaming, and lifecycle. Relay
+     implements only the M365 Copilot provider adapter, local function bodies,
+     validation policy, packaging, and diagnostics around that runtime.
    - Acceptance: a .NET Agent Framework smoke run can call Relay's Copilot
      adapter, select a Relay tool, pause/resume an approval, stream AG-UI events,
      and finish through the Workbench. Windows NSIS and Linux archive still ship
      one .NET sidecar product path, with no Python runtime requirement.
    - Current slice: Copilot turns now run through `ChatClientAgent` with an
-     Agent Framework session and are covered by the golden smoke. Native
-     Agent Framework typed tools and approval middleware remain the next
-     backend-runtime hardening step.
+     Agent Framework session; Relay capabilities are registered as
+     `AIFunctionFactory.Create` tools; the Copilot adapter projects
+     `ChatOptions.Tools` and converts valid tool choices to
+     `FunctionCallContent`; `FunctionInvokingChatClient` owns the normal
+     observation loop; mutating functions are wrapped with
+     `ApprovalRequiredAIFunction`. The Workbench still uses the existing
+     `PendingApproval` API as a bridge when Framework approval content is
+     surfaced.
+   - Revised remaining slices:
+     1. Move approval pause/resume to Agent Framework approval request/response
+        content and AG-UI human-in-the-loop middleware. Relay still decides
+        whether an operation is safe, but the approval protocol is Framework
+        owned.
+     2. Serialize Agent Framework session state into the existing run ledger
+        instead of maintaining separate Relay-only conversation state.
+     3. Keep Relay tool functions small and deterministic. They validate
+        workspace scope, execute one local action, return structured
+        observations, and never call Copilot themselves.
 
 4. Implement fail-fast Copilot provider behavior inside Agent Framework.
    - Current risk: hidden retries, fallback execution, or stale DOM extraction
      can make Copilot instability look like successful agent behavior.
-   - Target: `RelayCopilotChatClient` or the equivalent Agent Framework adapter
-     classifies failures as `open`, `composer_ready`, `prompt_insert`, `send`,
-     `wait_response`, `extract`, or `schema_validate`. It may use short bounded
-     mechanical waits inside the same operation, but it must not route to a
-     fallback model, fallback planner, old runner, or weaker tool.
+   - Target: `RelayCopilotChatClient` becomes the only custom model-provider
+     seam. It classifies failures as `open`, `composer_ready`,
+     `prompt_insert`, `send`, `wait_response`, `extract`, `tool_projection`,
+     or `schema_validate`. It may use short bounded mechanical waits inside the
+     same operation, but it must not route to a fallback model, fallback
+     planner, old runner, or weaker tool.
    - Acceptance: golden and live Copilot E2E tests prove that a valid Copilot
      turn succeeds, while invalid JSON, empty response extraction, prompt echo,
      selector drift, and response timeout all surface as failed Agent Framework
@@ -751,13 +801,19 @@ Reference anchors:
 ### Agent harness and event protocol requirements
 
 - Use Microsoft Agent Framework in the .NET sidecar as the production harness
-  for the generic agent loop. Its responsibilities are agent turns, typed tool
-  calls, sessions, middleware, approval pause/resume, streaming updates, durable
-  run records, and final answer synthesis.
-- Relay remains the local governance layer around Agent Framework. Relay owns
-  the M365 Copilot CDP provider adapter, workspace containment, tool argument
-  validation, local tool execution, backups, diffs, support bundles, and
-  packaging.
+  for the generic agent loop. Its responsibilities are agent turns, tool-call
+  detection, typed function dispatch, sessions, middleware, approval
+  pause/resume, streaming updates, durable run state, and final answer
+  synthesis.
+- Relay remains the local governance layer around Agent Framework, not a
+  competing orchestrator. Relay owns the M365 Copilot CDP provider adapter,
+  workspace containment, local function bodies, backups, diffs, support
+  bundles, and packaging.
+- Implement tools as Agent Framework function tools first. Use
+  `AIFunctionFactory.Create` with typed parameters and descriptions for
+  in-process tools. Use `ApprovalRequiredAIFunction` for write/mutation tools.
+  Add Relay middleware only for policy checks, logging, diagnostics, and
+  Copilot transport adaptation.
 - Do not add a parallel Relay-owned workflow runner, Python runner, OpenCode
   runner, or direct ad hoc AG-UI runner as a fallback. If Agent Framework cannot
   express a required Relay behavior, add a narrow adapter or middleware around
@@ -767,8 +823,9 @@ Reference anchors:
   invalid JSON, stale response pickup, or selector drift must fail the run with
   AG-UI error events and diagnostics so developers can fix the adapter.
 - Implement human-in-the-loop approval as a loop, not as a single callback:
-  when Relay reaches a mutation step, the UI pauses the same run, presents the
-  approval, and resumes only after approve/reject.
+  when Agent Framework emits an approval request for a mutation function, the
+  UI pauses the same run, presents the approval through AG-UI, and resumes only
+  after approve/reject.
 - Use AG-UI events for the Workbench run stream. Required event coverage
   includes run lifecycle, text message streaming, tool call start/args/result,
   state snapshot/delta, approval interrupt/resume, artifact creation, errors,
@@ -1421,6 +1478,17 @@ cutover criterion below is no longer satisfied.
   - legacy runtime exclusion inventory.
 - Agent Framework sidecar smoke:
   - local mock Copilot adapter returns expected Agent Framework response;
+  - Agent Framework function tools are registered from typed Relay functions,
+    and the run fails if Copilot tool projection cannot produce valid
+    Microsoft.Extensions.AI tool-call content;
+  - current bridge smoke proves mutating function tools use
+    `ApprovalRequiredAIFunction` and do not execute before approval;
+  - final approval cutover smoke proves AG-UI approval requests resume through
+    Agent Framework approval response content and no longer use Relay's custom
+    `PendingApproval` wire protocol;
+  - final session smoke proves Agent Framework `AgentSession` state is
+    persisted enough to resume an approval and to keep tool observations
+    attached to the same run;
   - live Edge CDP -> M365 Copilot exact-response canary passes when a signed-in
     session is available;
   - generic tool-choice smoke covers `rg_files`/`rg_search`/`read`,

@@ -30,6 +30,54 @@
 
 ## Milestone Log
 
+### 2026-05-16 Agent Framework-First Plan Revision
+
+Reviewed current Microsoft Agent Framework documentation and revised
+`PLANS.md` to reduce Relay-owned orchestration code:
+
+- Agent Framework already owns the tool-calling loop: it detects model tool
+  calls, executes tools, and feeds results back. Relay should define local
+  tools and policies, not keep expanding a custom planner loop.
+- Function tools are the right shape for Relay's local business logic because
+  they run in the sidecar process and preserve compile-time type safety and
+  testability.
+- Mutating tools should use Agent Framework approval primitives:
+  `ApprovalRequiredAIFunction` / function approval request-response handling,
+  then AG-UI human-in-the-loop middleware for Workbench approval UI.
+- AG-UI integration should move from Relay's compatibility event mapping to
+  Agent Framework's ASP.NET Core AG-UI endpoint/middleware model, including
+  SSE streaming, session mapping, tool events, state updates, and approval
+  workflows.
+- The only unavoidable Relay adapter is the M365 Copilot Edge/CDP
+  `IChatClient` provider. Because Copilot is reached through a browser rather
+  than a native model API, Relay must project Agent Framework tools into
+  Copilot prompts and convert Copilot's selected action back into
+  Microsoft.Extensions.AI tool-call content. That adapter replaces the custom
+  runner; it is not a second execution path.
+
+Research sources:
+
+- Microsoft Agent Framework "Adding Tools":
+  https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools
+- Microsoft Agent Framework "Tools Overview":
+  https://learn.microsoft.com/en-us/agent-framework/agents/tools/
+- Microsoft Agent Framework tool approval:
+  https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval
+- Agent Framework AG-UI integration:
+  https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/
+- Agent Framework AG-UI human-in-the-loop:
+  https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop
+- Microsoft Agent Framework overview:
+  https://learn.microsoft.com/en-us/agent-framework/overview/
+
+Verification for this plan-only change:
+
+```bash
+git diff --check
+```
+
+Result: passed.
+
 ### 2026-05-16 Microsoft Agent Framework Runner Slice
 
 Implemented the next backend-runtime slice:
@@ -67,6 +115,49 @@ Results:
   sidecar Release build, sidecar smoke, golden agent smoke, ripgrep streaming,
   Office/PDF read extraction, OfficeCLI registry smoke, security smoke, and
   release inventory generation.
+
+### 2026-05-16 Agent Framework Function Tool Dispatch
+
+Implemented the next Framework-first runtime slice:
+
+- Extended `RelayCopilotChatClient` to understand `ChatOptions.Tools`.
+  When Agent Framework exposes function tools, the adapter now renders a
+  compact function catalog for M365 Copilot and requires Copilot to return
+  either `{"action":"tool",...}` or `{"action":"final",...}`. Valid tool
+  selections are converted into `Microsoft.Extensions.AI.FunctionCallContent`.
+- Rendered `FunctionResultContent` and approval request/response content back
+  into the Copilot prompt so `FunctionInvokingChatClient` can own the normal
+  tool-observation loop instead of Relay manually serializing observations.
+- Registered Relay local capabilities as typed Agent Framework functions with
+  `AIFunctionFactory.Create`: `rg_files`, `rg_search`, `read`, `officecli`,
+  `officecli_mutate`, `edit`, `write`, `workspace_status`, `diff`,
+  `run_command`, and `ask_user`.
+- Wrapped mutating tools with `ApprovalRequiredAIFunction`. `officecli` is now
+  read-only at the Agent Framework function boundary; Office mutations must use
+  `officecli_mutate`, which maps back to Relay's existing semantic OfficeCLI
+  executor after approval.
+- Replaced the custom multi-step `RelayAgentPlan -> RelayToolExecutor ->
+  observations` loop with a single `ChatClientAgent.RunAsync` backed by
+  `FunctionInvokingChatClient`. The existing `PendingApproval` wire protocol is
+  still used as a bridge for the current Workbench approval API; moving
+  approve/resume fully onto Agent Framework approval response content remains a
+  planned follow-up.
+
+Verification commands:
+
+```bash
+PATH=/tmp/dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/dotnet:$PATH pnpm check
+```
+
+Results:
+
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release` -
+  passed with zero warnings.
+- `pnpm check` - passed. Covered hard-cut guard, Workbench typecheck/build,
+  sidecar Release build, sidecar smoke, golden Agent Framework tool loop,
+  ripgrep streaming, Office/PDF read extraction, OfficeCLI registry smoke,
+  security smoke, and release inventory generation.
 
 ### 2026-05-16 OfficeCLI Capability Registry Implementation
 
