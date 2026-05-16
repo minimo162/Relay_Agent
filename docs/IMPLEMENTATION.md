@@ -17803,3 +17803,46 @@ Result:
   sidecar build/smoke, agent golden smoke, AG-UI client-tool smoke, ripgrep
   stream cap smoke, Office/PDF read smoke, OfficeCLI registry smoke, sidecar
   security smoke, and release inventory generation.
+
+## 2026-05-16: AFAGUI02 Agent Framework Tool Registration Refactor
+
+Changes:
+
+- Refactored `RelayAgentFunctionSet` so Agent Framework tool registration is
+  policy-driven instead of a single mixed list.
+- Added explicit `ReadOnlyToolRegistrations` for `rg_files`, `rg_search`,
+  `read`, read-only `officecli`, `workspace_status`, `diff`, and `ask_user`.
+  These remain normal Agent Framework functions and execute automatically after
+  Relay validates arguments and workspace scope.
+- Added explicit `MutatingToolRegistrations` for `officecli_mutate`, `edit`,
+  `write`, and `run_command`. These are wrapped with
+  `ApprovalRequiredAIFunction`, then projected to AG-UI `request_approval` by
+  the AFAGUI01 bridge before any local mutation can execute.
+- Centralized Agent Framework tool-name to Relay executor-tool mapping so
+  `officecli_mutate` maps back to the existing `officecli` executor while
+  preserving Agent Framework approval semantics.
+- Expanded the AG-UI client-tool smoke so it verifies:
+  - `read` and read-only `officecli capabilities` execute without approval;
+  - `write` can be approved and then creates a file;
+  - rejected `write` creates no file;
+  - `edit`, `run_command`, and mutating `officecli` all surface as AG-UI
+    approval requests before side effects.
+- Marked `AFAGUI02` complete in Task Master and updated `PLANS.md` so
+  `AFAGUI03` is the next checkpoint.
+
+Verification commands run locally:
+
+```bash
+node --check scripts/agui-client-tool-smoke.mjs
+PATH=/tmp/dotnet:/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm agent:agui-client-tool-smoke
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Script syntax check passed.
+- Sidecar Release build passed.
+- AG-UI client-tool smoke passed with the expanded read-only/mutating policy
+  assertions.
+- Full `pnpm check` passed.

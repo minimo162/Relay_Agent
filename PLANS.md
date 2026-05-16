@@ -407,12 +407,20 @@ backup policy, diagnostics, packaging, and Workbench visual composition.
 
 Implementation plan:
 
-Selected next task to execute:
+Current completed tasks:
 
 - **AFAGUI01: Prove Agent Framework approval projection over AG-UI.** This is
   the first blocker for the cutover because it verifies that `MapAGUI` plus a
   narrow Agent Framework middleware can carry a mutating local function to the
   Workbench for approve/reject without relying on Relay's custom run stream.
+- **AFAGUI02: Refactor Relay tool registration around Agent Framework
+  primitives.** Relay now has an explicit Agent Framework tool catalog split
+  between read-only automatic functions and mutating
+  `ApprovalRequiredAIFunction` tools projected to AG-UI `request_approval`.
+
+Next task after this checkpoint:
+
+- **AFAGUI03: Move Workbench primary execution to official AG-UI transport.**
 
 1. Add a proof slice for AG-UI client-tool approvals.
    - Confirm the current Agent Framework AG-UI package surface. If a future

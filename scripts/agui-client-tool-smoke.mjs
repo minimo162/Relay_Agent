@@ -14,10 +14,15 @@ const rejectedPath = join(workspace, "agui-rejected.txt");
 const responses = [
   JSON.stringify({ action: "tool", tool: "read", args: { path: "seed.txt" } }),
   JSON.stringify({ action: "final", answer: "AG-UI read completed." }),
+  JSON.stringify({ action: "tool", tool: "officecli", args: { operation: "capabilities" } }),
+  JSON.stringify({ action: "final", answer: "AG-UI OfficeCLI read-only completed." }),
   JSON.stringify({ action: "tool", tool: "write", args: { path: "agui-approved.txt", content: "approved by ag-ui" } }),
   JSON.stringify({ action: "final", answer: "AG-UI approved write completed." }),
   JSON.stringify({ action: "tool", tool: "write", args: { path: "agui-rejected.txt", content: "this must not be written" } }),
   JSON.stringify({ action: "final", answer: "AG-UI rejected write was not executed." }),
+  JSON.stringify({ action: "tool", tool: "edit", args: { path: "seed.txt", oldString: "seed", newString: "changed" } }),
+  JSON.stringify({ action: "tool", tool: "run_command", args: { argv: ["git", "status"] } }),
+  JSON.stringify({ action: "tool", tool: "officecli", args: { operation: "set", filePath: "book.xlsx", target: "/Sheet1/A1", properties: { value: "x" } } }),
 ];
 
 await writeFile(join(workspace, "seed.txt"), "seed");
@@ -110,6 +115,21 @@ function readApprovalRequest(toolCall) {
   return { args, request };
 }
 
+function assertNoApproval(events, label) {
+  if (events.some((event) => event.type === "TOOL_CALL_START" && event.toolCallName === "request_approval")) {
+    throw new Error(`${label} unexpectedly requested approval: ${JSON.stringify(events)}`);
+  }
+}
+
+function assertApprovalFor(events, expectedFunctionName) {
+  const approvalCall = collectToolCall(events, "request_approval");
+  const request = readApprovalRequest(approvalCall).request;
+  if (request.functionName !== expectedFunctionName) {
+    throw new Error(`expected ${expectedFunctionName} approval request, got ${request.functionName}: ${JSON.stringify(events)}`);
+  }
+  return request;
+}
+
 function runInput(runId, userText, messages = []) {
   return {
     threadId: `thread-${runId}`,
@@ -160,20 +180,22 @@ try {
   if (!readCall.args.includes("seed.txt")) {
     throw new Error(`read AG-UI tool call did not target seed.txt: ${JSON.stringify(readRun.events)}`);
   }
-  if (readRun.events.some((event) => event.type === "TOOL_CALL_START" && event.toolCallName === "request_approval")) {
-    throw new Error(`read-only AG-UI tool unexpectedly requested approval: ${JSON.stringify(readRun.events)}`);
-  }
+  assertNoApproval(readRun.events, "read-only read");
   if (!readRun.events.some((event) => event.type === "TOOL_CALL_RESULT" && String(event.content ?? "").includes("chars read"))) {
     throw new Error(`read-only AG-UI tool did not return a read observation: ${JSON.stringify(readRun.events)}`);
+  }
+
+  const officeCapabilitiesRun = await postAgUi(runInput("agui-client-tool-office-read", "OfficeCLI の機能一覧を確認して"));
+  collectToolCall(officeCapabilitiesRun.events, "officecli");
+  assertNoApproval(officeCapabilitiesRun.events, "read-only officecli");
+  if (!officeCapabilitiesRun.events.some((event) => event.type === "TOOL_CALL_RESULT")) {
+    throw new Error(`read-only officecli did not return a tool result: ${JSON.stringify(officeCapabilitiesRun.events)}`);
   }
 
   const approvePrompt = "agui-approved.txt を作成して";
   const approvalStart = await postAgUi(runInput("agui-client-tool-approve-start", approvePrompt));
   const approvalCall = collectToolCall(approvalStart.events, "request_approval");
-  const approvalRequest = readApprovalRequest(approvalCall).request;
-  if (approvalRequest.functionName !== "write") {
-    throw new Error(`expected write approval request, got ${approvalRequest.functionName}`);
-  }
+  assertApprovalFor(approvalStart.events, "write");
   if (existsSync(outputPath)) {
     throw new Error("write executed before AG-UI approval");
   }
@@ -199,10 +221,7 @@ try {
   const rejectPrompt = "agui-rejected.txt を作成して";
   const rejectStart = await postAgUi(runInput("agui-client-tool-reject-start", rejectPrompt));
   const rejectCall = collectToolCall(rejectStart.events, "request_approval");
-  const rejectRequest = readApprovalRequest(rejectCall).request;
-  if (rejectRequest.functionName !== "write") {
-    throw new Error(`expected write rejection request, got ${rejectRequest.functionName}`);
-  }
+  assertApprovalFor(rejectStart.events, "write");
   if (existsSync(rejectedPath)) {
     throw new Error("rejected file was written before rejection");
   }
@@ -218,6 +237,18 @@ try {
   if (!rejected.events.some((event) => event.type === "RUN_FINISHED")) {
     throw new Error(`rejected run did not finish: ${JSON.stringify(rejected.events)}`);
   }
+
+  const editStart = await postAgUi(runInput("agui-client-tool-edit-start", "seed.txt の seed を changed に変えて"));
+  assertApprovalFor(editStart.events, "edit");
+  if (readFileSync(join(workspace, "seed.txt"), "utf8") !== "seed") {
+    throw new Error("edit executed before AG-UI approval");
+  }
+
+  const commandStart = await postAgUi(runInput("agui-client-tool-command-start", "git status を実行して"));
+  assertApprovalFor(commandStart.events, "run_command");
+
+  const officeMutateStart = await postAgUi(runInput("agui-client-tool-office-mutate-start", "book.xlsx の Sheet1 A1 を x にして"));
+  assertApprovalFor(officeMutateStart.events, "officecli_mutate");
 
   console.log("[agui-client-tool-smoke] ok");
 } finally {

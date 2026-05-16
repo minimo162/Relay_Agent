@@ -1616,7 +1616,7 @@
         {
           "id": "AFAGUI02",
           "title": "Refactor Relay tool registration around Agent Framework primitives",
-          "description": "Split read-only tools and mutating tools at Agent Framework registration time. Keep read-only tools as automatic Agent Framework functions and register mutating tools as AG-UI client-mediated actions so the Workbench owns explicit approval before Relay executes local file, OfficeCLI, or bounded command mutations.",
+          "description": "Split read-only tools and mutating tools at Agent Framework registration time. Keep read-only tools as automatic Agent Framework functions and register mutating tools as ApprovalRequiredAIFunction tools projected to AG-UI request_approval calls so the Workbench owns explicit approval before Relay executes local file, OfficeCLI, or bounded command mutations.",
           "files": [
             "apps/sidecar/",
             "apps/workbench/src/",
@@ -1624,13 +1624,13 @@
             "docs/IMPLEMENTATION.md",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "Relay tool catalog registered through Agent Framework with read-only automatic tools and AG-UI client-mediated mutating tools",
+          "artifact": "Relay tool catalog registered through Agent Framework with read-only automatic tools and AG-UI-projected approval-required mutating tools",
           "effort": "L",
           "priority": "critical",
           "blockedBy": [
             "AFAGUI01"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "AFAGUI03",

@@ -429,7 +429,7 @@ public sealed class RelayAgentFrameworkRunner
             if (content is ToolApprovalRequestContent requestContent &&
                 requestContent.ToolCall is FunctionCallContent call)
             {
-                var executorTool = call.Name == "officecli_mutate" ? "officecli" : call.Name;
+                var executorTool = RelayAgentFunctionSet.ToExecutorToolName(call.Name);
                 var toolCall = new RelayToolCall(call.CallId, executorTool, ArgumentsToJsonObject(call.Arguments ?? new Dictionary<string, object?>()));
                 var validation = _tools.Validate(workspace, toolCall);
                 if (!validation.Ok)
@@ -512,24 +512,51 @@ public sealed class RelayAgentFunctionSet(
     RelayToolExecutor tools,
     Func<RunEvent, ValueTask> emit)
 {
+    private static readonly RelayAgentToolRegistration[] ReadOnlyToolRegistrations =
+    [
+        Tool(nameof(RgFilesAsync), "rg_files", "List workspace files with optional rg glob filters and filename substring matching.", "rg_files"),
+        Tool(nameof(RgSearchAsync), "rg_search", "Search plaintext/code content with ripgrep fixed-string matching.", "rg_search"),
+        Tool(nameof(ReadAsync), "read", "Read an exact workspace file. Office/PDF text is extracted when supported.", "read"),
+        Tool(nameof(OfficeCliAsync), "officecli", "Inspect Office files using semantic officecli operations that do not modify files.", "officecli"),
+        Tool(nameof(WorkspaceStatusAsync), "workspace_status", "Inspect workspace file count and git status.", "workspace_status"),
+        Tool(nameof(DiffAsync), "diff", "Show git diff for the workspace or a path.", "diff"),
+        Tool(nameof(AskUserAsync), "ask_user", "Ask the user for missing information.", "ask_user"),
+    ];
+
+    private static readonly RelayAgentToolRegistration[] MutatingToolRegistrations =
+    [
+        Tool(nameof(OfficeCliMutateAsync), "officecli_mutate", "Edit Office files using semantic officecli operations. Requires user approval.", "officecli", RelayAgentToolSafety.Mutating),
+        Tool(nameof(EditAsync), "edit", "Replace one exact string in a workspace file. Requires user approval.", "edit", RelayAgentToolSafety.Mutating),
+        Tool(nameof(WriteAsync), "write", "Create or overwrite a workspace file. Requires user approval.", "write", RelayAgentToolSafety.Mutating),
+        Tool(nameof(RunCommandAsync), "run_command", "Run bounded verification commands such as tests, builds, lint, typecheck, or git status/diff. Requires user approval.", "run_command", RelayAgentToolSafety.Mutating),
+    ];
+
     private int _toolSequence;
 
     public IList<AITool> CreateTools()
     {
-        return [
-            Function(nameof(RgFilesAsync), "rg_files", "List workspace files with optional rg glob filters and filename substring matching."),
-            Function(nameof(RgSearchAsync), "rg_search", "Search plaintext/code content with ripgrep fixed-string matching."),
-            Function(nameof(ReadAsync), "read", "Read an exact workspace file. Office/PDF text is extracted when supported."),
-            Function(nameof(OfficeCliAsync), "officecli", "Inspect Office files using semantic officecli operations that do not modify files."),
-            Function(nameof(OfficeCliMutateAsync), "officecli_mutate", "Edit Office files using semantic officecli operations. Requires user approval.", requiresApproval: true),
-            Function(nameof(EditAsync), "edit", "Replace one exact string in a workspace file.", requiresApproval: true),
-            Function(nameof(WriteAsync), "write", "Create or overwrite a workspace file.", requiresApproval: true),
-            Function(nameof(WorkspaceStatusAsync), "workspace_status", "Inspect workspace file count and git status."),
-            Function(nameof(DiffAsync), "diff", "Show git diff for the workspace or a path."),
-            Function(nameof(RunCommandAsync), "run_command", "Run bounded verification commands such as tests, builds, lint, typecheck, or git status/diff.", requiresApproval: true),
-            Function(nameof(AskUserAsync), "ask_user", "Ask the user for missing information."),
-        ];
+        var tools = new List<AITool>(ReadOnlyToolRegistrations.Length + MutatingToolRegistrations.Length);
+        tools.AddRange(ReadOnlyToolRegistrations.Select(Function));
+        tools.AddRange(MutatingToolRegistrations.Select(Function));
+        return tools;
     }
+
+    private static RelayAgentToolRegistration Tool(
+        string methodName,
+        string name,
+        string description,
+        string executorTool,
+        RelayAgentToolSafety safety = RelayAgentToolSafety.ReadOnly) =>
+        new(methodName, name, description, executorTool, safety);
+
+    public static bool IsMutatingAgentTool(string name) =>
+        MutatingToolRegistrations.Any(tool => tool.Name.Equals(name, StringComparison.Ordinal));
+
+    public static string ToExecutorToolName(string agentToolName) =>
+        ReadOnlyToolRegistrations.Concat(MutatingToolRegistrations)
+            .FirstOrDefault(tool => tool.Name.Equals(agentToolName, StringComparison.Ordinal))
+            ?.ExecutorTool
+        ?? agentToolName;
 
     public Task<ToolObservation> RgFilesAsync(
         string? contains = null,
@@ -659,12 +686,14 @@ public sealed class RelayAgentFunctionSet(
     public Task<ToolObservation> AskUserAsync(string question, CancellationToken cancellationToken = default) =>
         InvokeAsync("ask_user", Args(("question", question)), cancellationToken);
 
-    private AIFunction Function(string methodName, string name, string description, bool requiresApproval = false)
+    private AIFunction Function(RelayAgentToolRegistration registration)
     {
-        var method = GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public)
-            ?? throw new InvalidOperationException($"Missing function method: {methodName}");
-        var function = AIFunctionFactory.Create(method, this, name, description, JsonOptions.Default);
-        return requiresApproval ? new ApprovalRequiredAIFunction(function) : function;
+        var method = GetType().GetMethod(registration.MethodName, BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new InvalidOperationException($"Missing function method: {registration.MethodName}");
+        var function = AIFunctionFactory.Create(method, this, registration.Name, registration.Description, JsonOptions.Default);
+        return registration.Safety is RelayAgentToolSafety.Mutating
+            ? new ApprovalRequiredAIFunction(function)
+            : function;
     }
 
     private async Task<ToolObservation> InvokeAsync(string tool, JsonObject args, CancellationToken cancellationToken)
@@ -709,6 +738,19 @@ public sealed class RelayAgentFunctionSet(
         return result;
     }
 }
+
+public enum RelayAgentToolSafety
+{
+    ReadOnly,
+    Mutating,
+}
+
+public sealed record RelayAgentToolRegistration(
+    string MethodName,
+    string Name,
+    string Description,
+    string ExecutorTool,
+    RelayAgentToolSafety Safety);
 
 public sealed record AgUiApprovalRequest(
     string ApprovalId,
