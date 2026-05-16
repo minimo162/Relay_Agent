@@ -102,6 +102,179 @@ Root prevention guarantees:
     search, file read, Office edit, and code edit paths. Guard-hit tests remain
     separate regression fixtures.
 
+## Copilot Choice-Error Reduction Design
+
+Research checked on 2026-05-17:
+
+- Microsoft Agent Framework tool guidance says the framework handles the
+  tool-calling loop, while tool names/descriptions and registering only the
+  needed tools materially affect whether the model selects the right tool.
+  Function tools are the right fit for Relay-owned local business logic that
+  needs type safety, local resource access, and testability.
+- Agent Framework middleware is the official interception point for agent-run,
+  function-call, and chat-call validation. Middleware can terminate early for
+  validation/security failures, which is the right place to prevent invalid
+  local-work turns before Copilot is called.
+- Agent Framework + AG-UI HITL guidance uses
+  `ApprovalRequiredAIFunction`, approval middleware, and AG-UI client tool
+  calls to keep approvals in the framework run instead of custom Relay state.
+- AG-UI capabilities allow dynamic discovery of supported tools, state,
+  execution limits, and HITL features. AG-UI events include tool-call,
+  state-snapshot, state-delta, text, and run-error events that can drive the
+  Workbench without a Relay custom run protocol.
+- Pydantic AI's AG-UI example is useful prior art because it mixes backend
+  agent tools and AG-UI client tools, and demonstrates tools returning AG-UI
+  events as part of the stream.
+- Magentic-UI is useful product prior art for keeping agents transparent and
+  controllable instead of fully autonomous, especially for action-oriented
+  local work.
+
+Reference URLs:
+
+- `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/function-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/middleware/`
+- `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/`
+- `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop`
+- `https://docs.ag-ui.com/concepts/capabilities`
+- `https://docs.ag-ui.com/sdk/js/core/events`
+- `https://pydantic.dev/docs/ai/examples/ag-ui/`
+- `https://www.microsoft.com/en-us/research/blog/magentic-ui-an-experimental-human-centered-web-agent/`
+
+Design principle:
+
+Relay should not merely catch wrong Copilot choices after the fact. Before each
+Copilot provider call, Relay should derive a small **Admissible Action Envelope
+(AAE)** from Agent Framework session state, registered tools, AG-UI
+capabilities, workspace readiness, and terminal criteria. The AAE is not a new
+runtime or a second tool catalog; it is a projection of Agent Framework and
+AG-UI state used to narrow Copilot's prompt/tool surface for exactly one step.
+
+The AAE should contain:
+
+- `phase`: `needs_observation`, `needs_exact_read`, `needs_approval`,
+  `needs_mutation`, `can_finalize`, `needs_user_input`, or `failed`.
+- `allowedActions`: exact tool names, AG-UI client/HITL actions, or `final`.
+- `forbiddenActions`: invalid actions for this phase with a short reason.
+- `visibleTools`: Agent Framework function tools exposed to Copilot for this
+  step.
+- `hiddenTools`: registered tools deliberately hidden for this step.
+- `terminalCriteria`: the concrete conditions required before `final`.
+- `stateId`: stable hash for prompt dumps, AG-UI state, and test assertions.
+
+Policy:
+
+- The Copilot prompt must show only AAE `visibleTools`, never the whole static
+  catalog.
+- `final` is not a normal option until AAE phase is `can_finalize`.
+- `ask_user` is only visible when AAE phase is `needs_user_input`.
+- Mutating tools are visible only after enough read/inspection context exists
+  to make an approval meaningful; actual execution still uses Agent Framework
+  approval primitives.
+- `bash` is hidden by default and appears only for explicit verification,
+  build, test, git inspection, or user-requested command tasks.
+- If AAE cannot produce a safe next action, fail the Agent Framework run with
+  AG-UI `RUN_ERROR` before the Copilot provider call.
+- Guard repair remains a last-line defect detector. Normal E2E fixtures must
+  fail if guard repair was needed.
+
+### Executable Task Queue: Copilot Choice-Error Reduction
+
+1. **CER01: Add an AAE builder derived from framework state.**
+   - Status: complete.
+   - Scope:
+     - Build AAE from Agent Framework run/session metadata, workspace
+       readiness, registered tool descriptors, completed tool results,
+       pending approvals, and terminal eligibility.
+     - Keep the data structure internal to the Copilot adapter/middleware; do
+       not expose it as a new public Relay run protocol.
+   - Acceptance: local search, exact read, Office inspect/edit, code edit, and
+     file creation each produce deterministic AAE phases and allowed actions.
+   - Verification: AAE unit/smoke snapshots; `pnpm check`.
+
+2. **CER02: Filter Copilot tool projection from AAE visible tools.**
+   - Status: complete.
+   - Scope:
+     - Replace static prompt tool listing with AAE-filtered tool listing.
+     - Add prompt dump assertions for hidden `ask_user`, hidden `bash`, and
+       absent `final` before terminal eligibility.
+     - Keep all descriptions sourced from Agent Framework function
+       registrations.
+   - Acceptance: known-objective search prompts expose only search/read/status
+     tools; file creation/edit prompts expose mutation tools only when terminal
+     policy and approval policy allow them.
+   - Verification: prompt-dump fixture tests; `framework-native-prevention`
+     smoke; `pnpm check`.
+
+3. **CER03: Move invalid-action prevention into middleware admission.**
+   - Status: complete.
+   - Scope:
+     - Agent-run/chat middleware must compute AAE before Copilot calls.
+     - If no legal action exists, terminate with AG-UI `RUN_ERROR` instead of
+       asking Copilot to explain the failure.
+     - Function-call middleware must verify that each tool call is still
+       allowed by the current AAE.
+   - Acceptance: missing local tool families, missing workspace, and
+     non-terminal final states fail before Copilot-authored final text.
+   - Verification: admission smokes for search, read, Office, code, mutation,
+     and missing-tool cases; `pnpm check`.
+
+4. **CER04: Publish AAE-derived diagnostics without adding a second run protocol.**
+   - Status: complete.
+   - Scope:
+     - Keep Workbench execution on the official AG-UI endpoint and event
+       stream instead of introducing a Relay-specific run wire protocol.
+     - Publish AAE snapshots through prompt dumps and support diagnostics so
+       tool-choice failures can be correlated with AG-UI run events.
+     - Keep raw AAE details behind diagnostics; the user-facing Workbench
+       remains driven by AG-UI run/tool/approval/error events.
+   - Acceptance: AG-UI run replay still drives the Workbench, while support
+     diagnostics can show the AAE phase, visible tools, hidden tools, and
+     terminal criteria for each Copilot step.
+   - Verification: prompt-dump AAE fixture; support-bundle metrics;
+     AG-UI client-tool smoke; browser E2E; `pnpm check`.
+
+5. **CER05: Tighten tool descriptions and schema minimalism.**
+   - Status: complete.
+   - Scope:
+     - Audit every model-visible tool name, description, and parameter schema
+       against Agent Framework guidance: concrete purpose, concrete return,
+       no vague overlap, no unnecessary parameters for the current phase.
+     - Split or hide overloaded operations when they cause poor selection.
+     - Keep OfficeCLI breadth behind semantic operations and registry entries,
+       not raw argv.
+   - Acceptance: tool descriptions explain when to use the tool, when not to
+     use it, required parameters, and returned evidence.
+   - Verification: catalog snapshot review; golden tool-selection fixtures;
+     `pnpm check`.
+
+6. **CER06: Add zero-repair normal-path regression gates.**
+   - Status: complete.
+   - Scope:
+     - Count AAE hidden-tool violations, guard repairs, invalid final
+       attempts, and invalid `ask_user` attempts separately.
+     - Normal fixtures must assert zero repairs for search, exact read,
+       Office inspect/mutation approval, code edit, file creation, and
+       verification command tasks.
+     - Explicit adversarial fixtures continue to assert visible rejection.
+   - Acceptance: Copilot can still be wrong in adversarial fixtures, but normal
+     user-like fixtures fail the build if the adapter had to rescue the run.
+   - Verification: prevention-clean suite; support-bundle counters; `pnpm
+     check`.
+
+7. **CER07: Run live Copilot choice-quality canaries.**
+   - Status: complete.
+   - Scope:
+     - Live signed-in Copilot E2E for local search, exact read, Office
+       inspect, Office mutation approval, file creation, code edit, and
+       verification.
+     - Save prompt dumps, AAE snapshots, AG-UI event logs, and final answers.
+   - Acceptance: live canaries complete with no hidden-tool violations, no
+     guard repair, no premature final, and no unnecessary `ask_user`.
+   - Verification: `pnpm workbench:live-copilot-e2e` plus task-specific live
+     canary logs when Edge CDP is available.
+
 ## Immediate Task Queue: Relay Protocol State Machine
 
 The live Copilot E2E runs exposed a root reliability issue: M365 Copilot can

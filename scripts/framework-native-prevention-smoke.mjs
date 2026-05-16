@@ -75,8 +75,15 @@ function assertKnownLocalPromptsHideAskUser() {
     if (!text.includes("RELAY_TURN_STATE") || !text.includes("RELAY_TOOL_JSON_ONLY")) {
       continue;
     }
+    if (!text.includes("RELAY_ADMISSIBLE_ACTION_ENVELOPE")) {
+      throw new Error(`known-objective prompt did not include AAE: ${file}`);
+    }
     if (/^- ask_user\(/m.test(text)) {
       throw new Error(`ask_user was visible in known-objective prompt dump ${file}`);
+    }
+    if ((text.includes('"phase":"NeedsObservation"') || text.includes('"phase":"NeedsMutation"')) &&
+      text.includes('For final answer: {"action":"final"')) {
+      throw new Error(`pre-terminal prompt exposed final template: ${file}`);
     }
   }
 }

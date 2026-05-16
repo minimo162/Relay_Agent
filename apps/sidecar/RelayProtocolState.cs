@@ -125,15 +125,22 @@ public static class RelayTurnStateFactory
         var hasOfficePath = Regex.IsMatch(exactFilePath ?? "", @"\.(xlsx|xlsm|xls|docx|pptx)$", RegexOptions.IgnoreCase);
         var officeMention = Regex.IsMatch(
             text,
-            @"office|excel|word|powerpoint|ppt|xlsx|xlsm|docx|pptx|セル|シート|ワークブック|スライド|文書|表計算|officecli",
+            @"office|excel|word|powerpoint|ppt|xlsx|xlsm|docx|pptx|cell|sheet\d*|[A-Z]{1,3}[0-9]{1,7}|セル|シート|ワークブック|スライド|文書|表計算|officecli",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var mutationMention = Regex.IsMatch(
             text,
-            @"編集|修正|変更|更新|作成|作って|書いて|保存|出力|生成|赤く|色|塗|追加|削除|rename|edit|update|modify|create|write|save|generate|delete|remove|set",
+            @"編集|修正|変更|更新|作成|作って|書いて|保存|出力|生成|赤く|青く|色|塗|追加|削除|置換|差し替|入力|設定|反映|変え|にして|へして|rename|edit|update|modify|create|write|save|generate|delete|remove|replace|set|color",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (officeMention || hasOfficePath)
         {
             return mutationMention ? RelayLocalIntent.OfficeMutate : RelayLocalIntent.OfficeInspect;
+        }
+
+        if (mutationMention && !string.IsNullOrWhiteSpace(exactFilePath))
+        {
+            return LooksLikeCodeOrProjectRequest(text, exactFilePath)
+                ? RelayLocalIntent.CodeWork
+                : RelayLocalIntent.FileMutation;
         }
 
         if (!string.IsNullOrWhiteSpace(pendingOutputFile))

@@ -81,6 +81,9 @@ app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
 app.MapGet("/api/tool-catalog", () =>
     Results.Json(RelayToolCatalogSnapshot.FromCurrentCatalog(), JsonOptions.Default));
 
+app.MapGet("/api/prevention-metrics", () =>
+    Results.Json(RelayPreventionMetrics.Snapshot().ToJson(), JsonOptions.Default));
+
 app.MapPost("/api/workspace", (WorkspaceRequest request) =>
 {
     if (string.IsNullOrWhiteSpace(request.Path))
@@ -354,6 +357,10 @@ public static class SupportBundle
             archive,
             "audit/tool-call-summary.json",
             await ToolCallAuditSummary.CreateJsonAsync(dataDirectory, cancellationToken));
+        AddText(
+            archive,
+            "audit/prevention-metrics.json",
+            RelayPreventionMetrics.Snapshot().ToJson().ToJsonString(JsonOptions.Default));
 
         foreach (var directoryName in new[] { "runs", "run-events" })
         {

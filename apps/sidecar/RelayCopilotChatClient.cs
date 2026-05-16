@@ -90,12 +90,15 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
 
         RelayTurnState? protocolState = null;
+        RelayAdmissibleActionEnvelope? envelope = null;
         CaptureOriginalUserRequest(messageList, options);
         if (hasTools)
         {
             CapturePendingOutputFile(messageList, options);
             protocolState = BuildProtocolState(messageList, options);
-            parts.Add(RelayPromptBuilder.BuildStatePrompt(protocolState));
+            envelope = BuildEnvelope(protocolState, options);
+            DumpEnvelopeIfRequested(envelope);
+            parts.Add(RelayPromptBuilder.BuildStatePrompt(protocolState, envelope));
         }
 
         foreach (var message in messageList)
@@ -109,7 +112,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (hasTools)
         {
-            parts.Add(BuildToolProjectionPrompt(options, protocolState));
+            parts.Add(BuildToolProjectionPrompt(options, envelope));
         }
 
         return string.Join("\n\n", parts);
@@ -131,6 +134,14 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         DumpText(dumpDir, "response", response);
     }
 
+    private static void DumpEnvelopeIfRequested(RelayAdmissibleActionEnvelope envelope)
+    {
+        var dumpDir = Environment.GetEnvironmentVariable("RELAY_COPILOT_PROMPT_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dumpDir)) return;
+
+        DumpText(dumpDir, "aae", envelope.ToDiagnosticJson().ToJsonString(JsonOptions.Compact));
+    }
+
     private static void DumpText(string dumpDir, string kind, string text)
     {
         Directory.CreateDirectory(dumpDir);
@@ -146,8 +157,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             return TextResponse(responseText, options);
         }
 
-        var availableTools = GetAvailableToolNames(options);
         var state = BuildProtocolState(messages, options);
+        var availableTools = GetAvailableToolNames(options);
+        var envelope = BuildEnvelope(state, options);
         RelayAgentPlan plan;
         try
         {
@@ -160,7 +172,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (plan.Action == "final")
         {
-            var finalDecision = RelayProtocolGuard.ValidateFinal(state, availableTools);
+            var finalDecision = RelayProtocolGuard.ValidateFinal(state, availableTools, envelope);
             if (TryApplyProtocolDecision(finalDecision, options, out var finalResponse))
             {
                 return finalResponse;
@@ -176,7 +188,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         var planArgs = plan.Args ?? new JsonObject();
         var toolName = NormalizeRequestedTool(plan.Tool, planArgs);
         ValidateProjectedToolCall(toolName, planArgs);
-        var toolDecision = RelayProtocolGuard.ValidateTool(toolName, planArgs, state, availableTools);
+        var toolDecision = RelayProtocolGuard.ValidateTool(toolName, planArgs, state, availableTools, envelope);
         if (TryApplyProtocolDecision(toolDecision, options, out var toolResponse))
         {
             return toolResponse;
@@ -196,9 +208,11 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             case RelayProtocolDecisionKind.Allow:
                 return false;
             case RelayProtocolDecisionKind.ReplaceWithTool when decision.ToolDirective is not null:
+                RelayPreventionMetrics.RecordGuardRepair(decision.Error ?? decision.ToolDirective.Reason);
                 response = ToolCallResponse(decision.ToolDirective.Tool, decision.ToolDirective.Args, options);
                 return true;
             case RelayProtocolDecisionKind.Reject:
+                RelayPreventionMetrics.RecordProtocolRejection(decision.Error ?? "Copilot response violated Relay protocol state.");
                 throw new InvalidOperationException(decision.Error ?? "Copilot response violated Relay protocol state.");
             default:
                 throw new InvalidOperationException("Invalid Relay protocol decision.");
@@ -280,7 +294,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             }
             : new { callId = toolCall.CallId, type = toolCall.GetType().Name };
 
-    private static string BuildToolProjectionPrompt(ChatOptions? options, RelayTurnState? state)
+    private static string BuildToolProjectionPrompt(ChatOptions? options, RelayAdmissibleActionEnvelope? envelope)
     {
         var parts = new List<string>
         {
@@ -290,7 +304,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "Relay tools are available through this JSON compiler even if the Copilot web chat has no built-in local tools. Never answer that local tools are unavailable.",
             "Follow RELAY_TURN_STATE. If it says final is invalid, return action=tool.",
             """For a tool call: {"action":"tool","tool":"<tool name>","args":{...}}""",
-            """For final answer: {"action":"final","answer":"<concise answer>"}""",
+            envelope?.CanFinalize == true
+                ? """For final answer: {"action":"final","answer":"<concise answer>"}"""
+                : "Do not return action=final in this step; final is not in RELAY_ADMISSIBLE_ACTION_ENVELOPE.allowedActions.",
             "If the user asks to create or overwrite a file, call write with file_path and complete content.",
             "Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.",
             "For local document/data review, use glob/read/grep first and reason from those results. Do not use bash for ordinary file reading or light CSV arithmetic.",
@@ -305,7 +321,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "Tools:",
         };
 
-        foreach (var tool in GetPromptToolDeclarations(options, state))
+        foreach (var tool in GetPromptToolDeclarations(options, envelope))
         {
             parts.Add($"- {tool.Name}({SummarizeToolArguments(tool.JsonSchema)}): {CompactToolDescription(tool.Description)}");
         }
@@ -560,16 +576,16 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
     private static IEnumerable<AIFunctionDeclaration> GetToolDeclarations(ChatOptions? options) =>
         options?.Tools?.OfType<AIFunctionDeclaration>() ?? [];
 
-    private static IEnumerable<AIFunctionDeclaration> GetPromptToolDeclarations(ChatOptions? options, RelayTurnState? state) =>
-        GetToolDeclarations(options).Where(tool => IsPromptVisible(tool.Name, state));
-
-    private static bool IsPromptVisible(string toolName, RelayTurnState? state) =>
-        toolName != "ask_user" || state?.CanAskUser == true;
+    private static IEnumerable<AIFunctionDeclaration> GetPromptToolDeclarations(ChatOptions? options, RelayAdmissibleActionEnvelope? envelope) =>
+        GetToolDeclarations(options).Where(tool => envelope?.AllowsTool(tool.Name) ?? true);
 
     private static ISet<string> GetAvailableToolNames(ChatOptions? options) =>
         GetToolDeclarations(options)
             .Select(tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
+
+    private static RelayAdmissibleActionEnvelope BuildEnvelope(RelayTurnState state, ChatOptions? options) =>
+        RelayAdmissibleActionEnvelopeBuilder.Create(state, GetAvailableToolNames(options));
 
     private static string? GetAdditionalPropertyString(ChatOptions? options, string key) =>
         options?.AdditionalProperties is not null && options.AdditionalProperties.TryGetValue(key, out var value)

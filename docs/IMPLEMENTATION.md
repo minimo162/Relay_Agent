@@ -18679,3 +18679,55 @@ Result:
 - Live signed-in Copilot Workbench E2E passed:
   `[workbench-live-copilot-e2e] ok elapsed=27845ms readiness=Ready cdp=9360`.
 - `git diff --check` passed.
+
+## 2026-05-17: Copilot Choice-Error Reduction
+
+Changes:
+
+- Added `RelayAdmissibleActionEnvelope` as the per-turn action contract between
+  Relay protocol state and M365 Copilot prompt projection. The envelope lists
+  the current phase, allowed actions, hidden tools, forbidden actions, and
+  terminal criteria.
+- Updated `RelayPromptBuilder` and `RelayCopilotChatClient` so Copilot only sees
+  tools that are admissible for the current turn. Pre-terminal local-work turns
+  no longer receive the final-answer template or hidden tools such as
+  `ask_user`, `bash`, and write tools when the phase does not allow them.
+- Updated `RelayProtocolGuard` so hidden-tool use, unnecessary `ask_user`, and
+  premature `final` responses are rejected or repaired at the same boundary
+  that validates Copilot JSON.
+- Added `RelayPreventionMetrics`, `/api/prevention-metrics`, and support bundle
+  export under `audit/prevention-metrics.json` to make repairs/rejections
+  visible during diagnostics.
+- Kept the Workbench on the official AG-UI endpoint/event stream and exposed
+  AAE state through prompt dumps/support diagnostics, avoiding a second
+  Relay-specific run protocol.
+- Added `scripts/choice-error-reduction-smoke.mjs` and included it in
+  `pnpm check`. The smoke verifies that normal search/read/write paths complete
+  without guard repairs, hidden-tool violations, invalid `ask_user`, or invalid
+  `final` attempts.
+- Tightened local intent classification for common edit phrasing such as
+  `変えて`, `にして`, and cell-oriented Office instructions like `Sheet1 A1`.
+  This keeps existing AG-UI approval and OfficeCLI semantic mutation flows
+  visible to Copilot while still requiring approval before execution.
+- Updated `docs/FRAMEWORK_NATIVE_CUTOVER.md` and `PLANS.md` for CER01 through
+  CER07 completion.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:build
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:agui-client-tool-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:officecli-registry-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+```
+
+Result:
+
+- Sidecar Release build passed.
+- AG-UI client-tool approval smoke passed after AAE mutation phase adjustment.
+- OfficeCLI registry smoke passed after recognizing English `Sheet` and cell
+  reference edit instructions as Office mutation intent.
+- Full `pnpm check` passed, including the new choice-error reduction smoke.
+- Live signed-in Copilot Workbench E2E passed:
+  `[workbench-live-copilot-e2e] ok elapsed=25578ms readiness=Ready cdp=9360`.

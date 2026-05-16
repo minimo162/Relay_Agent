@@ -2,17 +2,22 @@ using System.Text.Json;
 
 public static class RelayPromptBuilder
 {
-    public static string BuildStatePrompt(RelayTurnState state)
+    public static string BuildStatePrompt(RelayTurnState state, RelayAdmissibleActionEnvelope envelope)
     {
         var lines = new List<string>
         {
             "RELAY_TURN_STATE",
             state.ToDiagnosticJson().ToJsonString(JsonOptions.Compact),
             "",
+            "RELAY_ADMISSIBLE_ACTION_ENVELOPE",
+            envelope.ToDiagnosticJson().ToJsonString(JsonOptions.Compact),
+            "",
             "Protocol rules for this turn:",
             "- Copilot may reason and choose among Relay tools, but Relay owns local execution state.",
             "- If requiresLocalToolBeforeFinal is true, action=final is invalid until a local tool result exists.",
             "- If requiresMutationBeforeFinal is true, action=final is invalid until a successful mutation tool result exists.",
+            "- Choose only actions listed in RELAY_ADMISSIBLE_ACTION_ENVELOPE.allowedActions.",
+            "- Tools not listed in RELAY_ADMISSIBLE_ACTION_ENVELOPE.visibleTools are invalid for this turn.",
             "- If the objective and workspace are known, ask_user is invalid unless a critical missing requirement blocks all safe local action.",
             "- If a protocol rule blocks your intended final answer, return action=tool instead.",
         };

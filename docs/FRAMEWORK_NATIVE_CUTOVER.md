@@ -20,6 +20,7 @@ function bodies, safety policy, packaging, diagnostics, and UI presentation.
 | Office tools | `officecli`, `officecli_mutate` | keep | Read-only operations are separate from approved mutations | `scripts/officecli-registry-smoke.mjs` |
 | Mutations | `edit`, `write`, `apply_patch`, `officecli_mutate`, bounded `bash` | keep through Agent Framework approval | Mutations must produce `ToolApprovalRequestContent` and AG-UI approval requests | `scripts/agui-client-tool-smoke.mjs` |
 | User questions | `ask_user` catalog metadata as AG-UI client/state-scoped | replace backend-global behavior | Hidden from known-objective prompts; guarded if Copilot still asks unnecessarily | `scripts/framework-native-prevention-smoke.mjs` |
+| Admissible action envelope | `RelayAdmissibleActionEnvelope` projected from `RelayTurnState` and Agent Framework tools | adapter policy | Only state-valid tools/final/client actions are visible to Copilot for one step | `scripts/choice-error-reduction-smoke.mjs` |
 | Terminal policy | `RelayTurnState`, `RelayProtocolGuard`, `RelayInitialToolPolicy` | adapter policy | Reject or repair invalid Copilot JSON before user-visible completion | `scripts/protocol-state-smoke.mjs` and `scripts/framework-native-prevention-smoke.mjs` |
 | Workbench stream | `@ag-ui/client` consuming `/agui/relay` | keep | UI state derives from AG-UI events, with Relay `RunEvent` only as view-model mapping | `scripts/check-hard-cut-guard.mjs` |
 | Legacy run routes | `/api/runs`, `/events`, `/agui-events` custom routes | remove | Must not exist in active sidecar/workbench paths | `scripts/check-hard-cut-guard.mjs` |
@@ -30,8 +31,8 @@ function bodies, safety policy, packaging, diagnostics, and UI presentation.
 | Failure class | Root cause | Structural block | Regression signal |
 | --- | --- | --- | --- |
 | `local tools unavailable` final | Copilot treats the web chat as lacking local tools | Tool projection explicitly describes Relay tools; `RelayProtocolGuard.ValidateFinal` replaces premature final with deterministic first local tool when possible | `protocol-state-smoke`, `framework-native-prevention-smoke` |
-| Unnecessary `ask_user` | Clarification tool is globally visible for known objective/scope | Prompt projection hides `ask_user` unless `RelayTurnState.CanAskUser`; guard rejects or replaces any stray call | `framework-native-prevention-smoke` |
-| Premature `final` | Copilot finalizes before local observation/mutation/approval | Terminal guard rejects final before required local tool or mutation success | `protocol-state-smoke`, `framework-native-prevention-smoke` |
+| Unnecessary `ask_user` | Clarification tool is globally visible for known objective/scope | AAE hides `ask_user` unless the phase is `NeedsUserInput`; guard rejects or replaces any stray call | `framework-native-prevention-smoke`, `choice-error-reduction-smoke` |
+| Premature `final` | Copilot finalizes before local observation/mutation/approval | AAE removes the final template until phase is `CanFinalize`; terminal guard rejects final before required local tool or mutation success | `protocol-state-smoke`, `framework-native-prevention-smoke`, `choice-error-reduction-smoke` |
 | Unsupported tool drift | Copilot emits a stale Relay/OpenCode/Codex alias | Catalog snapshot forbids legacy aliases and provider drift | `agent-tool-catalog-smoke` |
 | Mutation without approval | Model requests write/edit/Office mutation as a normal function result | Mutating tools are `ApprovalRequiredAIFunction` and projected through AG-UI approval bridge | `agui-client-tool-smoke` |
 
@@ -51,6 +52,7 @@ function bodies, safety policy, packaging, diagnostics, and UI presentation.
 | FNP09 prevention-clean tests | `framework-native-prevention-smoke` plus existing protocol/catalog/approval smokes | complete |
 | FNP10 live Copilot E2E | `workbench:live-copilot-e2e` remains the manual/live gate; not run in headless CI | documented manual gate |
 | FNP11 superseded paths | Hard-cut guard quarantines old routes, tool aliases, and active source references | complete |
+| CER01-CER07 choice-error reduction | AAE builder, AAE-filtered prompt projection, prevention metrics, zero-repair smoke, and live E2E gate | complete |
 
 ## Residual Relay-Owned Code
 
@@ -59,6 +61,7 @@ do not provide Relay-specific policy:
 
 - M365 Copilot Edge CDP transport and send/readiness diagnostics.
 - Strict JSON projection and validation for Copilot responses.
+- Admissible Action Envelope projection for the current Copilot step.
 - Workspace containment, path normalization, output caps, and redaction.
 - Ripgrep and OfficeCLI executable resolution.
 - Office/PDF plaintext extraction through exact `read`.
