@@ -439,17 +439,17 @@ Framework-first revision after current Microsoft documentation review:
      `ChatOptions.Tools` and converts valid tool choices to
      `FunctionCallContent`; `FunctionInvokingChatClient` owns the normal
      observation loop; mutating functions are wrapped with
-     `ApprovalRequiredAIFunction`. The Workbench still uses the existing
-     `PendingApproval` API as a bridge when Framework approval content is
-     surfaced.
+     `ApprovalRequiredAIFunction`; approval-required runs now serialize the
+     Agent Framework session into the run ledger and resume by feeding
+     `ToolApprovalResponseContent` back into the same `ChatClientAgent`
+     session. The Workbench still uses the existing `PendingApproval` display
+     shape only as a UI compatibility envelope.
    - Revised remaining slices:
-     1. Move approval pause/resume to Agent Framework approval request/response
-        content and AG-UI human-in-the-loop middleware. Relay still decides
-        whether an operation is safe, but the approval protocol is Framework
-        owned.
-     2. Serialize Agent Framework session state into the existing run ledger
-        instead of maintaining separate Relay-only conversation state.
-     3. Keep Relay tool functions small and deterministic. They validate
+     1. Replace the Workbench `PendingApproval` compatibility envelope with
+        AG-UI human-in-the-loop events and state snapshots. Relay still
+        decides whether an operation is safe, but the approval protocol is
+        Framework owned.
+     2. Keep Relay tool functions small and deterministic. They validate
         workspace scope, execute one local action, return structured
         observations, and never call Copilot themselves.
 

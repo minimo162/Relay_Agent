@@ -100,7 +100,7 @@ app.MapPost("/api/runs", async (RunRequest request, CancellationToken cancellati
 app.MapGet("/api/runs/{runId}", async (string runId, CancellationToken cancellationToken) =>
 {
     var run = await runManager.GetAsync(runId, cancellationToken);
-    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(run);
+    return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
 });
 
 app.MapGet("/api/runs/{runId}/events", async (HttpContext context, string runId, CancellationToken cancellationToken) =>
@@ -484,7 +484,8 @@ public sealed record RunRecord(
     DateTimeOffset? CompletedAt,
     RunRequest Request,
     IReadOnlyList<RunEvent> Events,
-    PendingApproval? PendingApproval = null)
+    PendingApproval? PendingApproval = null,
+    JsonElement? AgentSessionState = null)
 {
     public static RunRecord Start(RunRequest request) =>
         new($"run-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{RandomNumberGenerator.GetHexString(6).ToLowerInvariant()}",

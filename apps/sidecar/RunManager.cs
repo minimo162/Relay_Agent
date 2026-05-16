@@ -59,6 +59,7 @@ public sealed class RunManager(
         {
             Status = "running",
             PendingApproval = run.PendingApproval,
+            AgentSessionState = run.AgentSessionState,
             CompletedAt = null,
         });
         if (!_activeRuns.TryAdd(run.RunId, state))
@@ -85,7 +86,7 @@ public sealed class RunManager(
 
         var state = new ActiveRun(run);
         await AppendEventAsync(state, RunEvent.Status("実行しませんでした", "承認が取り消されました。"), cancellationToken);
-        await CompleteAsync(state, "cancelled", null, CancellationToken.None, removeActive: false);
+        await CompleteAsync(state, "cancelled", null, null, CancellationToken.None, removeActive: false);
         return state.Snapshot();
     }
 
@@ -119,14 +120,14 @@ public sealed class RunManager(
             if (string.IsNullOrWhiteSpace(request.Instruction))
             {
                 await AppendEventAsync(state, RunEvent.Error("指示が空です", "自然言語のタスクを入力してください。"), CancellationToken.None);
-                await CompleteAsync(state, "failed", null, CancellationToken.None);
+                await CompleteAsync(state, "failed", null, null, CancellationToken.None);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(request.Workspace) || !Directory.Exists(request.Workspace))
             {
                 await AppendEventAsync(state, RunEvent.Error("Workspace を確認できません", "存在するローカルフォルダを指定してください。"), CancellationToken.None);
-                await CompleteAsync(state, "failed", null, CancellationToken.None);
+                await CompleteAsync(state, "failed", null, null, CancellationToken.None);
                 return;
             }
 
@@ -147,7 +148,7 @@ public sealed class RunManager(
                 await AppendEventAsync(state, RunEvent.Error(
                     "必須ツールが未準備です",
                     string.Join("\n", requiredFailures.Select(check => $"{check.Name}: {check.Detail}"))), CancellationToken.None);
-                await CompleteAsync(state, "failed", null, CancellationToken.None);
+                await CompleteAsync(state, "failed", null, null, CancellationToken.None);
                 return;
             }
 
@@ -160,17 +161,17 @@ public sealed class RunManager(
                 state.Snapshot().RunId,
                 async (runEvent, token) => await AppendEventAsync(state, runEvent, token),
                 state.CancellationToken);
-            await CompleteAsync(state, result.Status, result.PendingApproval, CancellationToken.None);
+            await CompleteAsync(state, result.Status, result.PendingApproval, result.AgentSessionState, CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
             await AppendEventAsync(state, RunEvent.Status("停止しました", "ユーザー操作により実行を停止しました。"), CancellationToken.None);
-            await CompleteAsync(state, "cancelled", null, CancellationToken.None);
+            await CompleteAsync(state, "cancelled", null, null, CancellationToken.None);
         }
         catch (Exception ex)
         {
             await AppendEventAsync(state, RunEvent.Error("Copilot transport failed", ex.Message), CancellationToken.None);
-            await CompleteAsync(state, "failed", null, CancellationToken.None);
+            await CompleteAsync(state, "failed", null, null, CancellationToken.None);
         }
     }
 
@@ -182,17 +183,17 @@ public sealed class RunManager(
                 state.Snapshot(),
                 async (runEvent, token) => await AppendEventAsync(state, runEvent, token),
                 state.CancellationToken);
-            await CompleteAsync(state, result.Status, result.PendingApproval, CancellationToken.None);
+            await CompleteAsync(state, result.Status, result.PendingApproval, result.AgentSessionState, CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
             await AppendEventAsync(state, RunEvent.Status("停止しました", "ユーザー操作により実行を停止しました。"), CancellationToken.None);
-            await CompleteAsync(state, "cancelled", null, CancellationToken.None);
+            await CompleteAsync(state, "cancelled", null, null, CancellationToken.None);
         }
         catch (Exception ex)
         {
             await AppendEventAsync(state, RunEvent.Error("承認後の実行に失敗しました", ex.Message), CancellationToken.None);
-            await CompleteAsync(state, "failed", null, CancellationToken.None);
+            await CompleteAsync(state, "failed", null, null, CancellationToken.None);
         }
     }
 
@@ -227,6 +228,7 @@ public sealed class RunManager(
         ActiveRun state,
         string status,
         PendingApproval? pendingApproval,
+        System.Text.Json.JsonElement? agentSessionState,
         CancellationToken cancellationToken,
         bool removeActive = true)
     {
@@ -238,6 +240,7 @@ public sealed class RunManager(
                 Status = status,
                 CompletedAt = status is "completed" or "failed" or "cancelled" ? DateTimeOffset.UtcNow : null,
                 PendingApproval = pendingApproval,
+                AgentSessionState = status is "approval_required" ? agentSessionState : null,
             };
             run = state.Run;
         }

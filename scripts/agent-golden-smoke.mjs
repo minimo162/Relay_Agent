@@ -12,11 +12,11 @@ const responses = [
   `${JSON.stringify({ action: "tool", tool: "rg_files", args: { contains: "seed", limit: 5 } })}\n\nSure.`,
   `${JSON.stringify({ action: "final", answer: "検索は rg_files を使いました。" })}\n\nDone.`,
   JSON.stringify({ action: "tool", tool: "write", args: { path: "approval.txt", content: "approved write" } }),
-  "承認済みの書き込みを実行しました。",
+  JSON.stringify({ action: "final", answer: "承認済みの書き込みを実行しました。" }),
   JSON.stringify({ action: "tool", tool: "workspace_status", args: { limit: 100 } }),
   JSON.stringify({ action: "tool", tool: "diff", args: {} }),
   JSON.stringify({ action: "tool", tool: "run_command", args: { argv: ["node", "--version"], timeoutMs: 30000 } }),
-  "状態確認と検証を完了しました。",
+  JSON.stringify({ action: "final", answer: "状態確認と検証を完了しました。" }),
 ];
 
 await import("node:fs/promises").then(({ writeFile }) => writeFile(join(workspace, "seed.txt"), "部品売上 seed"));
@@ -128,6 +128,9 @@ try {
   if (approvedRun.status !== "completed") throw new Error(`approved run did not complete: ${JSON.stringify(approvedRun)}`);
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved write output mismatch");
+  }
+  if (!approvedRun.events.some((event) => event.type === "status" && event.detail?.includes("ToolApprovalResponseContent"))) {
+    throw new Error(`approved run did not resume with Agent Framework approval response: ${JSON.stringify(approvedRun)}`);
   }
 
   const verificationStart = await postRun("ワークスペース状態と差分を確認し、node のバージョンで検証して");

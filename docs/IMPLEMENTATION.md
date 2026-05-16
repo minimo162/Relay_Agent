@@ -159,6 +159,43 @@ Results:
   ripgrep streaming, Office/PDF read extraction, OfficeCLI registry smoke,
   security smoke, and release inventory generation.
 
+### 2026-05-16 Agent Framework Approval Resume
+
+Completed the follow-up approval slice for the Framework-first runtime:
+
+- Approval-required runs now persist the serialized `AgentSession` in the run
+  ledger alongside the UI-visible pending approval.
+- `PendingApproval` is now a compatibility envelope that carries the
+  Framework approval request id, function name, call id, and arguments. The
+  Workbench can keep rendering the same confirmation panel while the backend
+  uses Agent Framework approval content internally.
+- Approval no longer executes the pending tool directly through
+  `RelayToolExecutor`. Relay reconstructs the original
+  `ToolApprovalRequestContent`, creates a `ToolApprovalResponseContent`, and
+  resumes the same `ChatClientAgent` session. `FunctionInvokingChatClient`
+  then invokes the approved function and continues the Copilot tool loop.
+- Added golden-smoke coverage that verifies the approved run resumes through
+  `ToolApprovalResponseContent`, writes only after approval, and still
+  completes after an approval-gated verification command.
+- Kept serialized session state out of the normal `/api/runs/{runId}`
+  Workbench response. The ledger retains it for resume; UI polling receives
+  only `RunResponse`.
+
+Verification commands:
+
+```bash
+PATH=/tmp/dotnet:$PATH pnpm sidecar:build
+PATH=/tmp/dotnet:$PATH pnpm check
+```
+
+Results:
+
+- `pnpm sidecar:build` - passed with zero warnings.
+- `pnpm check` - passed. Covered hard-cut guard, Workbench typecheck/build,
+  sidecar Release build, sidecar smoke, golden Agent Framework approval
+  resume, ripgrep streaming, Office/PDF read extraction, OfficeCLI registry
+  smoke, security smoke, and release inventory generation.
+
 ### 2026-05-16 OfficeCLI Capability Registry Implementation
 
 Implemented the OfficeCLI execution side of the revised plan:
