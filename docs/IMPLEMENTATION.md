@@ -30,6 +30,55 @@
 
 ## Milestone Log
 
+### 2026-05-16 AG-UI Stream Consumption and Copilot ChatClient Adapter
+
+Continued the remediation plan without cutting a release:
+
+- Switched the browser Workbench event stream from the custom
+  `/api/runs/{runId}/events` endpoint to the AG-UI-compatible
+  `/api/runs/{runId}/agui-events` endpoint.
+- Added an AG-UI-to-Workbench event adapter so the current UI can render AG-UI
+  lifecycle/tool/approval/error/completion events while the React +
+  `@ag-ui/client` migration remains open.
+- Extended the hard-cut guard to fail if the Workbench returns to the old
+  custom `/events` stream.
+- Added `RelayCopilotChatClient`, an `Microsoft.Extensions.AI.IChatClient`
+  adapter over the existing Edge CDP M365 Copilot transport. The
+  OpenAI-compatible compatibility endpoint now routes through this adapter,
+  establishing the concrete bridge needed for Microsoft Agent Framework runner
+  adoption.
+- Fixed the Workbench's AG-UI terminal-event handling so completed/error/
+  approval events update the visible run state immediately instead of waiting
+  for the follow-up run snapshot fetch.
+- Changed support-bundle export to an explicit `POST /api/support-bundle`
+  operation. The default bundle redacts local paths and content-like JSON
+  fields; callers must explicitly opt into sensitive bundles.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+node scripts/check-hard-cut-guard.mjs
+git diff --check
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj
+PATH=/root/.dotnet:$PATH pnpm sidecar:smoke
+PATH=/root/.dotnet:$PATH pnpm sidecar:security-smoke
+PATH=/root/.dotnet:$PATH pnpm workbench:ux-e2e
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Workbench typecheck passed.
+- Hard-cut guard passed and now enforces Workbench AG-UI stream consumption.
+- Sidecar Debug build passed with the `RelayCopilotChatClient` adapter.
+- `git diff --check` passed.
+- Sidecar smoke and security smoke passed, including the support-bundle
+  authorization check and authenticated POST export path.
+- Workbench browser E2E passed through the AG-UI stream path and produced
+  updated screenshots for empty, completed, and approval states.
+- Full `pnpm check` passed after rebuilding the Workbench assets.
+
 ### 2026-05-16 Generic Tool Runtime and AG-UI Stream Slice
 
 Implemented the first executable slice of the generic-agent remediation plan:

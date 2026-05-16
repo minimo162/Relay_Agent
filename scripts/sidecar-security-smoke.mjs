@@ -77,6 +77,18 @@ try {
   }, "POST");
   if (badOrigin !== 403) throw new Error(`expected 403 for bad origin, got ${badOrigin}`);
 
+  const noTokenSupportBundle = await request("/api/support-bundle", {
+    "Content-Type": "application/json",
+    Origin: `http://127.0.0.1:${port}`,
+  }, "POST");
+  if (noTokenSupportBundle !== 401) throw new Error(`expected 401 for support bundle without token, got ${noTokenSupportBundle}`);
+
+  const supportBundle = await request(`/api/support-bundle?token=${encodeURIComponent(token)}`, {
+    "X-Relay-Token": token,
+    Origin: `http://127.0.0.1:${port}`,
+  }, "POST");
+  if (supportBundle !== 200) throw new Error(`expected 200 for explicit support bundle export, got ${supportBundle}`);
+
   const directoryListing = await request(`/assets/?token=${encodeURIComponent(token)}`, { "X-Relay-Token": token });
   if (directoryListing === 200) throw new Error("static asset directory listing is reachable");
 

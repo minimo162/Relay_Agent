@@ -337,15 +337,18 @@ addressing these items.
 
 Implementation status on 2026-05-16:
 
-- Completed in the current slice: generic `workspace_status`, `diff`, and
+- Completed in the current slices: generic `workspace_status`, `diff`, and
   approval-gated bounded `run_command`; `rg_search` `--` hardening; Workbench
-  event identity by `runId + sequence`; AG-UI-compatible SSE event mapping; and
-  golden smoke coverage for those behaviors.
+  event identity by `runId + sequence`; AG-UI-compatible SSE event mapping;
+  Workbench consumption of `/agui-events`; hard-cut guard coverage that blocks
+  returning the Workbench to the old `/events` stream; the
+  `RelayCopilotChatClient` `IChatClient` adapter; POST-only support-bundle
+  export with default redaction; and golden smoke coverage for those behaviors.
 - Still open for the next slice: full Microsoft Agent Framework runner
   replacement, full React/Tailwind/shadcn/Radix/`@ag-ui/client` Workbench
   migration, exact Office/PDF `read` extraction, semantic OfficeCLI operation
-  registry, explicit redacted support-bundle export, and streaming ripgrep
-  stdout caps before process buffering.
+  registry, deeper support-bundle redaction fixture coverage, and streaming
+  ripgrep stdout caps before process buffering.
 
 ### P0: AG-UI Full Adoption
 

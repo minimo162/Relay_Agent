@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.IO.Compression;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -13,6 +14,7 @@ var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var ledger = new RunLedger(options.DataDirectory);
 var copilot = CopilotTransportFactory.FromEnvironment();
+var copilotChatClient = new RelayCopilotChatClient(copilot);
 var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentRunner(copilot, new RelayToolExecutor(options.DataDirectory, toolResolver));
@@ -185,9 +187,19 @@ app.MapPost("/api/runs/{runId}/cancel", async (string runId, CancellationToken c
     return run is null ? Results.NotFound(new ErrorResponse("Run not found.")) : Results.Json(RunResponse.FromRun(run));
 });
 
-app.MapGet("/api/support-bundle", async (CancellationToken cancellationToken) =>
+app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken cancellationToken) =>
 {
-    var path = await SupportBundle.CreateAsync(options.DataDirectory, cancellationToken);
+    var includeSensitive = false;
+    if ((request.ContentLength ?? 0) > 0)
+    {
+        var bundleRequest = await JsonSerializer.DeserializeAsync<SupportBundleRequest>(
+            request.Body,
+            JsonOptions.Default,
+            cancellationToken);
+        includeSensitive = bundleRequest?.IncludeSensitive ?? false;
+    }
+
+    var path = await SupportBundle.CreateAsync(options.DataDirectory, includeSensitive, cancellationToken);
     return Results.File(path, "application/zip", Path.GetFileName(path));
 });
 
@@ -213,7 +225,10 @@ app.MapPost("/v1/chat/completions", async (OpenAiChatCompletionRequest request, 
         return Results.BadRequest(new ErrorResponse("No user message was supplied."));
     }
 
-    var reply = await copilot.SendAsync(prompt, cancellationToken);
+    var reply = (await copilotChatClient.GetResponseAsync(
+        [new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt)],
+        new Microsoft.Extensions.AI.ChatOptions { ModelId = request.Model ?? "m365-copilot" },
+        cancellationToken)).Text;
     return Results.Json(OpenAiChatCompletionResponse.FromText(request.Model ?? "m365-copilot", reply));
 });
 
@@ -441,6 +456,8 @@ public sealed record ReadinessCheck(string Name, bool Ready, string Detail, bool
 
 public sealed record ErrorResponse(string Error);
 
+public sealed record SupportBundleRequest(bool IncludeSensitive = false);
+
 public sealed record RunEvent(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("message")] string Message,
@@ -490,7 +507,7 @@ public static class JsonOptions
 
 public static class SupportBundle
 {
-    public static async Task<string> CreateAsync(string dataDirectory, CancellationToken cancellationToken)
+    public static async Task<string> CreateAsync(string dataDirectory, bool includeSensitive, CancellationToken cancellationToken)
     {
         var bundleRoot = Path.Combine(dataDirectory, "support-bundles");
         Directory.CreateDirectory(bundleRoot);
@@ -501,7 +518,9 @@ public static class SupportBundle
         AddText(archive, "README.txt", string.Join("\n", [
             "Relay Agent support bundle",
             "This bundle contains run metadata, bounded observations, and event logs.",
-            "It does not include workspace documents by default.",
+            includeSensitive
+                ? "Sensitive fields were included because the caller explicitly requested them."
+                : "Local paths and content-like fields are redacted by default.",
             $"Created: {DateTimeOffset.UtcNow:O}",
             "",
         ]));
@@ -514,12 +533,34 @@ public static class SupportBundle
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var relative = Path.GetRelativePath(dataDirectory, file).Replace('\\', '/');
-                archive.CreateEntryFromFile(file, relative, CompressionLevel.Fastest);
+                if (includeSensitive)
+                {
+                    archive.CreateEntryFromFile(file, relative, CompressionLevel.Fastest);
+                }
+                else
+                {
+                    AddText(archive, relative, Redact(await File.ReadAllTextAsync(file, cancellationToken)));
+                }
             }
         }
 
         await Task.CompletedTask;
         return path;
+    }
+
+    private static string Redact(string text)
+    {
+        var redacted = Regex.Replace(
+            text,
+            "(?i)\"(workspace|path|filePath|originalPath|backupPath|content|oldString|newString)\"\\s*:\\s*\"([^\"\\\\]|\\\\.)*\"",
+            match =>
+            {
+                var name = Regex.Match(match.Value, "^\"([^\"]+)\"").Groups[1].Value;
+                return $"\"{name}\":\"[REDACTED]\"";
+            });
+        redacted = Regex.Replace(redacted, "[A-Za-z]:\\\\[^\"'\\r\\n]+", "[REDACTED_PATH]");
+        redacted = Regex.Replace(redacted, "/(?:home|root|tmp|Users|mnt|workspace)/[^\"'\\s\\r\\n]+", "[REDACTED_PATH]");
+        return redacted;
     }
 
     private static void AddText(ZipArchive archive, string path, string content)

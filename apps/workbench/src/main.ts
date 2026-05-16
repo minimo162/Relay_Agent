@@ -35,6 +35,16 @@ type RunEvent = {
   timestamp?: string;
 };
 
+type AgUiEvent = {
+  type: string;
+  message?: string;
+  detail?: string;
+  runId?: string;
+  sequence?: number;
+  timestamp?: string;
+  relayType?: string;
+};
+
 type PendingApproval = {
   approvalId: string;
   toolCall: {
@@ -140,6 +150,23 @@ let eventSource: EventSource | null = null;
 let events: RunEvent[] = [];
 let eventKeys = new Set<string>();
 
+const runEventTypes: readonly RunEvent["type"][] = [
+  "status",
+  "tool",
+  "approval",
+  "final",
+  "copilot_turn_started",
+  "copilot_turn_completed",
+  "tool_call_started",
+  "tool_call_completed",
+  "approval_requested",
+  "approval_resolved",
+  "artifact_created",
+  "completed",
+  "cancelled",
+  "error",
+];
+
 function api(path: string): string {
   const url = new URL(path, window.location.origin);
   if (token) url.searchParams.set("token", token);
@@ -148,6 +175,49 @@ function api(path: string): string {
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return token ? { ...extra, "X-Relay-Token": token } : extra;
+}
+
+function isRunEventType(value: unknown): value is RunEvent["type"] {
+  return typeof value === "string" && (runEventTypes as readonly string[]).includes(value);
+}
+
+function runEventFromAgUi(event: AgUiEvent): RunEvent {
+  const mappedType = isRunEventType(event.relayType) ? event.relayType : runEventTypeFromAgUi(event.type);
+  return {
+    type: mappedType,
+    message: event.message || event.type,
+    detail: event.detail,
+    runId: event.runId,
+    sequence: event.sequence,
+    timestamp: event.timestamp,
+  };
+}
+
+function runEventTypeFromAgUi(type: string): RunEvent["type"] {
+  switch (type) {
+    case "STATE_DELTA":
+      return "status";
+    case "THINKING_START":
+      return "copilot_turn_started";
+    case "THINKING_END":
+      return "copilot_turn_completed";
+    case "TOOL_CALL_START":
+      return "tool_call_started";
+    case "TOOL_CALL_END":
+      return "tool_call_completed";
+    case "USER_CONFIRMATION_REQUEST":
+      return "approval_requested";
+    case "USER_CONFIRMATION_RESULT":
+      return "approval_resolved";
+    case "RUN_FINISHED":
+      return "completed";
+    case "RUN_CANCELLED":
+      return "cancelled";
+    case "RUN_ERROR":
+      return "error";
+    default:
+      return "status";
+  }
 }
 
 function eventKey(event: RunEvent): string {
@@ -173,6 +243,18 @@ function appendEvent(event: RunEvent, render = true): void {
   if (render) {
     renderEvents();
     renderSummary();
+  }
+}
+
+function applyEventState(runId: string, event: RunEvent): void {
+  if (event.type === "completed" || event.type === "final") {
+    setRunChrome("completed", runId);
+  } else if (event.type === "error") {
+    setRunChrome("failed", runId);
+  } else if (event.type === "cancelled") {
+    setRunChrome("cancelled", runId);
+  } else if (event.type === "approval_requested") {
+    setRunChrome("approval_required", runId);
   }
 }
 
@@ -391,13 +473,14 @@ async function runTask(): Promise<void> {
 
 function connectEvents(runId: string): void {
   closeEventStream();
-  const source = new EventSource(api(`/api/runs/${encodeURIComponent(runId)}/events`));
+  const source = new EventSource(api(`/api/runs/${encodeURIComponent(runId)}/agui-events`));
   eventSource = source;
-  source.addEventListener("run-event", (event) => {
+  source.addEventListener("ag-ui-event", (event) => {
     const data = (event as MessageEvent).data;
     if (!data) return;
-    const runEvent = JSON.parse(data) as RunEvent;
+    const runEvent = runEventFromAgUi(JSON.parse(data) as AgUiEvent);
     appendEvent(runEvent);
+    applyEventState(runId, runEvent);
     if (runEvent.type === "final" || runEvent.type === "completed" || runEvent.type === "error" || runEvent.type === "approval_requested") {
       window.setTimeout(() => void loadRun(runId), 120);
     }

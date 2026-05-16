@@ -55,6 +55,9 @@ assert(fileExists("apps/workbench/package.json"), "missing browser workbench pac
 assert(read("PLANS.md").includes("No transitional fallback architecture"), "PLANS.md must retain hard-cutover rule");
 assert(read("README.md").includes("browser-hosted local web workbench"), "README.md must describe the sidecar workbench architecture");
 assert(/browser-hosted local web\s+workbench/.test(read("AGENTS.md")), "AGENTS.md must describe the sidecar workbench architecture");
+const workbenchMain = read("apps/workbench/src/main.ts");
+assert(workbenchMain.includes("/agui-events"), "Workbench must consume the AG-UI run stream");
+assert(!/\/events[`'"]/.test(workbenchMain), "Workbench must not consume the old custom run-event stream");
 
 const ci = read(".github/workflows/ci.yml");
 assert(ci.includes("pnpm check") && ci.includes("Set up .NET"), "CI must build the sidecar through the active acceptance gate");
