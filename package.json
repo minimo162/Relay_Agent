@@ -6,8 +6,9 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:golden-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:golden-smoke && pnpm agent:rg-stream-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "agent:golden-smoke": "node scripts/agent-golden-smoke.mjs",
+    "agent:rg-stream-smoke": "node scripts/rg-stream-cap-smoke.mjs",
     "build": "pnpm --filter @relay-agent/workbench build && node scripts/prepare-sidecar-assets.mjs",
     "dev": "pnpm build && dotnet run --project apps/sidecar/Relay.Sidecar.csproj",
     "sidecar:build": "dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release",

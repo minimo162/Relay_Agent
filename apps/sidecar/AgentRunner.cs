@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -353,18 +354,23 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         }
 
         var contains = GetString(call.Args, "contains");
-        var glob = GetString(call.Args, "glob");
-        var limit = GetInt(call.Args, "limit") ?? 50;
+        var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 50, 1, 200);
         var args = new List<string> { "--files" };
-        if (!string.IsNullOrWhiteSpace(glob)) args.AddRange(["-g", glob]);
-        var result = await RunProcessAsync(rg.ExecutablePath, args, workspace, cancellationToken);
+        AddRipgrepFilters(args, call.Args);
+        var result = await RunLineProcessAsync(
+            rg.ExecutablePath,
+            args,
+            workspace,
+            cancellationToken,
+            maxLines: limit,
+            includeLine: line => string.IsNullOrWhiteSpace(contains) || line.Contains(contains, StringComparison.OrdinalIgnoreCase),
+            timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
 
-        var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(line => string.IsNullOrWhiteSpace(contains) || line.Contains(contains, StringComparison.OrdinalIgnoreCase))
-            .Take(Math.Clamp(limit, 1, 200))
-            .ToArray();
-        return ToolObservation.Ok(call.Id, call.Tool, $"{lines.Length} file candidates", lines);
+        var summary = result.Truncated
+            ? $"{result.Lines.Count} file candidates (truncated at limit)"
+            : $"{result.Lines.Count} file candidates";
+        return ToolObservation.Ok(call.Id, call.Tool, summary, result.Lines);
     }
 
     private async Task<ToolObservation> RgSearchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -376,17 +382,25 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         }
 
         var pattern = GetString(call.Args, "pattern") ?? "";
-        var glob = GetString(call.Args, "glob");
-        var limit = GetInt(call.Args, "limit") ?? 80;
+        var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 80, 1, 200);
         var args = new List<string> { "--line-number", "--color", "never", "--fixed-strings" };
-        if (!string.IsNullOrWhiteSpace(glob)) args.AddRange(["-g", glob]);
+        AddRipgrepFilters(args, call.Args);
         args.AddRange(["--", pattern]);
-        var result = await RunProcessAsync(rg.ExecutablePath, args, workspace, cancellationToken, allowExitOne: true);
+        var result = await RunLineProcessAsync(
+            rg.ExecutablePath,
+            args,
+            workspace,
+            cancellationToken,
+            maxLines: limit,
+            includeLine: null,
+            allowExitOne: true,
+            timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
-        var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Take(Math.Clamp(limit, 1, 200))
-            .ToArray();
-        return ToolObservation.Ok(call.Id, call.Tool, $"{lines.Length} content matches", lines);
+
+        var summary = result.Truncated
+            ? $"{result.Lines.Count} content matches (truncated at limit)"
+            : $"{result.Lines.Count} content matches";
+        return ToolObservation.Ok(call.Id, call.Tool, summary, result.Lines);
     }
 
     private static async Task<ToolObservation> ReadAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -731,6 +745,34 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 
+    private static void AddRipgrepFilters(List<string> args, JsonObject callArgs)
+    {
+        AddGlob(args, GetString(callArgs, "glob"));
+        foreach (var glob in GetStringArray(callArgs, "globs") ?? [])
+        {
+            AddGlob(args, glob);
+        }
+        AddGlob(args, GetString(callArgs, "excludeGlob"), exclude: true);
+        foreach (var glob in GetStringArray(callArgs, "excludeGlobs") ?? [])
+        {
+            AddGlob(args, glob, exclude: true);
+        }
+
+        var maxDepth = GetInt(callArgs, "maxDepth");
+        if (maxDepth is not null)
+        {
+            args.Add("--max-depth");
+            args.Add(Math.Clamp(maxDepth.Value, 1, 64).ToString());
+        }
+    }
+
+    private static void AddGlob(List<string> args, string? glob, bool exclude = false)
+    {
+        if (string.IsNullOrWhiteSpace(glob)) return;
+        var pattern = exclude && !glob.StartsWith('!') ? $"!{glob}" : glob;
+        args.AddRange(["-g", pattern]);
+    }
+
     private static async Task<ProcessResult> RunProcessAsync(
         string fileName,
         IReadOnlyList<string> args,
@@ -739,6 +781,134 @@ public sealed class RelayToolExecutor(string dataDirectory, ToolResolver toolRes
         bool allowExitOne = false)
     {
         return await RelayProcess.RunAsync(fileName, args, workingDirectory, cancellationToken, allowExitOne);
+    }
+
+    private static async Task<LineProcessResult> RunLineProcessAsync(
+        string fileName,
+        IReadOnlyList<string> args,
+        string workingDirectory,
+        CancellationToken cancellationToken,
+        int maxLines,
+        Func<string, bool>? includeLine,
+        bool allowExitOne = false,
+        int timeoutMs = 60000)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(timeoutMs);
+
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
+
+        var lines = new List<string>();
+        var stderr = new StringBuilder();
+        var linesLock = new object();
+        var stderrLock = new object();
+        var stdoutDone = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stderrDone = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var truncated = 0;
+
+        process.OutputDataReceived += (_, eventArgs) =>
+        {
+            if (eventArgs.Data is null)
+            {
+                stdoutDone.TrySetResult(null);
+                return;
+            }
+
+            if (Volatile.Read(ref truncated) == 1) return;
+            if (includeLine is not null && !includeLine(eventArgs.Data)) return;
+
+            var shouldStop = false;
+            lock (linesLock)
+            {
+                if (lines.Count < maxLines)
+                {
+                    lines.Add(eventArgs.Data.Trim());
+                    shouldStop = lines.Count >= maxLines;
+                }
+            }
+
+            if (shouldStop)
+            {
+                Volatile.Write(ref truncated, 1);
+                TryKill(process);
+            }
+        };
+        process.ErrorDataReceived += (_, eventArgs) =>
+        {
+            if (eventArgs.Data is null)
+            {
+                stderrDone.TrySetResult(null);
+                return;
+            }
+
+            lock (stderrLock)
+            {
+                if (stderr.Length < 12000) stderr.AppendLine(eventArgs.Data);
+            }
+        };
+
+        try
+        {
+            if (!process.Start())
+            {
+                return new LineProcessResult(false, [], "Process did not start.", false);
+            }
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            await process.WaitForExitAsync(timeout.Token);
+            await Task.WhenAll(stdoutDone.Task, stderrDone.Task).WaitAsync(timeout.Token);
+
+            var wasTruncated = Volatile.Read(ref truncated) == 1;
+            var exitCode = process.ExitCode;
+            var success = wasTruncated || exitCode == 0 || (allowExitOne && exitCode == 1);
+            IReadOnlyList<string> snapshot;
+            lock (linesLock)
+            {
+                snapshot = lines.ToArray();
+            }
+
+            string errorText;
+            lock (stderrLock)
+            {
+                errorText = stderr.ToString().Trim();
+            }
+            var output = success
+                ? errorText
+                : string.Join("\n", [string.Join("\n", snapshot), errorText]).Trim();
+            return new LineProcessResult(success, snapshot, output, wasTruncated);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            return new LineProcessResult(false, [], $"{fileName} timed out after {timeoutMs}ms.", false);
+        }
+        catch (Exception ex)
+        {
+            TryKill(process);
+            return new LineProcessResult(false, [], ex.Message, false);
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Best-effort cleanup.
+        }
     }
 }
 
@@ -759,6 +929,8 @@ public sealed record ToolValidation(bool Ok, string? Error)
 }
 
 public sealed record ProcessResult(bool Success, string Output);
+
+public sealed record LineProcessResult(bool Success, IReadOnlyList<string> Lines, string Output, bool Truncated);
 
 public sealed record PendingApproval(string ApprovalId, string RunId, RelayToolCall ToolCall, DateTimeOffset CreatedAt)
 {

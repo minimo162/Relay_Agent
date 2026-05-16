@@ -79,6 +79,40 @@ Result:
   updated screenshots for empty, completed, and approval states.
 - Full `pnpm check` passed after rebuilding the Workbench assets.
 
+### 2026-05-16 Streaming Ripgrep Cap Slice
+
+Continued the same remediation plan without cutting a release:
+
+- Replaced the `rg_files` and `rg_search` process-output path with a streaming
+  reader that stops reading and kills `rg` as soon as the requested result limit
+  is reached.
+- Kept `rg_search`'s `--` pattern separator and added Relay-level filter
+  projection for `glob`, `globs`, `excludeGlob`, `excludeGlobs`, and
+  `maxDepth`.
+- Added `scripts/rg-stream-cap-smoke.mjs`, which runs the sidecar against a
+  fake `rg` that emits slowly. The smoke proves Relay returns after the limit,
+  reports truncation, and does not let the fake `rg` reach later output.
+- Added `pnpm agent:rg-stream-smoke` to the root check gate.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj
+node --check scripts/rg-stream-cap-smoke.mjs
+git diff --check
+PATH=/root/.dotnet:$PATH pnpm sidecar:build
+PATH=/root/.dotnet:$PATH pnpm agent:rg-stream-smoke
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Debug and Release builds passed.
+- The new rg stream-cap smoke passed independently and inside `pnpm check`
+  under one second, confirming truncation at the tool limit.
+- `git diff --check` passed.
+- Full `pnpm check` passed with the new rg stream-cap smoke in the gate.
+
 ### 2026-05-16 Generic Tool Runtime and AG-UI Stream Slice
 
 Implemented the first executable slice of the generic-agent remediation plan:
