@@ -17,7 +17,7 @@ var copilot = CopilotTransportFactory.FromEnvironment();
 var copilotChatClient = new RelayCopilotChatClient(copilot);
 var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
-var agentRunner = new RelayAgentRunner(copilot, new RelayToolExecutor(options.DataDirectory, toolResolver));
+var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
 var runManager = new RunManager(ledger, tools, agentRunner);
 
 var app = builder.Build();

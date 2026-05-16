@@ -4,7 +4,7 @@ using System.Threading.Channels;
 public sealed class RunManager(
     RunLedger ledger,
     ToolReadiness tools,
-    RelayAgentRunner agentRunner) : IDisposable
+    RelayAgentFrameworkRunner agentRunner) : IDisposable
 {
     private readonly ConcurrentDictionary<string, ActiveRun> _activeRuns = new();
 

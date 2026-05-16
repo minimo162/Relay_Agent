@@ -354,12 +354,13 @@ Implementation status on 2026-05-16:
   export with default redaction; streaming/capped ripgrep output for
   `rg_files` and `rg_search`; exact `read` extraction for `.docx`, `.xlsx`,
   `.xlsm`, `.pptx`, and uncompressed text-layer `.pdf`; broad semantic
-  OfficeCLI capability-registry compilation with raw-argv rejection; and golden
-  smoke coverage for those behaviors.
-- Still open for the next slice: full Microsoft Agent Framework runner
-  replacement, full React/Tailwind/shadcn/Radix/`@ag-ui/client` Workbench
-  migration, deeper support-bundle redaction fixture coverage, and richer PDF
-  extraction for filtered streams.
+  OfficeCLI capability-registry compilation with raw-argv rejection; a
+  Microsoft Agent Framework-backed `ChatClientAgent` runner path for Copilot
+  turns and per-run sessions; and golden smoke coverage for those behaviors.
+- Still open for the next slices: native Microsoft Agent Framework typed-tool
+  and approval middleware adoption, full React/Tailwind/shadcn/Radix/
+  `@ag-ui/client` Workbench migration, deeper support-bundle redaction fixture
+  coverage, and richer PDF extraction for filtered streams.
 
 ### P0: AG-UI Full Adoption
 
@@ -398,6 +399,10 @@ Implementation status on 2026-05-16:
      adapter, select a Relay tool, pause/resume an approval, stream AG-UI events,
      and finish through the Workbench. Windows NSIS and Linux archive still ship
      one .NET sidecar product path, with no Python runtime requirement.
+   - Current slice: Copilot turns now run through `ChatClientAgent` with an
+     Agent Framework session and are covered by the golden smoke. Native
+     Agent Framework typed tools and approval middleware remain the next
+     backend-runtime hardening step.
 
 4. Implement fail-fast Copilot provider behavior inside Agent Framework.
    - Current risk: hidden retries, fallback execution, or stale DOM extraction

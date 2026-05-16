@@ -88,6 +88,9 @@ try {
   const searchStart = await postRun("seed を探して");
   const searchRun = await waitForRun(searchStart.runId, ["completed", "failed", "cancelled"]);
   if (searchRun.status !== "completed") throw new Error(`search run did not complete: ${JSON.stringify(searchRun)}`);
+  if (!searchRun.events.some((event) => event.type === "status" && event.message === "Microsoft Agent Framework セッションを開始しました")) {
+    throw new Error(`search run did not start through Microsoft Agent Framework: ${JSON.stringify(searchRun)}`);
+  }
   if (!searchRun.events.some((event) => event.type === "tool_call_started" && event.message === "rg_files")) {
     throw new Error(`search run did not execute rg_files: ${JSON.stringify(searchRun)}`);
   }

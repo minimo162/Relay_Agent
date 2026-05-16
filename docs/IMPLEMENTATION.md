@@ -30,6 +30,44 @@
 
 ## Milestone Log
 
+### 2026-05-16 Microsoft Agent Framework Runner Slice
+
+Implemented the next backend-runtime slice:
+
+- Replaced the direct `ICopilotTransport.SendAsync` calls in the active agent
+  runner with a `Microsoft.Agents.AI.ChatClientAgent` backed by
+  `RelayCopilotChatClient`.
+- Added an Agent Framework session for each run so Copilot planning, JSON
+  repair, and post-approval finalization flow through the Agent Framework
+  adapter rather than the raw CDP transport.
+- Kept Relay's existing governance boundary in place for this slice: Relay
+  still validates tool names and arguments, enforces workspace containment,
+  pauses mutating tools for approval, executes local tools, and records run
+  events.
+- Updated the golden smoke to require the Agent Framework session event before
+  accepting the generic `rg_files` tool-choice run. Native Agent Framework
+  typed-tool wrappers and approval middleware remain open in `PLANS.md`.
+
+Verification commands:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk pnpm agent:golden-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH DOTNET_ROOT=/tmp/relay-dotnet/sdk pnpm check
+```
+
+Results:
+
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release` -
+  passed.
+- `pnpm agent:golden-smoke` - passed. The smoke confirmed that a run starts
+  through the Microsoft Agent Framework session path, chooses `rg_files`,
+  pauses mutations for approval, and completes after approval.
+- `pnpm check` - passed. Covered hard-cut guard, Workbench typecheck/build,
+  sidecar Release build, sidecar smoke, golden agent smoke, ripgrep streaming,
+  Office/PDF read extraction, OfficeCLI registry smoke, security smoke, and
+  release inventory generation.
+
 ### 2026-05-16 OfficeCLI Capability Registry Implementation
 
 Implemented the OfficeCLI execution side of the revised plan:

@@ -3,11 +3,38 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
-public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecutor tools)
+public sealed class RelayAgentFrameworkRunner
 {
     private const int MaxSteps = 6;
     private const string AllowedTools = "rg_files, rg_search, read, officecli, edit, write, workspace_status, diff, run_command, ask_user";
+    private const string AgentInstructions = """
+        You are Relay Agent's Microsoft Agent Framework planner.
+        M365 Copilot provides reasoning. Relay validates and executes local tools.
+        Return only the JSON object requested by each Relay prompt.
+        Do not claim local execution yourself.
+        """;
+    private readonly ChatClientAgent _agent;
+    private readonly ChatClientAgentRunOptions _runOptions = new(new ChatOptions
+    {
+        ModelId = "m365-copilot",
+    });
+    private readonly RelayToolExecutor _tools;
+
+    public RelayAgentFrameworkRunner(IChatClient chatClient, RelayToolExecutor tools)
+    {
+        _agent = new ChatClientAgent(
+            chatClient,
+            "relay-agent",
+            "Relay Agent",
+            AgentInstructions,
+            new List<AITool>(),
+            null,
+            null);
+        _tools = tools;
+    }
 
     public async Task<AgentRunResult> RunAsync(
         RunRequest request,
@@ -27,10 +54,15 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             }
         }
 
+        var session = await _agent.CreateSessionAsync(cancellationToken);
+        await Emit(RunEvent.Status(
+            "Microsoft Agent Framework セッションを開始しました",
+            "Copilot turns are routed through ChatClientAgent; Relay still validates and executes local tools."));
+
         for (var step = 1; step <= MaxSteps; step++)
         {
             await Emit(RunEvent.CopilotTurnStarted("Copilot が次の手順を選択しています", $"step {step}/{MaxSteps}"));
-            var planText = await copilot.SendAsync(BuildStepPrompt(request, observations), cancellationToken);
+            var planText = await RunCopilotTurnAsync(BuildStepPrompt(request, observations), session, cancellationToken);
             RelayAgentPlan plan;
             try
             {
@@ -40,7 +72,10 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             catch (Exception parseError)
             {
                 await Emit(RunEvent.Status("Copilot のJSON形式を修復しています", parseError.Message));
-                var repairText = await copilot.SendAsync(BuildPlanRepairPrompt(request, observations, planText, parseError.Message), cancellationToken);
+                var repairText = await RunCopilotTurnAsync(
+                    BuildPlanRepairPrompt(request, observations, planText, parseError.Message),
+                    session,
+                    cancellationToken);
                 try
                 {
                     plan = RelayAgentPlan.Parse(repairText);
@@ -71,22 +106,22 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             }
 
             var toolCall = new RelayToolCall($"tool-{step:00}", plan.Tool, plan.Args ?? new JsonObject());
-            var validation = tools.Validate(request.Workspace, toolCall);
+            var validation = _tools.Validate(request.Workspace, toolCall);
             if (!validation.Ok)
             {
                 await Emit(RunEvent.Error("ツール引数を検証できません", validation.Error));
                 return new AgentRunResult("failed", events, null);
             }
 
-            if (tools.RequiresApproval(toolCall))
+            if (_tools.RequiresApproval(toolCall))
             {
                 var approval = PendingApproval.FromToolCall(runId, toolCall);
-                await Emit(RunEvent.Approval("実行前に確認してください", tools.Describe(toolCall)));
+                await Emit(RunEvent.Approval("実行前に確認してください", _tools.Describe(toolCall)));
                 return new AgentRunResult("approval_required", events, approval);
             }
 
-            await Emit(RunEvent.ToolCallStarted(toolCall.Tool, tools.Describe(toolCall)));
-            var observation = await tools.ExecuteAsync(request.Workspace, toolCall, cancellationToken);
+            await Emit(RunEvent.ToolCallStarted(toolCall.Tool, _tools.Describe(toolCall)));
+            var observation = await _tools.ExecuteAsync(request.Workspace, toolCall, cancellationToken);
             observations.Add(observation);
             await Emit(observation.Success
                 ? RunEvent.ToolCallCompleted($"{toolCall.Tool} completed", observation.Summary)
@@ -124,9 +159,9 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
         }
 
         var toolCall = run.PendingApproval.ToolCall;
-        await Emit(RunEvent.ApprovalResolved("承認しました", tools.Describe(toolCall)));
-        await Emit(RunEvent.ToolCallStarted("承認済みの操作を実行しています", tools.Describe(toolCall)));
-        var observation = await tools.ExecuteAsync(run.Request.Workspace, toolCall, cancellationToken, approvalGranted: true);
+        await Emit(RunEvent.ApprovalResolved("承認しました", _tools.Describe(toolCall)));
+        await Emit(RunEvent.ToolCallStarted("承認済みの操作を実行しています", _tools.Describe(toolCall)));
+        var observation = await _tools.ExecuteAsync(run.Request.Workspace, toolCall, cancellationToken, approvalGranted: true);
         await Emit(observation.Success
             ? RunEvent.ToolCallCompleted($"{toolCall.Tool} completed", observation.Summary)
             : RunEvent.Error($"{toolCall.Tool} failed", observation.Summary));
@@ -145,9 +180,19 @@ public sealed class RelayAgentRunner(ICopilotTransport copilot, RelayToolExecuto
             "OBSERVATION JSON:",
             JsonSerializer.Serialize(observation, JsonOptions.Default),
         ]);
-        var final = await copilot.SendAsync(finalPrompt, cancellationToken);
+        var session = await _agent.CreateSessionAsync(cancellationToken);
+        await Emit(RunEvent.Status(
+            "Microsoft Agent Framework セッションを再開しました",
+            "Approved observation finalization is routed through ChatClientAgent."));
+        var final = await RunCopilotTurnAsync(finalPrompt, session, cancellationToken);
         await Emit(RunEvent.Completed("完了しました", final));
         return new AgentRunResult("completed", events, null);
+    }
+
+    private async Task<string> RunCopilotTurnAsync(string prompt, AgentSession session, CancellationToken cancellationToken)
+    {
+        var response = await _agent.RunAsync(prompt, session, _runOptions, cancellationToken);
+        return response.Text;
     }
 
     private static string BuildStepPrompt(RunRequest request, IReadOnlyList<ToolObservation> observations) =>
