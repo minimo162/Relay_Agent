@@ -353,8 +353,9 @@ Implementation status on 2026-05-16:
   `RelayCopilotChatClient` `IChatClient` adapter; POST-only support-bundle
   export with default redaction; streaming/capped ripgrep output for
   `rg_files` and `rg_search`; exact `read` extraction for `.docx`, `.xlsx`,
-  `.xlsm`, `.pptx`, and uncompressed text-layer `.pdf`; broad semantic
-  OfficeCLI capability-registry compilation with raw-argv rejection; a
+  `.xlsm`, `.pptx`, and text-layer `.pdf` including common filtered streams;
+  broad semantic OfficeCLI capability-registry compilation with raw-argv
+  rejection; a
   Microsoft Agent Framework-backed `ChatClientAgent` runner path for Copilot
   turns and per-run sessions; Agent Framework function-tool dispatch through
   `AIFunctionFactory.Create`; Copilot tool projection to
@@ -363,10 +364,11 @@ Implementation status on 2026-05-16:
   approval response resume/session serialization; Workbench approval rendering
   from AG-UI state instead of `RunResponse.pendingApproval`; React + Vite +
   TypeScript + Tailwind CSS + shadcn-style local components + Radix Tooltip
-  Workbench migration; `@ag-ui/client`-based Workbench stream consumption; and
-  deeper support-bundle redaction fixture coverage; and golden smoke coverage
-  for those behaviors.
-- Still open for the next slice: richer PDF extraction for filtered streams.
+  Workbench migration; `@ag-ui/client`-based Workbench stream consumption;
+  deeper support-bundle redaction fixture coverage; golden smoke coverage for
+  those behaviors; and filtered PDF stream extraction coverage.
+- Still open for the next slice: no remaining implementation task is currently
+  queued in this plan.
 
 Framework-first revision after current Microsoft documentation review:
 
@@ -480,8 +482,9 @@ Framework-first revision after current Microsoft documentation review:
      for supported Office/PDF containers, using sidecar-owned extraction code or
      approved bundled readers.
    - Acceptance: golden tests prove `rg_files -> read -> final` can inspect
-     `.xlsx`, `.docx`, `.pptx`, and text-layer `.pdf` fixtures without routing
-     back to the deleted document-search engine.
+     `.xlsx`, `.docx`, `.pptx`, and text-layer `.pdf` fixtures, including a
+     FlateDecode filtered PDF stream, without routing back to the deleted
+     document-search engine.
 
 6. Replace open-ended OfficeCLI argv planning with an OfficeCLI capability
    registry.

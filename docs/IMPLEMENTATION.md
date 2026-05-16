@@ -17635,3 +17635,35 @@ Result:
 - The local NSIS build produced
   `dist/installer/Relay.Agent-0.3.2-win-x64-setup.exe`; the generated NSIS
   script uses `RequestExecutionLevel user` and the user-local install path.
+
+## 2026-05-16: Filtered PDF Exact Read
+
+Changes:
+
+- Extended the sidecar PDF exact-read extractor to inspect PDF content streams
+  instead of only scanning the raw file source.
+- Added bounded decoding for common text-layer stream filters:
+  `FlateDecode`, `ASCIIHexDecode`, and `ASCII85Decode`.
+- Kept the extractor intentionally text-layer-only. Unsupported filters,
+  decode failures, image-only PDFs, and OCR needs are reported as warnings
+  instead of triggering a hidden fallback reader.
+- Expanded the Office/PDF read smoke with a generated `/FlateDecode` PDF
+  fixture and tightened the assertion so a PDF read must extract non-zero text
+  and must not silently pass with extraction warnings.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+node --check scripts/office-pdf-read-smoke.mjs
+PATH=/tmp/dotnet:$PATH pnpm agent:office-pdf-read-smoke
+PATH=/tmp/dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- The Office/PDF read smoke passed for generated DOCX, XLSX, PPTX,
+  uncompressed PDF, and FlateDecode filtered PDF fixtures.
+- Full `pnpm check` passed, including the hardened Office/PDF read smoke,
+  OfficeCLI registry smoke, security smoke, and release inventory generation.

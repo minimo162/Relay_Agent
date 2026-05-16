@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 
 const token = "relay-office-pdf-read-token";
 const port = 17896;
@@ -47,17 +48,48 @@ endstream
 endobj
 xref
 0 5
-0000000000 65535 f 
+0000000000 65535 f
 trailer
 << /Root 1 0 R >>
 %%EOF
 `, "latin1");
+
+const filteredPdfText = "BT /F1 12 Tf 72 720 Td (Filtered PDF parts sales fixture) Tj ET";
+const filteredPdfStream = deflateSync(Buffer.from(filteredPdfText, "latin1"));
+writeFileSync(join(workspace, "filtered.pdf"), Buffer.concat([
+  Buffer.from(`%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length ${filteredPdfStream.length} /Filter /FlateDecode >>
+stream
+`, "latin1"),
+  filteredPdfStream,
+  Buffer.from(`
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f
+trailer
+<< /Root 1 0 R >>
+%%EOF
+`, "latin1"),
+]));
 
 const cases = [
   ["sample.docx", "docx"],
   ["sample.xlsx", "xlsx"],
   ["sample.pptx", "pptx"],
   ["sample.pdf", "pdf"],
+  ["filtered.pdf", "pdf"],
 ];
 const responses = cases.flatMap(([path]) => [
   JSON.stringify({ action: "tool", tool: "read", args: { path } }),
@@ -98,7 +130,14 @@ try {
     if (!readEvent) {
       throw new Error(`${path} did not use extracted ${kind} read path: ${JSON.stringify(completed.events)}`);
     }
-    if (String(readEvent.detail ?? "").includes("Binary file")) {
+    const detail = String(readEvent.detail ?? "");
+    if (!new RegExp(`${kind} extracted, [1-9][0-9]* chars read`).test(detail)) {
+      throw new Error(`${path} extracted no text: ${JSON.stringify(readEvent)}`);
+    }
+    if (detail.includes("warnings=")) {
+      throw new Error(`${path} emitted extraction warnings: ${JSON.stringify(readEvent)}`);
+    }
+    if (detail.includes("Binary file")) {
       throw new Error(`${path} fell back to binary read: ${JSON.stringify(readEvent)}`);
     }
   }
