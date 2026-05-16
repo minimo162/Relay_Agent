@@ -16,8 +16,9 @@ Browser Workbench
   one composer, workspace field, concise run status, result and approval cards
 
 .NET Relay Sidecar
-  serves the Workbench, validates local API calls, records run ledgers,
-  checks tool readiness, owns app-local data, and gates local execution
+  serves the Workbench, exposes the official AG-UI run endpoint,
+  validates local tool calls, checks readiness, owns app-local data,
+  and gates local execution
 
 M365 Copilot via Edge CDP
   primary reasoning controller for planning, tool choice, and synthesis
@@ -46,10 +47,11 @@ details behind the sidecar.
 ## Sidecar
 
 The sidecar binds to `127.0.0.1` by default and requires a per-run launch token
-for state-changing APIs. It stores run ledgers under user-local Relay app data.
-It also exposes a Relay-owned OpenAI-compatible `/v1/chat/completions` endpoint
-that uses the sidecar Copilot transport rather than the old Node/Tauri-era
-bridge.
+for state-changing APIs. Agent execution is served through `/agui/relay` using
+Microsoft Agent Framework AG-UI hosting. Relay also exposes a small
+OpenAI-compatible `/v1/chat/completions` endpoint for local compatibility
+checks; it uses the same sidecar Copilot transport rather than the old
+Node/Tauri-era bridge.
 
 Readiness checks currently cover:
 
@@ -95,6 +97,26 @@ Run the active acceptance gate:
 
 ```bash
 pnpm check
+```
+
+`pnpm check` is the non-browser acceptance gate. It covers the hard-cut guard,
+Workbench typecheck/build, sidecar build/smoke, official AG-UI tool/approval
+smokes, ripgrep and Office/PDF read smokes, OfficeCLI semantic registry policy,
+security checks, and release inventory generation.
+
+When Microsoft Edge is available on the host, run the browser-level Workbench
+UX smoke:
+
+```bash
+pnpm workbench:ux-e2e
+```
+
+Before a release that changes Copilot CDP selectors, prompt delivery, send
+timing, or response extraction, run the signed-in live Copilot E2E with an Edge
+remote-debugging session available:
+
+```bash
+pnpm workbench:live-copilot-e2e
 ```
 
 Start the local sidecar:

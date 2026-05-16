@@ -88,6 +88,8 @@ export function App() {
   }, []);
 
   const setRunChrome = useCallback((status: RunStatus | "idle", runId: string | null) => {
+    statusRef.current = status;
+    runIdRef.current = runId;
     setCurrentStatus(status);
     setCurrentRunId(runId);
     if (status !== "approval_required") {
@@ -134,7 +136,9 @@ export function App() {
 
   const applyEventState = useCallback((runId: string, event: RunEvent) => {
     if (event.type === "completed") {
-      setRunChrome("completed", runId);
+      if (statusRef.current !== "approval_required") {
+        setRunChrome("completed", runId);
+      }
     } else if (event.type === "error") {
       setRunChrome("failed", runId);
     } else if (event.type === "cancelled") {

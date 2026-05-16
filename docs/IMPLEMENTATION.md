@@ -17934,3 +17934,38 @@ Result:
   AG-UI client-tool approval smoke, ripgrep stream cap smoke, Office/PDF read
   smoke, OfficeCLI registry smoke, sidecar security smoke, and release
   inventory generation.
+
+## 2026-05-16: AFAGUI05 Official-Path Acceptance Documentation
+
+Changes:
+
+- Fixed Workbench AG-UI approval state handling so a `RUN_FINISHED` event after
+  a `request_approval` client-tool call does not incorrectly hide the approval
+  panel. The UI now keeps the run in `approval_required` until the user approves
+  or rejects the AG-UI client tool.
+- Re-ran the browser-level Workbench UX E2E against the official `/agui/relay`
+  path. The flow covers a minimal Workbench load, collapsed details by default,
+  search through `rg_files`, visible final answer, write approval request,
+  approve/resume, and screenshots under `dist/e2e/`.
+- Updated `README.md` to describe `/agui/relay`, the non-browser acceptance
+  gate, browser UX E2E, and live Copilot E2E expectations.
+- Updated `AGENTS.md` so the active catalog and verification discipline match
+  the current Agent Framework + AG-UI architecture.
+- Marked `AFAGUI05` complete in Task Master and updated `PLANS.md`; no
+  remaining `agent_framework_agui_native_cutover` task is scheduled.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm workbench:ux-e2e
+PATH=/tmp/dotnet:/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Workbench UX E2E passed:
+  `search=341ms`, `approval=113ms`, screenshots
+  `workbench-empty.png`, `workbench-completed.png`, and
+  `workbench-approval.png`.
+- Full `pnpm check` passed after the Workbench state fix and documentation
+  updates.

@@ -17,14 +17,15 @@
   approvals, backups, diffs, logs, and app storage.
 - The active generic tool catalog is `rg_files`, `rg_search`, `read`,
   `officecli`, `edit`, `write`, `workspace_status`, `diff`, `run_command`,
-  `ask_user`, and `final`.
+  and `ask_user`. Final answers are normal Agent Framework assistant responses,
+  not a Relay tool.
 - Current implementation focus is the review remediation plan in `PLANS.md`:
   Microsoft Agent Framework backend adoption, AG-UI full adoption for the
   Workbench-facing UX/event contract, fail-fast Copilot provider behavior,
   Office/PDF `read` extraction, semantic OfficeCLI operations, generic
   workspace/diff/verification tools, explicit redacted support-bundle export,
   ripgrep streaming/capping, `rg_search` argument hardening, and Workbench
-  event identity by `runId + sequence` during migration.
+  official `/agui/relay` execution with AG-UI client-tool approvals.
 
 ## Source of Truth
 
@@ -56,8 +57,8 @@ decisions, verification runs, and known limitations.
 
 - AG-UI is the target Workbench-facing protocol and UX model. New run UI work
   should emit/consume AG-UI lifecycle, message, tool, state, interrupt/resume,
-  error, and completion events instead of extending the custom Relay `RunEvent`
-  wire shape.
+  error, and completion events through `/agui/relay` instead of extending or
+  reviving the custom Relay run routes.
 - The Workbench visual implementation should follow AG-UI/CopilotKit/Dojo
   agent UI interaction patterns while preserving Relay's minimal professional
   surface. The target frontend stack is React + Vite + TypeScript + Tailwind
@@ -112,8 +113,10 @@ decisions, verification runs, and known limitations.
   - Workbench typecheck/build;
   - sidecar build;
   - sidecar smoke;
-  - agent golden smoke for search, Office, coding, generic verification,
-    approvals, and fail-fast invalid output;
+  - official AG-UI agent golden smoke for search, Office, coding, generic
+    verification, approvals, and fail-fast invalid output;
+  - official AG-UI client-tool approval smoke for read-only execution,
+    mutation approval, rejection, and resume;
   - sidecar security smoke;
   - release inventory/SBOM generation.
 - Use `pnpm workbench:ux-e2e` for user-visible Workbench flow changes when

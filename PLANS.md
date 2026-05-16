@@ -421,10 +421,16 @@ Current completed tasks:
   The sidecar no longer maps legacy `/api/runs` product routes, `RunManager`
   has been removed, Workbench types no longer expose `RunResponse`, and smoke
   scripts now drive runs through the official `/agui/relay` endpoint.
+- **AFAGUI05: Add official-path acceptance coverage and documentation.**
+  The official AG-UI path is covered by `pnpm check` smokes, the browser-level
+  `pnpm workbench:ux-e2e` flow, release inventory/installer policy checks, and
+  aligned README/AGENTS/implementation documentation.
 
 Next task after this checkpoint:
 
-- **AFAGUI05: Add official-path acceptance coverage and documentation.**
+- No remaining `agent_framework_agui_native_cutover` task is scheduled. Review
+  and retire stale historical AionUi acceptance tasks before adding any new
+  active milestone.
 
 1. Add a proof slice for AG-UI client-tool approvals.
    - Confirm the current Agent Framework AG-UI package surface. If a future
