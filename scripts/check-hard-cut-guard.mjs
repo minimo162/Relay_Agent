@@ -58,6 +58,7 @@ assert(/browser-hosted local web\s+workbench/.test(read("AGENTS.md")), "AGENTS.m
 const workbenchMain = read("apps/workbench/src/main.ts");
 assert(workbenchMain.includes("/agui-events"), "Workbench must consume the AG-UI run stream");
 assert(!/\/events[`'"]/.test(workbenchMain), "Workbench must not consume the old custom run-event stream");
+assert(!workbenchMain.includes("pendingApproval"), "Workbench approval UI must be driven by AG-UI state, not RunResponse.pendingApproval");
 
 const ci = read(".github/workflows/ci.yml");
 assert(ci.includes("pnpm check") && ci.includes("Set up .NET"), "CI must build the sidecar through the active acceptance gate");

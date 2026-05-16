@@ -359,13 +359,13 @@ Implementation status on 2026-05-16:
   turns and per-run sessions; Agent Framework function-tool dispatch through
   `AIFunctionFactory.Create`; Copilot tool projection to
   `FunctionCallContent`; `FunctionInvokingChatClient` observation looping;
-  `ApprovalRequiredAIFunction` wrapping for mutating tools; and golden smoke
+  `ApprovalRequiredAIFunction` wrapping for mutating tools; Agent Framework
+  approval response resume/session serialization; Workbench approval rendering
+  from AG-UI state instead of `RunResponse.pendingApproval`; and golden smoke
   coverage for those behaviors.
-- Still open for the next slices: full Agent Framework approval response
-  resume/session serialization, full React/Tailwind/shadcn/Radix/
+- Still open for the next slices: full React/Tailwind/shadcn/Radix/
   `@ag-ui/client` Workbench migration, deeper support-bundle redaction fixture
-  coverage, richer PDF extraction for filtered streams, and replacement of the
-  temporary Workbench `PendingApproval` bridge.
+  coverage, and richer PDF extraction for filtered streams.
 
 Framework-first revision after current Microsoft documentation review:
 
@@ -442,13 +442,13 @@ Framework-first revision after current Microsoft documentation review:
      `ApprovalRequiredAIFunction`; approval-required runs now serialize the
      Agent Framework session into the run ledger and resume by feeding
      `ToolApprovalResponseContent` back into the same `ChatClientAgent`
-     session. The Workbench still uses the existing `PendingApproval` display
-     shape only as a UI compatibility envelope.
+     session. Workbench approval cards are driven by AG-UI
+     `USER_CONFIRMATION_REQUEST` state, while `PendingApproval` remains only as
+     internal ledger state for `/approve`.
    - Revised remaining slices:
-     1. Replace the Workbench `PendingApproval` compatibility envelope with
-        AG-UI human-in-the-loop events and state snapshots. Relay still
-        decides whether an operation is safe, but the approval protocol is
-        Framework owned.
+     1. Replace the custom Workbench event adapter with the official
+        `@ag-ui/client` consumer during the React/Tailwind/shadcn/Radix UI
+        migration.
      2. Keep Relay tool functions small and deterministic. They validate
         workspace scope, execute one local action, return structured
         observations, and never call Copilot themselves.

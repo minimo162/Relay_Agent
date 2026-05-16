@@ -60,11 +60,15 @@ try {
   if (semanticRun.status !== "approval_required") {
     throw new Error(`semantic OfficeCLI operation did not pause for approval: ${JSON.stringify(semanticRun)}`);
   }
-  if (semanticRun.pendingApproval?.toolCall?.tool !== "officecli") {
-    throw new Error(`semantic OfficeCLI approval missing tool call: ${JSON.stringify(semanticRun)}`);
+  if ("pendingApproval" in semanticRun) {
+    throw new Error(`RunResponse should not expose PendingApproval: ${JSON.stringify(semanticRun)}`);
   }
-  if (semanticRun.pendingApproval.toolCall.args.argv) {
-    throw new Error(`semantic OfficeCLI approval leaked raw argv: ${JSON.stringify(semanticRun.pendingApproval)}`);
+  const approval = await latestApprovalFromAgUi(semanticRun.runId);
+  if (approval?.toolCall?.tool !== "officecli") {
+    throw new Error(`semantic OfficeCLI AG-UI approval missing tool call: ${JSON.stringify(approval)}`);
+  }
+  if (approval.toolCall.args.argv) {
+    throw new Error(`semantic OfficeCLI approval leaked raw argv: ${JSON.stringify(approval)}`);
   }
   if (existsSync(join(dataDir, "backups"))) {
     throw new Error("OfficeCLI mutation created a backup before approval");
@@ -126,6 +130,24 @@ async function waitForRun(runId, expectedStatuses) {
     await sleep(100);
   }
   throw new Error(`run did not finish: ${runId}`);
+}
+
+async function latestApprovalFromAgUi(runId) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/runs/${encodeURIComponent(runId)}/agui-events?token=${encodeURIComponent(token)}`, {
+    headers: { "X-Relay-Token": token },
+  });
+  if (!response.ok) throw new Error(`AG-UI stream failed: ${response.status}`);
+  const text = await response.text();
+  let approval = null;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("data: ")) continue;
+    const event = JSON.parse(line.slice(6));
+    if (event.type === "USER_CONFIRMATION_REQUEST") approval = event.state?.approval ?? null;
+    if (event.type === "USER_CONFIRMATION_RESULT" || event.type === "RUN_FINISHED" || event.type === "RUN_CANCELLED" || event.type === "RUN_ERROR") {
+      approval = null;
+    }
+  }
+  return approval;
 }
 
 function sleep(ms) {

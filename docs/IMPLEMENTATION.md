@@ -138,10 +138,9 @@ Implemented the next Framework-first runtime slice:
   executor after approval.
 - Replaced the custom multi-step `RelayAgentPlan -> RelayToolExecutor ->
   observations` loop with a single `ChatClientAgent.RunAsync` backed by
-  `FunctionInvokingChatClient`. The existing `PendingApproval` wire protocol is
-  still used as a bridge for the current Workbench approval API; moving
-  approve/resume fully onto Agent Framework approval response content remains a
-  planned follow-up.
+  `FunctionInvokingChatClient`. The follow-up slices now route approval resume
+  through Agent Framework approval response content and expose the visible
+  approval card through AG-UI state rather than `RunResponse.pendingApproval`.
 
 Verification commands:
 
@@ -191,6 +190,50 @@ PATH=/tmp/dotnet:$PATH pnpm check
 Results:
 
 - `pnpm sidecar:build` - passed with zero warnings.
+- `pnpm check` - passed. Covered hard-cut guard, Workbench typecheck/build,
+  sidecar Release build, sidecar smoke, golden Agent Framework approval
+  resume, ripgrep streaming, Office/PDF read extraction, OfficeCLI registry
+  smoke, security smoke, and release inventory generation.
+
+### 2026-05-16 AG-UI Approval State Cutover
+
+Moved the visible approval UI off `RunResponse.pendingApproval` and onto the
+AG-UI event stream:
+
+- `approval_requested` run events now carry a UI-safe approval data payload
+  with the approval id and validated tool call summary.
+- `/api/runs/{runId}/agui-events` maps approval requests to
+  `USER_CONFIRMATION_REQUEST` events with `state.approval`, and maps approval
+  resolution to `USER_CONFIRMATION_RESULT` with `state.approval = null`.
+- `RunResponse` no longer exposes `PendingApproval`; it remains internal ledger
+  state used by `/approve` and `/reject`.
+- The Workbench reconstructs the approval card from AG-UI state replay/live
+  events. Polling `/api/runs/{runId}` remains a display snapshot for status,
+  activity, and final/error text.
+- Updated hard-cut guard and smoke coverage so Workbench source cannot regress
+  to `pendingApproval`, and OfficeCLI/golden smokes verify approval tool calls
+  through AG-UI state.
+
+Verification commands:
+
+```bash
+PATH=/tmp/dotnet:$PATH pnpm build
+PATH=/tmp/dotnet:$PATH pnpm agent:golden-smoke
+PATH=/tmp/dotnet:$PATH pnpm agent:officecli-registry-smoke
+PATH=/tmp/dotnet:$PATH pnpm workbench:ux-e2e
+PATH=/tmp/dotnet:$PATH pnpm check
+```
+
+Results:
+
+- `pnpm build` - passed and regenerated sidecar Workbench assets.
+- `pnpm agent:golden-smoke` - passed, including AG-UI approval state for
+  `write` and `run_command`.
+- `pnpm agent:officecli-registry-smoke` - passed, including semantic
+  OfficeCLI approval through AG-UI state with no raw argv leak.
+- `pnpm workbench:ux-e2e` - passed. The Workbench rendered the approval card
+  from AG-UI state, completed approval resume, and saved screenshots for
+  empty/completed/approval states.
 - `pnpm check` - passed. Covered hard-cut guard, Workbench typecheck/build,
   sidecar Release build, sidecar smoke, golden Agent Framework approval
   resume, ripgrep streaming, Office/PDF read extraction, OfficeCLI registry

@@ -30,22 +30,13 @@ type RunEvent = {
     | "error";
   message: string;
   detail?: string;
+  data?: unknown;
   runId?: string;
   sequence?: number;
   timestamp?: string;
 };
 
-type AgUiEvent = {
-  type: string;
-  message?: string;
-  detail?: string;
-  runId?: string;
-  sequence?: number;
-  timestamp?: string;
-  relayType?: string;
-};
-
-type PendingApproval = {
+type ApprovalState = {
   approvalId: string;
   toolCall: {
     id: string;
@@ -54,13 +45,26 @@ type PendingApproval = {
   };
 };
 
+type AgUiEvent = {
+  type: string;
+  message?: string;
+  detail?: string;
+  data?: unknown;
+  state?: {
+    approval?: ApprovalState | null;
+  };
+  runId?: string;
+  sequence?: number;
+  timestamp?: string;
+  relayType?: string;
+};
+
 type RunStatus = "running" | "completed" | "failed" | "approval_required" | "cancelled";
 
 type RunResponse = {
   runId: string;
   status: RunStatus;
   events: RunEvent[];
-  pendingApproval?: PendingApproval | null;
 };
 
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
@@ -149,6 +153,7 @@ let currentStatus: RunStatus | "idle" = "idle";
 let eventSource: EventSource | null = null;
 let events: RunEvent[] = [];
 let eventKeys = new Set<string>();
+let currentApproval: ApprovalState | null = null;
 
 const runEventTypes: readonly RunEvent["type"][] = [
   "status",
@@ -187,6 +192,7 @@ function runEventFromAgUi(event: AgUiEvent): RunEvent {
     type: mappedType,
     message: event.message || event.type,
     detail: event.detail,
+    data: event.data,
     runId: event.runId,
     sequence: event.sequence,
     timestamp: event.timestamp,
@@ -235,15 +241,16 @@ function setEvents(nextEvents: readonly RunEvent[]): void {
   renderSummary();
 }
 
-function appendEvent(event: RunEvent, render = true): void {
+function appendEvent(event: RunEvent, render = true): boolean {
   const key = eventKey(event);
-  if (eventKeys.has(key)) return;
+  if (eventKeys.has(key)) return false;
   eventKeys.add(key);
   events.push(event);
   if (render) {
     renderEvents();
     renderSummary();
   }
+  return true;
 }
 
 function applyEventState(runId: string, event: RunEvent): void {
@@ -255,7 +262,16 @@ function applyEventState(runId: string, event: RunEvent): void {
     setRunChrome("cancelled", runId);
   } else if (event.type === "approval_requested") {
     setRunChrome("approval_required", runId);
+  } else if (event.type === "approval_resolved") {
+    currentApproval = null;
+    renderApproval();
   }
+}
+
+function applyAgUiState(event: AgUiEvent): void {
+  if (!event.state || !Object.prototype.hasOwnProperty.call(event.state, "approval")) return;
+  currentApproval = normalizeApproval(event.state.approval);
+  renderApproval();
 }
 
 function renderEvents(): void {
@@ -317,13 +333,13 @@ function renderSummary(): void {
   summaryTextEl.textContent = event.detail || event.message;
 }
 
-function renderApproval(result: RunResponse): void {
+function renderApproval(): void {
   approvalEl.replaceChildren();
   approvalEl.hidden = true;
-  if (!result.pendingApproval || result.status !== "approval_required") return;
+  if (!currentApproval || currentStatus !== "approval_required" || !currentRunId) return;
 
   approvalEl.hidden = false;
-  const toolCall = result.pendingApproval.toolCall;
+  const toolCall = currentApproval.toolCall;
   const target = approvalTarget(toolCall.args);
   const operation = String(toolCall.args.operation ?? toolCall.args.command ?? toolCall.tool);
 
@@ -354,14 +370,46 @@ function renderApproval(result: RunResponse): void {
   reject.className = "secondary-button";
   reject.type = "button";
   reject.textContent = "実行しない";
-  reject.addEventListener("click", () => void rejectRun(result.runId));
+  reject.addEventListener("click", () => void rejectRun(currentRunId!));
   const approve = document.createElement("button");
   approve.className = "primary-button";
   approve.type = "button";
   approve.textContent = "許可して続行";
-  approve.addEventListener("click", () => void approveRun(result.runId));
+  approve.addEventListener("click", () => void approveRun(currentRunId!));
   actions.append(reject, approve);
   approvalEl.append(header, grid, raw, actions);
+}
+
+function normalizeApproval(value: unknown): ApprovalState | null {
+  if (!value || typeof value !== "object") return null;
+  const approval = value as { approvalId?: unknown; toolCall?: unknown };
+  if (typeof approval.approvalId !== "string") return null;
+  if (!approval.toolCall || typeof approval.toolCall !== "object") return null;
+  const toolCall = approval.toolCall as { id?: unknown; tool?: unknown; args?: unknown };
+  if (typeof toolCall.id !== "string" || typeof toolCall.tool !== "string") return null;
+  return {
+    approvalId: approval.approvalId,
+    toolCall: {
+      id: toolCall.id,
+      tool: toolCall.tool,
+      args: toolCall.args && typeof toolCall.args === "object"
+        ? (toolCall.args as Record<string, unknown>)
+        : {},
+    },
+  };
+}
+
+function approvalFromEvents(nextEvents: readonly RunEvent[], status: RunStatus): ApprovalState | null {
+  if (status !== "approval_required") return null;
+  let approval: ApprovalState | null = null;
+  for (const event of nextEvents) {
+    if (event.type === "approval_requested") {
+      approval = normalizeApproval(event.data);
+    } else if (event.type === "approval_resolved" || event.type === "completed" || event.type === "cancelled" || event.type === "error") {
+      approval = null;
+    }
+  }
+  return approval;
 }
 
 function appendFact(list: HTMLDListElement, label: string, value: string): void {
@@ -387,6 +435,10 @@ function setRunChrome(status: RunStatus | "idle", runId: string | null): void {
   runIdEl.textContent = runId ? runId : "";
   runStateEl.textContent = status === "approval_required" ? "Waiting" : statusLabel(status);
   runStateEl.dataset.status = status;
+  if (status !== "approval_required") {
+    currentApproval = null;
+    renderApproval();
+  }
 }
 
 function statusLabel(status: RunStatus | "idle"): string {
@@ -403,7 +455,8 @@ function statusLabel(status: RunStatus | "idle"): string {
 function renderRun(result: RunResponse): void {
   setRunChrome(result.status, result.runId);
   setEvents(result.events);
-  renderApproval(result);
+  currentApproval = approvalFromEvents(result.events, result.status);
+  renderApproval();
   rawEl.textContent = JSON.stringify(result, null, 2);
 }
 
@@ -441,6 +494,7 @@ async function runTask(): Promise<void> {
 
   closeEventStream();
   approvalEl.hidden = true;
+  currentApproval = null;
   summaryEl.hidden = true;
   setRunChrome("running", null);
   setEvents([]);
@@ -478,9 +532,12 @@ function connectEvents(runId: string): void {
   source.addEventListener("ag-ui-event", (event) => {
     const data = (event as MessageEvent).data;
     if (!data) return;
-    const runEvent = runEventFromAgUi(JSON.parse(data) as AgUiEvent);
-    appendEvent(runEvent);
+    const agUiEvent = JSON.parse(data) as AgUiEvent;
+    const runEvent = runEventFromAgUi(agUiEvent);
+    const added = appendEvent(runEvent);
+    if (!added) return;
     applyEventState(runId, runEvent);
+    applyAgUiState(agUiEvent);
     if (runEvent.type === "final" || runEvent.type === "completed" || runEvent.type === "error" || runEvent.type === "approval_requested") {
       window.setTimeout(() => void loadRun(runId), 120);
     }

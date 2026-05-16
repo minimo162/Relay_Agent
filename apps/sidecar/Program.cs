@@ -299,6 +299,12 @@ static object ToAgUiEvent(RunEvent runEvent)
         "error" => "RUN_ERROR",
         _ => "TEXT_MESSAGE_CONTENT",
     };
+    var state = runEvent.Type switch
+    {
+        "approval_requested" => new { approval = runEvent.Data },
+        "approval_resolved" => new { approval = (object?)null },
+        _ => null,
+    };
 
     return new
     {
@@ -308,6 +314,8 @@ static object ToAgUiEvent(RunEvent runEvent)
         timestamp = runEvent.Timestamp,
         message = runEvent.Message,
         detail = runEvent.Detail,
+        data = runEvent.Data,
+        state,
         relayType = runEvent.Type,
     };
 }
@@ -445,9 +453,9 @@ public sealed record WorkspaceRequest(string Path);
 
 public sealed record WorkspaceResponse(string Path, bool Exists, string DisplayPath);
 
-public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events, PendingApproval? PendingApproval = null)
+public sealed record RunResponse(string RunId, string Status, IReadOnlyList<RunEvent> Events)
 {
-    public static RunResponse FromRun(RunRecord run) => new(run.RunId, run.Status, run.Events, run.PendingApproval);
+    public static RunResponse FromRun(RunRecord run) => new(run.RunId, run.Status, run.Events);
 }
 
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
@@ -462,6 +470,7 @@ public sealed record RunEvent(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("detail")] string? Detail = null,
+    [property: JsonPropertyName("data")] object? Data = null,
     [property: JsonPropertyName("runId")] string? RunId = null,
     [property: JsonPropertyName("sequence")] long Sequence = 0,
     [property: JsonPropertyName("timestamp")] DateTimeOffset? Timestamp = null)
@@ -471,7 +480,7 @@ public sealed record RunEvent(
     public static RunEvent CopilotTurnCompleted(string message, string? detail = null) => new("copilot_turn_completed", message, detail);
     public static RunEvent ToolCallStarted(string message, string? detail = null) => new("tool_call_started", message, detail);
     public static RunEvent ToolCallCompleted(string message, string? detail = null) => new("tool_call_completed", message, detail);
-    public static RunEvent Approval(string message, string? detail = null) => new("approval_requested", message, detail);
+    public static RunEvent Approval(string message, string? detail = null, object? data = null) => new("approval_requested", message, detail, data);
     public static RunEvent ApprovalResolved(string message, string? detail = null) => new("approval_resolved", message, detail);
     public static RunEvent Error(string message, string? detail = null) => new("error", message, detail);
     public static RunEvent Completed(string message, string? detail = null) => new("completed", message, detail);

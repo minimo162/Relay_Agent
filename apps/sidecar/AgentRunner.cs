@@ -69,7 +69,10 @@ public sealed class RelayAgentFrameworkRunner
             {
                 var serializedSession = await SerializeSessionAsync(agent, session, cancellationToken);
                 await Emit(RunEvent.CopilotTurnCompleted("Copilot が承認の必要な操作を選択しました", approval.ToolCall.Tool));
-                await Emit(RunEvent.Approval("実行前に確認してください", _tools.Describe(approval.ToolCall)));
+                await Emit(RunEvent.Approval(
+                    "実行前に確認してください",
+                    _tools.Describe(approval.ToolCall),
+                    ApprovalDisplayState.FromPendingApproval(approval)));
                 return new AgentRunResult("approval_required", events, approval, serializedSession);
             }
 
@@ -139,7 +142,10 @@ public sealed class RelayAgentFrameworkRunner
         {
             var serializedSession = await SerializeSessionAsync(agent, session, cancellationToken);
             await Emit(RunEvent.CopilotTurnCompleted("Copilot が追加承認の必要な操作を選択しました", nextApproval.ToolCall.Tool));
-            await Emit(RunEvent.Approval("実行前に確認してください", _tools.Describe(nextApproval.ToolCall)));
+            await Emit(RunEvent.Approval(
+                "実行前に確認してください",
+                _tools.Describe(nextApproval.ToolCall),
+                ApprovalDisplayState.FromPendingApproval(nextApproval)));
             return new AgentRunResult("approval_required", events, nextApproval, serializedSession);
         }
 
@@ -1926,6 +1932,12 @@ public sealed record AgentFrameworkApproval(
     string FunctionName,
     string CallId,
     JsonObject Arguments);
+
+public sealed record ApprovalDisplayState(string ApprovalId, RelayToolCall ToolCall)
+{
+    public static ApprovalDisplayState FromPendingApproval(PendingApproval approval) =>
+        new(approval.ApprovalId, approval.ToolCall);
+}
 
 public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Args, string? Answer)
 {
