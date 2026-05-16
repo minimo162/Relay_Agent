@@ -6,12 +6,13 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:golden-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:tool-catalog-smoke && pnpm agent:golden-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "agent:agui-client-tool-smoke": "node scripts/agui-client-tool-smoke.mjs",
     "agent:golden-smoke": "node scripts/agent-golden-smoke.mjs",
     "agent:office-pdf-read-smoke": "node scripts/office-pdf-read-smoke.mjs",
     "agent:officecli-registry-smoke": "node scripts/officecli-registry-smoke.mjs",
     "agent:rg-stream-smoke": "node scripts/rg-stream-cap-smoke.mjs",
+    "agent:tool-catalog-smoke": "node scripts/agent-tool-catalog-smoke.mjs",
     "build": "pnpm --filter @relay-agent/workbench build && node scripts/prepare-sidecar-assets.mjs",
     "dev": "pnpm build && dotnet run --project apps/sidecar/Relay.Sidecar.csproj",
     "sidecar:build": "dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release",

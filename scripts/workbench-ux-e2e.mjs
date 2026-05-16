@@ -22,6 +22,11 @@ const responses = [
   JSON.stringify({ action: "final", answer: "検索は glob を使いました。" }),
   JSON.stringify({ action: "tool", tool: "write", args: { file_path: "approval.txt", content: "approved write" } }),
   JSON.stringify({ action: "final", answer: "承認済みの書き込みを実行しました。" }),
+  JSON.stringify({ action: "tool", tool: "write", args: { file_path: "rejected.txt", content: "should not write" } }),
+  JSON.stringify({ action: "final", answer: "書き込みは実行しませんでした。" }),
+  "{not valid json",
+  JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["node", "-e", "setTimeout(()=>{},3000)"], timeoutMs: 10000 } }),
+  JSON.stringify({ action: "final", answer: "停止されなければ完了します。" }),
 ];
 
 const sidecar = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -268,6 +273,25 @@ async function runBrowserFlow() {
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved file content mismatch");
   }
+
+  await setValue("#instruction", "rejected.txt を作って");
+  await click("#send");
+  await waitForExpression("document.querySelector('#approval') && !document.querySelector('#approval').hidden", 6000, "rejection approval panel");
+  await click("#approval .secondary-button");
+  await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('書き込みは実行しませんでした。'))", 6000, "rejection final event");
+  if (existsSync(join(workspace, "rejected.txt"))) throw new Error("rejected write executed unexpectedly");
+
+  await setValue("#instruction", "壊れた応答を確認して");
+  await click("#send");
+  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Failed' || Array.from(document.querySelectorAll('#events li.event-error')).length > 0", 6000, "visible failure state");
+
+  await setValue("#instruction", "長い検証を開始して");
+  await click("#send");
+  await waitForExpression("document.querySelector('#approval') && !document.querySelector('#approval').hidden", 6000, "long-running approval panel");
+  await click("#approval .primary-button");
+  await waitForExpression("document.querySelector('#send')?.textContent.includes('停止') || document.querySelector('#run-state')?.textContent === 'Running'", 3000, "long-running state");
+  await click("#send");
+  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Stopped'", 3000, "visible cancellation state");
 
   const finalUx = await evaluate(`(() => ({
     approvalHidden: document.querySelector('#approval')?.hidden,

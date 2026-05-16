@@ -428,9 +428,10 @@ Current completed tasks:
 
 Next task after this checkpoint:
 
-- No remaining `agent_framework_agui_native_cutover` task is scheduled. Review
-  and retire stale historical AionUi acceptance tasks before adding any new
-  active milestone.
+- No remaining `agent_framework_agui_native_cutover` task is scheduled. Stale
+  historical AionUi acceptance tasks `AION04` through `AION07` were retired as
+  obsolete in Task Master on 2026-05-16 because AionUi is no longer an active
+  product or release path.
 
 1. Add a proof slice for AG-UI client-tool approvals.
    - Confirm the current Agent Framework AG-UI package surface. If a future
@@ -551,18 +552,228 @@ Framework-first revision after current Microsoft documentation review:
      schemas.
   4. Relay-owned in-process functions only for the remaining gaps.
 
+#### Microsoft Agent Framework Prior-Art Review
+
+Updated 2026-05-16 after reviewing current Microsoft Agent Framework docs,
+official samples, and Microsoft blog case studies:
+
+- **Official sample taxonomy:** `microsoft/Agent-Framework-Samples` organizes
+  examples around foundations, first agents, provider exploration, tools
+  (vision/code interpreter/custom tools/file search), providers and MCP,
+  RAG/file search, planning, multi-agent workflows, evaluation/tracing, DevUI,
+  and real-world cases
+  (`https://github.com/microsoft/Agent-Framework-Samples`). Relay should keep
+  its plan and verification matrix aligned to those same axes: provider,
+  tools, workflow/orchestration, UI streaming, evaluation/tracing, and
+  packaging.
+- **Agent vs workflow boundary:** Microsoft guidance says to use an agent for
+  open-ended conversational work and autonomous tool use, and a workflow when
+  steps are well-defined; it also says that if a function can handle the task,
+  use a function instead of an AI agent
+  (`https://learn.microsoft.com/en-us/agent-framework/overview/`). Relay should
+  therefore stay with one Copilot-controlled manager plus local tools for
+  coding, Office edits, and local file lookup. Do not split into multiple
+  agents just to make simple file/search/edit operations look more agentic.
+- **Tool type pattern:** Agent Framework's tool docs list function tools,
+  approval, code interpreter, file search, web search, hosted MCP, local MCP,
+  and Foundry toolboxes
+  (`https://learn.microsoft.com/agent-framework/agents/tools/`). Local MCP
+  tools are broadly compatible with providers that support function tools, but
+  provider-native approval is not universal. Relay must keep approval and
+  workspace policy as Relay-owned AG-UI/client-tool behavior instead of
+  assuming the Copilot provider can enforce approval natively.
+- **AG-UI product pattern:** Microsoft's AG-UI + Agent Framework workflow demo
+  frames the UI problem clearly: users need to see which agent is active, why
+  the system is waiting, and what sensitive action needs approval
+  (`https://devblogs.microsoft.com/agent-framework/ag-ui-multi-agent-workflow-demo/`).
+  Relay should continue the minimal Workbench direction, but the visible run
+  stream must always show active status, tool calls, approval waits, errors,
+  and completion without hiding them in support-only logs. The demo notes that
+  C# support for MAF + AG-UI was still in development at publication time, so
+  Relay must keep preview-package drift guarded by `pnpm check` and live E2E.
+- **Handoff vs agent-as-tool:** Handoff orchestration is for cases where
+  specialized agents transfer control and task ownership; agent-as-tool keeps a
+  primary agent responsible while delegating bounded subtasks
+  (`https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/handoff`).
+  If Relay later adds specialist agents, prefer agent-as-tool for bounded
+  specialists such as "Office reviewer" or "code verifier"; reserve handoff for
+  real domain ownership transfer with explicit routing rules and shared
+  context requirements.
+- **Workflow orchestration options:** Agent Framework documents sequential,
+  concurrent, handoff, group chat, and magentic orchestration patterns
+  (`https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/`).
+  Relay should not adopt these until a user workflow is repeatable enough to
+  justify explicit topology. The current generic Workbench should remain a
+  single agent run loop, while future deterministic recipes can become
+  workflows only after their entry/exit states and approval points are known.
+- **Declarative workflow and MCP examples:** Declarative workflow docs include
+  `InvokeFunctionTool`, `InvokeMcpTool`, `FunctionTools`, `ToolApproval`,
+  `CustomerSupport`, and `DeepResearch` samples
+  (`https://learn.microsoft.com/en-us/agent-framework/workflows/declarative`).
+  This supports Relay's current decision: model local capabilities as typed
+  tools first; use MCP only for approved standalone providers; do not invent a
+  Relay scheduler when Agent Framework workflows can represent deterministic
+  processes later.
+- **Durable workflow as MCP:** The .NET durable workflow example shows Azure
+  Functions exposing registered workflows as remote MCP tools at a runtime
+  webhook endpoint
+  (`https://devblogs.microsoft.com/dotnet/durable-workflows-in-microsoft-agent-framework/`).
+  For Relay, this is future prior art for exposing durable, non-local,
+  enterprise-approved workflows as MCP tools. It is not a reason to add a local
+  arbitrary MCP server or cloud dependency to the MVP.
+- **Enterprise production signals:** Microsoft's Foundry introduction cites
+  Agent Framework use cases such as audit testing/documentation, customer
+  support, vehicle telemetry analysis, integration services, and marketing
+  content workflows, emphasizing governance, observability, durability, and
+  human-in-the-loop operation
+  (`https://devblogs.microsoft.com/foundry/introducing-microsoft-agent-framework-the-open-source-engine-for-agentic-ai-apps/`).
+  Relay's matching product requirement is not more bespoke tool code; it is
+  stronger traceability: redacted support bundles, tool-call audit records,
+  approval artifacts, reproducible smokes, and release inventory.
+
+Resulting Relay design adjustments:
+
+- Keep the current **single Copilot manager + Agent Framework tools** as the
+  default architecture.
+- Treat multi-agent/handoff workflows as future features with a named business
+  need, not as a default replacement for the generic Workbench.
+- Keep **AG-UI as the user-visible execution protocol**, with approval and
+  waiting states promoted in the UI rather than hidden.
+- Keep **Relay-owned policy and approval** around all local tools because M365
+  Copilot is reached through a custom CDP adapter and provider-native approval
+  cannot be assumed.
+- Prefer future **declarative workflows or MCP-wrapped durable workflows** only
+  when a repeatable process has stable steps, inputs, approval points, and
+  output contracts.
+- Add future improvements under verification/evaluation/tracing rather than
+  expanding the tool catalog first.
+
+#### Executable Task Queue: Agent Framework Prior-Art Alignment
+
+These tasks convert the prior-art review into implementable work. They are
+ordered so each step leaves a concrete artifact and does not require a second
+agent runtime, AionUi, OpenCode/OpenWork, Codex app-server, or unrestricted
+shell.
+
+1. **MAFPR01: Add an Agent Framework alignment matrix.**
+   - Status: completed 2026-05-16.
+   - Goal: turn the prior-art review into a maintained engineering checklist.
+   - Changes:
+     - Add `docs/AGENT_FRAMEWORK_ALIGNMENT.md`.
+     - Map each Agent Framework prior-art axis to Relay's current decision:
+       provider adapter, function tools, local MCP admission, approval,
+       AG-UI streaming, workflow orchestration, evaluation/tracing, and
+       packaging.
+     - Mark each axis as `adopted`, `adopted with Relay policy`,
+       `deferred`, or `rejected`.
+   - Acceptance: the doc has no implementation claims without a current source
+     file or verification command reference.
+   - Verification: `git diff --check`.
+
+2. **MAFPR02: Add a model-facing tool catalog snapshot gate.**
+   - Status: completed 2026-05-16.
+   - Goal: make Agent Framework tool schema drift visible before Copilot sees
+     it.
+   - Changes:
+     - Add a smoke script that starts the sidecar in mock mode, reads the
+       registered Agent Framework tool names/schemas or an exported catalog
+       endpoint, and writes/compares a stable JSON snapshot.
+     - Assert that prompt-facing names remain `glob`, `grep`, `read`,
+       `officecli`, `officecli_mutate`, `edit`, `write`, `apply_patch`,
+       `workspace_status`, `diff`, `bash`, and `ask_user`.
+     - Reject `rg_files`, `rg_search`, and `run_command` in active catalog
+       output.
+   - Acceptance: a catalog change fails a targeted smoke with a readable diff.
+   - Verification: new catalog smoke; `pnpm check`.
+
+3. **MAFPR03: Add an AG-UI run-state acceptance matrix.**
+   - Status: completed 2026-05-16.
+   - Goal: align Workbench UX with Agent Framework/AG-UI examples that expose
+     active status, waits, approvals, errors, and completion.
+   - Changes:
+     - Add a small Workbench E2E matrix covering: ready state, running state,
+       tool-call visible state, approval-required state, rejection, failure,
+       cancellation, and completed state.
+     - Keep screenshots under the existing E2E artifact location.
+     - Update user-facing copy only if a state is ambiguous.
+   - Acceptance: users can tell whether Relay is thinking, waiting for
+     approval, executing a tool, failed, cancelled, or done without opening
+     support details.
+   - Verification: `pnpm workbench:ux-e2e`; `pnpm check`.
+
+4. **MAFPR04: Add tool-call audit and evaluation artifacts.**
+   - Status: completed 2026-05-16.
+   - Goal: follow Agent Framework production guidance by improving
+     observability before adding more tool behavior.
+   - Changes:
+     - Extend support-bundle or run-ledger output with a redacted tool-call
+       audit summary: tool name, argument classification, approval status,
+       duration, success/failure, output truncation, and backup/diff pointers.
+     - Add a deterministic smoke that verifies sensitive fields and document
+       contents remain redacted.
+   - Acceptance: a failed run can be diagnosed from redacted metadata without
+     exposing raw documents, tokens, cookies, or prompt payloads.
+   - Verification: sidecar security/support-bundle smoke; `pnpm check`.
+
+5. **MAFPR05: Define the workflow admission gate.**
+   - Status: completed 2026-05-16.
+   - Goal: prevent premature multi-agent or workflow adoption while keeping a
+     clear path for repeatable business processes.
+   - Changes:
+     - Add a doc section or file that defines when Relay may use:
+       single-agent tools, agent-as-tool, handoff, declarative workflow,
+       local MCP, or durable workflow-as-MCP.
+     - Include required fields for any future workflow proposal: trigger,
+       inputs, deterministic steps, approval points, rollback/backup behavior,
+       output contract, E2E test, and support-bundle evidence.
+   - Acceptance: no new workflow/multi-agent feature can be scheduled without
+     satisfying this gate.
+   - Verification: `git diff --check`; hard-cut guard if new forbidden paths
+     are added.
+
+6. **MAFPR06: Harden live Copilot provider acceptance.**
+   - Status: completed 2026-05-16.
+   - Goal: keep the custom M365 Copilot CDP adapter compatible with Agent
+     Framework tool-calling expectations.
+   - Changes:
+     - Add or update live E2E criteria for prompt delivery, tool JSON
+       projection, AG-UI streaming, approval resume, final answer extraction,
+       and fail-fast invalid JSON.
+     - Keep this as an optional live gate unless a signed-in Edge CDP session
+       is available.
+   - Acceptance: live failures are classified as environment, prompt delivery,
+     response extraction, schema validation, or tool execution failures.
+   - Verification: `pnpm workbench:live-copilot-e2e` when available; otherwise
+     documented skip with reason.
+
+7. **MAFPR07: Review local MCP candidates before adding MCP runtime.**
+   - Status: completed 2026-05-16.
+   - Goal: avoid adding a toy MCP fixture or arbitrary server while preserving
+     the Agent Framework extension path.
+   - Changes:
+     - Evaluate candidate local MCP servers only if they provide a real
+       capability not already covered by ripgrep, OfficeCLI, filesystem, git,
+       or bounded command tools.
+     - Document packaging, security, approval, workspace containment,
+       redaction, and Windows/Linux behavior for each candidate.
+   - Acceptance: either choose a named approved MCP candidate with a concrete
+     follow-up task, or record that no MCP server should be added yet.
+   - Verification: documentation review; no runtime change unless a candidate
+     is explicitly approved.
+
 #### Tool Substrate Reduction Plan
 
-Current state: the active tool surface is mostly Relay-owned function wrappers.
-`RelayAgentFunctionSet` registers `rg_files`, `rg_search`, `read`,
-`officecli`, `officecli_mutate`, `edit`, `write`, `workspace_status`, `diff`,
-`run_command`, and `ask_user` through `AIFunctionFactory.Create`, while
-`RelayToolExecutor` validates and dispatches those calls. Some tools already
-delegate to established executables such as ripgrep and OfficeCLI, but the
-catalog, validation, and dispatch shape are still Relay-specific. This is
-acceptable for the current MVP, but the next architectural step is to reduce
-custom tool code without regressing to the removed OpenCode/OpenWork/Codex
-runtime model.
+Current state: the active tool surface is descriptor-driven Agent Framework
+function tools. `RelayAgentFunctionSet` now exposes `glob`, `grep`, `read`,
+`officecli`, `officecli_mutate`, `edit`, `write`, `apply_patch`,
+`workspace_status`, `diff`, bounded `bash`, and `ask_user` through
+`AIFunctionFactory.Create`, while `RelayToolExecutor` uses a provider registry
+for validation, descriptions, approval requirements, and execution. Some tools
+delegate to established executables such as ripgrep and OfficeCLI. The next
+architectural step is not another rename; it is reducing the remaining
+Relay-owned provider code only where Agent Framework primitives, approved MCP
+providers, or existing CLI/library substrates can replace it without losing
+local policy, auditability, or packaging control.
 
 Design target:
 

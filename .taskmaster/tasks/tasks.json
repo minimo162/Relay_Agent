@@ -1441,7 +1441,7 @@
     {
       "id": "aionui_release_acceptance",
       "name": "AionUi Release Acceptance And Windows Sign-off",
-      "description": "Post-WDS task list for moving the Relay-branded AionUi shell from completed document-search/result-flow contracts to a releasable Windows acceptance bundle. Linux-preparable gates are separated from clean-Windows sign-off, and B12 remains the existing Windows bootstrap handoff gate.",
+      "description": "Historical phase retained for traceability. AION01-AION03 were completed while Relay-branded AionUi was still being evaluated. AION04-AION07 were cancelled as obsolete on 2026-05-16 after the product hard-cut to the browser-hosted Workbench plus .NET sidecar architecture; do not schedule new work from this phase.",
       "tasks": [
         {
           "id": "AION01",
@@ -1505,8 +1505,8 @@
         },
         {
           "id": "AION04",
-          "title": "Import clean-Windows B12 handoff evidence into AionUi acceptance",
-          "description": "After B12 is complete on a clean Windows host, link its installer/browser handoff evidence into the AionUi acceptance bundle. Preserve exact artifact paths, provider endpoint/model, OpenCode/OpenWork versions, SHA256 values, and M365 text/read-tool transcript evidence.",
+          "title": "Retired obsolete AionUi acceptance task: Import clean-Windows B12 handoff evidence",
+          "description": "Cancelled as obsolete on 2026-05-16. Relay no longer ships or accepts Relay-branded AionUi, OpenCode/OpenWork, or document-search-specific acceptance bundles. Current acceptance belongs to the browser-hosted Workbench plus .NET sidecar path.",
           "files": [
             "docs/WINDOWS_OPENWORK_OPENCODE_BOOTSTRAP_E2E.md",
             "docs/AIONUI_WINDOWS_VALIDATION.md",
@@ -1514,19 +1514,20 @@
             "PLANS.md",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "Clean-Windows B12 installer/browser handoff evidence linked from the AionUi acceptance matrix",
+          "artifact": "Obsolete task retired by the sidecar/workbench hard-cut; see docs/IMPLEMENTATION.md 2026-05-16 stale AionUi pending cleanup.",
           "effort": "S",
           "priority": "critical",
           "blockedBy": [
             "B12",
             "AION01"
           ],
-          "status": "pending"
+          "status": "cancelled",
+          "obsoleteReason": "AionUi was retired as an active product path; this Windows acceptance task no longer applies."
         },
         {
           "id": "AION05",
-          "title": "Run installed Relay-branded AionUi first-run provider smoke",
-          "description": "On a clean Windows install, verify that the Relay-branded AionUi shell starts from the intended first-run flow, seeds the M365 Copilot provider/default model, surfaces sign-in or ready state clearly, discovers OfficeCLI/ripgrep/bundled Node/LiteParse, and does not route the primary user path through OpenCode Web.",
+          "title": "Retired obsolete AionUi acceptance task: Installed first-run provider smoke",
+          "description": "Cancelled as obsolete on 2026-05-16. The installed Relay-branded AionUi shell is no longer an active release target. First-run acceptance now belongs to the Workbench sidecar app and its AG-UI/Copilot readiness gates.",
           "files": [
             "docs/AIONUI_WINDOWS_VALIDATION.md",
             "docs/AIONUI_RELAY_MIGRATION.md",
@@ -1534,7 +1535,7 @@
             "PLANS.md",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "Installed AionUi first-run provider and local-runtime smoke evidence",
+          "artifact": "Obsolete task retired by the sidecar/workbench hard-cut; see docs/IMPLEMENTATION.md 2026-05-16 stale AionUi pending cleanup.",
           "effort": "M",
           "priority": "critical",
           "blockedBy": [
@@ -1542,12 +1543,13 @@
             "AION03",
             "AION04"
           ],
-          "status": "pending"
+          "status": "cancelled",
+          "obsoleteReason": "AionUi was retired as an active product path; installed AionUi first-run smoke no longer applies."
         },
         {
           "id": "AION06",
-          "title": "Run installed Workspace Document Search UX acceptance",
-          "description": "Using the installed Relay-branded AionUi shell on Windows, run representative shared-folder searches and record result-card behavior, preview/open/copy/refine/show-more actions, partial/no-result/permission states, local draft and Copilot-polish boundaries, and support export output without source document contents.",
+          "title": "Retired obsolete AionUi acceptance task: Workspace Document Search UX acceptance",
+          "description": "Cancelled as obsolete on 2026-05-16. The dedicated Workspace Document Search UX and Relay-branded AionUi shell are no longer active product paths. Local file lookup is now a generic agent workflow over glob/grep/read.",
           "files": [
             "docs/AIONUI_WINDOWS_VALIDATION.md",
             "docs/WORKSPACE_DOCUMENT_SEARCH_GOLDEN_QUERIES.md",
@@ -1556,19 +1558,20 @@
             "PLANS.md",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "Installed Workspace Document Search UX acceptance evidence and support-export sample",
+          "artifact": "Obsolete task retired by the sidecar/workbench hard-cut; see docs/IMPLEMENTATION.md 2026-05-16 stale AionUi pending cleanup.",
           "effort": "L",
           "priority": "high",
           "blockedBy": [
             "WDS12",
             "AION05"
           ],
-          "status": "pending"
+          "status": "cancelled",
+          "obsoleteReason": "Dedicated AionUi document-search acceptance was superseded by the generic Workbench agent workflow."
         },
         {
           "id": "AION07",
-          "title": "Publish AionUi release readiness decision",
-          "description": "Consolidate the release workflow, overlay smoke, B12 handoff, installed first-run, and Workspace Document Search acceptance artifacts into a release readiness decision. Update docs with known limitations, unsupported Windows-only gaps, unsigned/signed build status, and the next operator action.",
+          "title": "Retired obsolete AionUi acceptance task: Publish release readiness decision",
+          "description": "Cancelled as obsolete on 2026-05-16. AionUi release readiness is not published because AionUi is no longer a release target. Current release readiness is governed by the sidecar/workbench package, AG-UI smokes, support-bundle redaction, and release inventory.",
           "files": [
             "README.md",
             "docs/AIONUI_WINDOWS_VALIDATION.md",
@@ -1577,7 +1580,7 @@
             "PLANS.md",
             ".taskmaster/tasks/tasks.json"
           ],
-          "artifact": "AionUi release readiness decision with evidence links and known limitations",
+          "artifact": "Obsolete task retired by the sidecar/workbench hard-cut; see docs/IMPLEMENTATION.md 2026-05-16 stale AionUi pending cleanup.",
           "effort": "M",
           "priority": "high",
           "blockedBy": [
@@ -1585,7 +1588,8 @@
             "AION05",
             "AION06"
           ],
-          "status": "pending"
+          "status": "cancelled",
+          "obsoleteReason": "AionUi release readiness was superseded by the sidecar/workbench release path."
         }
       ]
     },
@@ -1694,6 +1698,154 @@
             "AFAGUI04"
           ],
           "status": "completed"
+        }
+      ]
+    },
+    {
+      "id": "agent_framework_prior_art_alignment",
+      "name": "Agent Framework Prior-Art Alignment",
+      "description": "Executable task phase derived from Microsoft Agent Framework prior-art review. It keeps the default architecture as one M365 Copilot manager over Agent Framework tools, improves AG-UI visibility, catalog drift checks, audit/evaluation artifacts, workflow admission rules, live Copilot acceptance, and MCP admission without adding a second runtime or obsolete AionUi/OpenCode paths.",
+      "tasks": [
+        {
+          "id": "MAFPR01",
+          "title": "Add Agent Framework alignment matrix",
+          "description": "Create docs/AGENT_FRAMEWORK_ALIGNMENT.md mapping Agent Framework prior-art axes to Relay decisions: provider adapter, function tools, local MCP admission, approval, AG-UI streaming, workflow orchestration, evaluation/tracing, and packaging. Mark each axis adopted, adopted with Relay policy, deferred, or rejected with source and verification references.",
+          "files": [
+            "docs/AGENT_FRAMEWORK_ALIGNMENT.md",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/AGENT_FRAMEWORK_ALIGNMENT.md alignment matrix",
+          "effort": "S",
+          "priority": "critical",
+          "blockedBy": [],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "git diff --check; pnpm check"
+        },
+        {
+          "id": "MAFPR02",
+          "title": "Add model-facing tool catalog snapshot gate",
+          "description": "Add a smoke that exports or inspects the registered Agent Framework tool catalog and compares names/schemas against a stable snapshot. The gate must assert the current glob/grep/read/officecli/officecli_mutate/edit/write/apply_patch/workspace_status/diff/bash/ask_user catalog and reject old rg_files, rg_search, and run_command names.",
+          "files": [
+            "apps/sidecar/",
+            "scripts/",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "/api/tool-catalog endpoint plus scripts/agent-tool-catalog-smoke.mjs and snapshot fixture",
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": [
+            "MAFPR01"
+          ],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "pnpm agent:tool-catalog-smoke; pnpm check"
+        },
+        {
+          "id": "MAFPR03",
+          "title": "Add AG-UI run-state acceptance matrix",
+          "description": "Extend Workbench E2E coverage so users can distinguish ready, running, visible tool call, approval required, rejection, failure, cancellation, and completion states without opening support details. Keep screenshots in the existing E2E artifact location and only adjust copy where a state is ambiguous.",
+          "files": [
+            "apps/workbench/src/",
+            "scripts/workbench-ux-e2e.mjs",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/AGENT_FRAMEWORK_ALIGNMENT.md AG-UI matrix plus scripts/workbench-ux-e2e.mjs state checks",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "MAFPR01"
+          ],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "pnpm workbench:ux-e2e; pnpm check"
+        },
+        {
+          "id": "MAFPR04",
+          "title": "Add tool-call audit and evaluation artifacts",
+          "description": "Extend the support-bundle or run-ledger output with redacted tool-call audit metadata: tool name, argument classification, approval status, duration, success/failure, output truncation, and backup/diff pointers. Add a deterministic smoke proving sensitive fields and document contents remain redacted.",
+          "files": [
+            "apps/sidecar/",
+            "scripts/sidecar-security-smoke.mjs",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "Support bundle audit/tool-call-summary.json plus sidecar security smoke assertion",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "MAFPR02"
+          ],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "pnpm sidecar:security-smoke; pnpm check"
+        },
+        {
+          "id": "MAFPR05",
+          "title": "Define workflow admission gate",
+          "description": "Document the decision gate for single-agent tools, agent-as-tool, handoff, declarative workflow, local MCP, and durable workflow-as-MCP. Future workflow proposals must identify trigger, inputs, deterministic steps, approval points, rollback/backup behavior, output contract, E2E test, and support-bundle evidence.",
+          "files": [
+            "docs/AGENT_FRAMEWORK_ALIGNMENT.md",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/AGENT_FRAMEWORK_ALIGNMENT.md workflow admission gate",
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": [
+            "MAFPR01"
+          ],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "git diff --check; pnpm check"
+        },
+        {
+          "id": "MAFPR06",
+          "title": "Harden live Copilot provider acceptance",
+          "description": "Update live E2E criteria for prompt delivery, tool JSON projection, AG-UI streaming, approval resume, final answer extraction, and fail-fast invalid JSON. Failures must be classified as environment, prompt delivery, response extraction, schema validation, or tool execution failures. Keep it optional unless a signed-in Edge CDP session is available.",
+          "files": [
+            "scripts/workbench-live-copilot-e2e.mjs",
+            "docs/COPILOT_E2E_CDP_PITFALLS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "scripts/workbench-live-copilot-e2e.mjs live failure classification and docs acceptance criteria",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "MAFPR02",
+            "MAFPR03"
+          ],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "pnpm workbench:live-copilot-e2e when signed-in Edge CDP is available; classified failure path is static-smoked by script syntax and pnpm check coverage"
+        },
+        {
+          "id": "MAFPR07",
+          "title": "Review local MCP candidates before adding MCP runtime",
+          "description": "Evaluate local MCP candidates only if they provide a real capability not already covered by ripgrep, OfficeCLI, filesystem, git, or bounded command tools. Document packaging, security, approval, workspace containment, redaction, and Windows/Linux behavior; either choose a named approved MCP candidate with a follow-up task or record that no MCP server should be added yet.",
+          "files": [
+            "docs/AGENT_FRAMEWORK_ALIGNMENT.md",
+            "docs/TOOL_SUBSTRATE_MATRIX.md",
+            "PLANS.md",
+            "docs/IMPLEMENTATION.md",
+            ".taskmaster/tasks/tasks.json"
+          ],
+          "artifact": "docs/AGENT_FRAMEWORK_ALIGNMENT.md MCP admission review with no-add decision",
+          "effort": "S",
+          "priority": "medium",
+          "blockedBy": [
+            "MAFPR01",
+            "MAFPR05"
+          ],
+          "status": "completed",
+          "completedAt": "2026-05-16",
+          "verification": "git diff --check; pnpm check"
         }
       ]
     }

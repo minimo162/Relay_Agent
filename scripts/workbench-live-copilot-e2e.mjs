@@ -159,6 +159,26 @@ async function captureScreenshot(name) {
   writeFileSync(join(artifactDir, name), Buffer.from(screenshot.data, "base64"));
 }
 
+function classifyLiveCopilotFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target/i.test(message)) {
+    return "environment";
+  }
+  if (/Prompt did not reach|composer|visible length|input|send/i.test(message)) {
+    return "prompt_delivery";
+  }
+  if (/Timed out waiting for live Copilot final answer|response completed|extract|final answer/i.test(message)) {
+    return "response_extraction";
+  }
+  if (/invalid JSON|schema|tool projection|expected JSON|unavailable tool/i.test(message)) {
+    return "schema_validation";
+  }
+  if (/tool|officecli|ripgrep|approval|workspace|execution/i.test(message)) {
+    return "tool_execution";
+  }
+  return "unknown";
+}
+
 async function runBrowserFlow() {
   edge = spawn(edgePath, [
     "--headless=new",
@@ -239,6 +259,10 @@ try {
   await waitForStatus();
   const result = await runBrowserFlow();
   console.log(`[workbench-live-copilot-e2e] ok elapsed=${result.elapsedMs}ms readiness=${result.readiness} cdp=${copilotCdpPort}`);
+} catch (error) {
+  const classification = classifyLiveCopilotFailure(error);
+  const message = error instanceof Error ? error.message : String(error);
+  throw new Error(`[workbench-live-copilot-e2e:${classification}] ${message}`);
 } finally {
   if (cdp) cdp.close();
   if (edge) edge.kill("SIGTERM");

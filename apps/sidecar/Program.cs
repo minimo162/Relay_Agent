@@ -78,6 +78,9 @@ app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
         Checks: checks));
 });
 
+app.MapGet("/api/tool-catalog", () =>
+    Results.Json(RelayToolCatalogSnapshot.FromCurrentCatalog(), JsonOptions.Default));
+
 app.MapPost("/api/workspace", (WorkspaceRequest request) =>
 {
     if (string.IsNullOrWhiteSpace(request.Path))
@@ -279,6 +282,40 @@ public sealed record ErrorResponse(string Error);
 
 public sealed record SupportBundleRequest(bool IncludeSensitive = false);
 
+public sealed record RelayToolCatalogSnapshot(
+    string SchemaVersion,
+    IReadOnlyList<RelayToolCatalogSnapshotEntry> Tools)
+{
+    public static RelayToolCatalogSnapshot FromCurrentCatalog() =>
+        new(
+            "RelayAgentToolCatalogSnapshot.v1",
+            RelayAgentToolCatalog.All.Select(tool => new RelayToolCatalogSnapshotEntry(
+                tool.Name,
+                tool.Description,
+                tool.ExecutorTool,
+                tool.Safety.ToString(),
+                tool.FrameworkToolType.ToString(),
+                tool.CapabilityFamily,
+                tool.ProviderKey,
+                tool.MutationClass.ToString(),
+                tool.ApprovalPolicy,
+                tool.OutputContract,
+                tool.PromptVisibility)).ToArray());
+}
+
+public sealed record RelayToolCatalogSnapshotEntry(
+    string Name,
+    string Description,
+    string ExecutorTool,
+    string Safety,
+    string FrameworkToolType,
+    string CapabilityFamily,
+    string ProviderKey,
+    string MutationClass,
+    string ApprovalPolicy,
+    string OutputContract,
+    string PromptVisibility);
+
 public static class JsonOptions
 {
     public static readonly JsonSerializerOptions Default = new(JsonSerializerDefaults.Web)
@@ -313,6 +350,11 @@ public static class SupportBundle
             "",
         ]));
 
+        AddText(
+            archive,
+            "audit/tool-call-summary.json",
+            await ToolCallAuditSummary.CreateJsonAsync(dataDirectory, cancellationToken));
+
         foreach (var directoryName in new[] { "runs", "run-events" })
         {
             var directory = Path.Combine(dataDirectory, directoryName);
@@ -344,6 +386,301 @@ public static class SupportBundle
         writer.Write(content);
     }
 }
+
+public static class ToolCallAuditSummary
+{
+    private static readonly string[] AuditDirectories = ["runs", "run-events"];
+
+    public static async Task<string> CreateJsonAsync(string dataDirectory, CancellationToken cancellationToken)
+    {
+        var records = new List<ToolCallAuditRecord>();
+        var scannedFiles = 0;
+
+        foreach (var directoryName in AuditDirectories)
+        {
+            var directory = Path.Combine(dataDirectory, directoryName);
+            if (!Directory.Exists(directory)) continue;
+
+            foreach (var file in Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                scannedFiles += 1;
+
+                JsonNode? node;
+                try
+                {
+                    node = JsonNode.Parse(await File.ReadAllTextAsync(file, cancellationToken));
+                }
+                catch (JsonException)
+                {
+                    records.Add(new ToolCallAuditRecord(
+                        Source: Path.GetRelativePath(dataDirectory, file).Replace('\\', '/'),
+                        Type: "unparseable_json",
+                        ToolName: null,
+                        ArgumentClassification: [],
+                        ApprovalStatus: null,
+                        Success: null,
+                        DurationMs: null,
+                        OutputTruncated: null,
+                        HasBackupPointer: false,
+                        HasDiffPointer: false));
+                    continue;
+                }
+
+                if (node is null) continue;
+                CollectRecords(
+                    node,
+                    Path.GetRelativePath(dataDirectory, file).Replace('\\', '/'),
+                    records);
+            }
+        }
+
+        var summary = new ToolCallAuditSummaryDocument(
+            SchemaVersion: "RelayToolCallAuditSummary.v1",
+            ScannedFiles: scannedFiles,
+            ToolLikeRecords: records.Count,
+            Records: records
+                .OrderBy(record => record.Source, StringComparer.Ordinal)
+                .ThenBy(record => record.Type, StringComparer.Ordinal)
+                .ThenBy(record => record.ToolName, StringComparer.Ordinal)
+                .Take(200)
+                .ToArray());
+        return JsonSerializer.Serialize(summary, JsonOptions.Default);
+    }
+
+    private static void CollectRecords(JsonNode node, string source, List<ToolCallAuditRecord> records)
+    {
+        if (node is JsonObject obj)
+        {
+            if (LooksLikeToolOrApprovalRecord(obj))
+            {
+                records.Add(new ToolCallAuditRecord(
+                    Source: source,
+                    Type: FindString(obj, "type") ?? "tool_or_approval",
+                    ToolName: FindFirstString(obj, ["toolName", "toolCallName", "functionName", "tool", "name"]),
+                    ArgumentClassification: ClassifyArguments(obj),
+                    ApprovalStatus: ApprovalStatus(obj),
+                    Success: SuccessState(obj),
+                    DurationMs: FindFirstNumber(obj, ["durationMs", "elapsedMs", "latencyMs"]),
+                    OutputTruncated: FindFirstBoolean(obj, ["outputTruncated", "truncated"]),
+                    HasBackupPointer: ContainsKeyFragment(obj, "backup"),
+                    HasDiffPointer: ContainsKeyFragment(obj, "diff")));
+            }
+
+            foreach (var property in obj)
+            {
+                if (property.Value is not null) CollectRecords(property.Value, source, records);
+            }
+            return;
+        }
+
+        if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item is not null) CollectRecords(item, source, records);
+            }
+        }
+    }
+
+    private static bool LooksLikeToolOrApprovalRecord(JsonObject obj)
+    {
+        var type = FindString(obj, "type");
+        if (type is not null && (
+            type.Contains("tool", StringComparison.OrdinalIgnoreCase) ||
+            type.Contains("approval", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return FindFirstString(obj, ["toolName", "toolCallName", "functionName", "tool"]) is not null ||
+            obj.ContainsKey("approved") ||
+            obj.ContainsKey("approvalId") ||
+            obj.ContainsKey("toolCallId");
+    }
+
+    private static IReadOnlyList<string> ClassifyArguments(JsonObject obj)
+    {
+        var classes = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (key, value) in obj)
+        {
+            if (!key.Contains("arg", StringComparison.OrdinalIgnoreCase) &&
+                !key.Contains("parameter", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            ClassifyNode(value, classes);
+        }
+        return classes.ToArray();
+    }
+
+    private static void ClassifyNode(JsonNode? node, SortedSet<string> classes)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (key, value) in obj)
+                {
+                    if (LooksPathLikeKey(key)) classes.Add("path-like");
+                    else if (LooksContentLikeKey(key)) classes.Add("content-like");
+                    else if (LooksCommandLikeKey(key)) classes.Add("command-like");
+                    else classes.Add("other");
+                    ClassifyNode(value, classes);
+                }
+                break;
+            case JsonArray array:
+                foreach (var item in array) ClassifyNode(item, classes);
+                break;
+            case JsonValue value when value.TryGetValue<string>(out var text):
+                if (Regex.IsMatch(text, @"^[A-Za-z]:\\|^/")) classes.Add("path-like");
+                else classes.Add("literal");
+                break;
+            case JsonValue:
+                classes.Add("literal");
+                break;
+        }
+    }
+
+    private static string? ApprovalStatus(JsonObject obj)
+    {
+        if (FindFirstBoolean(obj, ["approved"]) is { } approved) return approved ? "approved" : "rejected";
+        var type = FindString(obj, "type");
+        if (type is not null && type.Contains("approval", StringComparison.OrdinalIgnoreCase))
+        {
+            return FindFirstString(obj, ["status", "approvalStatus"]) ?? "requested";
+        }
+        return FindFirstString(obj, ["approvalStatus"]);
+    }
+
+    private static bool? SuccessState(JsonObject obj)
+    {
+        if (FindFirstBoolean(obj, ["success", "ok"]) is { } success) return success;
+        var type = FindString(obj, "type");
+        if (type is not null)
+        {
+            if (type.Contains("completed", StringComparison.OrdinalIgnoreCase) ||
+                type.Contains("result", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (type.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                type.Contains("failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+        var status = FindString(obj, "status");
+        if (status is null) return null;
+        if (status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("ok", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("success", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("error", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        return null;
+    }
+
+    private static string? FindFirstString(JsonObject obj, IReadOnlyList<string> names)
+    {
+        foreach (var name in names)
+        {
+            if (FindString(obj, name) is { } value) return value;
+        }
+        return null;
+    }
+
+    private static string? FindString(JsonObject obj, string name) =>
+        obj.TryGetPropertyValue(name, out var node) &&
+        node is JsonValue value &&
+        value.TryGetValue<string>(out var text)
+            ? SupportBundleRedactor.Redact(text)
+            : null;
+
+    private static double? FindFirstNumber(JsonObject obj, IReadOnlyList<string> names)
+    {
+        foreach (var name in names)
+        {
+            if (obj.TryGetPropertyValue(name, out var node) &&
+                node is JsonValue value &&
+                value.TryGetValue<double>(out var number))
+            {
+                return number;
+            }
+        }
+        return null;
+    }
+
+    private static bool? FindFirstBoolean(JsonObject obj, IReadOnlyList<string> names)
+    {
+        foreach (var name in names)
+        {
+            if (obj.TryGetPropertyValue(name, out var node) &&
+                node is JsonValue value &&
+                value.TryGetValue<bool>(out var flag))
+            {
+                return flag;
+            }
+        }
+        return null;
+    }
+
+    private static bool ContainsKeyFragment(JsonObject obj, string fragment)
+    {
+        foreach (var (key, value) in obj)
+        {
+            if (key.Contains(fragment, StringComparison.OrdinalIgnoreCase)) return true;
+            if (value is JsonObject child && ContainsKeyFragment(child, fragment)) return true;
+            if (value is JsonArray array)
+            {
+                foreach (var item in array)
+                {
+                    if (item is JsonObject itemObj && ContainsKeyFragment(itemObj, fragment)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static bool LooksPathLikeKey(string key) =>
+        key.Contains("path", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("file", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("cwd", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("workspace", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksContentLikeKey(string key) =>
+        key.Contains("content", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("string", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("text", StringComparison.OrdinalIgnoreCase) ||
+        key.Contains("prompt", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksCommandLikeKey(string key) =>
+        key.Contains("command", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("argv", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("args", StringComparison.OrdinalIgnoreCase);
+}
+
+public sealed record ToolCallAuditSummaryDocument(
+    string SchemaVersion,
+    int ScannedFiles,
+    int ToolLikeRecords,
+    IReadOnlyList<ToolCallAuditRecord> Records);
+
+public sealed record ToolCallAuditRecord(
+    string Source,
+    string Type,
+    string? ToolName,
+    IReadOnlyList<string> ArgumentClassification,
+    string? ApprovalStatus,
+    bool? Success,
+    double? DurationMs,
+    bool? OutputTruncated,
+    bool HasBackupPointer,
+    bool HasDiffPointer);
 
 public static class SupportBundleRedactor
 {

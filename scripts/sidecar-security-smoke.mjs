@@ -143,6 +143,16 @@ try {
   }, "POST");
   if (supportBundle.statusCode !== 200) throw new Error(`expected 200 for explicit support bundle export, got ${supportBundle.statusCode}`);
   const entries = readZipTextEntries(supportBundle.body);
+  if (!entries.has("audit/tool-call-summary.json")) {
+    throw new Error("support bundle is missing audit/tool-call-summary.json");
+  }
+  const auditSummary = JSON.parse(entries.get("audit/tool-call-summary.json"));
+  if (auditSummary.schemaVersion !== "RelayToolCallAuditSummary.v1") {
+    throw new Error(`unexpected audit summary schema: ${auditSummary.schemaVersion}`);
+  }
+  if (auditSummary.scannedFiles < 2 || auditSummary.toolLikeRecords < 1) {
+    throw new Error(`audit summary did not inspect the synthetic run logs: ${JSON.stringify(auditSummary)}`);
+  }
   const bundleText = [...entries.values()].join("\n");
   for (const forbidden of [
     "PROJECT_SECRET_REVENUE",

@@ -18118,3 +18118,156 @@ Result:
   `workbench-empty.png`, `workbench-completed.png`, and
   `workbench-approval.png`.
 - `git diff --check` passed.
+
+## 2026-05-16: Stale AionUi Pending Cleanup
+
+Changes:
+
+- Retired the historical Task Master `aionui_release_acceptance` pending tasks
+  `AION04`, `AION05`, `AION06`, and `AION07` as `cancelled` with explicit
+  `obsoleteReason` fields.
+- Updated the phase description to state that AION01-AION03 are retained only
+  for traceability and that AION04-AION07 must not be scheduled because
+  Relay-branded AionUi, OpenCode/OpenWork, and the dedicated Workspace Document
+  Search UX are no longer active product or release paths.
+- Updated `PLANS.md` so the Agent Framework/AG-UI cutover section no longer
+  points at a future stale-AionUi cleanup task.
+
+Verification commands run locally:
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"
+node -e "const j=JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); const p=[]; for (const ph of j.phases||[]) for (const t of ph.tasks||[]) if (t.status==='pending') p.push(t.id); console.log(JSON.stringify(p))"
+git diff --check
+```
+
+Result:
+
+- Task Master JSON parses successfully.
+- No pending Task Master tasks remain.
+- `git diff --check` passed.
+
+## 2026-05-16: Microsoft Agent Framework Prior-Art Plan Update
+
+Changes:
+
+- Reviewed current Microsoft Agent Framework official docs, samples, workflow
+  docs, AG-UI workflow demo, durable workflow/MCP guidance, and Microsoft
+  enterprise case-study material.
+- Updated `PLANS.md` with a dedicated prior-art section that maps those
+  examples to Relay decisions:
+  single Copilot manager by default, Agent Framework tools as the main runtime
+  surface, Relay-owned policy/approval, AG-UI-visible execution state,
+  declarative workflows only for repeatable processes, and MCP only for
+  approved standalone providers or durable enterprise workflows.
+- Updated the Tool Substrate Reduction Plan current-state wording so it
+  reflects the already-cut-over descriptor/provider catalog instead of the old
+  `rg_files` / `rg_search` / `run_command` baseline.
+
+Verification commands run locally:
+
+```bash
+git diff --check
+```
+
+Result:
+
+- `git diff --check` passed.
+
+## 2026-05-16: Agent Framework Prior-Art Task Breakdown
+
+Changes:
+
+- Converted the Agent Framework prior-art review into an executable task queue
+  in `PLANS.md`:
+  `MAFPR01` alignment matrix, `MAFPR02` tool catalog snapshot gate,
+  `MAFPR03` AG-UI run-state acceptance matrix, `MAFPR04` tool-call audit and
+  evaluation artifacts, `MAFPR05` workflow admission gate, `MAFPR06` live
+  Copilot provider acceptance hardening, and `MAFPR07` local MCP candidate
+  review.
+- Added a new Task Master phase,
+  `agent_framework_prior_art_alignment`, with those seven tasks as pending
+  work. Each task includes files, artifact, effort, priority, blockers, and
+  acceptance-oriented descriptions.
+- Kept the queue ordered so it improves architecture traceability,
+  verification, AG-UI visibility, auditability, workflow governance, and
+  provider acceptance before adding any new runtime or tool substrate.
+
+Verification commands run locally:
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); console.log('tasks json ok')"
+node -e "const j=JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); const phase=j.phases.find(p=>p.id==='agent_framework_prior_art_alignment'); console.log(JSON.stringify((phase?.tasks||[]).map(t=>[t.id,t.status,t.blockedBy]), null, 2))"
+git diff --check
+```
+
+Result:
+
+- Task Master JSON parses successfully.
+- New `MAFPR01` through `MAFPR07` tasks are present and pending.
+- `git diff --check` passed.
+
+## 2026-05-16: Agent Framework Prior-Art Task Completion
+
+Changes:
+
+- Completed `MAFPR01` by adding
+  `docs/AGENT_FRAMEWORK_ALIGNMENT.md`, a maintained alignment matrix that maps
+  provider adapter, Agent Framework runtime, function tools, local MCP
+  admission, approval, AG-UI streaming, workflows, evaluation/tracing, and
+  packaging to Relay decisions and verification artifacts.
+- Completed `MAFPR02` by adding `/api/tool-catalog`, a stable
+  `RelayAgentToolCatalogSnapshot.v1` export, the snapshot fixture at
+  `scripts/fixtures/agent-tool-catalog-snapshot.json`, and
+  `scripts/agent-tool-catalog-smoke.mjs`. The smoke rejects old `rg_files`,
+  `rg_search`, `run_command`, and `office_search` names.
+- Completed `MAFPR03` by documenting the AG-UI run-state acceptance matrix and
+  extending `scripts/workbench-ux-e2e.mjs` to exercise running, completed,
+  approval-required, approved, rejected, failed, and stopped states.
+- Completed `MAFPR04` by adding `audit/tool-call-summary.json` to support
+  bundles through `ToolCallAuditSummary`. The summary records redacted
+  tool-like metadata and argument classifications without raw paths, prompts,
+  tokens, document contents, stdout, or stderr. `sidecar-security-smoke` now
+  asserts the audit artifact exists and remains redacted.
+- Completed `MAFPR05` by documenting the workflow admission gate, including
+  required trigger, input, deterministic-step, approval, rollback, output,
+  evaluation, and security fields for any future workflow/multi-agent/MCP
+  proposal.
+- Completed `MAFPR06` by adding live Copilot failure classification to
+  `scripts/workbench-live-copilot-e2e.mjs`: environment, prompt delivery,
+  response extraction, schema validation, tool execution, or unknown.
+- Completed `MAFPR07` by documenting the MCP admission review and recording the
+  current no-add decision: no local MCP server should be added until a named
+  standalone provider offers real capability beyond ripgrep, OfficeCLI,
+  filesystem, git, and bounded commands.
+- Marked all `MAFPR01` through `MAFPR07` Task Master tasks as completed with
+  concrete artifact and verification fields. No pending Task Master tasks
+  remain.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:tool-catalog-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:security-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:ux-e2e
+node -e "const j=JSON.parse(require('fs').readFileSync('.taskmaster/tasks/tasks.json','utf8')); const p=[]; for (const ph of j.phases||[]) for (const t of ph.tasks||[]) if (t.status==='pending') p.push(t.id); console.log(JSON.stringify(p));"
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+git diff --check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Tool catalog snapshot smoke passed.
+- Support-bundle security/redaction smoke passed with the new audit summary.
+- Workbench UX E2E passed:
+  `search=395ms`, `approval=116ms`, screenshots
+  `workbench-empty.png`, `workbench-completed.png`, and
+  `workbench-approval.png`.
+- Task Master pending-task query returned `[]`.
+- Full `pnpm check` passed, including hard-cut guard, Workbench typecheck/build,
+  sidecar build/smoke, tool catalog smoke, golden smoke, AG-UI client-tool
+  smoke, ripgrep stream cap smoke, Office/PDF read smoke, OfficeCLI registry
+  smoke, support-bundle security smoke, and release inventory/SBOM generation.
+- `git diff --check` passed.
