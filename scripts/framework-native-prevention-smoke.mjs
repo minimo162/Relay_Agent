@@ -102,7 +102,7 @@ try {
   if (askUser.frameworkToolType !== "Client" || askUser.promptVisibility !== "state_scoped") {
     throw new Error(`ask_user must be state-scoped AG-UI client metadata: ${JSON.stringify(askUser)}`);
   }
-  for (const name of ["officecli_mutate", "edit", "write", "apply_patch", "bash"]) {
+  for (const name of ["officecli_mutate", "edit", "write", "patch", "bash"]) {
     const tool = tools.get(name);
     if (!tool || tool.approvalPolicy !== "required") {
       throw new Error(`${name} must require framework approval: ${JSON.stringify(tool)}`);

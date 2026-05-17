@@ -132,9 +132,9 @@
       "promptVisibility": "visible"
     },
     {
-      "name": "apply_patch",
+      "name": "patch",
       "description": "Apply a structured multi-file patch. Requires user approval.",
-      "executorTool": "apply_patch",
+      "executorTool": "patch",
       "safety": "Mutating",
       "frameworkToolType": "Function",
       "capabilityFamily": "workspace.mutate",

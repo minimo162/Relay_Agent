@@ -16,7 +16,7 @@
   owns the M365 Copilot provider adapter, local tool validation, execution,
   approvals, backups, diffs, logs, and app storage.
 - The active generic tool catalog is `glob`, `grep`, `read`, `officecli`,
-  `officecli_mutate`, `edit`, `write`, `apply_patch`, `workspace_status`,
+  `officecli_mutate`, `edit`, `write`, `patch`, `workspace_status`,
   `diff`, `bash`, and `ask_user`. Final answers are normal Agent Framework
   assistant responses, not a Relay tool.
 - Current implementation focus is the review remediation plan in `PLANS.md`:
@@ -89,8 +89,8 @@ decisions, verification runs, and known limitations.
   to argv by Relay. Do not let Copilot provide arbitrary OfficeCLI command
   arrays directly. Office mutations need backup, approval, and post-apply
   verification.
-- `edit` and `write` must stay workspace-scoped, approval-gated for mutations,
-  and auditable through run events and backup/diff artifacts.
+- `edit`, `write`, and `patch` must stay workspace-scoped, approval-gated for
+  mutations, and auditable through run events and backup/diff artifacts.
 - `workspace_status` and `diff` are generic read-only review tools. Use them to
   expose dirty state, changed paths, pending mutations, and applied changes
   before final answers.

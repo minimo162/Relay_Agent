@@ -26,6 +26,7 @@ public sealed record RelayTurnState(
     string? PendingOutputFile,
     string? ExactFilePath,
     string[] CompletedTools,
+    string[] CompletedToolDetails,
     string StateId)
 {
     public bool HasKnownObjective => !string.IsNullOrWhiteSpace(OriginalUserRequest);
@@ -63,6 +64,7 @@ public sealed record RelayTurnState(
             ["exactFilePath"] = ExactFilePath,
         };
         node["completedTools"] = new JsonArray(CompletedTools.Select(tool => JsonValue.Create(tool)).ToArray());
+        node["completedToolDetails"] = new JsonArray(CompletedToolDetails.Select(tool => JsonValue.Create(tool)).ToArray());
         return node;
     }
 }
@@ -80,7 +82,8 @@ public static class RelayTurnStateFactory
         bool hasAnyToolResult,
         bool hasMutationToolCall,
         string? pendingOutputFile,
-        IEnumerable<string> completedTools)
+        IEnumerable<string> completedTools,
+        IEnumerable<string> completedToolDetails)
     {
         var exactFilePath = ExtractExactFilePath(originalUserRequest);
         var intent = ClassifyIntent(originalUserRequest, pendingOutputFile, exactFilePath);
@@ -88,6 +91,11 @@ public static class RelayTurnStateFactory
             .Where(tool => !string.IsNullOrWhiteSpace(tool))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(tool => tool, StringComparer.Ordinal)
+            .ToArray();
+        var details = completedToolDetails
+            .Where(detail => !string.IsNullOrWhiteSpace(detail))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(detail => detail, StringComparer.Ordinal)
             .ToArray();
         var stateSeed = string.Join("\u001f", [
             runKey,
@@ -99,6 +107,7 @@ public static class RelayTurnStateFactory
             pendingOutputFile ?? "",
             exactFilePath ?? "",
             string.Join(",", completed),
+            string.Join(",", details),
         ]);
         var stateId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stateSeed)))[..12].ToLowerInvariant();
         return new RelayTurnState(
@@ -111,6 +120,7 @@ public static class RelayTurnStateFactory
             string.IsNullOrWhiteSpace(pendingOutputFile) ? null : pendingOutputFile,
             exactFilePath,
             completed,
+            details,
             stateId);
     }
 
@@ -125,12 +135,20 @@ public static class RelayTurnStateFactory
         var hasOfficePath = Regex.IsMatch(exactFilePath ?? "", @"\.(xlsx|xlsm|xls|docx|pptx)$", RegexOptions.IgnoreCase);
         var officeMention = Regex.IsMatch(
             text,
-            @"office|excel|word|powerpoint|ppt|xlsx|xlsm|docx|pptx|cell|sheet\d*|[A-Z]{1,3}[0-9]{1,7}|セル|シート|ワークブック|スライド|文書|表計算|officecli",
+            @"office|excel|word|powerpoint|ppt|xlsx|xlsm|docx|pptx|cell|sheet\d*|(?<![A-Za-z0-9_])(?-i:[A-Z]{1,3}[1-9][0-9]{0,6})(?![A-Za-z0-9_])|セル|シート|ワークブック|スライド|文書|表計算|officecli",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var mutationMention = Regex.IsMatch(
             text,
             @"編集|修正|変更|更新|作成|作って|書いて|保存|出力|生成|赤く|青く|色|塗|追加|削除|置換|差し替|入力|設定|反映|変え|にして|へして|rename|edit|update|modify|create|write|save|generate|delete|remove|replace|set|color",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var looksLikeCodeOrProject =
+            LooksLikeCodeOrProjectRequest(text, exactFilePath) ||
+            LooksLikeCodeOrProjectRequest(text, pendingOutputFile);
+        if (mutationMention && looksLikeCodeOrProject && !hasOfficePath)
+        {
+            return RelayLocalIntent.CodeWork;
+        }
+
         if (officeMention || hasOfficePath)
         {
             return mutationMention ? RelayLocalIntent.OfficeMutate : RelayLocalIntent.OfficeInspect;
@@ -145,12 +163,12 @@ public static class RelayTurnStateFactory
 
         if (!string.IsNullOrWhiteSpace(pendingOutputFile))
         {
-            return LooksLikeCodeOrProjectRequest(text, pendingOutputFile)
+            return looksLikeCodeOrProject
                 ? RelayLocalIntent.CodeWork
                 : RelayLocalIntent.FileMutation;
         }
 
-        if (LooksLikeCodeOrProjectRequest(text, exactFilePath))
+        if (looksLikeCodeOrProject)
         {
             return RelayLocalIntent.CodeWork;
         }

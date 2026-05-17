@@ -24,7 +24,7 @@ M365 Copilot via Edge CDP
   primary reasoning controller for planning, tool choice, and synthesis
 
 Relay local tools
-  ripgrep, exact read, OfficeCLI, exact edits, writes, approvals, logs
+  ripgrep, exact read, OfficeCLI, exact edits, writes, patches, approvals, logs
 ```
 
 The old Tauri desktop shell, AionUi overlay, and OpenCode/OpenWork provider
@@ -156,7 +156,7 @@ from the active release path.
 - M365 Copilot may plan and synthesize, but Relay executes tools.
 - Relay validates every tool argument before execution.
 - Office edits go through OfficeCLI and backup/approval.
-- Code edits use exact replacements or approved writes inside the selected
-  workspace.
+- Code edits use exact replacements, approved writes, or approved structured
+  patches inside the selected workspace.
 - Shared folders are never used for Relay caches, indexes, or temp state.
 - Unrestricted shell is not part of the default tool catalog.

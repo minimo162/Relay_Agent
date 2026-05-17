@@ -16,14 +16,16 @@ workspace, one task composer, one agent trace, and one result/approval surface.
 M365 Copilot chooses which local tools are needed from the user's natural
 language request; Relay validates and executes those tools locally.
 
-The product no longer treats AionUi, OpenCode/OpenWork, Codex app-server,
-custom Relay run streams, or Tauri as active product architecture. The active
-architecture is a **framework-native Agent Framework + AG-UI workbench**:
-Microsoft Agent Framework owns agent turns, tool invocation, sessions,
-middleware, approvals, and streaming run lifecycle; AG-UI owns the
-Workbench-facing event/state/tool/approval protocol; Relay adds only the
-minimum adapters needed for M365 Copilot over Edge CDP, local tool function
-bodies, workspace policy, packaging, and diagnostics.
+The product no longer treats AionUi, OpenWork, custom Relay run streams, or
+Tauri as active product architecture. The active architecture is a
+**framework-native Agent Framework + AG-UI workbench with an OpenCode-compatible
+local tool contract**: Microsoft Agent Framework owns agent turns, tool
+invocation, sessions, middleware, approvals, and streaming run lifecycle; AG-UI
+owns the Workbench-facing event/state/tool/approval protocol; OpenCode's
+built-in tool model is the primary reference for model-visible local workspace
+tools; Relay adds only the minimum adapters needed for M365 Copilot over Edge
+CDP, OpenCode-compatible local tool function bodies, workspace policy,
+packaging, and diagnostics.
 
 The active product target is a **generic Relay Workbench**:
 
@@ -42,25 +44,139 @@ Framework adoption rule:
   any Relay-owned protocol, schema, event, tool catalog, or workflow state.
 - If Agent Framework or AG-UI already has a concept, Relay must use or adapt
   that concept instead of creating a parallel Relay abstraction.
+- Prefer OpenCode-compatible local workspace tool names, argument schemas,
+  permissions, and result semantics before adding Relay-specific model-visible
+  tools. Relay may implement the tool bodies, but the model-facing contract
+  should look like an existing agent tool system, not a new Relay invention.
 - If a gap exists because M365 Copilot is only reachable through Edge CDP,
   isolate the gap in the Copilot provider adapter or a narrow middleware layer.
   Do not compensate by building a second agent runtime.
-- OpenCode, Codex app-server, GitHub Copilot, Claude Code, and AionUi may be
-  used only as comparative prior art. They are not runtime substrates, public
-  contracts, or naming authorities for Relay's active architecture.
+- OpenCode is the canonical reference for Relay's model-visible local file and
+  shell tools. Codex app-server remains a harness/runtime reference, but is not
+  adopted as the active runtime while M365 Copilot is the required controller.
+  GitHub Copilot, Claude Code, and AionUi remain comparative UX/runtime prior
+  art unless a later plan explicitly adopts one of their public contracts.
 
 Plan-coherence rule for older sections in this file:
 
 - Any older task text that names Relay-specific run/event contracts,
-  `RunEvent`, `RelayTurnState` as the canonical runtime state, OpenCode-
-  compatible contracts, or `rg_files`/`rg_search` as public tool names is
-  superseded by the framework-native direction in this section.
+  `RunEvent`, `RelayTurnState` as the canonical runtime state, or
+  `rg_files`/`rg_search` as public tool names is superseded by the
+  framework-native + OpenCode-compatible direction in this section.
 - Public Workbench traffic must be AG-UI. Public tool/runtime semantics must be
   Agent Framework function/MCP/client tools plus middleware and approvals.
+  Model-visible local workspace tool semantics must be OpenCode-compatible
+  unless a documented gap makes that impossible.
 - Legacy names may remain only as internal provider aliases during migration:
   `rg_files` maps to the Agent Framework `glob` function tool, and
   `rg_search` maps to the Agent Framework `grep` function tool. New plan tasks
   must use the canonical names `glob` and `grep`.
+
+## OpenCode-Compatible Tool Contract Migration Plan
+
+This section is the active execution plan after the complex live Copilot E2E
+showed that Relay was drifting back into a custom tool/runtime design. The
+lesson is explicit: do not keep inventing Relay-specific tool semantics,
+recovery rules, or planner state for file/code work. Mature agents have already
+converged on a small workspace tool surface. Relay should adopt that surface
+and spend engineering effort on Copilot transport, Agent Framework integration,
+AG-UI UX, approvals, packaging, and diagnostics.
+
+Reference systems checked for this direction:
+
+- OpenCode built-in tools: `read`, `grep`, `glob`, `bash`, `edit`, `write`,
+  `patch`, and MCP extension. This is the closest fit to Relay's required
+  local workspace work.
+- Codex app-server: useful reference for threads, approvals, sandboxing,
+  streaming diffs, MCP integration, and long-lived runtime state. It is a
+  complete harness around Codex, not a drop-in runtime while M365 Copilot must
+  remain the reasoning controller.
+- Microsoft Agent Framework: the active run loop, function tool registration,
+  middleware, approvals, and MCP integration layer for Relay.
+- AG-UI: the active frontend event/state/tool/approval protocol.
+
+Reference URLs:
+
+- `https://open-code.ai/en/docs/tools`
+- `https://opencode.ai/docs/mcp-servers/`
+- `https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md`
+- `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/user-guide/agents/agent-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/user-guide/model-context-protocol/using-mcp-tools`
+
+Design decisions:
+
+- **Adopt OpenCode-compatible local tools as the model-facing contract.**
+  Canonical names are `read`, `glob`, `grep`, `edit`, `write`, `patch`, and
+  bounded `bash`. `apply_patch` may remain as a temporary compatibility alias,
+  but new model-facing prompts, docs, tests, and UX should use `patch` unless a
+  framework API forces the old name.
+- **Do not build a Relay tool taxonomy.** Relay-specific helpers may exist
+  behind the contract, but Copilot should not see Relay-only tool families for
+  ordinary file/code work.
+- **Use Agent Framework as the tool host.** OpenCode-compatible tools are
+  registered as Agent Framework function tools or imported MCP tools. Agent
+  Framework middleware handles admission, tool filtering, approval, and
+  terminal eligibility.
+- **Use AG-UI as the only frontend protocol.** Tool calls, approvals, state,
+  errors, and final output are projected through AG-UI events and state.
+- **Keep OfficeCLI as an extension tool, not a second planner.** Office work
+  should follow the same contract style: inspect/read first, then an approved
+  mutation. OfficeCLI can be exposed as a semantic Agent Framework tool or MCP
+  server, but it must not create a parallel Office-only planning harness.
+- **Prefer existing mechanisms over prompt folklore.** Patch failures,
+  repeated reads, early final answers, and unnecessary clarification should be
+  addressed by standard tool results, Agent Framework session state, and
+  approval/terminal middleware, not by growing ad hoc prompt rules.
+
+Non-goals for this migration:
+
+- Do not adopt Codex app-server as the runtime in this milestone. M365 Copilot
+  remains the controller, and Relay cannot require OpenAI API/subscription
+  access.
+- Do not remove Agent Framework or AG-UI. They are the active run loop and UI
+  protocol.
+- Do not add new broad Relay-owned tools before the OpenCode-compatible tool
+  contract is documented, tested, and used by live E2E.
+- Do not silently fallback to unrelated tools when the contract is violated.
+  Fail visibly, record diagnostics, and fix the contract.
+
+Migration strategy:
+
+1. Freeze further expansion of Relay-specific model-visible tools and prompt
+   recovery rules.
+2. Produce an explicit OpenCode-compatible tool contract spec for Relay:
+   tool name, description, parameters, result shape, permission class,
+   approval behavior, and failure semantics. The active contract artifact is
+   `docs/OPENCODE_TOOL_CONTRACT.md`.
+3. Rename or alias existing tools to the contract:
+   - `rg_files` -> internal alias of `glob`;
+   - `rg_search` -> internal alias of `grep`;
+   - `apply_patch` -> temporary alias of `patch`;
+   - existing exact text replace remains `edit`;
+   - file create/replace remains `write`;
+   - shell verification remains bounded `bash`.
+4. Refactor prompt/tool projection to emit only contract tools from Agent
+   Framework registrations.
+5. Refactor tests and live E2E to assert OpenCode-compatible behavior instead
+   of Relay-specific recovery behavior.
+6. Only after the contract is stable, evaluate whether any existing MCP server
+   or OpenCode-compatible tool implementation can replace Relay's internal
+   implementation bodies.
+
+Acceptance criteria for this plan:
+
+- A model-visible tool inventory dump contains only OpenCode-compatible local
+  tools plus documented extension tools such as OfficeCLI.
+- Normal code/file E2E completes through `read`/`glob`/`grep`/`edit`/`write`/
+  `patch`/`bash` semantics without adding new Relay-only action names.
+- `apply_patch` remains accepted only as a compatibility alias and is absent
+  from new prompts where `patch` is available.
+- Complex project creation and improvement live E2E either succeeds through the
+  standard contract or fails with a clear contract/tool-result error; it must
+  not trigger new ad hoc Relay planner features.
+- Documentation and tests make it clear where Relay implements tool bodies and
+  where it merely exposes an existing tool contract through Agent Framework.
 
 Root prevention guarantees:
 

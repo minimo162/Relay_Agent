@@ -11,6 +11,8 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 {
     private static readonly ConcurrentDictionary<string, string> PendingOutputFiles = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, string> OriginalUserRequests = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> PendingToolCallDetails = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> CompletedToolResultDetails = new(StringComparer.Ordinal);
 
     private static readonly ChatClientMetadata Metadata = new(
         providerName: "m365-copilot",
@@ -221,12 +223,15 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static ChatResponse ToolCallResponse(string toolName, JsonObject args, ChatOptions? options)
     {
+        var callId = $"call-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}";
+        var arguments = ToArgumentDictionary(args);
+        RememberPendingToolCall(options, callId, toolName, arguments);
         var contents = new List<AIContent>
         {
             new FunctionCallContent(
-                $"call-{RandomNumberGenerator.GetHexString(8).ToLowerInvariant()}",
+                callId,
                 toolName,
-                ToArgumentDictionary(args)),
+                arguments),
         };
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, contents))
         {
@@ -264,7 +269,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             {
                 callId = call.CallId,
                 tool = call.Name,
-                args = call.Arguments,
+                args = ToPromptSafeArguments(call.Arguments),
             }, JsonOptions.Compact),
             FunctionResultContent result => "RELAY_TOOL_RESULT " + JsonSerializer.Serialize(new
             {
@@ -290,9 +295,43 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             {
                 callId = functionCall.CallId,
                 tool = functionCall.Name,
-                args = functionCall.Arguments,
+                args = ToPromptSafeArguments(functionCall.Arguments),
             }
             : new { callId = toolCall.CallId, type = toolCall.GetType().Name };
+
+    private static IReadOnlyDictionary<string, object?>? ToPromptSafeArguments(IDictionary<string, object?>? args)
+    {
+        if (args is null) return null;
+        if (args.Count == 0) return new Dictionary<string, object?>();
+        return args.ToDictionary(
+            pair => pair.Key,
+            pair => ToPromptSafeArgumentValue(pair.Key, pair.Value),
+            StringComparer.Ordinal);
+    }
+
+    private static object? ToPromptSafeArgumentValue(string key, object? value)
+    {
+        if (value is string text && IsLargeGeneratedTextArgument(key))
+        {
+            return TruncateLargeGeneratedTextForPrompt(text);
+        }
+
+        return value;
+    }
+
+    private static bool IsLargeGeneratedTextArgument(string key) =>
+        key.Equals("patch", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("content", StringComparison.OrdinalIgnoreCase);
+
+    private static string TruncateLargeGeneratedTextForPrompt(string text)
+    {
+        const int head = 1800;
+        const int tail = 500;
+        if (text.Length <= head + tail + 200) return text;
+        return text[..head] +
+            $"\n... [Relay truncated {text.Length - head - tail} chars of generated content for prompt continuity] ...\n" +
+            text[^tail..];
+    }
 
     private static string BuildToolProjectionPrompt(ChatOptions? options, RelayAdmissibleActionEnvelope? envelope)
     {
@@ -310,12 +349,17 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "If the user asks to create or overwrite a file, call write with file_path and complete content.",
             "Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.",
             "For local document/data review, use glob/read/grep first and reason from those results. Do not use bash for ordinary file reading or light CSV arithmetic.",
+            "For code/project edits, read exact target files without offset/limit before mutating unless the user explicitly asks for a partial inspection.",
+            "For code/project edits on small text files, prefer write with the complete replacement for each affected file after reading it. Use edit for one exact replacement. Use patch only when the user explicitly requests a patch or the patch is very small with certain context.",
+            "If patch reports missing context or file-exists errors, recover by reading the current full file and then using write/edit/patch with current content. Do not loop on diff/read after the needed files are already read.",
+            "When RELAY_COMPLETED_TOOL_RESULTS shows the requested files were read successfully and RELAY_TURN_STATE requires mutation, your next action must be write/edit/patch, not read/diff/final.",
             "For comparisons across files, discover and read every required source file before write/final. Use period/version tokens from file paths as evidence context when content lacks those columns.",
             "Use ask_user only when a critical requirement is genuinely missing. If the user specified objective, scope/files, and desired output, continue with tools instead of asking.",
             "Use bash only for explicit verification/build/test/git/rg commands with direct argv. Never call bash/sh/pwsh/cmd as argv[0], never use -lc, heredocs, pipelines, or shell scripts.",
             "Never use bash for cat/ls/find; use read for exact files and glob for file discovery.",
-            "Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.",
-            "Return exactly one plain JSON object. Do not use markdown, prose, headings, bullets, or code fences.",
+            "Prefer write/patch for file creation or edits instead of command-generated file mutations.",
+            "Return exactly one fenced json code block containing one JSON object, with no prose before or after the block.",
+            "The fenced block is required because Copilot's normal markdown rendering can remove code characters such as '*' from JSON string content.",
             "If a JSON string contains HTML/XML/code with angle brackets, JSON-escape '<' as \\u003c and '>' as \\u003e so Copilot UI cannot render it.",
             "Rules: one tool max; no tool_uses/recipient_name. Relay executes tools; unknown fields are invalid; use forward slashes in paths.",
             "Tools:",
@@ -370,14 +414,22 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
 
         TryGetPendingOutputFile(messages, options, out var pendingOutputFile);
+        var completedToolDetails = UpdateCompletedToolResultDetails(runKey, messages);
+        var completedToolNames = GetCompletedToolNames(messages)
+            .Concat(completedToolDetails.Select(ExtractToolNameFromDetail))
+            .Where(tool => !string.IsNullOrWhiteSpace(tool))
+            .Cast<string>();
+        var hasMutationToolCall = HasMutationToolCall(messages) ||
+            completedToolDetails.Any(IsSuccessfulMutationDetail);
         return RelayTurnStateFactory.Create(
             runKey,
             request,
             RelayWorkspaceContext.ResolveWorkspace(options),
             HasAnyToolResult(messages),
-            HasMutationToolCall(messages),
+            hasMutationToolCall,
             pendingOutputFile,
-            GetCompletedToolNames(messages));
+            completedToolNames,
+            completedToolDetails);
     }
 
     private static bool TryFindPendingOutputFile(IReadOnlyList<ChatMessage> messages, out string targetFile)
@@ -448,6 +500,124 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
     }
 
+    private static void RememberPendingToolCall(ChatOptions? options, string callId, string toolName, IDictionary<string, object?> arguments)
+    {
+        PendingToolCallDetails[ToolCallDetailKey(GetRunKey(options), callId)] = FormatToolCallDetail(toolName, arguments);
+    }
+
+    private static string[] UpdateCompletedToolResultDetails(string runKey, IReadOnlyList<ChatMessage> messages)
+    {
+        var discovered = GetCompletedToolResultDetails(runKey, messages).ToArray();
+        if (discovered.Length > 0)
+        {
+            CompletedToolResultDetails.AddOrUpdate(
+                runKey,
+                _ => JoinToolDetails(discovered),
+                (_, existing) => JoinToolDetails(SplitToolDetails(existing).Concat(discovered)));
+        }
+
+        return CompletedToolResultDetails.TryGetValue(runKey, out var stored)
+            ? SplitToolDetails(stored)
+            : [];
+    }
+
+    private static IEnumerable<string> GetCompletedToolResultDetails(string runKey, IReadOnlyList<ChatMessage> messages)
+    {
+        foreach (var content in messages.SelectMany(message => message.Contents))
+        {
+            switch (content)
+            {
+                case FunctionResultContent result:
+                    var resultInfo = ReadToolResultInfo(result.Result);
+                    PendingToolCallDetails.TryGetValue(ToolCallDetailKey(runKey, result.CallId), out var callDetail);
+                    var toolName = resultInfo.Tool ?? ExtractToolNameFromDetail(callDetail);
+                    if (string.IsNullOrWhiteSpace(toolName))
+                    {
+                        continue;
+                    }
+
+                    var status = resultInfo.Success == false ? "failed" : "success";
+                    yield return string.IsNullOrWhiteSpace(callDetail)
+                        ? $"{toolName}:{status}"
+                        : $"{callDetail}:{status}";
+                    break;
+                case ToolApprovalResponseContent approval when approval.ToolCall is FunctionCallContent approvedCall:
+                    yield return $"{FormatToolCallDetail(approvedCall.Name, approvedCall.Arguments)}:approved";
+                    break;
+            }
+        }
+    }
+
+    private static string ToolCallDetailKey(string runKey, string callId) => runKey + "\u001f" + callId;
+
+    private static string JoinToolDetails(IEnumerable<string> details) =>
+        string.Join("\n", details
+            .Where(detail => !string.IsNullOrWhiteSpace(detail))
+            .Distinct(StringComparer.Ordinal)
+            .TakeLast(60));
+
+    private static string[] SplitToolDetails(string details) =>
+        details.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string? ExtractToolNameFromDetail(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail)) return null;
+        var separator = detail.IndexOf(':');
+        return separator > 0 ? detail[..separator] : detail;
+    }
+
+    private static bool IsSuccessfulMutationDetail(string detail)
+    {
+        var tool = ExtractToolNameFromDetail(detail);
+        return IsMutationTool(tool) && detail.EndsWith(":success", StringComparison.Ordinal);
+    }
+
+    private static string FormatToolCallDetail(string toolName, IDictionary<string, object?>? arguments)
+    {
+        var target = GetArgumentString(arguments, "file_path")
+            ?? GetArgumentString(arguments, "path")
+            ?? GetArgumentString(arguments, "pattern");
+        return string.IsNullOrWhiteSpace(target)
+            ? toolName
+            : $"{toolName}:{target}";
+    }
+
+    private static string? GetArgumentString(IDictionary<string, object?>? arguments, string key) =>
+        arguments is not null && arguments.TryGetValue(key, out var value) && value is not null
+            ? value.ToString()
+            : null;
+
+    private sealed record RelayToolResultInfo(string? Tool, bool? Success);
+
+    private static RelayToolResultInfo ReadToolResultInfo(object? result)
+    {
+        if (result is null) return new RelayToolResultInfo(null, null);
+        try
+        {
+            var json = JsonSerializer.Serialize(result, JsonOptions.Default);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return new RelayToolResultInfo(null, null);
+            }
+
+            var tool = root.TryGetProperty("tool", out var toolProperty) &&
+                toolProperty.ValueKind == JsonValueKind.String
+                    ? toolProperty.GetString()
+                    : null;
+            var success = root.TryGetProperty("success", out var successProperty) &&
+                successProperty.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? (bool?)successProperty.GetBoolean()
+                    : null;
+            return new RelayToolResultInfo(tool, success);
+        }
+        catch
+        {
+            return new RelayToolResultInfo(null, null);
+        }
+    }
+
     private static string GetInitialRequestText(IReadOnlyList<ChatMessage> messages)
     {
         var plain = ExtractUserRequestBeforeTools(messages);
@@ -506,7 +676,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
     }
 
     private static bool IsMutationTool(string? tool) =>
-        tool is "write" or "edit" or "apply_patch" or "officecli_mutate";
+        tool is "write" or "edit" or "patch" or "apply_patch" or "officecli_mutate";
 
     private static string GetRunKey(ChatOptions? options) =>
         GetAdditionalPropertyString(options, "ag_ui_run_id")
@@ -606,6 +776,11 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static string NormalizeRequestedTool(string tool, JsonObject args)
     {
+        if (tool == "apply_patch")
+        {
+            return "patch";
+        }
+
         if (tool == "bash")
         {
             var argv = GetStringArray(args, "argv");

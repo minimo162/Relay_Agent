@@ -9,9 +9,10 @@
   Workbench consuming AG-UI through `@ag-ui/client`, and continue narrowing
   Relay code to Copilot CDP adaptation, local tools, policy, diagnostics, and
   packaging. File search, Office editing, and coding are high-frequency recipes
-  over one generic tool catalog, not product modes or separate runners. AionUi,
-  OpenCode/OpenWork, Tauri, Python workflow wrappers, and hidden fallback
-  runners are not fallback paths.
+  over one generic tool catalog, not product modes or separate runners.
+  OpenCode's built-in local tool model is now the reference contract for
+  model-visible file/code tools, while AionUi, OpenWork, Tauri, Python workflow
+  wrappers, and hidden fallback runners are not fallback paths.
 - Repository state: active source lives under `apps/workbench/`,
   `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
   docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
@@ -21,7 +22,8 @@
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
 - Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
-  task metadata. The current executable plan is `PLANS.md`.
+  task metadata. The current executable plan is `PLANS.md`, with concrete
+  OpenCode-compatible migration steps in `tasks.md`.
 - Packaging policy: `docs/PACKAGING_POLICY.md` now fixes the active release
   path to a Windows user-scope NSIS installer for the sidecar Workbench plus a
   Linux sidecar archive/launcher. Tauri NSIS packaging is historical and not an
@@ -29,6 +31,73 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-17 OpenCode-Compatible Tool Contract Cutover
+
+Implemented the `tasks.md` OCT01-OCT10 contract migration:
+
+- Added `docs/OPENCODE_TOOL_CONTRACT.md` with the active tool inventory,
+  canonical workspace contract, extension tools, compatibility aliases, and
+  projection rules.
+- Changed the model-visible patch mutation tool from `apply_patch` to
+  canonical `patch`; `apply_patch` remains an internal executor/normalizer
+  compatibility alias only.
+- Updated Agent Framework catalog metadata, admissible action envelopes,
+  Copilot prompt projection, mutation tracking, approval smokes, protocol
+  smokes, and the tool-catalog fixture to use `patch`.
+- Kept `rg_files` and `rg_search` out of the active sidecar catalog and prompts.
+  They remain historical names that conceptually map to `glob` and `grep`.
+- Updated `README.md`, `AGENTS.md`, `PLANS.md`, and `tasks.md` to describe the
+  OpenCode-compatible contract and completed task queue.
+
+Verification:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:build
+PATH=/tmp/relay-dotnet/sdk:$PATH node scripts/agent-tool-catalog-smoke.mjs --update
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:tool-catalog-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:protocol-state-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:framework-native-prevention-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:choice-error-reduction-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:officecli-registry-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+```
+
+Result: passed. Live Copilot E2E passed in 31909ms with readiness `Ready` on
+CDP port 9360. Full `pnpm check` passed after the contract cutover.
+
+### 2026-05-17 OpenCode-Compatible Tool Contract Plan Revision
+
+After the live Copilot complex-project E2E, the plan was corrected to avoid
+growing a Relay-specific local tool/runtime system. The active direction is now
+Agent Framework + AG-UI with an OpenCode-compatible local tool contract:
+
+- Agent Framework remains the run loop, session/tool host, middleware, approval
+  layer, and terminal-state authority.
+- AG-UI remains the Workbench event/state/tool/approval protocol.
+- OpenCode's built-in tool surface is the primary reference for model-visible
+  local workspace tools: `read`, `glob`, `grep`, `edit`, `write`, `patch`, and
+  bounded `bash`.
+- Codex app-server remains a harness/runtime reference, but it is not adopted
+  as the active runtime while M365 Copilot must remain the controller.
+- Relay-specific local tool names should become internal aliases or disappear
+  from new prompts. `apply_patch` is a temporary compatibility alias for
+  `patch`; `rg_files` and `rg_search` remain internal aliases for `glob` and
+  `grep`.
+
+Artifacts:
+
+- Updated `PLANS.md` with the OpenCode-compatible tool contract migration plan.
+- Added `tasks.md` with executable OCT01-OCT10 tasks.
+
+Verification:
+
+```bash
+git diff --check
+```
+
+Result: passed.
 
 ### 2026-05-16 Official AG-UI Hosting Cutover
 
@@ -18731,3 +18800,42 @@ Result:
 - Full `pnpm check` passed, including the new choice-error reduction smoke.
 - Live signed-in Copilot Workbench E2E passed:
   `[workbench-live-copilot-e2e] ok elapsed=25578ms readiness=Ready cdp=9360`.
+
+## 2026-05-17: Live Copilot HTML Creation E2E
+
+Changes:
+
+- Tightened Office-intent detection so `E2E` and similar standalone tokens do
+  not satisfy the Excel cell-reference detector. This keeps generic code/file
+  creation requests in the write/apply-patch path instead of exposing Office
+  mutation tools.
+- Changed Copilot tool projection responses to require a fenced `json` code
+  block. Copilot's normal markdown rendering can remove code characters such as
+  `*` from large HTML/JavaScript strings; the fenced block preserves generated
+  code while Relay still extracts the JSON object from the response text.
+- Normalized generated markup writes for `.html`, `.htm`, `.svg`, and `.xml`
+  when Copilot returns a JSON-safe literal Unicode escape stream such as
+  `\u003c!doctype html\u003e`. The same normalization applies to patch-added
+  markup content.
+- Extended `scripts/choice-error-reduction-smoke.mjs` with an escaped-HTML
+  write regression.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:build
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:choice-error-reduction-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:officecli-registry-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH node /tmp/relay-live-tetris-current-e2e.mjs
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Choice-error reduction smoke passed, including escaped HTML normalization.
+- OfficeCLI registry smoke passed.
+- Live signed-in Copilot Tetris E2E passed. Copilot wrote
+  `tetris.html` through Relay `write`, Relay approval completed, and the
+  generated single-file HTML passed structure plus inline JavaScript syntax
+  checks:
+  `/root/Relay_Agent/dist/e2e/live-tetris-1778974346427/tetris.html`.

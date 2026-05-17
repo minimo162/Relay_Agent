@@ -25,6 +25,15 @@ const responses = [
   JSON.stringify({ action: "final", answer: "読みました。" }),
   JSON.stringify({ action: "tool", tool: "write", args: { file_path: "out.md", content: "# Done\n" } }),
   JSON.stringify({ action: "final", answer: "作成しました。" }),
+  JSON.stringify({
+    action: "tool",
+    tool: "write",
+    args: {
+      file_path: "escaped.html",
+      content: "\\u003c!doctype html\\u003e\n\\u003chtml\\u003e\\u003cbody\\u003eOK\\u003c/body\\u003e\\u003c/html\\u003e\n",
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "HTMLを作成しました。" }),
 ];
 
 await writeFile(join(workspace, "seed.txt"), "choice error seed\n", "utf8");
@@ -106,7 +115,7 @@ function assertPromptProjection() {
 
   const needsObservation = prompts.find(({ text }) => text.includes('"phase":"NeedsObservation"'));
   if (!needsObservation) throw new Error("expected a NeedsObservation prompt");
-  for (const hidden of ["bash", "write", "apply_patch", "officecli_mutate", "ask_user"]) {
+  for (const hidden of ["bash", "write", "patch", "officecli_mutate", "ask_user"]) {
     if (new RegExp(`^- ${hidden}\\(`, "m").test(needsObservation.text)) {
       throw new Error(`NeedsObservation prompt exposed hidden tool ${hidden}`);
     }
@@ -167,6 +176,36 @@ try {
   });
   if (!hasRunFinished(writeApproved.events) || assistantText(writeApproved.events) !== "作成しました。") {
     throw new Error(`approved write run did not finish cleanly: ${JSON.stringify(writeApproved.events)}`);
+  }
+
+  const escapedPrompt = "escaped.html を作成して";
+  const escapedStart = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "choice-escaped-html-start",
+    instruction: escapedPrompt,
+  });
+  const escapedApprovalCall = collectToolCall(escapedStart.events, "request_approval");
+  const escapedApproval = readApprovalRequest(escapedApprovalCall).request;
+  if (escapedApproval.functionName !== "write") {
+    throw new Error(`escaped HTML write did not use framework approval: ${JSON.stringify(escapedApproval)}`);
+  }
+
+  const escapedApproved = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "choice-escaped-html-approved",
+    instruction: escapedPrompt,
+    messages: approvalMessages("choice-escaped-html-approved", escapedPrompt, escapedApprovalCall, true),
+  });
+  if (!hasRunFinished(escapedApproved.events) || assistantText(escapedApproved.events) !== "HTMLを作成しました。") {
+    throw new Error(`approved escaped HTML run did not finish cleanly: ${JSON.stringify(escapedApproved.events)}`);
+  }
+  const escapedHtml = readFileSync(join(workspace, "escaped.html"), "utf8");
+  if (!escapedHtml.startsWith("<!doctype html>") || escapedHtml.includes("\\u003c")) {
+    throw new Error(`escaped HTML content was not normalized: ${JSON.stringify(escapedHtml)}`);
   }
 
   assertPromptProjection();

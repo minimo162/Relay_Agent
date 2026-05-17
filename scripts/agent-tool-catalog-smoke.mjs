@@ -93,13 +93,13 @@ try {
     "officecli_mutate",
     "edit",
     "write",
-    "apply_patch",
+    "patch",
     "bash",
   ];
   if (JSON.stringify(toolNames) !== JSON.stringify(expectedNames)) {
     throw new Error(`unexpected tool order/names: ${JSON.stringify(toolNames)}`);
   }
-  for (const forbidden of ["rg_files", "rg_search", "run_command", "office_search"]) {
+  for (const forbidden of ["rg_files", "rg_search", "run_command", "office_search", "apply_patch"]) {
     if (toolNames.includes(forbidden)) throw new Error(`forbidden tool was exposed: ${forbidden}`);
   }
 

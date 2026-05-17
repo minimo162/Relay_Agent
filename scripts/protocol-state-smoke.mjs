@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assistantText, collectToolCall, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
+import { assistantText, collectToolCall, hasRunFinished, postAgUi, readApprovalRequest } from "./lib/agui-smoke.mjs";
 
 const token = "relay-protocol-state-token";
 const port = 17908;
@@ -17,9 +17,20 @@ const responses = [
   JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["cat", "seed.txt"] } }),
   JSON.stringify({ action: "final", answer: "読み取りました。" }),
   JSON.stringify({ action: "final", answer: "作成しました。" }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "src/app.js" } }),
+  JSON.stringify({
+    action: "tool",
+    tool: "patch",
+    args: {
+      patch: "*** Begin Patch\n*** Add File: README.md\n+# Project\n+\n+relayTeamTaskBoard.v1\n*** End Patch\n",
+    },
+  }),
 ];
 
 writeFileSync(join(workspace, "seed.txt"), "protocol state seed\n", "utf8");
+writeFileSync(join(workspace, "README.md"), "# Project\n", "utf8");
+await import("node:fs/promises").then(({ mkdir }) => mkdir(join(workspace, "src"), { recursive: true }));
+writeFileSync(join(workspace, "src", "app.js"), "const STORAGE_KEY = 'old';\n", "utf8");
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
   cwd: process.cwd(),
@@ -120,6 +131,23 @@ try {
     instruction: "protocol-output.md を作成して",
   });
   assertRunError(mutationFinal.events, "before a required mutation tool");
+
+  const projectCodeMutation = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "protocol-project-code-mutation",
+    instruction: "README.md と src/app.js を更新して、localStorage キー relayTeamTaskBoard.v1 を使うように改善して",
+  });
+  const projectReadCall = collectToolCall(projectCodeMutation.events, "read");
+  if (!projectReadCall.args.includes("src/app.js")) {
+    throw new Error(`project/code mutation should read code files before mutation: ${projectReadCall.args}`);
+  }
+  const approvalCall = collectToolCall(projectCodeMutation.events, "request_approval");
+  const approval = readApprovalRequest(approvalCall).request;
+  if (approval.functionName !== "patch") {
+    throw new Error(`project/code mutation should expose patch, not Office tools: ${JSON.stringify(approval)}`);
+  }
 
   console.log("[protocol-state-smoke] ok");
 } finally {

@@ -34,13 +34,25 @@ public static class RelayPromptBuilder
             lines.Add("");
             lines.Add("RELAY_PENDING_MUTATION");
             lines.Add($"Target output file: {state.PendingOutputFile}");
-            lines.Add("No write/apply_patch/edit/office mutation has succeeded yet.");
+            lines.Add("No write/patch/edit/office mutation has succeeded yet.");
         }
 
         if (state.CompletedTools.Length > 0)
         {
             lines.Add("");
             lines.Add("RELAY_COMPLETED_TOOLS " + string.Join(", ", state.CompletedTools));
+        }
+
+        if (state.CompletedToolDetails.Length > 0)
+        {
+            lines.Add("");
+            lines.Add("RELAY_COMPLETED_TOOL_RESULTS");
+            foreach (var detail in state.CompletedToolDetails)
+            {
+                lines.Add("- " + detail);
+            }
+            lines.Add("Do not repeat successful read/glob/grep calls unless the same target must be rechecked after a mutation.");
+            lines.Add("If the user-named source files have already been read and the phase still needs a mutation, choose write/edit/patch next instead of read/diff.");
         }
 
         return string.Join("\n", lines);

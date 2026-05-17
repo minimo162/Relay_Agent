@@ -21,12 +21,12 @@ public sealed class RelayAgentFrameworkRunner
         For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
-        If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
+        If the user asks to create or update a file, do not finalize until a write/patch/edit/office mutation tool result exists.
         Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.
         Treat period, version, region, and department tokens in file names and paths as evidence context when the file content omits them.
         Use ask_user only when a critical requirement is genuinely missing. Do not ask for clarification when the user already gave the objective, target files or scope, and desired output.
         Use bash only for explicit build/test/lint/typecheck/git/rg verification commands; never wrap commands in bash/sh -lc.
-        Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.
+        Prefer write/patch for file creation or edits instead of command-generated file mutations.
         Never claim local execution without tool results. Keep final answers concise in the user's language.
         """;
     private readonly IChatClient _chatClient;
@@ -391,10 +391,15 @@ public sealed class RelayAgentFunctionSet(
         CancellationToken cancellationToken = default) =>
         InvokeAsync("write", Args(("file_path", file_path), ("content", content)), cancellationToken);
 
+    public Task<ToolObservation> PatchAsync(
+        string patch,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync("patch", Args(("patch", patch)), cancellationToken);
+
     public Task<ToolObservation> ApplyPatchAsync(
         string patch,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("apply_patch", Args(("patch", patch)), cancellationToken);
+        PatchAsync(patch, cancellationToken);
 
     public Task<ToolObservation> WorkspaceStatusAsync(int? limit = null, CancellationToken cancellationToken = default) =>
         InvokeAsync("workspace_status", Args(("limit", limit)), cancellationToken);
@@ -611,10 +616,10 @@ public static class RelayAgentToolCatalog
             "required",
             "write_summary"),
         Tool(
-            nameof(RelayAgentFunctionSet.ApplyPatchAsync),
-            "apply_patch",
+            nameof(RelayAgentFunctionSet.PatchAsync),
+            "patch",
             "Apply a structured multi-file patch. Requires user approval.",
-            "apply_patch",
+            "patch",
             RelayAgentToolSafety.Mutating,
             "workspace.mutate",
             "file_mutation",
@@ -1103,10 +1108,16 @@ public sealed class RelayToolExecutor
                 WriteAsync,
                 _ => true),
             ToolProvider(
-                "apply_patch",
+                "patch",
                 ValidatePatch,
                 _ => "apply structured patch",
-                ApplyPatchAsync,
+                PatchAsync,
+                _ => true),
+            ToolProvider(
+                "apply_patch",
+                ValidatePatch,
+                _ => "apply structured patch compatibility alias",
+                PatchAsync,
                 _ => true),
             ToolProvider(
                 "workspace_status",
@@ -1333,14 +1344,14 @@ public sealed class RelayToolExecutor
     private async Task<ToolObservation> WriteAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
         var path = ResolveWorkspacePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
-        var content = GetString(call.Args, "content") ?? "";
+        var content = NormalizeGeneratedFileContent(path, GetString(call.Args, "content") ?? "");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var backupPath = File.Exists(path) ? await CreateBackupAsync(path, cancellationToken) : null;
         await File.WriteAllTextAsync(path, content, cancellationToken);
         return ToolObservation.Ok(call.Id, call.Tool, backupPath is null ? "file written" : $"file written; backup={backupPath}", path);
     }
 
-    private async Task<ToolObservation> ApplyPatchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
+    private async Task<ToolObservation> PatchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
         var patch = GetString(call.Args, "patch") ?? "";
         if (string.IsNullOrWhiteSpace(patch)) return ToolObservation.Fail(call.Id, call.Tool, "patch is required.");
@@ -1361,7 +1372,7 @@ public sealed class RelayToolExecutor
             {
                 case RelayPatchOperationKind.Add:
                     if (File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Add file already exists: {operation.Path}");
-                    await File.WriteAllTextAsync(path, operation.NewText ?? "", cancellationToken);
+                    await File.WriteAllTextAsync(path, NormalizeGeneratedFileContent(path, operation.NewText ?? ""), cancellationToken);
                     changed.Add(path);
                     break;
                 case RelayPatchOperationKind.Delete:
@@ -1380,7 +1391,7 @@ public sealed class RelayToolExecutor
                         return ToolObservation.Fail(call.Id, call.Tool, $"Patch context was not found: {operation.Path}");
                     }
                     backups.Add(await CreateBackupAsync(path, cancellationToken));
-                    await File.WriteAllTextAsync(path, original.Replace(oldText, newText, StringComparison.Ordinal), cancellationToken);
+                    await File.WriteAllTextAsync(path, original.Replace(oldText, NormalizeGeneratedFileContent(path, newText), StringComparison.Ordinal), cancellationToken);
                     changed.Add(path);
                     break;
             }
@@ -2138,7 +2149,7 @@ public sealed class RelayToolExecutor
         var patch = GetString(args, "patch");
         if (string.IsNullOrWhiteSpace(patch))
         {
-            return ToolValidation.Fail("apply_patch requires patch.");
+            return ToolValidation.Fail("patch requires patch.");
         }
 
         if (!RelayPatch.TryParse(patch, out var operations, out var error))
@@ -2367,6 +2378,32 @@ public sealed class RelayToolExecutor
         }
         return count;
     }
+
+    private static string NormalizeGeneratedFileContent(string path, string content)
+    {
+        if (content.Length == 0) return content;
+        var extension = Path.GetExtension(path);
+        if (!IsMarkupExtension(extension)) return content;
+
+        var trimmed = content.TrimStart();
+        if (!trimmed.StartsWith(@"\u003c", StringComparison.OrdinalIgnoreCase) &&
+            !content.Contains(@"\u003chtml", StringComparison.OrdinalIgnoreCase) &&
+            !content.Contains(@"\u003c!doctype", StringComparison.OrdinalIgnoreCase))
+        {
+            return content;
+        }
+
+        return Regex.Replace(
+            content,
+            @"\\u(?<hex>[0-9a-fA-F]{4})",
+            static match => ((char)Convert.ToInt32(match.Groups["hex"].Value, 16)).ToString());
+    }
+
+    private static bool IsMarkupExtension(string extension) =>
+        extension.Equals(".html", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".htm", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".svg", StringComparison.OrdinalIgnoreCase) ||
+        extension.Equals(".xml", StringComparison.OrdinalIgnoreCase);
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 
@@ -2643,7 +2680,7 @@ public static class RelayPatch
                 index++;
                 if (index < lines.Length - 1 && lines[index].StartsWith("*** Move to: ", StringComparison.Ordinal))
                 {
-                    error = "apply_patch move operations are not supported yet.";
+                    error = "patch move operations are not supported yet.";
                     return false;
                 }
 

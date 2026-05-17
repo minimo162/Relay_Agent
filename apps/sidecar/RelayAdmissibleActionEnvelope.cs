@@ -58,9 +58,9 @@ public static class RelayAdmissibleActionEnvelopeBuilder
     private static readonly string[] ObservationTools = ["glob", "grep", "read", "workspace_status"];
     private static readonly string[] ExactReadTools = ["read"];
     private static readonly string[] OfficeInspectTools = ["officecli", "read"];
-    private static readonly string[] FileMutationTools = ["read", "glob", "grep", "edit", "write", "apply_patch", "workspace_status", "diff"];
+    private static readonly string[] FileMutationTools = ["read", "glob", "grep", "edit", "write", "patch", "workspace_status", "diff"];
     private static readonly string[] OfficeMutationTools = ["officecli", "officecli_mutate", "read", "workspace_status", "diff"];
-    private static readonly string[] CodeWorkTools = ["read", "glob", "grep", "edit", "write", "apply_patch", "workspace_status", "diff"];
+    private static readonly string[] CodeWorkTools = ["read", "glob", "grep", "edit", "write", "patch", "workspace_status", "diff"];
     private static readonly string[] VerificationTools = ["workspace_status", "diff", "bash", "read", "grep"];
     private static readonly string[] ContinuationTools = ["glob", "grep", "read", "officecli", "workspace_status", "diff"];
 
@@ -145,7 +145,7 @@ public static class RelayAdmissibleActionEnvelopeBuilder
 
         if (state.HasAnyToolResult && phase == RelayActionPhase.CanFinalize)
         {
-            candidates = candidates.Concat(["edit", "write", "apply_patch", "officecli_mutate"]).ToArray();
+            candidates = candidates.Concat(["edit", "write", "patch", "officecli_mutate"]).ToArray();
         }
 
         return candidates
