@@ -15,7 +15,7 @@ tool contract rather than a Relay-specific taxonomy.
 | Tool | Provider | Approval | Primary use | Result shape |
 | --- | --- | --- | --- | --- |
 | `glob` | ripgrep file listing | none | Find candidate files by path/name when the exact file is unknown. | `ToolObservation` with capped path list and truncation metadata. |
-| `grep` | ripgrep content search | none | Search plaintext/code content. | `ToolObservation` with capped matching lines. |
+| `grep` | ripgrep content search | none | Search plaintext/code content. | `ToolObservation` with structured, capped `RelayGrepObservation.v1` matches. |
 | `read` | Relay file reader | none | Read an exact file. Office/PDF text extraction is handled by the reader when supported. | `ToolObservation` with bounded text or extracted document text. |
 | `edit` | Relay exact replacement | required | Replace exact text in an existing workspace file. | `ToolObservation` with replacement count and backup path. |
 | `write` | Relay file writer | required | Create or overwrite a workspace file with complete content. | `ToolObservation` with written path and optional backup path. |
@@ -56,8 +56,12 @@ tool contract rather than a Relay-specific taxonomy.
 ### `grep`
 
 - Use for plaintext/code content search.
-- Parameters: `pattern` is required; optional `path`, `glob`, and filters may
-  narrow scope.
+- Parameters: either `pattern`, `allTerms`, or `anyTerms` is required.
+  Optional `path`, `glob`, `includeGlobs`, `excludeGlobs`,
+  `excludeTerms`, `fixedStrings`, `caseInsensitive`, `contextLines`,
+  `maxMatchesPerFile`, `limit`, and `timeoutMs` may narrow scope.
+- Prefer `allTerms` for compound business concepts where every core term must
+  appear in local context before a candidate is promoted.
 - Do not use on Office/PDF binary containers; discover with `glob`, then
   inspect exact candidates with `read`.
 - Relay passes a `--` separator before user/model patterns so pattern text
@@ -127,6 +131,48 @@ fields into argv locally so Office edits stay auditable and policy-controlled.
   `rg_search` are not shown in new prompts.
 - Contract violations fail visibly with diagnostics instead of introducing
   fallback planners or new Relay-only tool names.
+
+## Direct Corpus Interaction Boundary
+
+Relay adopts the Direct Corpus Interaction (DCI) lesson from
+`arXiv:2605.05242` as an agent recipe over this same OpenCode-compatible tool
+surface. DCI does not introduce a new Relay retrieval subsystem.
+
+Relay's DCI boundary is:
+
+| Concept | Owner in Relay |
+| --- | --- |
+| Agent turn loop, session continuity, tool invocation, approval pause/resume, final eligibility | Microsoft Agent Framework |
+| Workbench stream, tool events, approval UI, replayable run state | AG-UI |
+| Model-visible local file/tool names and broad semantics | OpenCode-compatible contract |
+| Local tool implementations, workspace containment, Windows/shared-folder behavior, Office/PDF extraction, backups, policy, support bundles | Relay sidecar |
+| M365 Copilot browser automation | Relay Copilot CDP provider adapter |
+
+DCI-compatible behavior means:
+
+- use `glob` to discover candidate files when exact paths are unknown;
+- use `grep` for high-resolution plaintext/code evidence, including
+  conjunctive and exclusionary searches;
+- use exact `read` calls to inspect local context and Office/PDF extracted
+  text where supported;
+- use bounded `bash` only for explicit verification or narrow approved command
+  classes, not for arbitrary shell exploration;
+- refine search terms after observing partial evidence;
+- produce final answers only after local observations support the claim.
+
+DCI-incompatible behavior means:
+
+- reviving `RelayDocumentSearch*`, SQLite/FTS, or a dedicated document-search
+  runner;
+- creating a hidden local ranking answer outside the Agent Framework session;
+- using filename/entity matches as evidence without local context checks;
+- falling back to a mock model, heuristic search answer, or weaker tool path
+  when Copilot or the provider adapter fails.
+
+This contract intentionally keeps Relay's public tool surface small. Search,
+Office review, coding, and verification are high-frequency workflows composed
+from the same generic tools rather than separate user modes or separate
+backend runners.
 
 ## Agent Framework / AG-UI Parity Matrix
 

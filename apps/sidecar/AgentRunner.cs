@@ -19,6 +19,8 @@ public sealed class RelayAgentFrameworkRunner
         When the user requests local work, do not say tools are unavailable; choose a Relay tool so Relay can execute it.
         Use tools for local files, Office work, code edits, and verification.
         For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
+        Use direct corpus interaction for local search: search direct terms, combine weak clues with grep allTerms/anyTerms/excludeTerms when useful, read local context around promising matches, extract new terms/entities from observations, refine the search, cross-check evidence, then answer.
+        Do not treat filename/entity matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
         If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
@@ -292,10 +294,19 @@ public sealed class RelayAgentFunctionSet(
             ("timeoutMs", timeoutMs)), cancellationToken);
 
     public Task<ToolObservation> GrepAsync(
-        string pattern,
+        string? pattern = null,
         string? path = null,
         string? glob = null,
+        string[]? allTerms = null,
+        string[]? anyTerms = null,
+        string[]? excludeTerms = null,
+        string[]? includeGlobs = null,
+        string[]? excludeGlobs = null,
         bool? case_insensitive = null,
+        bool? caseInsensitive = null,
+        bool? fixedStrings = null,
+        int? contextLines = null,
+        int? maxMatchesPerFile = null,
         int? limit = null,
         int? timeoutMs = null,
         CancellationToken cancellationToken = default) =>
@@ -303,7 +314,16 @@ public sealed class RelayAgentFunctionSet(
             ("pattern", pattern),
             ("path", path),
             ("glob", glob),
+            ("allTerms", allTerms),
+            ("anyTerms", anyTerms),
+            ("excludeTerms", excludeTerms),
+            ("includeGlobs", includeGlobs),
+            ("excludeGlobs", excludeGlobs),
             ("case_insensitive", case_insensitive),
+            ("caseInsensitive", caseInsensitive),
+            ("fixedStrings", fixedStrings),
+            ("contextLines", contextLines),
+            ("maxMatchesPerFile", maxMatchesPerFile),
             ("limit", limit),
             ("timeoutMs", timeoutMs)), cancellationToken);
 
@@ -522,7 +542,7 @@ public static class RelayAgentToolCatalog
         Tool(
             nameof(RelayAgentFunctionSet.GrepAsync),
             "grep",
-            "Search plaintext/code content with ripgrep. Do not use for Office/PDF containers; use glob then exact read.",
+            "Search plaintext/code content with ripgrep. Supports pattern plus DCI filters such as allTerms, anyTerms, excludeTerms, includeGlobs, excludeGlobs, contextLines, and maxMatchesPerFile. Do not use for Office/PDF containers; use glob then exact read.",
             "grep",
             RelayAgentToolSafety.ReadOnly,
             "workspace.search",
@@ -1221,15 +1241,25 @@ public sealed class RelayToolExecutor
             return ToolObservation.Fail(call.Id, call.Tool, rg.Detail);
         }
 
-        var pattern = GetString(call.Args, "pattern") ?? "";
+        var grepPlan = BuildGrepPlan(call.Args);
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 80, 1, 200);
         var args = new List<string> { "--line-number", "--color", "never" };
-        if (GetBool(call.Args, "case_insensitive") == true)
+        if (grepPlan.CaseInsensitive)
         {
             args.Add("--ignore-case");
         }
+        if (grepPlan.ContextLines > 0)
+        {
+            args.Add("--context");
+            args.Add(grepPlan.ContextLines.ToString());
+        }
+        if (grepPlan.MaxMatchesPerFile is not null)
+        {
+            args.Add("--max-count");
+            args.Add(grepPlan.MaxMatchesPerFile.Value.ToString());
+        }
         AddRipgrepFilters(args, call.Args);
-        args.AddRange(["--", pattern]);
+        args.AddRange(["--", grepPlan.RipgrepPattern]);
         var workingDirectory = ResolveSearchDirectory(workspace, call.Args);
         var result = await RunLineProcessAsync(
             rg.ExecutablePath,
@@ -1242,10 +1272,41 @@ public sealed class RelayToolExecutor
             timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
 
+        var matches = BuildGrepObservationMatches(
+            workspace,
+            workingDirectory,
+            result.Lines,
+            grepPlan,
+            limit);
         var summary = result.Truncated
-            ? $"{result.Lines.Count} content matches (truncated at limit)"
-            : $"{result.Lines.Count} content matches";
-        return ToolObservation.Ok(call.Id, call.Tool, summary, result.Lines);
+            ? $"{matches.Count} content matches (truncated at limit)"
+            : $"{matches.Count} content matches";
+        return ToolObservation.Ok(call.Id, call.Tool, summary, new
+        {
+            schemaVersion = "RelayGrepObservation.v1",
+            root = workingDirectory,
+            pattern = grepPlan.RipgrepPattern,
+            allTerms = grepPlan.AllTerms,
+            anyTerms = grepPlan.AnyTerms,
+            excludeTerms = grepPlan.ExcludeTerms,
+            caseInsensitive = grepPlan.CaseInsensitive,
+            contextLines = grepPlan.ContextLines,
+            maxMatchesPerFile = grepPlan.MaxMatchesPerFile,
+            truncated = result.Truncated,
+            matches,
+            continuation = result.Truncated
+                ? new
+                {
+                    tool = "grep",
+                    args = new
+                    {
+                        pattern = grepPlan.RipgrepPattern,
+                        path = ToWorkspaceDisplayPath(workspace, workingDirectory),
+                        limit = Math.Min(limit * 2, 200),
+                    },
+                }
+                : null,
+        });
     }
 
     private static async Task<ToolObservation> ReadAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -1269,6 +1330,7 @@ public sealed class RelayToolExecutor
                     path,
                     document.Kind,
                     documentText,
+                    document.Text,
                     offset,
                     limit,
                     info.Exists ? info.Length : 0,
@@ -1297,6 +1359,7 @@ public sealed class RelayToolExecutor
                 path,
                 "text",
                 sliced,
+                text,
                 offset,
                 limit,
                 bytes.Length,
@@ -1310,6 +1373,7 @@ public sealed class RelayToolExecutor
         string path,
         string kind,
         string text,
+        string sourceText,
         int offset,
         int limit,
         long sizeBytes,
@@ -1319,17 +1383,25 @@ public sealed class RelayToolExecutor
     {
         var nextOffset = offset + text.Length;
         var hasMore = sourceTruncated || nextOffset < knownTotalChars;
-        var displayPath = Path.GetRelativePath(Path.GetFullPath(workspace), path);
+        var displayPath = ToWorkspaceDisplayPath(workspace, path);
+        var lineRange = ComputeLineRange(sourceText, offset, text.Length);
+        var anchors = BuildReadAnchors(kind, displayPath, lineRange.StartLine, lineRange.EndLine);
         return new
         {
             schemaVersion = "RelayReadObservation.v1",
             kind,
             path,
             displayPath,
+            evidenceState = kind.Equals("text", StringComparison.OrdinalIgnoreCase)
+                ? "exact_text"
+                : "extracted_content",
+            anchors,
             sizeBytes,
             encoding = kind.Equals("text", StringComparison.OrdinalIgnoreCase) ? "utf-8" : "extracted-text",
             offset,
             limit,
+            startLine = lineRange.StartLine,
+            endLine = lineRange.EndLine,
             returnedChars = text.Length,
             knownTotalChars,
             truncated = hasMore,
@@ -1350,6 +1422,37 @@ public sealed class RelayToolExecutor
                 }
                 : null,
         };
+    }
+
+    private static (int StartLine, int EndLine) ComputeLineRange(string sourceText, int offset, int returnedChars)
+    {
+        var safeOffset = Math.Clamp(offset, 0, sourceText.Length);
+        var endOffset = Math.Clamp(safeOffset + Math.Max(0, returnedChars), safeOffset, sourceText.Length);
+        var startLine = 1 + sourceText[..safeOffset].Count(static c => c == '\n');
+        var segment = sourceText[safeOffset..endOffset];
+        var lineCount = Math.Max(1, segment.Count(static c => c == '\n') + 1);
+        return (startLine, startLine + lineCount - 1);
+    }
+
+    private static object[] BuildReadAnchors(string kind, string displayPath, int startLine, int endLine)
+    {
+        var anchorKind = kind.Equals("text", StringComparison.OrdinalIgnoreCase)
+            ? "line_range"
+            : kind.Contains("excel", StringComparison.OrdinalIgnoreCase) || kind.Contains("spreadsheet", StringComparison.OrdinalIgnoreCase) || kind.Contains("xlsx", StringComparison.OrdinalIgnoreCase)
+                ? "document_extract"
+                : kind.Contains("pdf", StringComparison.OrdinalIgnoreCase)
+                    ? "page_extract"
+                    : "document_extract";
+        return
+        [
+            new
+            {
+                kind = anchorKind,
+                displayPath,
+                startLine,
+                endLine,
+            },
+        ];
     }
 
     private async Task<ToolObservation> OfficeCliAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -2298,9 +2401,11 @@ public sealed class RelayToolExecutor
 
     private static ToolValidation ValidateGrep(string workspace, JsonObject args)
     {
-        if (string.IsNullOrWhiteSpace(GetString(args, "pattern")))
+        if (string.IsNullOrWhiteSpace(GetString(args, "pattern")) &&
+            NonEmptyTerms(args, "allTerms").Length == 0 &&
+            NonEmptyTerms(args, "anyTerms").Length == 0)
         {
-            return ToolValidation.Fail("grep requires pattern.");
+            return ToolValidation.Fail("grep requires pattern, allTerms, or anyTerms.");
         }
 
         var path = GetPathArg(args, "path");
@@ -2328,6 +2433,107 @@ public sealed class RelayToolExecutor
 
         return ToolValidation.Pass();
     }
+
+    private sealed record GrepPlan(
+        string RipgrepPattern,
+        string[] AllTerms,
+        string[] AnyTerms,
+        string[] ExcludeTerms,
+        bool CaseInsensitive,
+        int ContextLines,
+        int? MaxMatchesPerFile);
+
+    private static GrepPlan BuildGrepPlan(JsonObject args)
+    {
+        var allTerms = NonEmptyTerms(args, "allTerms");
+        var anyTerms = NonEmptyTerms(args, "anyTerms");
+        var excludeTerms = NonEmptyTerms(args, "excludeTerms");
+        var caseInsensitive = GetBool(args, "caseInsensitive") == true || GetBool(args, "case_insensitive") == true;
+        var contextLines = Math.Clamp(GetInt(args, "contextLines") ?? 0, 0, 10);
+        var maxMatchesPerFile = GetInt(args, "maxMatchesPerFile");
+        if (maxMatchesPerFile is not null) maxMatchesPerFile = Math.Clamp(maxMatchesPerFile.Value, 1, 200);
+        var pattern = GetString(args, "pattern");
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            var sourceTerms = anyTerms.Length > 0 ? anyTerms : allTerms;
+            pattern = string.Join("|", sourceTerms.Select(Regex.Escape));
+        }
+        else if (GetBool(args, "fixedStrings") == true)
+        {
+            pattern = Regex.Escape(pattern);
+        }
+
+        return new GrepPlan(pattern, allTerms, anyTerms, excludeTerms, caseInsensitive, contextLines, maxMatchesPerFile);
+    }
+
+    private static IReadOnlyList<object> BuildGrepObservationMatches(
+        string workspace,
+        string workingDirectory,
+        IReadOnlyList<string> lines,
+        GrepPlan plan,
+        int limit)
+    {
+        var matches = new List<object>();
+        foreach (var line in lines)
+        {
+            if (line == "--") continue;
+            if (!TryParseRipgrepLine(workingDirectory, line, out var fullPath, out var lineNumber, out var text)) continue;
+            if (!LineSatisfiesTerms(text, plan)) continue;
+            var matchedTerms = MatchedTerms(text, plan);
+            matches.Add(new
+            {
+                path = fullPath,
+                displayPath = ToWorkspaceDisplayPath(workspace, fullPath),
+                lineNumber,
+                excerpt = Truncate(text, 1200),
+                matchedTerms,
+                evidenceState = plan.AllTerms.Length > 1 && plan.AllTerms.All(term => ContainsTerm(text, term, plan.CaseInsensitive))
+                    ? "conjunctive_content_match"
+                    : "content_match",
+            });
+            if (matches.Count >= limit) break;
+        }
+        return matches;
+    }
+
+    private static bool TryParseRipgrepLine(string workingDirectory, string line, out string fullPath, out int lineNumber, out string text)
+    {
+        fullPath = "";
+        lineNumber = 0;
+        text = "";
+        var first = line.IndexOf(':', StringComparison.Ordinal);
+        if (first <= 0) return false;
+        var second = line.IndexOf(':', first + 1);
+        if (second < 0)
+        {
+            second = line.IndexOf('-', first + 1);
+        }
+        if (second < 0) return false;
+        var pathPart = line[..first];
+        var linePart = line[(first + 1)..second];
+        if (!int.TryParse(linePart, out lineNumber)) return false;
+        text = line[(second + 1)..];
+        fullPath = Path.GetFullPath(Path.IsPathRooted(pathPart) ? pathPart : Path.Combine(workingDirectory, pathPart));
+        return true;
+    }
+
+    private static bool LineSatisfiesTerms(string text, GrepPlan plan)
+    {
+        if (plan.AllTerms.Any(term => !ContainsTerm(text, term, plan.CaseInsensitive))) return false;
+        if (plan.AnyTerms.Length > 0 && !plan.AnyTerms.Any(term => ContainsTerm(text, term, plan.CaseInsensitive))) return false;
+        if (plan.ExcludeTerms.Any(term => ContainsTerm(text, term, plan.CaseInsensitive))) return false;
+        return true;
+    }
+
+    private static string[] MatchedTerms(string text, GrepPlan plan) =>
+        plan.AllTerms
+            .Concat(plan.AnyTerms)
+            .Where(term => ContainsTerm(text, term, plan.CaseInsensitive))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool ContainsTerm(string text, string term, bool caseInsensitive) =>
+        text.IndexOf(term, caseInsensitive ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) >= 0;
 
     private static ToolValidation ValidatePatch(string workspace, JsonObject args)
     {
@@ -2557,6 +2763,13 @@ public sealed class RelayToolExecutor
         return strings.ToArray();
     }
 
+    private static string[] NonEmptyTerms(JsonObject args, string key) =>
+        (GetStringArray(args, key) ?? [])
+            .Select(static term => term.Trim())
+            .Where(static term => term.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     private static int? GetInt(JsonObject args, string key)
     {
         if (!args.TryGetPropertyValue(key, out var value) || value is null) return null;
@@ -2657,6 +2870,10 @@ public sealed class RelayToolExecutor
     private static void AddRipgrepFilters(List<string> args, JsonObject callArgs)
     {
         AddGlob(args, GetString(callArgs, "glob"));
+        foreach (var glob in GetStringArray(callArgs, "includeGlobs") ?? [])
+        {
+            AddGlob(args, glob);
+        }
         foreach (var glob in GetStringArray(callArgs, "globs") ?? [])
         {
             AddGlob(args, glob);

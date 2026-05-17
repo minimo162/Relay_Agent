@@ -19215,3 +19215,74 @@ Result:
   `dist/e2e/live-project/stage-result.json`, showing `createProject` failed at
   environment readiness, while `improveProject` and `renderProject` were not
   started.
+
+## 2026-05-17: DCI Tool Contract Implementation
+
+Change:
+
+- Documented the Direct Corpus Interaction boundary in
+  `docs/OPENCODE_TOOL_CONTRACT.md`: DCI is a generic recipe over
+  OpenCode-compatible `glob`, `grep`, `read`, bounded `bash`, and
+  `apply_patch`, not a revived `RelayDocumentSearch*`, SQLite/FTS, or separate
+  document-search runner.
+- Extended the Agent Framework `grep` tool with structured DCI arguments:
+  `allTerms`, `anyTerms`, `excludeTerms`, `fixedStrings`, `caseInsensitive`,
+  `contextLines`, `includeGlobs`, `excludeGlobs`, `maxMatchesPerFile`,
+  `limit`, and `timeoutMs`. Relay still compiles to safe ripgrep argv and
+  always passes `--` before model/user patterns.
+- Changed `grep` results to structured `RelayGrepObservation.v1` observations
+  containing display paths, line numbers, excerpts, matched terms,
+  evidence-state labels, truncation state, and continuation guidance.
+- Extended `read` observations with `evidenceState`, line-range anchors, stable
+  display paths, hashes, and continuation metadata for text and supported
+  Office/PDF extraction.
+- Kept DCI context management deterministic: large tool results are compacted
+  in the Copilot prompt projection with `relay_compacted` markers instead of
+  adding a hidden summarizer or retrieval fallback.
+- Updated the Workbench event summary renderer so AG-UI tool results surface
+  compact DCI evidence summaries for `grep` and `read` observations.
+- Added deterministic DCI smokes:
+  `scripts/dci-grep-smoke.mjs`, `scripts/dci-context-compaction-smoke.mjs`,
+  and `scripts/dci-golden-smoke.mjs`.
+- Added the live Copilot DCI runner
+  `scripts/workbench-live-dci-e2e.mjs`. It creates an isolated local corpus,
+  requires real `grep`/`read` tool use through the AG-UI/Agent Framework path,
+  and classifies provider/CDP/tool/logic failures under `dist/e2e/live-dci/`.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH pnpm sidecar:build
+PATH=/root/.dotnet:$PATH node scripts/agent-tool-catalog-smoke.mjs --update
+PATH=/root/.dotnet:$PATH pnpm agent:dci-grep-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:dci-context-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:dci-golden-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:office-pdf-read-smoke
+PATH=/root/.dotnet:$PATH pnpm check
+PATH=/root/.dotnet:$PATH pnpm workbench:ux-e2e
+PATH=/root/.dotnet:$PATH pnpm workbench:live-dci-e2e
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Tool catalog snapshot was intentionally updated for the richer `grep`
+  function schema.
+- DCI grep smoke passed, including conjunctive term filtering, exclusion
+  terms, context lines, caps, and a pattern beginning with `-`.
+- DCI context compaction smoke passed and verified that a large `read` result
+  is projected back to Copilot with `relay_compacted` markers while preserving
+  `RelayReadObservation.v1`.
+- DCI golden smoke passed and verified an iterative raw-corpus trajectory:
+  broad `grep`, local `read` of a misleading entity-name candidate, refined
+  conjunctive `grep`, exact `read` of the evidence file, and final decoy
+  rejection.
+- Office/PDF read smoke passed and now asserts structured evidence anchors and
+  `evidenceState` fields.
+- Full `pnpm check` passed, including the new DCI smokes.
+- Workbench UX E2E passed:
+  `[workbench-ux-e2e] ok search=431ms approval=123ms screenshots=workbench-empty.png,workbench-completed.png,workbench-approval.png,workbench-mobile.png`.
+- Live DCI E2E was attempted but the current Linux environment did not have a
+  reachable signed-in Edge CDP on port `9360`. The run failed fast with
+  structured classification `environment`; artifacts were written to
+  `dist/e2e/live-dci/failure.json`, `workspace.txt`, and `sidecar-stderr.txt`.

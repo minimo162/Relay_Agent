@@ -13,12 +13,14 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
-The next active queue is `POSTLIVE*`. It responds to the 2026-05-17
-post-LIVEFIX E2E result: the signed-in Copilot canary passes and multi-file
-project creation can complete, but project improvement can still stop after a
-`read` observation with structured `provider_response_timeout`. The fix must
-make Agent Framework continuation, OpenCode-shaped tool observations, and
-AG-UI replay do more of the work instead of adding another Relay planner.
+The next active queue is `DCI*`. It incorporates the 2026-05-17 Direct Corpus
+Interaction plan from `PLANS.md`: improve local search and document/data review
+by giving Copilot high-resolution raw-corpus tools through Agent Framework and
+OpenCode-compatible tool semantics, not by rebuilding a Relay-specific
+retriever or a separate document-search mode.
+
+The previous `POSTLIVE*` queue remains completed history below. It should not
+be extended unless a regression proves those acceptance criteria have broken.
 
 ## Execution Rules
 
@@ -33,6 +35,389 @@ AG-UI replay do more of the work instead of adding another Relay planner.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### DCI01 - Document The DCI Tool Contract Boundary
+
+Status: completed
+
+Scope:
+
+- Update `docs/OPENCODE_TOOL_CONTRACT.md` with a DCI section that explains how
+  `glob`, `grep`, `read`, bounded `bash`, and `apply_patch` compose into raw
+  corpus interaction.
+- Explicitly state that Relay will not revive `RelayDocumentSearch*`,
+  SQLite/FTS, or a dedicated search mode for this milestone.
+- Map DCI paper concepts to Relay ownership:
+  - Agent Framework: session, continuation, middleware, tool loop;
+  - OpenCode: model-facing local tool shape;
+  - Relay: policy, Office/PDF extraction, Windows/shared-folder safety,
+    diagnostics, packaging;
+  - AG-UI: investigation trace and approvals.
+
+Artifacts:
+
+- Updated `docs/OPENCODE_TOOL_CONTRACT.md`.
+- Implementation log entry with the paper/repo references.
+
+Acceptance:
+
+- The doc makes it clear that DCI is a generic agent recipe over existing
+  tools, not a new retrieval subsystem.
+- The doc lists which DCI capabilities are implemented as first-class tools
+  and which are intentionally blocked or bounded.
+
+Verification:
+
+- `git diff --check`
+
+### DCI02 - Add DCI-Grade Structured Grep
+
+Status: completed
+
+Scope:
+
+- Extend the Agent Framework `grep` function signature with structured
+  arguments for:
+  - `allTerms`;
+  - `anyTerms`;
+  - `excludeTerms`;
+  - `fixedStrings`;
+  - `caseInsensitive`;
+  - `contextLines`;
+  - `includeGlobs`;
+  - `excludeGlobs`;
+  - `maxMatchesPerFile`;
+  - `limit`;
+  - `timeoutMs`.
+- Keep the existing `pattern` and `glob` arguments as OpenCode-compatible
+  simple paths.
+- Compile structured filters to safe ripgrep argv. Always put `--` before
+  model/user patterns.
+- Return structured observations with path, displayPath, line number, excerpt,
+  matched terms, truncation, and continuation guidance.
+- Do not route Office/PDF containers through `grep`; keep exact `read` for
+  those.
+
+Artifacts:
+
+- Sidecar grep implementation update.
+- Tool catalog snapshot update.
+- Grep smoke covering conjunctive terms, exclusion terms, context lines,
+  caps, and a pattern starting with `-`.
+
+Acceptance:
+
+- A request such as "部品売上" can require both concept terms to appear in the
+  same file/context before a candidate is promoted.
+- Misleading entity-name-only matches can be demoted by requiring contextual
+  evidence instead of relying on filename rank.
+- Existing simple `grep(pattern, glob)` behavior remains compatible.
+
+Verification:
+
+- new DCI grep smoke
+- `pnpm agent:tool-catalog-smoke`
+- `pnpm agent:rg-stream-smoke`
+- `pnpm check`
+
+### DCI03 - Improve Read Observations For Evidence Anchors
+
+Status: completed
+
+Scope:
+
+- Extend `read` observations with stable evidence anchors:
+  - text/code: line ranges and offset/limit continuation;
+  - Excel/CSV: sheet/table/cell/range hints when available;
+  - Word/PDF/PPT: page/section/slide anchors when available.
+- Keep full local artifacts in Relay storage/support bundles, but project
+  bounded excerpts and hashes to Copilot.
+- Add `evidenceState` values that distinguish filename/path candidates,
+  generic content hits, conjunctive concept hits, and exact local evidence.
+
+Artifacts:
+
+- Sidecar read observation update.
+- Office/PDF extraction smoke updates.
+- Updated AG-UI replay fixture if event payload shape changes.
+
+Acceptance:
+
+- Copilot can cite or reason from exact local observations without receiving
+  entire large files.
+- Office/PDF candidate promotion can depend on actual extracted content when
+  available.
+- Local full artifacts remain user-controlled and redacted by default in
+  support bundles.
+
+Verification:
+
+- `pnpm agent:office-pdf-read-smoke`
+- `pnpm agent:agui-replay-smoke`
+- `pnpm check`
+
+### DCI04 - Add Agent Framework DCI Context Middleware
+
+Status: completed
+
+Scope:
+
+- Implement deterministic tool-result truncation by tool type in the Agent
+  Framework middleware/projection layer.
+- Add compaction that preserves the ordered trajectory skeleton:
+  tool name, args summary, paths, hashes, counts, latest evidence snippets,
+  and artifact IDs.
+- Keep the most recent turns intact and compact older bulky observations when
+  accumulated tool output crosses a threshold.
+- Do not add LLM summarization in this task. Summarization can be considered
+  later only if replayable and observable.
+
+Artifacts:
+
+- Middleware/projection update.
+- Context compaction smoke with repeated `grep`/`read` observations.
+- Implementation note describing thresholds and artifact retention.
+
+Acceptance:
+
+- Long DCI investigations do not flood Copilot with raw tool output.
+- The AG-UI replay/support bundle can reconstruct what was searched and read.
+- Compaction cannot hide a mutation or approval event.
+
+Verification:
+
+- new context compaction smoke
+- `pnpm agent:framework-trace-smoke`
+- `pnpm agent:agui-replay-smoke`
+- `pnpm check`
+
+### DCI05 - Add DCI Search Recipe To Framework Guidance
+
+Status: completed
+
+Scope:
+
+- Add concise Agent Framework instruction/projection guidance for DCI behavior:
+  search direct terms, combine weak clues, inspect local context, extract new
+  terms/entities, refine, cross-check, and answer only after relevant
+  observations exist.
+- Keep this guidance generic across local file search, codebase exploration,
+  Office review, and evidence-backed Q&A.
+- Do not add a `document_search` tool, a fixed taxonomy, or a task-specific
+  planner.
+
+Artifacts:
+
+- Agent instructions/tool projection update.
+- Golden smoke where a misleading filename/entity candidate must not win over
+  a lower-ranked file with conjunctive local evidence.
+
+Acceptance:
+
+- The model has enough guidance to use DCI-style iterative exploration without
+  being forced into a brittle fixed query plan.
+- `final` is blocked or corrected when local evidence was required but no
+  local observation exists.
+
+Verification:
+
+- new DCI golden smoke
+- `pnpm agent:choice-error-reduction-smoke`
+- `pnpm agent:framework-native-prevention-smoke`
+- `pnpm check`
+
+### DCI06 - Render AG-UI Investigation Timeline
+
+Status: completed
+
+Scope:
+
+- Update Workbench run rendering so DCI-style runs show:
+  - search terms tried;
+  - files inspected;
+  - evidence snippets/anchors;
+  - refinements;
+  - caveats and terminal confidence.
+- Keep the default surface minimal and professional. Diagnostics and raw JSON
+  stay collapsed under support details.
+- Ensure approvals and mutations remain visually distinct from read-only
+  investigation events.
+
+Artifacts:
+
+- Workbench timeline UI update.
+- UX E2E snapshot or Playwright assertion.
+
+Acceptance:
+
+- Users can understand why a candidate was selected without reading raw
+  Copilot/tool JSON.
+- The UI does not reintroduce separate "file search / Office / code" modes.
+- The trace remains AG-UI-event driven.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### DCI07 - Add Local Corpus Golden Benchmarks
+
+Status: completed
+
+Scope:
+
+- Create deterministic local corpora under test fixtures:
+  - sparse clue conjunction;
+  - misleading entity-name match;
+  - exact phrase with nearby negation;
+  - Office/Excel content evidence;
+  - codebase symbol lookup and edit verification.
+- Run them through the Agent Framework mock Copilot path so the acceptance does
+  not depend on live Copilot quota.
+- Save sanitized AG-UI event logs as replay fixtures.
+
+Artifacts:
+
+- DCI golden smoke script.
+- Fixture corpus.
+- Replay fixtures.
+
+Acceptance:
+
+- The benchmark proves DCI behavior over raw local files, not retriever rank.
+- The same generic tools handle search, Office inspection, and codebase
+  exploration.
+
+Verification:
+
+- new DCI golden smoke
+- `pnpm agent:agui-replay-smoke`
+- `pnpm check`
+
+### DCI08 - Build Live DCI E2E Corpus And Runner
+
+Status: completed
+
+Scope:
+
+- Add a live E2E runner, e.g. `scripts/workbench-live-dci-e2e.mjs`, that uses
+  the real signed-in M365 Copilot provider through Edge CDP.
+- The runner must create an isolated temporary corpus with:
+  - sparse clue conjunction;
+  - misleading entity-name/filename decoys;
+  - local context negation;
+  - text/Markdown/CSV files;
+  - Office fixtures once DCI03 anchors are available.
+- The user task should be natural language and should not reveal the exact file
+  names that contain the answer.
+- The runner must require actual Relay tools through AG-UI/Agent Framework:
+  `glob`, `grep`, `read`, and, where appropriate, bounded `bash`.
+- The runner must fail if the final answer appears before required local tool
+  observations exist.
+
+Artifacts:
+
+- Live DCI E2E script.
+- Temporary-corpus fixture generator.
+- Acceptance assertions for tool sequence, evidence file, final answer, and
+  decoy rejection.
+- Run output under `dist/e2e/live-dci/`.
+
+Acceptance:
+
+- The script can run independently from the older live project E2E.
+- It verifies the DCI pattern from the paper: iterative raw-corpus interaction,
+  local context reads, and refined search.
+- It does not use `RelayDocumentSearch*`, SQLite/FTS, a mock model, or a
+  fallback heuristic answer.
+
+Verification:
+
+- `pnpm workbench:live-copilot-e2e`
+- live DCI E2E command when Edge/Copilot is available
+- `pnpm check`
+
+### DCI09 - Add Live DCI E2E Classification And Artifacts
+
+Status: completed
+
+Scope:
+
+- Classify live DCI failures as:
+  - provider quota/rate limit;
+  - Edge CDP readiness or selector drift;
+  - Copilot prompt delivery/response extraction;
+  - Agent Framework continuation/session state;
+  - OpenCode tool contract violation;
+  - AG-UI replay/state rendering;
+  - DCI logic failure.
+- Save sanitized artifacts:
+  - AG-UI event log;
+  - framework trace IDs;
+  - tool-call trajectory summary;
+  - evidence snippets/anchors;
+  - decoy rejection evidence;
+  - provider diagnostics;
+  - Workbench screenshot.
+- Redact raw document contents by default. Include enough excerpts to prove
+  acceptance without exposing unnecessary local data.
+
+Artifacts:
+
+- Updated live DCI E2E report schema.
+- Implementation log entry template for live DCI runs.
+- Optional AG-UI replay fixture derived from a sanitized successful run.
+
+Acceptance:
+
+- A failed live DCI run is actionable without reading raw Copilot logs.
+- A successful run proves the paper-style DCI behavior, not just Copilot
+  connectivity.
+- Release notes can distinguish provider-blocked, framework-blocked, and
+  DCI-logic failures.
+
+Verification:
+
+- live DCI E2E command
+- `pnpm agent:agui-replay-smoke`
+- `pnpm check`
+
+### DCI10 - Run Live Copilot DCI E2E And Record Result
+
+Status: completed (live attempt environment-blocked)
+
+Scope:
+
+- After DCI01-DCI09 pass, run a signed-in live Copilot E2E that performs a
+  realistic local-corpus investigation.
+- Use the DCI08 fixture that requires iterative search, decoy rejection, and
+  local context checks.
+- Classify failures as provider/CDP, framework continuation, tool contract,
+  AG-UI replay, or DCI logic.
+- Record the outcome in `docs/IMPLEMENTATION.md` with artifact paths and the
+  exact command.
+
+Artifacts:
+
+- `dist/e2e/live-dci/` run artifacts.
+- Implementation log entry with command, result, and failure/success class.
+
+Acceptance:
+
+- Live Copilot can complete at least one DCI investigation without relying on a
+  dedicated document-search mode.
+- The run demonstrates at least two search/refinement steps and at least one
+  local context `read` before final answer.
+- The final answer identifies evidence-backed files/snippets and rejects the
+  decoy candidate.
+- If Copilot or Edge fails, the run ends with a structured provider/adapter
+  diagnostic, not a fallback answer.
+
+Verification:
+
+- `pnpm workbench:live-copilot-e2e`
+- live DCI E2E command, e.g. `pnpm workbench:live-dci-e2e`
+- `pnpm check`
 
 ### POSTLIVE01 - Keep Tool Validation Failures Out Of Approval
 

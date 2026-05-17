@@ -748,6 +748,8 @@ function summarizeToolResult(detail: string | undefined): string | undefined {
       data?: unknown;
       error?: unknown;
     };
+    const dciSummary = summarizeDciObservation(parsed);
+    if (dciSummary) return dciSummary;
     const parts = [];
     if (typeof parsed.tool === "string") parts.push(parsed.tool);
     if (typeof parsed.summary === "string") parts.push(parsed.summary);
@@ -758,6 +760,38 @@ function summarizeToolResult(detail: string | undefined): string | undefined {
     // Non-JSON tool results are already bounded upstream.
   }
   return detail.length > 180 ? `${detail.slice(0, 180)}...` : detail;
+}
+
+function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; data?: unknown }): string | undefined {
+  if (!parsed.data || typeof parsed.data !== "object") return undefined;
+  const data = parsed.data as {
+    schemaVersion?: unknown;
+    matches?: unknown;
+    displayPath?: unknown;
+    anchors?: unknown;
+    evidenceState?: unknown;
+    truncated?: unknown;
+  };
+  if (data.schemaVersion === "RelayGrepObservation.v1") {
+    const matches = Array.isArray(data.matches) ? data.matches : [];
+    const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; excerpt?: unknown } | undefined;
+    const path = typeof first?.displayPath === "string" ? compactPath(first.displayPath) : "";
+    const line = typeof first?.lineNumber === "number" ? `:${first.lineNumber}` : "";
+    const excerpt = typeof first?.excerpt === "string" ? ` — ${first.excerpt.slice(0, 96)}` : "";
+    const suffix = data.truncated === true ? " · truncated" : "";
+    return `grep · ${matches.length} evidence match${matches.length === 1 ? "" : "es"}${path ? ` · ${path}${line}` : ""}${excerpt}${suffix}`;
+  }
+  if (data.schemaVersion === "RelayReadObservation.v1") {
+    const path = typeof data.displayPath === "string" ? compactPath(data.displayPath) : "";
+    const anchors = Array.isArray(data.anchors) ? data.anchors : [];
+    const anchor = anchors[0] as { startLine?: unknown; endLine?: unknown } | undefined;
+    const lineRange = typeof anchor?.startLine === "number" && typeof anchor?.endLine === "number"
+      ? `:${anchor.startLine}-${anchor.endLine}`
+      : "";
+    const evidence = typeof data.evidenceState === "string" ? data.evidenceState : "read";
+    return `read · ${evidence}${path ? ` · ${path}${lineRange}` : ""}`;
+  }
+  return undefined;
 }
 
 function statusLabel(status: RunStatus | "idle"): string {

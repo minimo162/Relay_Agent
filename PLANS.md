@@ -88,6 +88,8 @@ Reference sources checked for this plan:
 
 - `https://opencode.ai/docs/tools/`
 - `https://opencode.ai/docs/agents/`
+- `https://arxiv.org/abs/2605.05242`
+- `https://github.com/DCI-Agent/DCI-Agent-Lite`
 - `https://learn.microsoft.com/en-us/agent-framework/overview/`
 - `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`
 - `https://learn.microsoft.com/en-us/agent-framework/agents/middleware/`
@@ -95,6 +97,154 @@ Reference sources checked for this plan:
 - `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop`
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
+
+### 2026-05-17 Direct Corpus Interaction Plan
+
+The arXiv paper "Beyond Semantic Similarity: Rethinking Retrieval for Agentic
+Search via Direct Corpus Interaction" strengthens the current Relay direction.
+Its core claim is that agentic search suffers when corpus access is compressed
+into a fixed top-k retriever. Capable agents do better when they can interact
+directly with the raw corpus through composable terminal-style tools such as
+`grep`, `rg`, `glob/find`, file reads, and lightweight scripts. The DCI-Agent-
+Lite implementation shows this can work without embeddings, vector indexes, or
+an offline retriever, as long as the harness controls tool output size and
+long-horizon context pressure.
+
+Relay's interpretation:
+
+> Search is not a separate product mode or a Relay-owned retriever. Search is a
+> high-frequency recipe over the same Agent Framework session and
+> OpenCode-compatible local tool catalog used for coding, Office inspection, and
+> verification.
+
+#### Design Decisions
+
+1. **Do not revive `RelayDocumentSearch*`, SQLite/FTS, or a dedicated search
+   runner.** DCI argues for higher-resolution raw-corpus interaction, not
+   another top-k retrieval abstraction. Relay should improve `glob`, `grep`,
+   `read`, and bounded `bash` observations instead.
+2. **Agent Framework owns the search loop.** Search planning, tool selection,
+   refinement, continuation after tool observations, approval boundaries, and
+   terminal answers must stay inside Agent Framework sessions and middleware.
+   Relay should not add a second search planner.
+3. **OpenCode remains the model-facing tool contract.** DCI uses CLI-style
+   corpus interaction, and OpenCode provides the closest mature public shape for
+   model-visible local tools. Relay should expose `glob`, `grep`, `read`,
+   `bash`, and `apply_patch` with OpenCode-compatible semantics while adding
+   Relay policy and Windows/Office support under the hood.
+4. **`bash` remains bounded.** DCI's paper uses shell pipelines, but Relay is a
+   business app over local and shared folders. Keep unrestricted shell out of
+   the default catalog. Add first-class structured `grep`/`glob`/`read`
+   capabilities before widening `bash`; any additional text-processing command
+   must be narrow, structured, auditable, and approval/policy gated.
+5. **Observation quality matters more than ranking.** The previous "Mパーツ"
+   failure is a retrieval-interface-resolution problem: filename/entity matches
+   were treated as relevance. DCI suggests forcing local context checks and
+   conjunctive evidence before promoting a candidate.
+6. **Context management is product-critical.** DCI-Agent-Lite uses truncation,
+   compaction, and optional summarization for long trajectories. Relay should
+   implement deterministic truncation and compaction in Agent Framework
+   middleware first. LLM summarization may be added later only if it is
+   observable, replayable, and does not hide local evidence.
+7. **AG-UI should show the investigation, not just a ranked list.** The
+   Workbench should show searches tried, files read, evidence snippets, and
+   why the agent refined the query. Candidate lists are secondary to evidence.
+
+#### Required Capability Changes
+
+1. **DCI-grade `grep`**
+   - Add structured arguments for `allTerms`, `anyTerms`, `excludeTerms`,
+     `fixedStrings`, `caseInsensitive`, `contextLines`, `includeGlobs`,
+     `excludeGlobs`, `maxMatchesPerFile`, and result caps.
+   - Push filtering into ripgrep wherever possible and always pass `--` before
+     user/model patterns.
+   - Return structured observations: display path, line number/range, matched
+     terms, excerpt, truncation state, and continuation guidance.
+
+2. **Evidence-first `read`**
+   - Keep exact text/code reads OpenCode-like.
+   - For Office/PDF reads, return stable sheet/page/section/cell anchors where
+     extraction supports them.
+   - Preserve local full artifacts, but project bounded excerpts plus hashes
+     into Copilot context.
+
+3. **Agent Framework DCI middleware**
+   - Add deterministic tool-result truncation by tool type.
+   - Add compaction that preserves the ordered tool-call skeleton, paths,
+     hashes, counts, and latest evidence snippets while replacing older bulky
+     observations with replayable artifact references.
+   - Enforce final-answer readiness: answers about local files need at least
+     one relevant local observation; evidence-backed answers need cited
+     `read`/`grep` observations.
+
+4. **OpenCode-compatible search recipes**
+   - Add prompt-projection guidance, not a planner, for DCI search behavior:
+     search direct terms, combine weak clues, read local context, extract new
+     entities/terms, refine, cross-check, and only then summarize.
+   - Keep this as framework/middleware/catalog guidance over generic tools, not
+     a `document_search` tool.
+
+5. **AG-UI DCI trace UX**
+   - Render search trajectories as a compact investigation timeline:
+     search terms, inspected files, evidence snippets, refinements, and
+     terminal confidence/caveats.
+   - Keep the visual surface minimal; advanced diagnostics remain collapsible
+     support details.
+
+6. **Verification**
+   - Add a deterministic local-corpus DCI golden smoke with sparse clues,
+     misleading entity-name matches, and required local context checks.
+   - Add Office/PDF DCI smoke cases using `read` extraction anchors.
+   - Add a live Copilot DCI E2E only after deterministic smokes pass.
+
+#### DCI Live E2E Design
+
+The live Copilot E2E for DCI must test the paper's actual claim: a capable
+agent should solve a local-corpus investigation by directly interacting with
+raw files, not by receiving a pre-ranked retrieval answer.
+
+The test should create an isolated temporary corpus with at least these cases:
+
+1. **Sparse clue conjunction**
+   - No single filename contains the full answer.
+   - The answer requires combining two or more weak clues found in separate
+     files or separate regions of the same file.
+   - Acceptance requires Copilot to issue multiple `grep`/`read` calls and
+     refine the search terms after seeing partial evidence.
+
+2. **Misleading entity-name match**
+   - Include files whose names strongly match one query token but whose local
+     content proves they are the wrong target.
+   - Include a lower-obviousness file where the required concepts co-occur in
+     local context.
+   - Acceptance requires the final answer to cite the content-confirmed file,
+     not the filename-only decoy.
+
+3. **Local context verification**
+   - Include a match with nearby negation or a warning such as "not applicable",
+     "not sales", or "draft example".
+   - Acceptance requires reading surrounding context rather than treating the
+     first lexical match as evidence.
+
+4. **Heterogeneous corpus**
+   - Include plaintext/Markdown/CSV plus at least one Relay-supported Office
+     file fixture after `read` anchors are implemented.
+   - Acceptance requires the same generic tools to inspect both code/text and
+     Office-derived evidence.
+
+5. **Trajectory and UX artifact**
+   - Save AG-UI event logs, framework trace IDs, Copilot prompt/response
+     diagnostics, and a redacted final report under `dist/e2e/live-dci/`.
+   - The Workbench screenshot should show a compact investigation timeline:
+     searches tried, files inspected, evidence snippets, refinements, and
+     final caveats.
+
+The live test is not a replacement for deterministic smokes. It is a release
+confidence gate that verifies M365 Copilot can follow the DCI recipe through
+Relay's Agent Framework/OpenCode tool surface. If Copilot, Edge CDP, or quota
+fails, the test must classify the failure as provider/adapter-blocked. It must
+not silently pass by falling back to a mock model, a dedicated search engine, or
+a local heuristic answer.
 
 ### 2026-05-17 Reinvention Review
 
