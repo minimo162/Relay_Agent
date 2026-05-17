@@ -353,6 +353,134 @@ auditable tools." The system should be stronger on ambiguous business language,
 sparse clues, misleading company/file names, prior-period copies, and documents
 whose relevance depends on nearby context.
 
+### 2026-05-17 DCI Code And Test Revision Plan
+
+This plan converts the DCI direction from a successful file-search E2E into a
+more durable code and test contract. It is based on arXiv:2605.05242's central
+claim: fixed top-k retrieval hides the exact lexical constraints, sparse clue
+conjunctions, local context checks, intermediate entity discovery, and
+multi-step hypothesis revisions that agentic search needs. Relay should
+therefore strengthen the generic local tool loop rather than add a hidden
+retriever, vector index, or document-search subsystem.
+
+#### Scope
+
+- Keep the active architecture: Microsoft Agent Framework session, M365
+  Copilot over Relay's Edge CDP adapter, AG-UI events, and OpenCode-compatible
+  `glob`, `grep`, and `read` tools.
+- Treat file search as a high-frequency recipe over the generic tool catalog.
+  Do not add or revive `RelayDocumentSearch*`, SQLite/FTS, vector search,
+  fixed business taxonomies, or a separate document-search mode.
+- Move DCI correctness from prompt guidance and one live E2E into explicit
+  code contracts, deterministic smokes, and live artifact gates.
+
+#### Code Changes
+
+1. **Explicit DCI trajectory contract**
+   - Add a compact `RelayDciTrajectory.v1` diagnostic shape derived from
+     Agent Framework tool observations. It should record tool order, searched
+     terms, matched paths, zero-match states, read targets, anchors, excerpts,
+     failed reads, hard-negative labels, and final cited evidence.
+   - The trajectory is a replay/support artifact and AG-UI state aid, not a
+     model-visible `document_search` tool and not a second planner.
+   - It must be reconstructable from AG-UI events and must not persist caches
+     or indexes inside searched/shared folders.
+
+2. **Generic read-admission and recovery**
+   - Keep the current rule that `read` is admissible only for explicit user
+     paths, observed candidate paths, or exact existing workspace paths.
+   - Replace any domain-specific recovery heuristics with generic query-term
+     extraction from the user request, failed read target, and previous
+     `glob`/`grep` observations.
+   - When Copilot invents a path after a zero-match `grep`, Relay should emit
+     an observable `grep` recovery or failed observation that points back to
+     observed candidates and usable terms. It must not crash the run or
+     silently synthesize a local answer.
+
+3. **Higher-resolution `grep` observations**
+   - Preserve structured arguments (`allTerms`, `anyTerms`, `excludeTerms`,
+     globs, context lines, caps) and push filters into ripgrep.
+   - Return match groups with nearby context, matched required/optional terms,
+     context labels, truncation state, and continuation guidance.
+   - Add deterministic context labels for generic evidence behavior:
+     possible evidence, negative/negated context, guide/glossary, prior-period,
+     generic memo, and no-evidence. These labels must remain transparent and
+     should not encode company-specific exceptions.
+
+4. **Evidence-first `read`**
+   - Keep exact text/code reads OpenCode-like.
+   - For Office/PDF/CSV-supported reads, expose stable anchors and bounded
+     excerpts so Copilot can verify local context instead of relying on file
+     names.
+   - Record text hashes and anchors in the trajectory so a final answer can be
+     audited without copying entire local documents into support artifacts.
+
+5. **DCI context compaction**
+   - Add deterministic compaction for long investigations that preserves the
+     ordered skeleton: terms tried, counts, matched paths, read anchors,
+     hashes, rejected decoys, and current hypotheses.
+   - Do not use LLM summarization as a hidden source of truth. If LLM
+     summarization is introduced later, it must be observable and replayable.
+
+6. **AG-UI investigation trace**
+   - Render the trajectory as a compact investigation timeline: searches
+     tried, files surfaced, files read, evidence snippets, rejected decoys, and
+     final cited file.
+   - Keep the default UI minimal. Raw observations and support bundle details
+     remain collapsed.
+
+#### Test Changes
+
+1. **Deterministic DCI metric unit tests**
+   - Add direct unit coverage for `RelayDciTrajectoryMetrics.v1` so live and
+     mock E2E share the same definitions for raw-tool-only behavior, weak-clue
+     conjunction, query expansion, coverage, localization, hard-negative
+     rejection, failed tools, and invented reads.
+
+2. **Multi-hop local corpus smokes**
+   - Add a corpus where the first useful file is only a guide/glossary that
+     reveals vocabulary needed to find the true evidence.
+   - Include entity-name decoys, prior-period references, generic memos,
+     negated contexts, and a gold evidence file whose filename does not expose
+     the full answer.
+   - Require at least one refinement after observing local content.
+
+3. **Invented-read and zero-match regressions**
+   - Add tests where Copilot tries a plausible but nonexistent filename after
+     a zero-match `grep`.
+   - The run should continue with an observable recovery or fail with a clear
+     protocol error; it must not terminate with a streaming exception.
+
+4. **Office/PDF/CSV DCI fixtures**
+   - Extend DCI tests beyond Markdown/plaintext once read anchors are stable:
+     a workbook sheet/cell evidence case, a CSV row evidence case, and a PDF
+     text-layer evidence case.
+   - The same generic `glob`/`grep`/`read` recipe should drive these cases
+     where possible; Office/PDF content search should remain bounded by what
+     Relay can safely extract.
+
+5. **Live Copilot DCI release gate**
+   - Keep `pnpm workbench:live-dci-e2e` as the signed-in Copilot confidence
+     gate.
+   - The test must save AG-UI events, trajectory metrics, final result,
+     prompt/response diagnostics, and failure classification under
+     `dist/e2e/live-dci/`.
+   - A live run that reaches the right final file by chance but misses local
+     context checks should fail the DCI metric gate.
+
+#### Acceptance Criteria
+
+- No dedicated retriever, hidden ranking engine, or revived
+  `RelayDocumentSearch*` path is added.
+- File search runs over `glob`, `grep`, and exact `read`, with optional bounded
+  verification tools only when explicitly justified.
+- A final answer about a local file must be backed by local observations and
+  exact evidence reads when the request asks for evidence, content, or context.
+- Hard negatives and guide-only matches cannot satisfy the final readiness
+  gate by themselves.
+- All DCI tests fail clearly as tool/protocol/provider errors; no mock model,
+  heuristic local answer, or fallback search engine is allowed to pass a test.
+
 ### 2026-05-17 Reinvention Review
 
 This review re-checks the active direction against the current public

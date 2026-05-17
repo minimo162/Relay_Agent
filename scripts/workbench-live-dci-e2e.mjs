@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { assistantText, collectToolCalls, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
 import { ensureCopilotCdp } from "./lib/copilot-cdp.mjs";
 import { computeDciMetrics } from "./lib/dci-metrics.mjs";
+import { buildDciTrajectory } from "./lib/dci-trajectory.mjs";
 
 const token = "relay-live-dci-token";
 const port = 17904;
@@ -117,7 +118,10 @@ try {
   }
   const calls = [...collectToolCalls(run.events).values()];
   const names = calls.map((call) => call.name);
-  const dciMetrics = computeDciMetrics(calls, assistantText(run.events), {
+  const final = assistantText(run.events);
+  const dciTrajectory = buildDciTrajectory(calls, final);
+  writeFileSync(join(artifactDir, "dci-trajectory.json"), `${JSON.stringify(dciTrajectory, null, 2)}\n`, "utf8");
+  const dciMetrics = computeDciMetrics(calls, final, {
     goldPath,
     hardNegativePaths,
     evidencePattern: /売上実績|parts sales|service parts revenue/,
@@ -147,7 +151,6 @@ try {
   if (!dciMetrics.localizationExactRead || !dciMetrics.evidenceSpanLocalized) {
     throw new Error(`DCI live run did not localize evidence by exact read: ${JSON.stringify(dciMetrics.readTargets)}`);
   }
-  const final = assistantText(run.events);
   if (/該当なし|見つかりません|確認できない|確認できません|no match|not found/i.test(final)) {
     throw new Error(`final answer incorrectly reported no evidence: ${final}`);
   }
@@ -160,7 +163,7 @@ try {
   if (!/source-a|finance\/q4/i.test(final)) {
     throw new Error(`final answer did not identify the content evidence file: ${final}`);
   }
-  const result = { workspace, tools: names, dciMetrics, final };
+  const result = { workspace, tools: names, dciTrajectory, dciMetrics, final };
   writeFileSync(join(artifactDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   console.log(`[workbench-live-dci-e2e] ok workspace=${workspace}`);
 } catch (error) {

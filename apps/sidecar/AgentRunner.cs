@@ -1459,6 +1459,19 @@ public sealed class RelayToolExecutor
         var haystack = $"{displayPath}\n{text}";
         var labels = new SortedSet<string>(StringComparer.Ordinal);
         if (ContainsAnyDciContext(haystack,
+            "no evidence",
+            "no match",
+            "not found",
+            "not confirmed",
+            "該当なし",
+            "見つかりません",
+            "確認できません",
+            "確認できない",
+            "存在しません"))
+        {
+            labels.Add("no_evidence");
+        }
+        if (ContainsAnyDciContext(haystack,
             "not evidence",
             "not sales",
             "not applicable",

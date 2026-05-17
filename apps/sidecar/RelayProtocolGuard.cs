@@ -42,6 +42,14 @@ public static class RelayProtocolGuard
             return RelayProtocolDecision.Replace(directive);
         }
 
+        if (ShouldRequireGrepRefinementBeforeFinal(state) && availableTools.Contains("grep"))
+        {
+            return RelayProtocolDecision.Replace(new RelayToolDirective(
+                "grep",
+                BuildReadAdmissionRecoveryGrep(new JsonObject(), state),
+                "grep_refinement_before_final"));
+        }
+
         if (state.RequiresReadEvidenceBeforeFinal &&
             availableTools.Contains("read") &&
             TryFindEvidenceReadPath(proposedAnswer, state, out var evidencePath))
@@ -64,6 +72,18 @@ public static class RelayProtocolGuard
 
         return RelayProtocolDecision.Allow();
     }
+
+    private static bool ShouldRequireGrepRefinementBeforeFinal(RelayTurnState state) =>
+        state.HasReadToolResult &&
+        !state.HasGrepToolResult &&
+        string.IsNullOrWhiteSpace(state.PendingOutputFile) &&
+        (ContainsAny(state.OriginalUserRequest, "再検索", "言い換え", "用語", "曖昧", "refine", "synonym") ||
+            state.CompletedToolDetails.Any(detail =>
+                detail.StartsWith("read:", StringComparison.Ordinal) &&
+                ContainsAny(detail, "guide", "glossary", "用語", "辞書")));
+
+    private static bool ContainsAny(string text, params string[] needles) =>
+        needles.Any(needle => text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
 
     private static bool TryFindEvidenceReadPath(string? proposedAnswer, RelayTurnState state, out string path)
     {
@@ -219,23 +239,31 @@ public static class RelayProtocolGuard
     private static JsonObject BuildReadAdmissionRecoveryGrep(JsonObject args, RelayTurnState state)
     {
         var requested = GetString(args, "file_path") ?? GetString(args, "path") ?? "";
-        var source = $"{state.OriginalUserRequest}\n{requested}";
+        var source = $"{state.OriginalUserRequest}\n{requested}\n{string.Join('\n', state.CompletedToolDetails)}";
         var allTerms = new List<string>();
         var anyTerms = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (Regex.IsMatch(source, @"(?:^|[^0-9])(?:4Q|Q4|4q|q4)(?:[^0-9]|$)", RegexOptions.CultureInvariant))
+        foreach (Match match in Regex.Matches(source, @"(?:^|[^0-9])(?:(?<n>[1-4])Q|Q(?<n>[1-4]))(?:[^0-9]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
-            allTerms.Add("4Q");
+            var quarter = match.Groups["n"].Value;
+            if (!string.IsNullOrWhiteSpace(quarter))
+            {
+                allTerms.Add($"{quarter}Q");
+            }
         }
-        var fyMatch = Regex.Match(source, @"FY\d{3}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (fyMatch.Success)
+        foreach (Match match in Regex.Matches(source, @"FY\d{2,4}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
-            allTerms.Add(fyMatch.Value.ToUpperInvariant());
+            allTerms.Add(match.Value.ToUpperInvariant());
         }
 
-        AddIfRelevant(anyTerms, source, @"アフター|after|aftermarket", "アフター", "aftermarket", "after", "サービス", "補修", "部品", "パーツ", "parts", "service", "revenue", "sales", "売上");
-        AddIfRelevant(anyTerms, source, @"部品|パーツ|parts|spare|service", "部品", "パーツ", "補修", "サービス", "parts", "service", "spare");
-        AddIfRelevant(anyTerms, source, @"売上|sales|revenue", "売上", "sales", "revenue");
+        foreach (var term in ExtractRecoveryTerms(source))
+        {
+            if (!allTerms.Contains(term, StringComparer.OrdinalIgnoreCase))
+            {
+                anyTerms.Add(term);
+            }
+            if (anyTerms.Count >= 12) break;
+        }
         if (anyTerms.Count == 0)
         {
             foreach (Match match in Regex.Matches(source, @"[\p{L}\p{N}]{2,}", RegexOptions.CultureInvariant))
@@ -259,21 +287,57 @@ public static class RelayProtocolGuard
         {
             node["anyTerms"] = ToJsonArray(anyTerms);
         }
-        node["includeGlobs"] = ToJsonArray(["**/*.md", "**/*.txt", "**/*.csv"]);
+        node["includeGlobs"] = ToJsonArray(["**/*.md", "**/*.txt", "**/*.csv", "**/*.json", "**/*.html"]);
         return node;
     }
 
-    private static void AddIfRelevant(ISet<string> terms, string source, string pattern, params string[] values)
+    private static IEnumerable<string> ExtractRecoveryTerms(string source)
     {
-        if (!Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        var terms = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(source, @"[A-Za-z][A-Za-z0-9_-]{1,}", RegexOptions.CultureInvariant))
         {
-            return;
+            foreach (var part in Regex.Split(match.Value, @"[_\-.]+"))
+            {
+                AddRecoveryTerm(terms, part);
+            }
         }
-        foreach (var value in values)
+
+        foreach (Match match in Regex.Matches(source, @"[\p{IsKatakana}ー]{2,}", RegexOptions.CultureInvariant))
         {
-            terms.Add(value);
+            AddRecoveryTerm(terms, match.Value);
         }
+
+        foreach (var term in new[]
+        {
+            "アフター", "部品", "パーツ", "補修", "サービス", "売上", "収益", "実績", "確定", "根拠",
+            "集計", "明細", "内訳", "資料", "数字", "会社名", "対象外", "過年度", "参考", "一般"
+        })
+        {
+            if (source.Contains(term, StringComparison.OrdinalIgnoreCase))
+            {
+                AddRecoveryTerm(terms, term);
+            }
+        }
+
+        return terms;
     }
+
+    private static void AddRecoveryTerm(ISet<string> terms, string value)
+    {
+        var term = value.Trim();
+        if (term.Length < 2 || term.Length > 40) return;
+        if (Regex.IsMatch(term, @"^[0-9]+$", RegexOptions.CultureInvariant)) return;
+        if (RecoveryStopWords.Contains(term)) return;
+        terms.Add(term);
+    }
+
+    private static readonly HashSet<string> RecoveryStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "file", "files", "folder", "path", "read", "grep", "glob", "search", "find", "the", "and", "for",
+        "from", "with", "this", "that", "tool", "success", "failed", "candidate", "workspace", "relay",
+        "ファイル", "フォルダ", "資料", "検索", "探して", "探し", "見つけ", "関する", "について", "この",
+        "から", "ため", "ください", "ローカル"
+    };
 
     private static JsonArray ToJsonArray(IEnumerable<string> values) =>
         new(values.Select(value => JsonValue.Create(value)).ToArray());

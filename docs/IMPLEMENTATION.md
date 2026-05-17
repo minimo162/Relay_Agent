@@ -32,6 +32,72 @@
 
 ## Milestone Log
 
+### 2026-05-17 DCI 2605 Code And Test Hardening
+
+Implemented the `DCI2605-01` through `DCI2605-10` task queue from
+`tasks.md`, keeping file search as a generic Agent Framework/AG-UI recipe over
+`glob`, `grep`, and exact `read` rather than reviving a dedicated document
+search subsystem.
+
+Changes:
+
+- Added `RelayDciTrajectory.v1` reconstruction in
+  `scripts/lib/dci-trajectory.mjs`. It derives a redacted investigation
+  trajectory from AG-UI/tool events: tool order, searched terms, matched paths,
+  zero-match states, read targets, anchors, context labels, rejected decoys,
+  final cited evidence, bounded excerpts, and hashes. The trajectory is a
+  support/test artifact and does not write cache/index/temp files into searched
+  folders.
+- Extended `RelayDciTrajectoryMetrics.v1` so deterministic smokes and live
+  Copilot E2E share the same pass/fail definitions for raw-tool-only behavior,
+  weak-clue conjunction, query expansion, coverage, exact read localization,
+  hard-negative rejection, failed tools, invented reads, and final citation.
+- Replaced the old domain-specific read-admission recovery with generic
+  extraction from the user request, failed read target, and prior tool details.
+  Invented reads are repaired to observable `grep` refinements when possible;
+  no local answer is synthesized by Relay.
+- Added a final-readiness guard for guide/glossary-only reads: if Copilot tries
+  to finalize after reading a guide without any `grep` refinement, Relay repairs
+  the turn to a `grep` call before allowing finalization.
+- Added `no_evidence` context labeling and strengthened the deterministic DCI
+  corpus with guide/glossary, misleading entity-name, prior-period, generic
+  memo, negated/no-evidence, and exact evidence-read cases.
+- Hardened Office/PDF read smoke expectations so supported extraction returns
+  structured anchors, context labels, and text hashes.
+- Updated the Workbench tool-result trace to show compact `grep` terms,
+  zero-match states, first evidence path, context labels, and read anchors while
+  keeping raw observations collapsed.
+- Updated `pnpm check` to include the new DCI metric and invented-read smokes.
+- Updated live DCI E2E to write `dci-trajectory.json` alongside AG-UI events,
+  metrics, final result, prompt/response diagnostics, and failure
+  classification under `dist/e2e/live-dci/`.
+
+Verification:
+
+```bash
+node --check scripts/lib/dci-trajectory.mjs scripts/lib/dci-metrics.mjs scripts/dci-metrics-smoke.mjs scripts/dci-invented-read-smoke.mjs scripts/dci-golden-smoke.mjs scripts/workbench-live-dci-e2e.mjs
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:build
+PATH=$HOME/.dotnet:$PATH pnpm typecheck
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-metrics-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-invented-read-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-grep-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-context-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-golden-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:office-pdf-read-smoke
+PATH=$HOME/.dotnet:$PATH pnpm check
+PATH=$HOME/.dotnet:$PATH pnpm workbench:live-dci-e2e
+git diff --check
+```
+
+Result: passed. During live DCI verification, an initial run exposed a real
+`glob -> read -> final` shortcut with classification `tool_contract`. The
+protocol guard was tightened, the deterministic golden smoke gained a
+guide-only final-readiness regression, and the rerun passed:
+
+```text
+[workbench-live-dci-e2e] ok workspace=/tmp/relay-live-dci-workspace-Lbo9sO
+```
+
 ### 2026-05-17 OpenCode-Style Patch Path Hardening
 
 Stopped the in-progress live complex-project E2E after the improvement phase

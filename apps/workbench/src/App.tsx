@@ -775,6 +775,14 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
   };
   if (data.schemaVersion === "RelayGrepObservation.v1") {
     const matches = Array.isArray(data.matches) ? data.matches : [];
+    const terms = [
+      ...stringArray((data as { allTerms?: unknown }).allTerms),
+      ...stringArray((data as { anyTerms?: unknown }).anyTerms),
+    ].slice(0, 4).join(", ");
+    if (matches.length === 0) {
+      const suffix = data.truncated === true ? " · truncated" : "";
+      return `grep · no content matches${terms ? ` · ${terms}` : ""}${suffix}`;
+    }
     const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; excerpt?: unknown; contextLabels?: unknown } | undefined;
     const path = typeof first?.displayPath === "string" ? compactPath(first.displayPath) : "";
     const line = typeof first?.lineNumber === "number" ? `:${first.lineNumber}` : "";
@@ -784,7 +792,8 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
       : "";
     const labelText = labels ? ` · ${labels}` : "";
     const suffix = data.truncated === true ? " · truncated" : "";
-    return `grep · ${matches.length} content match${matches.length === 1 ? "" : "es"}${path ? ` · ${path}${line}` : ""}${labelText}${excerpt}${suffix}`;
+    const termText = terms ? ` · ${terms}` : "";
+    return `grep · ${matches.length} content match${matches.length === 1 ? "" : "es"}${termText}${path ? ` · ${path}${line}` : ""}${labelText}${excerpt}${suffix}`;
   }
   if (data.schemaVersion === "RelayReadObservation.v1") {
     const path = typeof data.displayPath === "string" ? compactPath(data.displayPath) : "";
@@ -801,6 +810,12 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
     return `read · ${evidence}${path ? ` · ${path}${lineRange}` : ""}${labelText}`;
   }
   return undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+    : [];
 }
 
 function statusLabel(status: RunStatus | "idle"): string {

@@ -14,6 +14,7 @@ const workspace = mkdtempSync(join(tmpdir(), "relay-dci-golden-workspace-"));
 mkdirSync(join(workspace, "companies"), { recursive: true });
 mkdirSync(join(workspace, "evidence"), { recursive: true });
 mkdirSync(join(workspace, "notes"), { recursive: true });
+mkdirSync(join(workspace, "archive", "fy159"), { recursive: true });
 
 writeFileSync(
   join(workspace, "companies", "Mパーツ.md"),
@@ -42,6 +43,22 @@ writeFileSync(
   "utf8",
 );
 writeFileSync(join(workspace, "notes", "generic-sales.md"), "売上だけの一般メモで部品の話はありません。\n", "utf8");
+writeFileSync(
+  join(workspace, "archive", "fy159", "aftermarket-reference.md"),
+  [
+    "# FY159 reference",
+    "過年度のアフター系売上メモ。補修部品の売上説明はあるが、FY159の参考資料であり今期4Qの根拠ではありません。",
+  ].join("\n"),
+  "utf8",
+);
+writeFileSync(
+  join(workspace, "notes", "no-evidence.md"),
+  [
+    "# No evidence memo",
+    "アフター系の売上はこのファイルでは確認できません。該当なし。",
+  ].join("\n"),
+  "utf8",
+);
 
 const responses = [
   JSON.stringify({
@@ -80,6 +97,10 @@ const responses = [
   }),
   JSON.stringify({ action: "final", answer: "根拠ファイル: evidence/q4-parts-revenue.md" }),
   JSON.stringify({ action: "final", answer: "readiness repair inserted read before this final." }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "notes/aftermarket-glossary.md", limit: 4000 } }),
+  JSON.stringify({ action: "final", answer: "guide-only premature final" }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "evidence/q4-parts-revenue.md", limit: 4000 } }),
+  JSON.stringify({ action: "final", answer: "guide-only repair inserted grep and exact evidence read." }),
 ];
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -118,7 +139,13 @@ try {
   const names = calls.map((call) => call.name);
   const metrics = computeDciMetrics(calls, assistantText(run.events), {
     goldPath: "evidence/q4-parts-revenue.md",
-    hardNegativePaths: ["companies/Mパーツ.md", "notes/aftermarket-glossary.md", "notes/generic-sales.md"],
+    hardNegativePaths: [
+      "companies/Mパーツ.md",
+      "notes/aftermarket-glossary.md",
+      "notes/generic-sales.md",
+      "archive/fy159/aftermarket-reference.md",
+      "notes/no-evidence.md",
+    ],
     evidencePattern: /部品 売上|parts and sales/,
   });
   assertDciMetrics(metrics, {
@@ -137,6 +164,11 @@ try {
   }
   if (names.filter((name) => name === "read").length < 3) {
     throw new Error(`DCI golden did not inspect local context with read calls: ${names.join(", ")}`);
+  }
+  for (const label of ["guide_or_glossary", "negative_context", "prior_period", "generic_context", "no_evidence", "possible_evidence"]) {
+    if (!metrics.grepContextLabels.includes(label) && !metrics.readContextLabels.includes(label)) {
+      throw new Error(`DCI golden did not surface ${label}: ${JSON.stringify(metrics, null, 2)}`);
+    }
   }
 
   const final = assistantText(run.events);
@@ -171,6 +203,24 @@ try {
   }
   if (assistantText(prematureFinal.events) !== "readiness repair inserted read before this final.") {
     throw new Error(`final readiness answer mismatch: ${assistantText(prematureFinal.events)}`);
+  }
+
+  const guideOnly = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "dci-guide-only-readiness",
+    instruction: "アフター系の根拠を探して。用語ガイドだけで終わらず、そこに書かれた言い換えで再検索して",
+  });
+  if (!hasRunFinished(guideOnly.events)) {
+    throw new Error(`DCI guide-only readiness run did not finish: ${JSON.stringify(guideOnly.events)}`);
+  }
+  const guideOnlyTools = [...collectToolCalls(guideOnly.events).values()].map((call) => call.name);
+  if (guideOnlyTools.join(",") !== "read,grep,read") {
+    throw new Error(`guide-only final was not repaired through grep and exact read: ${guideOnlyTools.join(", ")}`);
+  }
+  if (assistantText(guideOnly.events) !== "guide-only repair inserted grep and exact evidence read.") {
+    throw new Error(`guide-only readiness answer mismatch: ${assistantText(guideOnly.events)}`);
   }
 
   console.log("[dci-golden-smoke] ok");

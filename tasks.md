@@ -13,13 +13,14 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
-The next active queue is `DCIFS*`. It incorporates the 2026-05-17 DCI File
-Search Improvement Plan from `PLANS.md`: make local file search a
-metrics-driven direct-corpus investigation over `glob`, `grep`, and `read`,
-not a revived Relay-specific retriever or a separate document-search mode.
+The next active queue is `DCI2605*`. It incorporates the 2026-05-17 DCI Code
+And Test Revision Plan from `PLANS.md`: convert the DCI paper alignment from a
+successful file-search E2E into durable code contracts, deterministic tests,
+and live release gates over `glob`, `grep`, and `read`.
 
-The previous `POSTLIVE*` queue remains completed history below. It should not
-be extended unless a regression proves those acceptance criteria have broken.
+The previous `DCIFS*` and `POSTLIVE*` queues remain completed history below.
+They should not be extended unless a regression proves those acceptance
+criteria have broken.
 
 ## Execution Rules
 
@@ -34,6 +35,309 @@ be extended unless a regression proves those acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### DCI2605-01 - Add Explicit DCI Trajectory Contract
+
+Status: completed
+
+Scope:
+
+- Define a compact `RelayDciTrajectory.v1` diagnostic shape derived from Agent
+  Framework tool observations.
+- Include tool order, searched terms, matched paths, zero-match states, read
+  targets, anchors, excerpts/hashes, failed reads, context labels, rejected
+  decoys, and final cited evidence.
+- Keep the trajectory as AG-UI/support diagnostic state, not a model-visible
+  `document_search` tool or hidden retriever.
+
+Artifacts:
+
+- Sidecar trajectory builder or event-to-trajectory helper.
+- Redacted support/AG-UI artifact projection.
+- Implementation log entry describing the privacy boundary.
+
+Acceptance:
+
+- A DCI trajectory can be reconstructed from AG-UI/tool events.
+- No Relay cache/index/temp file is written into searched or shared folders.
+- Failed reads and zero-match grep calls are represented as failed/empty
+  observations, not evidence.
+
+Verification:
+
+- new trajectory smoke
+- `pnpm agent:agui-replay-smoke`
+- `pnpm check`
+
+### DCI2605-02 - Replace Domain-Specific Read Recovery With Generic Recovery
+
+Status: completed
+
+Scope:
+
+- Keep read admission restricted to explicit user paths, observed candidate
+  paths, or exact existing workspace paths.
+- Replace domain-specific recovery terms with generic extraction from:
+  - original user request;
+  - failed read target;
+  - previous `glob`/`grep` terms;
+  - previous matched paths and excerpts.
+- When Copilot invents a plausible filename, repair to an observable `grep`
+  refinement or return a clear protocol failure. Do not crash the run.
+
+Artifacts:
+
+- Generic read-admission recovery implementation.
+- Invented-read regression smoke.
+
+Acceptance:
+
+- No hard-coded business/entity exception is needed for examples such as
+  company-name false positives.
+- Invented read targets are counted by DCI metrics and do not produce streaming
+  exceptions.
+
+Verification:
+
+- new invented-read recovery smoke
+- `pnpm agent:dci-golden-smoke`
+- `pnpm check`
+
+### DCI2605-03 - Increase Grep Observation Resolution
+
+Status: completed
+
+Scope:
+
+- Extend `grep` observations to carry grouped match context, required/optional
+  term hits, context labels, truncation state, and continuation guidance.
+- Keep filters pushed into ripgrep and keep `--` before user/model patterns.
+- Keep labels deterministic and transparent: possible evidence, negative
+  context, guide/glossary, prior-period, generic memo, and no-evidence.
+
+Artifacts:
+
+- `RelayGrepObservation.v1` schema update.
+- Regression cases for Japanese and English negation, prior period, guide,
+  generic memo, and evidence snippets.
+
+Acceptance:
+
+- Copilot can distinguish filename/entity hits from local content evidence.
+- A single weak lexical match is insufficient to satisfy DCI final readiness.
+
+Verification:
+
+- `pnpm agent:dci-grep-smoke`
+- `pnpm agent:dci-golden-smoke`
+- `pnpm check`
+
+### DCI2605-04 - Harden Evidence-First Read Observations
+
+Status: completed
+
+Scope:
+
+- Ensure `read` returns stable anchors, bounded excerpts, text hashes,
+  context labels, truncation state, and continuation guidance.
+- Extend DCI coverage to supported Office/PDF/CSV reads without adding a
+  separate Office/PDF search engine.
+- Keep full local document contents out of default support bundles unless the
+  user explicitly opts in.
+
+Artifacts:
+
+- `RelayReadObservation.v1` anchor/hash/context audit.
+- Office/PDF/CSV DCI fixture or smoke updates.
+
+Acceptance:
+
+- Final answers can cite exact observed file anchors.
+- Office/PDF/CSV reads use the same generic DCI recipe where extraction is
+  supported.
+
+Verification:
+
+- `pnpm agent:office-pdf-read-smoke`
+- new CSV/Office DCI smoke when fixture is added
+- `pnpm check`
+
+### DCI2605-05 - Add Deterministic DCI Context Compaction
+
+Status: completed
+
+Scope:
+
+- Add deterministic compaction for long DCI investigations.
+- Preserve the ordered skeleton: terms tried, match counts, candidate paths,
+  read anchors, hashes, rejected decoys, and current hypotheses.
+- Do not use hidden LLM summarization as a source of truth.
+
+Artifacts:
+
+- Agent Framework middleware or sidecar helper for DCI compaction.
+- Long-trajectory smoke that proves bulky excerpts are compacted while audit
+  data remains replayable.
+
+Acceptance:
+
+- Long local investigations do not flood Copilot context.
+- Compacted state remains sufficient for final-readiness and support replay.
+
+Verification:
+
+- `pnpm agent:dci-context-smoke`
+- new long-trajectory DCI smoke
+- `pnpm check`
+
+### DCI2605-06 - Expand DCI Golden Corpus
+
+Status: completed
+
+Scope:
+
+- Add deterministic corpora that require:
+  - guide/glossary vocabulary discovery;
+  - sparse clue conjunction;
+  - misleading entity-name rejection;
+  - prior-period rejection;
+  - generic memo rejection;
+  - negated local-context rejection;
+  - exact evidence read of a non-obvious filename.
+- Include at least one CSV/Office/PDF fixture once read-anchor behavior is
+  stable.
+
+Artifacts:
+
+- Fixture generator or inline test corpus.
+- Updated deterministic DCI golden smoke.
+
+Acceptance:
+
+- A single filename match or one exact phrase search cannot pass.
+- Gold evidence is found only after local context is observed and terms are
+  refined.
+
+Verification:
+
+- `pnpm agent:dci-golden-smoke`
+- `pnpm check`
+
+### DCI2605-07 - Add DCI Metric Unit Tests
+
+Status: completed
+
+Scope:
+
+- Add direct tests for `RelayDciTrajectoryMetrics.v1` definitions.
+- Cover raw-tool-only behavior, weak-clue conjunction, query expansion,
+  coverage, exact read localization, hard-negative rejection, failed tools,
+  invented read targets, and final citation.
+- Ensure deterministic and live E2E use the same metric helper.
+
+Artifacts:
+
+- DCI metric unit smoke.
+- Shared fixture cases for successful and failing trajectories.
+
+Acceptance:
+
+- Metric failures are explainable without reading live Copilot logs.
+- Live and mock E2E cannot silently diverge in what "DCI pass" means.
+
+Verification:
+
+- new DCI metric smoke
+- `pnpm agent:dci-golden-smoke`
+- `pnpm check`
+
+### DCI2605-08 - Refine AG-UI DCI Investigation Trace
+
+Status: completed
+
+Scope:
+
+- Render the DCI trajectory as a compact investigation timeline:
+  searches tried, files surfaced, files inspected, evidence snippets, rejected
+  decoys, and final cited file.
+- Keep the default Workbench surface minimal and keep raw observations
+  collapsed.
+- Ensure the UI is driven by AG-UI events/state, not custom hidden routes.
+
+Artifacts:
+
+- Workbench timeline refinement.
+- UX E2E assertion or screenshot update.
+
+Acceptance:
+
+- A user can see why the final file was selected without opening raw JSON.
+- The UI does not reintroduce separate search/Office/code modes.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### DCI2605-09 - Strengthen Live Copilot DCI Release Gate
+
+Status: completed
+
+Scope:
+
+- Keep `pnpm workbench:live-dci-e2e` as the signed-in Copilot gate.
+- Save AG-UI events, DCI trajectory metrics, final result,
+  prompt/response diagnostics, screenshots where available, and failure
+  classification under `dist/e2e/live-dci/`.
+- Fail when the right final file is reached by chance without local context
+  checks.
+
+Artifacts:
+
+- Updated live DCI E2E runner and report schema.
+- Implementation log entry template for pass/fail classification.
+
+Acceptance:
+
+- Provider/CDP/quota failures are clearly classified.
+- DCI logic failures are distinguishable from Copilot/Edge environment
+  failures.
+- No mock model, heuristic local answer, or fallback search engine can pass the
+  live DCI gate.
+
+Verification:
+
+- `pnpm workbench:live-dci-e2e`
+- `pnpm check`
+
+### DCI2605-10 - Record Implementation And Source Alignment
+
+Status: completed
+
+Scope:
+
+- Update `docs/IMPLEMENTATION.md` with the completed code/test changes,
+  verification commands, and known limitations.
+- Keep `PLANS.md`, `tasks.md`, `AGENTS.md`, and `README.md` aligned if any
+  public behavior changes.
+- Reconfirm that active code does not revive `RelayDocumentSearch*`,
+  SQLite/FTS, vector search, AionUi, OpenCode/OpenWork runtime, or Tauri.
+
+Artifacts:
+
+- Implementation log update.
+- Hard-cut / source-of-truth consistency check.
+
+Acceptance:
+
+- The plan, tasks, implementation log, and active code describe the same DCI
+  direction.
+- Completed tasks have concrete verification artifacts.
+
+Verification:
+
+- `git diff --check`
+- `pnpm check`
 
 ### DCIFS01 - Add Search Trajectory Ledger
 

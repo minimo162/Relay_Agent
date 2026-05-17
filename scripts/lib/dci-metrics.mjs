@@ -1,3 +1,5 @@
+import { buildDciTrajectory, normalizePath, parseJsonObject } from "./dci-trajectory.mjs";
+
 const defaultAllowedTools = new Set(["glob", "grep", "read"]);
 const defaultDomainTerms = [
   "部品",
@@ -13,6 +15,7 @@ const defaultDomainTerms = [
 ];
 
 export function computeDciMetrics(calls, final, options = {}) {
+  const trajectory = buildDciTrajectory(calls, final, options);
   const allowedTools = new Set(options.allowedTools ?? [...defaultAllowedTools]);
   const goldPath = normalizePath(options.goldPath ?? "");
   const hardNegativePaths = normalizePathArray(options.hardNegativePaths ?? []);
@@ -38,6 +41,7 @@ export function computeDciMetrics(calls, final, options = {}) {
 
   return {
     schemaVersion: "RelayDciTrajectoryMetrics.v1",
+    trajectorySchemaVersion: trajectory.schemaVersion,
     goldPath,
     hardNegativePaths,
     tools: calls.map((call) => call.name),
@@ -50,6 +54,11 @@ export function computeDciMetrics(calls, final, options = {}) {
     inventedReadTargets,
     grepContextLabels,
     readContextLabels,
+    trajectoryStepCount: trajectory.steps.length,
+    zeroMatchCount: trajectory.zeroMatchCount,
+    failedReadTargets: trajectory.failedReadTargets,
+    rejectedDecoys: trajectory.rejectedDecoys,
+    finalCitedEvidence: trajectory.finalCitedEvidence,
     noRetrieverTools: calls.every((call) => allowedTools.has(call.name)),
     noFailedTools: failedTools.length === 0,
     noInventedReadTargets: inventedReadTargets.length === 0,
@@ -133,15 +142,6 @@ function toolResultFailed(call) {
   });
 }
 
-function parseJsonObject(text) {
-  try {
-    const parsed = JSON.parse(text || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 function normalizeTermArray(value) {
   return Array.isArray(value)
     ? value.filter((term) => typeof term === "string" && term.trim()).map((term) => term.trim())
@@ -157,8 +157,4 @@ function normalizePathArray(value) {
 function readTarget(call) {
   const parsed = parseJsonObject(call.args);
   return typeof parsed.file_path === "string" ? normalizePath(parsed.file_path) : "";
-}
-
-function normalizePath(value) {
-  return String(value ?? "").replaceAll("\\", "/");
 }

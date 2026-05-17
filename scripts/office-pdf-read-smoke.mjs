@@ -138,7 +138,9 @@ try {
       !detail.includes("\"displayPath\"") ||
       !detail.includes("\"continuation\"") ||
       !detail.includes("\"anchors\"") ||
-      !detail.includes("\"evidenceState\"")) {
+      !detail.includes("\"evidenceState\"") ||
+      !detail.includes("\"contextLabels\"") ||
+      !detail.includes("\"textSha256\"")) {
       throw new Error(`${path} did not return a structured read observation: ${detail}`);
     }
     if (!new RegExp(`${kind} extracted, [1-9][0-9]* chars (read|returned)`).test(detail)) {
