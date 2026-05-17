@@ -7,6 +7,7 @@ import { assistantText, collectToolCalls, hasRunFinished, postAgUi } from "./lib
 import { ensureCopilotCdp } from "./lib/copilot-cdp.mjs";
 import { computeDciMetrics } from "./lib/dci-metrics.mjs";
 import { buildDciTrajectory } from "./lib/dci-trajectory.mjs";
+import { createAdversarialDciCorpus } from "./lib/dci-corpus-fixtures.mjs";
 
 const token = "relay-live-dci-token";
 const port = 17904;
@@ -14,57 +15,11 @@ const preferredCopilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?
 const dataDir = mkdtempSync(join(tmpdir(), "relay-live-dci-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-live-dci-workspace-"));
 const artifactDir = join(process.cwd(), "dist", "e2e", "live-dci");
-const goldPath = "finance/q4/source-a.md";
-const hardNegativePaths = [
-  "archive/fy159/aftermarket-reference.md",
-  "companies/Mパーツ.md",
-  "notes/generic-sales.md",
-  "notes/aftermarket-glossary.md",
-];
+const corpus = createAdversarialDciCorpus(workspace);
+const goldPath = corpus.files.gold;
+const hardNegativePaths = corpus.hardNegativePaths;
 
 mkdirSync(artifactDir, { recursive: true });
-mkdirSync(join(workspace, "archive", "fy159"), { recursive: true });
-mkdirSync(join(workspace, "companies"), { recursive: true });
-mkdirSync(join(workspace, "finance", "q4"), { recursive: true });
-mkdirSync(join(workspace, "notes"), { recursive: true });
-
-writeFileSync(
-  join(workspace, "companies", "Mパーツ.md"),
-  [
-    "# Mパーツ",
-    "Mパーツは会社名です。このファイルは会社プロフィールであり、アフター系の売上根拠ファイルではありません。",
-    "会社名にパーツを含むだけなので、数値根拠としては除外します。",
-  ].join("\n"),
-  "utf8",
-);
-writeFileSync(
-  join(workspace, "archive", "fy159", "aftermarket-reference.md"),
-  [
-    "# FY159 reference",
-    "過年度のアフター系メモ。補修部品の売上を説明するが、FY159の参考資料であり今期4Qの根拠ではありません。",
-  ].join("\n"),
-  "utf8",
-);
-writeFileSync(
-  join(workspace, "notes", "aftermarket-glossary.md"),
-  [
-    "# 用語ガイド",
-    "今期4Qのアフター系の根拠を探すときは、サービス部品、補修部品、パーツ事業の実績という言い換えで再検索します。",
-    "このガイド自体は根拠資料ではありません。会社名としてのMパーツと、売上根拠としてのサービス部品実績は区別してください。",
-  ].join("\n"),
-  "utf8",
-);
-writeFileSync(
-  join(workspace, "finance", "q4", "source-a.md"),
-  [
-    "# FY160 4Q source memo",
-    "アフター系の確定根拠: FY160 4Q 国内サービス部品、補修部品、パーツ事業の売上実績はこのファイルの集計表に基づく。",
-    "確定版として、parts sales と service parts revenue の根拠行を保持する。",
-  ].join("\n"),
-  "utf8",
-);
-writeFileSync(join(workspace, "notes", "generic-sales.md"), "売上高の一般メモ。部品の文脈はありません。\n", "utf8");
-
 let copilotCdp;
 let sidecar;
 let sidecarStderr = "";
@@ -99,10 +54,13 @@ try {
   const instruction = [
     "このローカルワークスペースだけを使ってください。",
     "この前話していたアフター系の数字の根拠ファイルを探してください。",
+    "まず notes/aftermarket-glossary.md を read して、言い換え候補を確認してください。",
     "何の言い換えか曖昧な場合は、候補文書の中身から用語を拾って再検索してください。",
     "用語ガイドだけで終わらず、そこに書かれた言い換えで必ず再検索してください。",
+    "会社名や過年度などの紛らわしい候補を少なくとも1件 read し、根拠ではないことを確認して除外してください。",
     "会社名だけが一致する候補、古い参考資料、一般的な売上メモは内容を確認して外してください。",
-    "今期4Qの根拠ファイルを、grep と read で確認してから日本語で短く答えてください。",
+    "grepで根拠候補を見つけたら、最終回答の直前にその候補ファイルを必ずreadしてください。",
+    "今期4Qの根拠ファイルを、grep と根拠ファイル自身のreadで確認してから日本語で短く答えてください。",
   ].join("\n");
   const run = await postAgUi({
     port,
@@ -144,6 +102,12 @@ try {
   }
   if (!dciMetrics.queryExpansionFromAmbiguity) {
     throw new Error(`DCI live run did not expand the ambiguous user phrase into domain terms: ${JSON.stringify(dciMetrics.grepArgs)}`);
+  }
+  if (!dciMetrics.observationToNextActionDependency) {
+    throw new Error(`DCI live run did not show observation-driven refinement: ${JSON.stringify(dciMetrics, null, 2)}`);
+  }
+  if (dciMetrics.hardNegativeReadCount < 1 || dciMetrics.candidateRejectionCount < 1) {
+    throw new Error(`DCI live run did not inspect and reject a hard negative: ${JSON.stringify(dciMetrics, null, 2)}`);
   }
   if (!dciMetrics.coverageAny) {
     throw new Error(`DCI live run did not surface the gold document in grep observations: ${JSON.stringify(dciMetrics.grepMatchPaths)}`);

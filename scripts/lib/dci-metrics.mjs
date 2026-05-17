@@ -30,7 +30,10 @@ export function computeDciMetrics(calls, final, options = {}) {
   const readObservations = readCalls.flatMap((call) => readObservationsFromResults(call));
   const allTermLists = grepArgs.flatMap((args) => normalizeTermArray(args.allTerms));
   const anyTermLists = grepArgs.flatMap((args) => normalizeTermArray(args.anyTerms));
-  const allTerms = [...allTermLists, ...anyTermLists].map((term) => term.toLowerCase());
+  const patternTerms = grepArgs
+    .map((args) => typeof args.pattern === "string" ? args.pattern : "")
+    .filter(Boolean);
+  const allTerms = [...allTermLists, ...anyTermLists, ...patternTerms].map((term) => term.toLowerCase());
   const observedPaths = [...new Set([...globPaths, ...grepMatchPaths, ...readObservations.map((observation) => normalizePath(observation?.displayPath ?? ""))].filter(Boolean))];
   const acceptedReadSources = [...new Set([...observedPaths, goldPath, ...hardNegativePaths].filter(Boolean))];
   const finalNormalized = normalizePath(final);
@@ -38,6 +41,15 @@ export function computeDciMetrics(calls, final, options = {}) {
   const inventedReadTargets = readTargets.filter((target) => !acceptedReadSources.some((path) => target.endsWith(path)));
   const grepContextLabels = grepCalls.flatMap((call) => grepContextLabelsFromResults(call));
   const readContextLabels = readObservations.flatMap((observation) => normalizeTermArray(observation?.contextLabels));
+  const grepObservations = grepCalls.flatMap((call) => grepObservationsFromResults(call));
+  const grepMatches = grepObservations.flatMap((observation) => Array.isArray(observation?.matches) ? observation.matches : []);
+  const readTargetsSet = new Set(readTargets);
+  const hardNegativeReadCount = hardNegativePaths.filter((path) =>
+    [...readTargetsSet].some((target) => target.endsWith(path))).length;
+  const evidenceReads = readObservations.filter((observation) => {
+    const observationPath = normalizePath(observation?.displayPath ?? "");
+    return goldPath ? observationPath === goldPath : Boolean(observationPath);
+  });
 
   return {
     schemaVersion: "RelayDciTrajectoryMetrics.v1",
@@ -59,10 +71,25 @@ export function computeDciMetrics(calls, final, options = {}) {
     failedReadTargets: trajectory.failedReadTargets,
     rejectedDecoys: trajectory.rejectedDecoys,
     finalCitedEvidence: trajectory.finalCitedEvidence,
+    refinementDepth: Math.max(0, grepCalls.length - 1),
+    operatorDiversity: new Set(calls.map((call) => call.name)).size,
+    contextWindowConjunction: grepMatches.some((match) =>
+      match?.scope === "context_window" || match?.evidenceState === "context_window_conjunctive_match"),
+    observationToNextActionDependency: hasObservationToNextActionDependency(calls),
+    candidateRejectionCount: trajectory.rejectedDecoys.length,
+    hardNegativeReadCount,
+    evidenceAnchorLocality: evidenceReads.some((observation) => Array.isArray(observation?.anchors) && observation.anchors.length > 0),
+    accidentalAnswerPrevented: goldPath
+      ? trajectory.finalCitedEvidence.includes(goldPath) && hardNegativePaths.every((path) => !trajectory.finalCitedEvidence.includes(path))
+      : hardNegativePaths.every((path) => !trajectory.finalCitedEvidence.includes(path)),
+    contextManagement: trajectory.contextManagement,
     noRetrieverTools: calls.every((call) => allowedTools.has(call.name)),
     noFailedTools: failedTools.length === 0,
     noInventedReadTargets: inventedReadTargets.length === 0,
-    weakClueConjunction: grepArgs.some((args) => normalizeTermArray(args.allTerms).length >= 2 || normalizeTermArray(args.anyTerms).length >= 2),
+    weakClueConjunction: grepArgs.some((args) =>
+      normalizeTermArray(args.allTerms).length >= 2 ||
+      normalizeTermArray(args.anyTerms).length >= 2 ||
+      patternContainsMultipleDomainTerms(args.pattern, domainTerms)),
     queryExpansionFromAmbiguity: domainTerms.some((term) => allTerms.some((observed) => observed.includes(term))),
     coverageAny: goldPath ? grepMatchPaths.includes(goldPath) : grepMatchPaths.length > 0,
     coverageHardNegatives: hardNegativePaths.filter((path) => grepMatchPaths.includes(path)),
@@ -112,6 +139,15 @@ function grepContextLabelsFromResults(call) {
   return labels;
 }
 
+function grepObservationsFromResults(call) {
+  const observations = [];
+  for (const result of call.results) {
+    const parsed = parseJsonObject(result);
+    if (parsed?.data?.schemaVersion === "RelayGrepObservation.v1") observations.push(parsed.data);
+  }
+  return observations;
+}
+
 function globPathsFromResults(call) {
   const paths = [];
   for (const result of call.results) {
@@ -132,6 +168,26 @@ function readObservationsFromResults(call) {
     if (parsed?.data?.schemaVersion === "RelayReadObservation.v1") observations.push(parsed.data);
   }
   return observations;
+}
+
+function hasObservationToNextActionDependency(calls) {
+  let sawObservation = false;
+  for (const call of calls) {
+    if (sawObservation && (call.name === "grep" || call.name === "read")) return true;
+    if ((call.name === "grep" || call.name === "read") && call.results.some((result) => {
+      const parsed = parseJsonObject(result);
+      return parsed?.success === true && parsed?.data;
+    })) {
+      sawObservation = true;
+    }
+  }
+  return false;
+}
+
+function patternContainsMultipleDomainTerms(pattern, domainTerms) {
+  if (typeof pattern !== "string" || !pattern.trim()) return false;
+  const lower = pattern.toLowerCase();
+  return domainTerms.filter((term) => lower.includes(term)).length >= 2;
 }
 
 function toolResultFailed(call) {

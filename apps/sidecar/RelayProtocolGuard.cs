@@ -54,14 +54,33 @@ public static class RelayProtocolGuard
             availableTools.Contains("read") &&
             TryFindEvidenceReadPath(proposedAnswer, state, out var evidencePath))
         {
+            if (!HasSuccessfulReadTarget(state, evidencePath) && !HasSuccessfulReadAfterGrep(state))
+            {
+                return RelayProtocolDecision.Replace(new RelayToolDirective(
+                    "read",
+                    new JsonObject
+                    {
+                        ["file_path"] = evidencePath,
+                        ["limit"] = 12000,
+                    },
+                    "evidence_read_before_final"));
+            }
+        }
+
+        if (availableTools.Contains("read") &&
+            ShouldRequireCitedEvidenceReadBeforeFinal(state) &&
+            TryExtractPath(proposedAnswer, out var citedEvidencePath) &&
+            !HasSuccessfulReadTarget(state, citedEvidencePath) &&
+            !HasSuccessfulReadAfterGrep(state))
+        {
             return RelayProtocolDecision.Replace(new RelayToolDirective(
                 "read",
                 new JsonObject
                 {
-                    ["file_path"] = evidencePath,
+                    ["file_path"] = citedEvidencePath,
                     ["limit"] = 12000,
                 },
-                "evidence_read_before_final"));
+                "cited_evidence_read_before_final"));
         }
 
         if (state.RequiresLocalToolBeforeFinal || !envelope.CanFinalize)
@@ -73,14 +92,75 @@ public static class RelayProtocolGuard
         return RelayProtocolDecision.Allow();
     }
 
-    private static bool ShouldRequireGrepRefinementBeforeFinal(RelayTurnState state) =>
-        state.HasReadToolResult &&
-        !state.HasGrepToolResult &&
+    private static bool ShouldRequireGrepRefinementBeforeFinal(RelayTurnState state)
+    {
+        if (!state.HasReadToolResult ||
+            state.HasGrepToolResult ||
+            !string.IsNullOrWhiteSpace(state.PendingOutputFile))
+        {
+            return false;
+        }
+
+        if (ContainsAny(
+            state.OriginalUserRequest,
+            "再検索", "言い換え", "用語", "曖昧", "refine", "synonym", "試行錯誤", "候補", "除外"))
+        {
+            return true;
+        }
+
+        return state.CompletedToolDetails.Any(detail =>
+            detail.StartsWith("read:", StringComparison.Ordinal) &&
+            ContainsAny(
+                detail,
+                "guide", "glossary", "用語", "辞書", "archive", "prior", "過年度", "参考",
+                "generic", "一般", "no-evidence", "no_evidence", "該当なし", "対象外", "negative"));
+    }
+
+    private static bool ShouldRequireCitedEvidenceReadBeforeFinal(RelayTurnState state) =>
         string.IsNullOrWhiteSpace(state.PendingOutputFile) &&
-        (ContainsAny(state.OriginalUserRequest, "再検索", "言い換え", "用語", "曖昧", "refine", "synonym") ||
-            state.CompletedToolDetails.Any(detail =>
+        ContainsAny(
+            state.OriginalUserRequest,
+            "探", "検索", "根拠", "証拠", "確認", "find", "search", "evidence", "source");
+
+    private static bool HasSuccessfulReadTarget(RelayTurnState state, string path)
+    {
+        var normalizedPath = NormalizePathForMatch(path);
+        return state.CompletedToolDetails.Any(detail =>
+        {
+            if (!detail.StartsWith("read:", StringComparison.Ordinal) ||
+                !detail.EndsWith(":success", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var normalizedDetail = NormalizePathForMatch(detail);
+            if (normalizedDetail.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return PathMatches(NormalizePathForMatch(detail["read:".Length..^":success".Length]), normalizedPath);
+        });
+    }
+
+    private static bool HasSuccessfulReadAfterGrep(RelayTurnState state)
+    {
+        var sawSuccessfulGrep = false;
+        foreach (var detail in state.CompletedToolDetails)
+        {
+            if (detail.StartsWith("grep:", StringComparison.Ordinal) && detail.EndsWith(":success", StringComparison.Ordinal))
+            {
+                sawSuccessfulGrep = true;
+            }
+            else if (sawSuccessfulGrep &&
                 detail.StartsWith("read:", StringComparison.Ordinal) &&
-                ContainsAny(detail, "guide", "glossary", "用語", "辞書")));
+                detail.EndsWith(":success", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private static bool ContainsAny(string text, params string[] needles) =>
         needles.Any(needle => text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
@@ -127,6 +207,19 @@ public static class RelayProtocolGuard
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!match.Success) return false;
         path = match.Groups["path"].Value.Trim(' ', '。', '、', ',', ';', ':', '"', '\'', '`');
+        if (path.Contains(' ', StringComparison.Ordinal))
+        {
+            var compactPath = Regex.Matches(
+                    path,
+                    @"[^\s""'`,;:。、「」]+?\.(?:md|txt|csv|json|html|css|js|ts|tsx|jsx|py|rs|cs|xlsx|xlsm|xls|docx|pptx|pdf)",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                .Select(candidate => candidate.Value.Trim(' ', '。', '、', ',', ';', ':', '"', '\'', '`'))
+                .LastOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate));
+            if (!string.IsNullOrWhiteSpace(compactPath))
+            {
+                path = compactPath;
+            }
+        }
         return !string.IsNullOrWhiteSpace(path);
     }
 
@@ -163,6 +256,14 @@ public static class RelayProtocolGuard
             RelayPreventionMetrics.RecordInvalidAskUserAttempt(state.StateId);
             return RelayProtocolDecision.Reject(
                 $"Copilot requested ask_user even though the objective and workspace are known. intent={state.Intent}; state={state.StateId}.");
+        }
+
+        if (toolName == "grep" && ShouldWidenGuideScopedGrep(args, state))
+        {
+            return RelayProtocolDecision.Replace(new RelayToolDirective(
+                "grep",
+                BuildWorkspaceWideGrep(args),
+                "guide_scoped_grep_widened"));
         }
 
         if (toolName == "read" &&
@@ -236,6 +337,47 @@ public static class RelayProtocolGuard
         return false;
     }
 
+    private static bool ShouldWidenGuideScopedGrep(JsonObject args, RelayTurnState state)
+    {
+        var requestedPath = GetString(args, "path");
+        if (string.IsNullOrWhiteSpace(requestedPath)) return false;
+        var normalizedRequested = NormalizePathForMatch(requestedPath);
+        if (string.IsNullOrWhiteSpace(normalizedRequested) || normalizedRequested is "." or "/") return false;
+
+        foreach (var detail in state.CompletedToolDetails)
+        {
+            if (!detail.StartsWith("read:", StringComparison.Ordinal) ||
+                !detail.EndsWith(":success", StringComparison.Ordinal) ||
+                !ContainsAny(detail, "guide", "glossary", "用語", "辞書"))
+            {
+                continue;
+            }
+
+            var target = NormalizePathForMatch(detail["read:".Length..^":success".Length]);
+            if (target.StartsWith(normalizedRequested.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase) ||
+                target.Equals(normalizedRequested, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static JsonObject BuildWorkspaceWideGrep(JsonObject args)
+    {
+        var widened = new JsonObject();
+        foreach (var item in args)
+        {
+            if (item.Key.Equals("path", StringComparison.OrdinalIgnoreCase)) continue;
+            widened[item.Key] = item.Value?.DeepClone();
+        }
+        if (!widened.ContainsKey("contextLines")) widened["contextLines"] = 1;
+        if (!widened.ContainsKey("contextWindowLines")) widened["contextWindowLines"] = 2;
+        if (!widened.ContainsKey("limit")) widened["limit"] = 100;
+        return widened;
+    }
+
     private static JsonObject BuildReadAdmissionRecoveryGrep(JsonObject args, RelayTurnState state)
     {
         var requested = GetString(args, "file_path") ?? GetString(args, "path") ?? "";
@@ -277,6 +419,7 @@ public static class RelayProtocolGuard
         {
             ["caseInsensitive"] = true,
             ["contextLines"] = 1,
+            ["contextWindowLines"] = 2,
             ["limit"] = 80,
         };
         if (allTerms.Count > 0)

@@ -1,6 +1,6 @@
 # Relay_Agent Completion Plan
 
-Date: 2026-05-17
+Date: 2026-05-18
 
 ## Product Direction
 
@@ -480,6 +480,162 @@ retriever, vector index, or document-search subsystem.
   gate by themselves.
 - All DCI tests fail clearly as tool/protocol/provider errors; no mock model,
   heuristic local answer, or fallback search engine is allowed to pass a test.
+
+### 2026-05-18 DCI Interface Resolution Follow-up Plan
+
+This follow-up applies arXiv:2605.05242 more aggressively after the completed
+`DCI2605*` hardening. The paper's useful product lesson is not merely "use
+grep." Its deeper claim is that retrieval quality for stronger agents depends
+on the **resolution of the corpus interface**: exact lexical constraints,
+sparse clue conjunctions, local context checks, intermediate entity discovery,
+and hypothesis revision must remain available as first-class actions. A single
+top-k retrieval abstraction, even if fast, hides too much state and can discard
+evidence before reasoning starts.
+
+Relay should therefore improve the generic Agent Framework/OpenCode-compatible
+tool loop in ways that increase observable search resolution without adding a
+hidden retriever, vector index, fixed taxonomy, or `RelayDocumentSearch*`
+subsystem.
+
+#### Scope
+
+- Keep M365 Copilot as the reasoning controller, Microsoft Agent Framework as
+  the agent runtime, AG-UI as the Workbench protocol, and OpenCode-compatible
+  tools as the model-facing local interface.
+- Keep file search, Office inspection, and coding as recipes over the same
+  generic tools. Do not reintroduce product modes or a search-specific backend.
+- Treat DCI as a tool-loop and evidence-discipline upgrade, not a new local
+  answer engine. Relay may validate, repair, cap, and audit, but Relay must not
+  synthesize answers from local files behind Copilot's back.
+
+#### Feature Revisions
+
+1. **DCI phase and hypothesis ledger**
+   - Extend `RelayDciTrajectory.v1` with explicit phase tags:
+     `explore`, `refine`, `inspect`, `verify`, and `answer_ready`.
+   - Add a compact hypothesis ledger derived from tool observations:
+     candidate claim, supporting paths, refuting paths, unresolved terms,
+     reason for rejection, and latest next action.
+   - Keep the ledger diagnostic/AG-UI state only. It is not a model-visible
+     retriever and not a hidden planner.
+
+2. **Higher-resolution grep semantics**
+   - Add context-window conjunction support so weak clues can satisfy
+     `allTerms` across a bounded nearby line window, not only on one line.
+   - Return match groups with `scope=line|context_window|file_sample`,
+     matched required terms, optional terms, excluded terms encountered nearby,
+     before/after snippets, and continuation guidance.
+   - Keep all filtering pushed into ripgrep where possible and preserve the
+     `--` separator before user/model patterns.
+
+3. **Observation-driven refinement gates**
+   - Add Agent Framework middleware/final-readiness checks that detect when a
+     search trajectory has only guide/glossary, zero-match, hard-negative,
+     generic, prior-period, or no-evidence observations.
+   - In those states, final answers should be repaired to the next observable
+     local tool action when a safe action exists, or fail fast with a protocol
+     error. Do not rely only on prompt wording.
+   - Require at least one observed-term refinement when the user request is
+     ambiguous and a read observation introduces new vocabulary.
+
+4. **Structured Office/CSV/PDF evidence projections**
+   - Strengthen `read` so supported Office/CSV/PDF files expose bounded table,
+     row, sheet, page, and cell/page anchors where extraction supports them.
+   - Add content projection that Copilot can search/refine over after exact
+     `read` without adding a separate Office/PDF search engine.
+   - Track extraction limitations explicitly in observations, e.g. unsupported
+     binary Office formats, PDF without text layer, hidden sheets, truncated
+     tables, and formula/cache limitations.
+
+5. **Minimal lightweight analysis without unrestricted shell**
+   - DCI uses shell commands and lightweight scripts, but Relay's default
+     business setting cannot expose unrestricted shell.
+   - Prefer first-class structured `glob`, `grep`, `read`, `diff`, and
+     bounded `bash` verification. Where lightweight analysis is needed, add
+     narrow argv-based operations under existing tools rather than new
+     Relay-specific model-visible names.
+   - Any widened command path must remain workspace-contained, capped,
+     cancellable, auditable, and approval/policy gated.
+
+6. **Deterministic context management policy**
+   - Keep deterministic truncation and compaction as the source of truth.
+   - Add compaction metrics: raw output bytes, projected bytes, kept anchors,
+     dropped excerpts, retained hashes, and replay sufficiency.
+   - Model-generated summarization remains disabled by default. It may be
+     added later only if observable, replayable, and clearly marked as a
+     lossy assistant summary rather than evidence.
+
+7. **Interface-resolution metrics**
+   - Extend `RelayDciTrajectoryMetrics.v1` with:
+     refinement depth, operator diversity, context-window conjunction,
+     observation-to-next-action dependency, candidate rejection count,
+     hard-negative read count, evidence-anchor locality, and accidental-answer
+     prevention.
+   - A final answer should fail the DCI gate when it cites the right file
+     without enough observed local evidence or without rejecting obvious decoys
+     in the trajectory.
+
+8. **Workbench hypothesis/evidence UX**
+   - Keep the minimal professional Workbench surface, but show a compact DCI
+     investigation trail when present:
+     searches tried, terms learned, candidates inspected, hypotheses rejected,
+     exact evidence anchors, and final caveats.
+   - Avoid ranked-result-page UX. The UI should explain why a file was selected
+     or rejected, not just list candidates.
+
+#### Test Revisions
+
+1. **Adversarial DCI corpus generator**
+   - Generate deterministic corpora with many distractors, nested folders,
+     misleading filenames, entity-name traps, prior-period copies, negated
+     snippets, generic memos, guide/glossary files, and non-obvious evidence
+     filenames.
+   - Include Markdown/text/CSV and at least one supported Office/PDF fixture
+     when extraction is available.
+
+2. **Sparse clue and context-window tests**
+   - Add cases where required terms occur on nearby lines, in adjacent table
+     cells, or across a small document section rather than one exact line.
+   - The passing trajectory must show local context-window evidence and an
+     exact read anchor before final.
+
+3. **Trajectory-quality unit tests**
+   - Add direct tests for the expanded trajectory and metrics:
+     phase transitions, hypothesis support/refutation, context-window matches,
+     decoy rejection, zero-match recovery, no-evidence repair, and accidental
+     final prevention.
+
+4. **Heterogeneous evidence smokes**
+   - Add deterministic smokes for CSV row evidence, xlsx sheet/cell evidence,
+     docx/pptx text evidence, and PDF text-layer evidence using the same
+     generic tool loop.
+   - Tests must verify anchors, hashes, limitations, and final citation
+     behavior.
+
+5. **Harder live Copilot DCI E2E**
+   - Upgrade `pnpm workbench:live-dci-e2e` or add a second live scenario where
+     the correct answer requires at least:
+     one exploratory search, one guide/context read, one refined search,
+     one decoy read/rejection, and one exact evidence read.
+   - Save AG-UI events, trajectory, metrics, prompt/response diagnostics,
+     screenshots when available, and failure classification under
+     `dist/e2e/live-dci/`.
+   - Fail if Copilot reaches the correct final string by chance without the
+     required trajectory evidence.
+
+#### Acceptance Criteria
+
+- No `RelayDocumentSearch*`, SQLite/FTS, vector search, hidden ranking engine,
+  fixed business taxonomy, or separate search mode is introduced.
+- DCI behavior is observable through Agent Framework tool calls and AG-UI
+  events, not hidden Relay inference.
+- A local evidence answer can be replayed from trajectory artifacts:
+  terms tried, files surfaced, files read, anchors, hashes, rejected decoys,
+  and final citation.
+- Tests cover both deterministic model behavior and a signed-in live M365
+  Copilot trajectory.
+- `pnpm check` includes the deterministic DCI additions; live DCI remains a
+  release-confidence gate with provider/tool/protocol failure classification.
 
 ### 2026-05-17 Reinvention Review
 

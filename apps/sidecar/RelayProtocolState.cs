@@ -57,7 +57,7 @@ public sealed record RelayTurnState(
     public bool RequiresReadEvidenceBeforeFinal =>
         RequiresLocalEvidenceReadRequest &&
         HasGrepToolResult &&
-        !HasReadToolResult;
+        !HasSuccessfulReadForGrepArtifact;
 
     public bool RequiresLocalEvidenceReadRequest =>
         Intent is RelayLocalIntent.FileSearch or RelayLocalIntent.FileRead or RelayLocalIntent.OfficeInspect &&
@@ -72,6 +72,43 @@ public sealed record RelayTurnState(
         !HasKnownObjective ||
         string.IsNullOrWhiteSpace(Workspace) ||
         Intent is RelayLocalIntent.GeneralChat;
+
+    private bool HasSuccessfulReadForGrepArtifact
+    {
+        get
+        {
+            var grepTargets = CompletedToolDetails
+                .Where(detail => detail.StartsWith("grep:", StringComparison.Ordinal) && detail.EndsWith(":success", StringComparison.Ordinal))
+                .Select(ExtractCompletedTarget)
+                .Where(target => !string.IsNullOrWhiteSpace(target))
+                .Select(NormalizeCompletedTarget)
+                .ToArray();
+            if (grepTargets.Length == 0) return false;
+            return CompletedToolDetails
+                .Where(detail => detail.StartsWith("read:", StringComparison.Ordinal) && detail.EndsWith(":success", StringComparison.Ordinal))
+                .Select(ExtractCompletedTarget)
+                .Where(target => !string.IsNullOrWhiteSpace(target))
+                .Select(NormalizeCompletedTarget)
+                .Any(readTarget => grepTargets.Any(grepTarget =>
+                    string.Equals(readTarget, grepTarget, StringComparison.OrdinalIgnoreCase) ||
+                    readTarget.EndsWith("/" + grepTarget, StringComparison.OrdinalIgnoreCase) ||
+                    grepTarget.EndsWith("/" + readTarget, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private static string ExtractCompletedTarget(string detail)
+    {
+        var first = detail.IndexOf(':');
+        var last = detail.LastIndexOf(':');
+        return first < 0 || last <= first + 1 ? "" : detail[(first + 1)..last];
+    }
+
+    private static string NormalizeCompletedTarget(string path) =>
+        path.Trim()
+            .Trim('"', '\'', '`')
+            .Replace('\\', '/')
+            .TrimStart('/')
+            .TrimEnd('/');
 
     public JsonObject ToDiagnosticJson()
     {

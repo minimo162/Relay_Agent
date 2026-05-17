@@ -5,6 +5,7 @@ const decoyLabels = new Set(["negative_context", "guide_or_glossary", "prior_per
 export function buildDciTrajectory(calls, final = "", options = {}) {
   const excerptChars = Math.max(40, Math.min(Number(options.excerptChars ?? 240), 600));
   const steps = calls.map((call, index) => buildStep(call, index + 1, excerptChars));
+  assignPhases(steps);
   const searchedTerms = unique(steps.flatMap((step) => [
     ...arrayOfStrings(step.args?.allTerms),
     ...arrayOfStrings(step.args?.anyTerms),
@@ -27,11 +28,14 @@ export function buildDciTrajectory(calls, final = "", options = {}) {
     return (step.matchedPaths?.length ? step.matchedPaths : step.surfacedPaths ?? [])
       .filter((path) => path && !finalNormalized.includes(path));
   }));
+  const hypotheses = buildHypothesisLedger(steps, finalNormalized, rejectedDecoys);
 
   return {
     schemaVersion: "RelayDciTrajectory.v1",
     tools: steps.map((step) => step.tool),
     steps,
+    phases: unique(steps.map((step) => step.phase).filter(Boolean)),
+    hypotheses,
     searchedTerms,
     surfacedPaths,
     matchedPaths,
@@ -41,6 +45,8 @@ export function buildDciTrajectory(calls, final = "", options = {}) {
     contextLabels,
     rejectedDecoys,
     finalCitedEvidence,
+    answerReady: finalCitedEvidence.length > 0 && rejectedDecoys.every((path) => !finalNormalized.includes(path)),
+    contextManagement: buildContextManagement(calls, steps),
     privacy: {
       rawDocumentTextIncluded: false,
       excerptChars,
@@ -123,11 +129,93 @@ function compactMatch(match, excerptChars) {
   return {
     displayPath: normalizePath(match?.displayPath ?? ""),
     lineNumber: Number.isFinite(match?.lineNumber) ? match.lineNumber : undefined,
+    startLine: Number.isFinite(match?.startLine) ? match.startLine : undefined,
+    endLine: Number.isFinite(match?.endLine) ? match.endLine : undefined,
+    scope: typeof match?.scope === "string" ? match.scope : undefined,
     matchedTerms: arrayOfStrings(match?.matchedTerms),
+    requiredTermHits: arrayOfStrings(match?.requiredTermHits),
+    optionalTermHits: arrayOfStrings(match?.optionalTermHits),
     contextLabels: arrayOfStrings(match?.contextLabels),
     evidenceState: typeof match?.evidenceState === "string" ? match.evidenceState : "",
     excerpt,
     textSha256: excerpt ? hashText(String(match?.excerpt ?? "")) : undefined,
+  };
+}
+
+function assignPhases(steps) {
+  let grepCount = 0;
+  for (const step of steps) {
+    if (step.tool === "glob") {
+      step.phase = "explore";
+    } else if (step.tool === "grep") {
+      grepCount += 1;
+      step.phase = grepCount === 1 && !step.zeroMatch ? "explore" : "refine";
+    } else if (step.tool === "read") {
+      const labels = step.contextLabels ?? [];
+      step.phase = labels.some((label) => label === "possible_evidence" || label === "content_match")
+        ? "verify"
+        : "inspect";
+    } else {
+      step.phase = "act";
+    }
+  }
+}
+
+function buildHypothesisLedger(steps, finalNormalized, rejectedDecoys) {
+  const ledger = new Map();
+  for (const step of steps) {
+    const paths = step.matchedPaths?.length ? step.matchedPaths : step.surfacedPaths ?? [];
+    for (const path of paths) {
+      if (!path) continue;
+      const entry = ledger.get(path) ?? {
+        path,
+        status: "unknown",
+        supportingSteps: [],
+        refutingSteps: [],
+        labels: [],
+        latestPhase: step.phase,
+      };
+      const labels = step.contextLabels ?? [];
+      entry.labels = unique([...entry.labels, ...labels]);
+      entry.latestPhase = step.phase;
+      const isDecoy = labels.some((label) => decoyLabels.has(label)) || rejectedDecoys.includes(path);
+      const isSupported = finalNormalized.includes(path) ||
+        labels.some((label) => label === "possible_evidence" || label === "content_match") ||
+        step.evidenceState === "exact_text" ||
+        step.evidenceState === "extracted_content";
+      if (isDecoy && !finalNormalized.includes(path)) {
+        entry.status = "rejected";
+        entry.refutingSteps = unique([...entry.refutingSteps, String(step.index)]);
+        entry.rejectionReason = labels.find((label) => decoyLabels.has(label)) ?? "not_cited_in_final";
+      } else if (isSupported) {
+        entry.status = "supported";
+        entry.supportingSteps = unique([...entry.supportingSteps, String(step.index)]);
+      }
+      ledger.set(path, entry);
+    }
+  }
+  return [...ledger.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function buildContextManagement(calls, steps) {
+  const rawChars = calls.reduce((total, call) => {
+    const argsChars = typeof call.args === "string" ? call.args.length : 0;
+    const resultChars = Array.isArray(call.results)
+      ? call.results.reduce((sum, result) => sum + String(result ?? "").length, 0)
+      : 0;
+    return total + argsChars + resultChars;
+  }, 0);
+  const projectedChars = JSON.stringify(steps).length;
+  const anchorsKept = steps.reduce((total, step) => total + (Array.isArray(step.anchors) ? step.anchors.length : 0), 0);
+  const hashesRetained = steps.filter((step) => Boolean(step.textSha256) || (step.matches ?? []).some((match) => Boolean(match.textSha256))).length;
+  return {
+    rawChars,
+    projectedChars,
+    compressionRatio: rawChars > 0 ? Number((projectedChars / rawChars).toFixed(4)) : 1,
+    anchorsKept,
+    hashesRetained,
+    excerptsKept: steps.filter((step) => Boolean(step.excerpt) || (step.matches ?? []).some((match) => Boolean(match.excerpt))).length,
+    replaySufficient: anchorsKept > 0 || steps.some((step) => (step.matchedPaths?.length ?? 0) > 0),
   };
 }
 

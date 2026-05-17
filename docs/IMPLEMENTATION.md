@@ -32,6 +32,60 @@
 
 ## Milestone Log
 
+### 2026-05-18 DCI Interface Resolution Follow-up
+
+Implemented the `DCI2605IR-01` through `DCI2605IR-10` follow-up queue from
+`tasks.md`. The change keeps file search as a generic Agent Framework/AG-UI
+recipe over OpenCode-compatible local tools; it does not revive
+`RelayDocumentSearch*`, SQLite/FTS, vector search, AionUi, OpenCode/OpenWork
+runtime, or Tauri.
+
+Changes:
+
+- Extended `RelayDciTrajectory.v1` with phase tags, a compact hypothesis
+  ledger, answer-readiness, and deterministic context-management metrics.
+- Extended `RelayGrepObservation.v1` with context-window conjunction matches,
+  line ranges, scopes, required/optional/excluded term hits, and continued
+  ripgrep-backed capped execution.
+- Tightened protocol behavior for DCI-style local evidence tasks: guide-scoped
+  `grep` is widened to the workspace after a guide/glossary read, cited
+  evidence paths are extracted more precisely from Japanese final text, and
+  finalization remains blocked until a `read` target intersects a `grep`
+  candidate path.
+- Extended `read` observations for CSV with `csv` kind, row-range anchors,
+  table-like evidence projection, limitations, hashes, and exact-text state;
+  existing Office/PDF extraction remains under the generic exact-read path.
+- Added adversarial DCI fixture generation and deterministic smokes for
+  sparse context-window evidence, heterogeneous CSV reads, guide-only final
+  repair, guide-scoped grep widening, and cited-evidence exact reads.
+- Updated Workbench trace summaries to surface context-window line ranges
+  without reintroducing a ranked search UI.
+- Upgraded the live Copilot DCI hard scenario to require guide read,
+  observation-driven `grep`, decoy rejection, workspace-wide widening, exact
+  evidence read, trajectory/metrics artifacts, and failure classification.
+
+Verification:
+
+```bash
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-corpus-fixture-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-metrics-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-context-window-grep-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-heterogeneous-read-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-final-refinement-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-guide-scoped-grep-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:dci-cited-evidence-read-smoke
+PATH=$HOME/.dotnet:$PATH pnpm workbench:live-dci-e2e
+PATH=$HOME/.dotnet:$PATH pnpm check
+git diff --check
+```
+
+Result: passed. The successful live Copilot DCI run wrote artifacts under
+`dist/e2e/live-dci/` and completed with:
+
+```text
+[workbench-live-dci-e2e] ok workspace=/tmp/relay-live-dci-workspace-otyVjN
+```
+
 ### 2026-05-17 DCI 2605 Code And Test Hardening
 
 Implemented the `DCI2605-01` through `DCI2605-10` task queue from

@@ -20,6 +20,7 @@ public static class RelayPromptBuilder
             "- Tools not listed in RELAY_ADMISSIBLE_ACTION_ENVELOPE.visibleTools are invalid for this turn.",
             "- If the objective and workspace are known, ask_user is invalid unless a critical missing requirement blocks all safe local action.",
             "- If a protocol rule blocks your intended final answer, return action=tool instead.",
+            "- For local search or evidence tasks, do not answer from grep snippets alone; before citing a candidate file as the answer, read that exact file path.",
         };
 
         if (!string.IsNullOrWhiteSpace(state.OriginalUserRequest))

@@ -1289,6 +1289,7 @@ public sealed class RelayToolExecutor
             excludeTerms = grepPlan.ExcludeTerms,
             caseInsensitive = grepPlan.CaseInsensitive,
             contextLines = grepPlan.ContextLines,
+            contextWindowLines = grepPlan.ContextWindowLines,
             maxMatchesPerFile = grepPlan.MaxMatchesPerFile,
             truncated = result.Truncated,
             matches,
@@ -1355,7 +1356,7 @@ public sealed class RelayToolExecutor
             BuildReadObservationData(
                 workspace,
                 path,
-                "text",
+                TextReadKindFor(path),
                 sliced,
                 text,
                 offset,
@@ -1384,18 +1385,19 @@ public sealed class RelayToolExecutor
         var displayPath = ToWorkspaceDisplayPath(workspace, path);
         var lineRange = ComputeLineRange(sourceText, offset, text.Length);
         var anchors = BuildReadAnchors(kind, displayPath, lineRange.StartLine, lineRange.EndLine);
+        var isPlainText = IsPlainTextReadKind(kind);
         return new
         {
             schemaVersion = "RelayReadObservation.v1",
             kind,
             path,
             displayPath,
-            evidenceState = kind.Equals("text", StringComparison.OrdinalIgnoreCase)
+            evidenceState = isPlainText
                 ? "exact_text"
                 : "extracted_content",
             anchors,
             sizeBytes,
-            encoding = kind.Equals("text", StringComparison.OrdinalIgnoreCase) ? "utf-8" : "extracted-text",
+            encoding = isPlainText ? "utf-8" : "extracted-text",
             offset,
             limit,
             startLine = lineRange.StartLine,
@@ -1407,6 +1409,15 @@ public sealed class RelayToolExecutor
             text,
             contextLabels = ClassifyDciContext(displayPath, text),
             textSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant(),
+            evidenceProjection = new
+            {
+                scope = "exact_file_read",
+                anchorCount = anchors.Length,
+                tableLike = IsTableLikeReadKind(kind),
+                sourceKind = kind,
+                limitations = BuildReadLimitations(kind, warnings, sourceTruncated),
+            },
+            extractionLimitations = BuildReadLimitations(kind, warnings, sourceTruncated),
             warnings,
             continuation = hasMore
                 ? new
@@ -1435,7 +1446,9 @@ public sealed class RelayToolExecutor
 
     private static object[] BuildReadAnchors(string kind, string displayPath, int startLine, int endLine)
     {
-        var anchorKind = kind.Equals("text", StringComparison.OrdinalIgnoreCase)
+        var anchorKind = kind.Equals("csv", StringComparison.OrdinalIgnoreCase)
+            ? "row_range"
+            : IsPlainTextReadKind(kind)
             ? "line_range"
             : kind.Contains("excel", StringComparison.OrdinalIgnoreCase) || kind.Contains("spreadsheet", StringComparison.OrdinalIgnoreCase) || kind.Contains("xlsx", StringComparison.OrdinalIgnoreCase)
                 ? "document_extract"
@@ -1452,6 +1465,29 @@ public sealed class RelayToolExecutor
                 endLine,
             },
         ];
+    }
+
+    private static string TextReadKindFor(string path) =>
+        Path.GetExtension(path).Equals(".csv", StringComparison.OrdinalIgnoreCase) ? "csv" : "text";
+
+    private static bool IsPlainTextReadKind(string kind) =>
+        kind.Equals("text", StringComparison.OrdinalIgnoreCase) ||
+        kind.Equals("csv", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTableLikeReadKind(string kind) =>
+        kind.Equals("csv", StringComparison.OrdinalIgnoreCase) ||
+        kind.Contains("excel", StringComparison.OrdinalIgnoreCase) ||
+        kind.Contains("spreadsheet", StringComparison.OrdinalIgnoreCase) ||
+        kind.Contains("xlsx", StringComparison.OrdinalIgnoreCase);
+
+    private static string[] BuildReadLimitations(string kind, IReadOnlyList<string> warnings, bool sourceTruncated)
+    {
+        var limitations = new List<string>();
+        if (sourceTruncated) limitations.Add("source_truncated");
+        if (warnings.Count > 0) limitations.Add("extractor_warnings");
+        if (kind.Contains("pdf", StringComparison.OrdinalIgnoreCase)) limitations.Add("pdf_text_layer_only");
+        if (!limitations.Any()) limitations.Add("none");
+        return limitations.ToArray();
     }
 
     private static string[] ClassifyDciContext(string displayPath, string text)
@@ -2505,6 +2541,7 @@ public sealed class RelayToolExecutor
         string[] ExcludeTerms,
         bool CaseInsensitive,
         int ContextLines,
+        int ContextWindowLines,
         int? MaxMatchesPerFile);
 
     private static GrepPlan BuildGrepPlan(JsonObject args)
@@ -2514,6 +2551,7 @@ public sealed class RelayToolExecutor
         var excludeTerms = NonEmptyTerms(args, "excludeTerms");
         var caseInsensitive = GetBool(args, "caseInsensitive") == true || GetBool(args, "case_insensitive") == true;
         var contextLines = Math.Clamp(GetInt(args, "contextLines") ?? 0, 0, 10);
+        var contextWindowLines = Math.Clamp(GetInt(args, "contextWindowLines") ?? GetInt(args, "windowLines") ?? contextLines, 0, 10);
         var maxMatchesPerFile = GetInt(args, "maxMatchesPerFile");
         if (maxMatchesPerFile is not null) maxMatchesPerFile = Math.Clamp(maxMatchesPerFile.Value, 1, 200);
         var pattern = GetString(args, "pattern");
@@ -2527,7 +2565,7 @@ public sealed class RelayToolExecutor
             pattern = Regex.Escape(pattern);
         }
 
-        return new GrepPlan(pattern, allTerms, anyTerms, excludeTerms, caseInsensitive, contextLines, maxMatchesPerFile);
+        return new GrepPlan(pattern, allTerms, anyTerms, excludeTerms, caseInsensitive, contextLines, contextWindowLines, maxMatchesPerFile);
     }
 
     private static IReadOnlyList<object> BuildGrepObservationMatches(
@@ -2538,28 +2576,81 @@ public sealed class RelayToolExecutor
         int limit)
     {
         var matches = new List<object>();
+        var parsedLines = new List<GrepObservationLine>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in lines)
         {
             if (line == "--") continue;
             if (!TryParseRipgrepLine(workingDirectory, line, out var fullPath, out var lineNumber, out var text)) continue;
+            parsedLines.Add(new GrepObservationLine(fullPath, lineNumber, text));
             if (!LineSatisfiesTerms(text, plan)) continue;
-            var matchedTerms = MatchedTerms(text, plan);
             var displayPath = ToWorkspaceDisplayPath(workspace, fullPath);
-            matches.Add(new
-            {
-                path = fullPath,
-                displayPath,
-                lineNumber,
-                excerpt = Truncate(text, 1200),
-                matchedTerms,
-                contextLabels = ClassifyDciContext(displayPath, text),
-                evidenceState = plan.AllTerms.Length > 1 && plan.AllTerms.All(term => ContainsTerm(text, term, plan.CaseInsensitive))
-                    ? "conjunctive_content_match"
-                    : "content_match",
-            });
+            var key = $"{displayPath}:{lineNumber}:{lineNumber}:line";
+            if (!seen.Add(key)) continue;
+            matches.Add(BuildGrepMatch(fullPath, displayPath, lineNumber, lineNumber, lineNumber, "line", text, plan));
             if (matches.Count >= limit) break;
         }
+        if (matches.Count < limit && plan.ContextWindowLines > 0 && plan.AllTerms.Length > 1)
+        {
+            foreach (var group in parsedLines.GroupBy(line => line.FullPath, StringComparer.OrdinalIgnoreCase))
+            {
+                var ordered = group.OrderBy(line => line.LineNumber).ToArray();
+                for (var index = 0; index < ordered.Length && matches.Count < limit; index++)
+                {
+                    var start = Math.Max(0, index - plan.ContextWindowLines);
+                    var end = Math.Min(ordered.Length - 1, index + plan.ContextWindowLines);
+                    var window = ordered[start..(end + 1)];
+                    var combined = string.Join("\n", window.Select(line => line.Text));
+                    if (!LineSatisfiesTerms(combined, plan)) continue;
+                    var displayPath = ToWorkspaceDisplayPath(workspace, group.Key);
+                    var startLine = window.First().LineNumber;
+                    var endLine = window.Last().LineNumber;
+                    var key = $"{displayPath}:{startLine}:{endLine}:context_window";
+                    if (!seen.Add(key)) continue;
+                    var excerpt = string.Join("\n", window.Select(line => $"{line.LineNumber}: {line.Text}"));
+                    matches.Add(BuildGrepMatch(group.Key, displayPath, ordered[index].LineNumber, startLine, endLine, "context_window", excerpt, plan));
+                }
+            }
+        }
         return matches;
+    }
+
+    private sealed record GrepObservationLine(string FullPath, int LineNumber, string Text);
+
+    private static object BuildGrepMatch(
+        string fullPath,
+        string displayPath,
+        int lineNumber,
+        int startLine,
+        int endLine,
+        string scope,
+        string text,
+        GrepPlan plan)
+    {
+        var requiredTermHits = TermHits(text, plan.AllTerms, plan.CaseInsensitive);
+        var optionalTermHits = TermHits(text, plan.AnyTerms, plan.CaseInsensitive);
+        var excludedTermHits = TermHits(text, plan.ExcludeTerms, plan.CaseInsensitive);
+        var evidenceState = scope == "context_window" && plan.AllTerms.Length > 1 && requiredTermHits.Length == plan.AllTerms.Length
+            ? "context_window_conjunctive_match"
+            : plan.AllTerms.Length > 1 && requiredTermHits.Length == plan.AllTerms.Length
+                ? "conjunctive_content_match"
+                : "content_match";
+        return new
+        {
+            path = fullPath,
+            displayPath,
+            lineNumber,
+            startLine,
+            endLine,
+            scope,
+            excerpt = Truncate(text, 1200),
+            matchedTerms = MatchedTerms(text, plan),
+            requiredTermHits,
+            optionalTermHits,
+            excludedTermHits,
+            contextLabels = ClassifyDciContext(displayPath, text),
+            evidenceState,
+        };
     }
 
     private static bool TryParseRipgrepLine(string workingDirectory, string line, out string fullPath, out int lineNumber, out string text)
@@ -2595,6 +2686,12 @@ public sealed class RelayToolExecutor
         plan.AllTerms
             .Concat(plan.AnyTerms)
             .Where(term => ContainsTerm(text, term, plan.CaseInsensitive))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] TermHits(string text, IReadOnlyList<string> terms, bool caseInsensitive) =>
+        terms
+            .Where(term => ContainsTerm(text, term, caseInsensitive))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 

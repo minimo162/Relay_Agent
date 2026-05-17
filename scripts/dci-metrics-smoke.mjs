@@ -71,6 +71,17 @@ if (!trajectory.rejectedDecoys.includes(decoy)) {
 if (!trajectory.finalCitedEvidence.includes(gold)) {
   throw new Error(`trajectory did not record final citation: ${JSON.stringify(trajectory.finalCitedEvidence)}`);
 }
+if (!trajectory.phases.includes("explore") || !trajectory.phases.includes("verify")) {
+  throw new Error(`trajectory did not record DCI phases: ${JSON.stringify(trajectory.phases)}`);
+}
+const goldHypothesis = trajectory.hypotheses.find((item) => item.path === gold);
+const decoyHypothesis = trajectory.hypotheses.find((item) => item.path === decoy);
+if (goldHypothesis?.status !== "supported" || decoyHypothesis?.status !== "rejected") {
+  throw new Error(`trajectory did not keep a support/rejection ledger: ${JSON.stringify(trajectory.hypotheses, null, 2)}`);
+}
+if (!trajectory.answerReady || trajectory.contextManagement.rawChars <= 0 || trajectory.contextManagement.replaySufficient !== true) {
+  throw new Error(`trajectory context management is incomplete: ${JSON.stringify(trajectory.contextManagement, null, 2)}`);
+}
 
 const metrics = computeDciMetrics(calls, final, {
   goldPath: gold,
@@ -89,6 +100,13 @@ assertDciMetrics(metrics, {
   evidenceSpanLocalized: true,
   hardNegativeRejected: true,
 });
+if (metrics.operatorDiversity !== 3 ||
+    metrics.observationToNextActionDependency !== true ||
+    metrics.candidateRejectionCount < 1 ||
+    metrics.evidenceAnchorLocality !== true ||
+    metrics.accidentalAnswerPrevented !== true) {
+  throw new Error(`DCI 2605 metrics missing decision-quality signals: ${JSON.stringify(metrics, null, 2)}`);
+}
 
 const failingMetrics = computeDciMetrics([
   ...calls,

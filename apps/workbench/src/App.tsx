@@ -783,9 +783,12 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
       const suffix = data.truncated === true ? " · truncated" : "";
       return `grep · no content matches${terms ? ` · ${terms}` : ""}${suffix}`;
     }
-    const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; excerpt?: unknown; contextLabels?: unknown } | undefined;
+    const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; startLine?: unknown; endLine?: unknown; excerpt?: unknown; contextLabels?: unknown; scope?: unknown } | undefined;
     const path = typeof first?.displayPath === "string" ? compactPath(first.displayPath) : "";
-    const line = typeof first?.lineNumber === "number" ? `:${first.lineNumber}` : "";
+    const line = typeof first?.startLine === "number" && typeof first?.endLine === "number" && first.endLine !== first.startLine
+      ? `:${first.startLine}-${first.endLine}`
+      : typeof first?.lineNumber === "number" ? `:${first.lineNumber}` : "";
+    const scope = typeof first?.scope === "string" && first.scope !== "line" ? ` · ${first.scope}` : "";
     const excerpt = typeof first?.excerpt === "string" ? ` — ${first.excerpt.slice(0, 96)}` : "";
     const labels = Array.isArray(first?.contextLabels)
       ? first.contextLabels.filter((label): label is string => typeof label === "string").slice(0, 3).join(", ")
@@ -793,7 +796,7 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
     const labelText = labels ? ` · ${labels}` : "";
     const suffix = data.truncated === true ? " · truncated" : "";
     const termText = terms ? ` · ${terms}` : "";
-    return `grep · ${matches.length} content match${matches.length === 1 ? "" : "es"}${termText}${path ? ` · ${path}${line}` : ""}${labelText}${excerpt}${suffix}`;
+    return `grep · ${matches.length} content match${matches.length === 1 ? "" : "es"}${termText}${path ? ` · ${path}${line}` : ""}${scope}${labelText}${excerpt}${suffix}`;
   }
   if (data.schemaVersion === "RelayReadObservation.v1") {
     const path = typeof data.displayPath === "string" ? compactPath(data.displayPath) : "";
