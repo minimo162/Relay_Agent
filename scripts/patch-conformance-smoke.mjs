@@ -20,6 +20,8 @@ const validBrokenPatch = "*** Begin Patch\n*** Add File: broken.md\n+recovered f
 const validNestedPatch = "*** Begin Patch\n*** Add File: nested.md\n+nested recovered\n*** Add File: nested2.md\n+nested2 recovered\n*** End Patch\n";
 const legacyMultiAddPatch = "*** Begin Patch\n*** Add File: valid.md\n+valid patch smoke\n*** Add File: docs/extra.md\n+extra patch smoke\n*** End Patch\n";
 const validUpdatePatch = "*** Begin Patch\n*** Update File: valid.md\n@@\n-valid patch smoke\n+valid patch smoke updated\n*** End Patch\n";
+const nestedSourcePatch = "*** Begin Patch\n*** Add File: sample-project/src/app.js\n+console.log(\"hello\");\n*** End Patch\n";
+const suffixUpdatePatch = "*** Begin Patch\n*** Update File: src/app.js\n@@\n-console.log(\"hello\");\n+console.log(\"hello from resolved suffix\");\n*** End Patch\n";
 const responses = [
   JSON.stringify({
     action: "tool",
@@ -67,6 +69,22 @@ const responses = [
     },
   }),
   JSON.stringify({ action: "final", answer: "update patch applied" }),
+  JSON.stringify({
+    action: "tool",
+    tool: "apply_patch",
+    args: {
+      patchText: nestedSourcePatch,
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "nested source created" }),
+  JSON.stringify({
+    action: "tool",
+    tool: "apply_patch",
+    args: {
+      patchText: suffixUpdatePatch,
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "suffix update applied" }),
 ];
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -233,6 +251,64 @@ try {
   }
   if (!readFileSync(output, "utf8").includes("valid patch smoke updated")) {
     throw new Error(`valid update patch did not update expected file: ${output}`);
+  }
+
+  const nested = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "patch-nested-source",
+    instruction: "sample-project/src/app.js を作成して",
+  });
+  const nestedApprovalCall = collectToolCall(nested.events, "request_approval");
+  const nestedApproval = readApprovalRequest(nestedApprovalCall).request;
+  if (nestedApproval.functionName !== "apply_patch") {
+    throw new Error(`expected nested source apply_patch approval, got ${JSON.stringify(nestedApproval)}`);
+  }
+  const nestedApproved = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "patch-nested-source",
+    instruction: "sample-project/src/app.js を作成して",
+    messages: approvalMessages("patch-nested-source", "sample-project/src/app.js を作成して", nestedApprovalCall, true),
+  });
+  if (!hasRunFinished(nestedApproved.events)) {
+    throw new Error(`nested source run did not finish: ${JSON.stringify(nestedApproved.events)}`);
+  }
+  const nestedPath = join(workspace, "sample-project", "src", "app.js");
+  if (!existsSync(nestedPath) || !readFileSync(nestedPath, "utf8").includes("hello")) {
+    throw new Error(`nested source patch did not create expected file: ${nestedPath}`);
+  }
+
+  const suffix = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "patch-suffix-update",
+    instruction: "src/app.js を更新して",
+  });
+  const suffixApprovalCall = collectToolCall(suffix.events, "request_approval");
+  const suffixApproval = readApprovalRequest(suffixApprovalCall).request;
+  if (suffixApproval.functionName !== "apply_patch") {
+    throw new Error(`expected suffix update apply_patch approval, got ${JSON.stringify(suffixApproval)}`);
+  }
+  const suffixApproved = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "patch-suffix-update",
+    instruction: "src/app.js を更新して",
+    messages: approvalMessages("patch-suffix-update", "src/app.js を更新して", suffixApprovalCall, true),
+  });
+  if (!hasRunFinished(suffixApproved.events)) {
+    throw new Error(`suffix update run did not finish: ${JSON.stringify(suffixApproved.events)}`);
+  }
+  if (!readFileSync(nestedPath, "utf8").includes("hello from resolved suffix")) {
+    throw new Error(`suffix update did not update unique nested file: ${nestedPath}`);
+  }
+  if (existsSync(join(workspace, "src", "app.js"))) {
+    throw new Error("suffix update created an unintended root src/app.js");
   }
 
   console.log("[patch-conformance-smoke] ok");

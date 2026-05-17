@@ -133,7 +133,7 @@
     },
     {
       "name": "apply_patch",
-      "description": "Apply a structured multi-file patch in one Begin/End envelope. Requires user approval.",
+      "description": "Apply a structured multi-file patch in one Begin/End envelope. Paths are workspace-relative OpenCode-style paths; use exact displayPath values returned by read/glob/workspace_status. Requires user approval.",
       "executorTool": "apply_patch",
       "safety": "Mutating",
       "frameworkToolType": "Function",

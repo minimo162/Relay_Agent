@@ -23,6 +23,9 @@ public sealed class RelayAgentFrameworkRunner
         If the user names multiple files, read each named file that is needed for the task before finalizing.
         If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
         apply_patch uses args.patchText with one envelope only: one leading *** Begin Patch, all file hunks, then one final *** End Patch.
+        Patch paths are workspace-relative, OpenCode-style paths. Reuse the exact displayPath returned by read/glob/workspace_status for later edits; do not shorten nested paths such as project/src/app.js to src/app.js unless that exact path exists.
+        If apply_patch reports a missing or ambiguous path, use the returned candidate display paths with read/glob before retrying. Do not retry the same failing path.
+        After creating or changing a multi-file project, verify expected referenced files exist before finalizing.
         Exact marker/token strings explicitly requested by the user are required output content, not optional verification notes.
         Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.
         Treat period, version, region, and department tokens in file names and paths as evidence context when the file content omits them.
@@ -620,7 +623,7 @@ public static class RelayAgentToolCatalog
         Tool(
             nameof(RelayAgentFunctionSet.ApplyPatchAsync),
             "apply_patch",
-            "Apply a structured multi-file patch in one Begin/End envelope. Requires user approval.",
+            "Apply a structured multi-file patch in one Begin/End envelope. Paths are workspace-relative OpenCode-style paths; use exact displayPath values returned by read/glob/workspace_status. Requires user approval.",
             "apply_patch",
             RelayAgentToolSafety.Mutating,
             "workspace.mutate",
@@ -1456,24 +1459,43 @@ public sealed class RelayToolExecutor
         }
 
         var changed = new List<string>();
+        var changedDisplayPaths = new List<string>();
         var backups = new List<string>();
+        var pathResolutions = new List<object>();
         foreach (var operation in operations)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var path = ResolveWorkspacePath(workspace, operation.Path);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (!TryResolvePatchOperationPath(workspace, operation, out var resolution, out var resolutionError, out var resolutionData))
+            {
+                return ToolObservation.Fail(call.Id, call.Tool, resolutionError ?? $"Patch path could not be resolved: {operation.Path}", resolutionData);
+            }
+            var path = resolution!.FullPath;
+            if (!string.Equals(operation.Path, resolution.DisplayPath, StringComparison.Ordinal) ||
+                !string.Equals(resolution.Strategy, "exact", StringComparison.Ordinal))
+            {
+                pathResolutions.Add(new
+                {
+                    requestedPath = operation.Path,
+                    resolvedPath = resolution.DisplayPath,
+                    resolution.Strategy,
+                });
+            }
+
             switch (operation.Kind)
             {
                 case RelayPatchOperationKind.Add:
                     if (File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Add file already exists: {operation.Path}");
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                     await File.WriteAllTextAsync(path, NormalizeGeneratedFileContent(path, operation.NewText ?? ""), cancellationToken);
                     changed.Add(path);
+                    changedDisplayPaths.Add(ToWorkspaceDisplayPath(workspace, path));
                     break;
                 case RelayPatchOperationKind.Delete:
                     if (!File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Delete file does not exist: {operation.Path}");
                     backups.Add(await CreateBackupAsync(path, cancellationToken));
                     File.Delete(path);
                     changed.Add(path);
+                    changedDisplayPaths.Add(ToWorkspaceDisplayPath(workspace, path));
                     break;
                 case RelayPatchOperationKind.Update:
                     if (!File.Exists(path)) return ToolObservation.Fail(call.Id, call.Tool, $"Update file does not exist: {operation.Path}");
@@ -1482,16 +1504,85 @@ public sealed class RelayToolExecutor
                     var newText = operation.NewText ?? "";
                     if (oldText.Length == 0 || !original.Contains(oldText, StringComparison.Ordinal))
                     {
-                        return ToolObservation.Fail(call.Id, call.Tool, $"Patch context was not found: {operation.Path}");
+                        return ToolObservation.Fail(
+                            call.Id,
+                            call.Tool,
+                            $"Patch context was not found: {resolution.DisplayPath}",
+                            new
+                            {
+                                schemaVersion = "RelayPatchContextError.v1",
+                                requestedPath = operation.Path,
+                                resolvedPath = resolution.DisplayPath,
+                                nextAction = "Read the resolvedPath and retry apply_patch with current file context.",
+                            });
                     }
                     backups.Add(await CreateBackupAsync(path, cancellationToken));
                     await File.WriteAllTextAsync(path, original.Replace(oldText, NormalizeGeneratedFileContent(path, newText), StringComparison.Ordinal), cancellationToken);
                     changed.Add(path);
+                    changedDisplayPaths.Add(ToWorkspaceDisplayPath(workspace, path));
                     break;
             }
         }
 
-        return ToolObservation.Ok(call.Id, call.Tool, $"{changed.Count} file(s) patched", new { changed, backups });
+        return ToolObservation.Ok(call.Id, call.Tool, $"{changed.Count} file(s) patched", new
+        {
+            changed,
+            changedDisplayPaths,
+            backups,
+            pathResolutions,
+        });
+    }
+
+    private sealed record PatchPathResolution(string FullPath, string DisplayPath, string Strategy);
+
+    private static bool TryResolvePatchOperationPath(
+        string workspace,
+        RelayPatchOperation operation,
+        out PatchPathResolution? resolution,
+        out string? error,
+        out object? errorData)
+    {
+        resolution = null;
+        error = null;
+        errorData = null;
+
+        var exactPath = ResolveWorkspacePath(workspace, operation.Path);
+        var exactDisplayPath = ToWorkspaceDisplayPath(workspace, exactPath);
+        if (operation.Kind is RelayPatchOperationKind.Add)
+        {
+            resolution = new PatchPathResolution(exactPath, exactDisplayPath, "exact");
+            return true;
+        }
+
+        if (File.Exists(exactPath))
+        {
+            resolution = new PatchPathResolution(exactPath, exactDisplayPath, "exact");
+            return true;
+        }
+
+        var candidates = FindWorkspaceFilesByPathTail(workspace, operation.Path, maxCandidates: 16);
+        if (candidates.Count == 1)
+        {
+            var candidatePath = ResolveWorkspacePath(workspace, candidates[0]);
+            resolution = new PatchPathResolution(candidatePath, candidates[0], "unique_suffix");
+            return true;
+        }
+
+        var verb = operation.Kind is RelayPatchOperationKind.Delete ? "Delete" : "Update";
+        error = candidates.Count == 0
+            ? $"{verb} file does not exist: {operation.Path}"
+            : $"{verb} file path is ambiguous: {operation.Path}";
+        errorData = new
+        {
+            schemaVersion = "RelayPatchPathResolutionError.v1",
+            operation = operation.Kind.ToString().ToLowerInvariant(),
+            requestedPath = operation.Path,
+            candidates,
+            nextAction = candidates.Count == 0
+                ? "Use glob/read to find the exact workspace-relative displayPath, then retry apply_patch with that path."
+                : "Read one exact candidate displayPath, then retry apply_patch with that path.",
+        };
+        return false;
     }
 
     private static async Task<ToolObservation> WorkspaceStatusAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -2360,6 +2451,55 @@ public sealed class RelayToolExecutor
         return full;
     }
 
+    private static string ToWorkspaceDisplayPath(string workspace, string path) =>
+        NormalizeWorkspaceRelativePath(Path.GetRelativePath(Path.GetFullPath(workspace), path));
+
+    private static string NormalizeWorkspaceRelativePath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        while (normalized.StartsWith("./", StringComparison.Ordinal))
+        {
+            normalized = normalized[2..];
+        }
+        return normalized;
+    }
+
+    private static IReadOnlyList<string> FindWorkspaceFilesByPathTail(string workspace, string requestedPath, int maxCandidates)
+    {
+        var root = Path.GetFullPath(workspace);
+        var requested = NormalizeWorkspaceRelativePath(requestedPath);
+        var hasDirectorySegment = requested.Contains('/', StringComparison.Ordinal);
+        var fileName = Path.GetFileName(requested.Replace('/', Path.DirectorySeparatorChar));
+        var matches = new List<string>();
+        var scanned = 0;
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                if (++scanned > 50000) break;
+                var displayPath = ToWorkspaceDisplayPath(workspace, file);
+                var isMatch = hasDirectorySegment
+                    ? displayPath.EndsWith("/" + requested, StringComparison.Ordinal)
+                    : !string.IsNullOrWhiteSpace(fileName) &&
+                        Path.GetFileName(displayPath).Equals(fileName, StringComparison.Ordinal);
+                if (!isMatch) continue;
+                matches.Add(displayPath);
+                if (matches.Count > maxCandidates) break;
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            // Best-effort candidate discovery. The original validation failure remains authoritative.
+        }
+
+        return matches
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .Take(maxCandidates)
+            .ToArray();
+    }
+
     private static string ResolveWorkspaceDirectory(string workspace, string path)
     {
         var full = ResolveWorkspacePath(workspace, path);
@@ -3012,7 +3152,7 @@ public sealed record ToolObservation(string ToolCallId, string Tool, bool Succes
         : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(Data, JsonOptions.Compact))))[..12].ToLowerInvariant();
 
     public static ToolObservation Ok(string id, string tool, string summary, object? data) => new(id, tool, true, summary, data);
-    public static ToolObservation Fail(string id, string tool, string summary) => new(id, tool, false, summary, null);
+    public static ToolObservation Fail(string id, string tool, string summary, object? data = null) => new(id, tool, false, summary, data);
 }
 
 public static class ToolObservationArtifacts

@@ -32,6 +32,45 @@
 
 ## Milestone Log
 
+### 2026-05-17 OpenCode-Style Patch Path Hardening
+
+Stopped the in-progress live complex-project E2E after the improvement phase
+entered a repeated patch retry loop. The run showed that Copilot could read the
+right nested files, but later tried shortened or inconsistent patch paths such
+as `src/app.js` and `docs/USAGE.md` instead of the exact workspace-relative
+paths under `relay-task-planner/`.
+
+Implemented the hardening at the Relay tool boundary rather than adding a
+mode-specific workaround:
+
+- Strengthened Agent Framework instructions and the model-visible
+  `apply_patch` description so patch paths are explicitly OpenCode-style,
+  workspace-relative paths and should reuse `displayPath` values returned by
+  `read`, `glob`, and `workspace_status`.
+- Changed `apply_patch`/`patch` execution so update/delete operations no
+  longer create parent directories before proving that the target exists.
+- Added deterministic, workspace-contained unique suffix resolution for
+  update/delete paths. For example, `src/app.js` can resolve to
+  `sample-project/src/app.js` only when that suffix match is unique.
+- Added structured patch path/context failure data with candidate display paths
+  and next-action guidance instead of a bare string error.
+- Extended the patch conformance smoke to cover unique nested suffix updates
+  and to assert that no unintended root `src/app.js` is created.
+
+Verification:
+
+```bash
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:build
+PATH=$HOME/.dotnet:$PATH pnpm agent:patch-conformance-smoke
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:protocol-state-smoke
+PATH=$HOME/.dotnet:$PATH pnpm check
+git diff --check
+```
+
+Result: passed. Full `pnpm check` passed after updating the intentional
+tool-catalog snapshot drift for the `apply_patch` description.
+
 ### 2026-05-17 Live E2E Reinvention Guardrail Plan
 
 After the request-limit reset check, the live signed-in Copilot canary passed,
