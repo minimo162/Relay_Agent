@@ -58,9 +58,11 @@ public static class RelayAdmissibleActionEnvelopeBuilder
     private static readonly string[] ObservationTools = ["glob", "grep", "read", "workspace_status"];
     private static readonly string[] ExactReadTools = ["read"];
     private static readonly string[] OfficeInspectTools = ["officecli", "read"];
-    private static readonly string[] FileMutationTools = ["read", "glob", "grep", "edit", "write", "patch", "workspace_status", "diff"];
-    private static readonly string[] OfficeMutationTools = ["officecli", "officecli_mutate", "read", "workspace_status", "diff"];
-    private static readonly string[] CodeWorkTools = ["read", "glob", "grep", "edit", "write", "patch", "workspace_status", "diff"];
+    private static readonly string[] FileMutationTools = ["read", "glob", "grep", "edit", "write", "apply_patch"];
+    private static readonly string[] OfficeMutationTools = ["officecli", "officecli_mutate", "read"];
+    private static readonly string[] CodeWorkTools = ["read", "glob", "grep", "edit", "write", "apply_patch"];
+    private static readonly string[] MultiFileCodeMutationTools = ["read", "glob", "grep", "apply_patch"];
+    private static readonly string[] MultiFileReadyToPatchTools = ["apply_patch"];
     private static readonly string[] VerificationTools = ["workspace_status", "diff", "bash", "read", "grep"];
     private static readonly string[] ContinuationTools = ["glob", "grep", "read", "officecli", "workspace_status", "diff"];
 
@@ -130,6 +132,8 @@ public static class RelayAdmissibleActionEnvelopeBuilder
             RelayActionPhase.NeedsUserInput => new[] { "ask_user" },
             RelayActionPhase.NeedsExactRead => ExactReadTools,
             RelayActionPhase.NeedsMutation when state.Intent == RelayLocalIntent.OfficeMutate => OfficeMutationTools,
+            RelayActionPhase.NeedsMutation when state.Intent == RelayLocalIntent.CodeWork && state.HasMultipleOutputFiles && HasCompletedReadForPendingTarget(state) => MultiFileReadyToPatchTools,
+            RelayActionPhase.NeedsMutation when state.Intent == RelayLocalIntent.CodeWork && state.HasMultipleOutputFiles => MultiFileCodeMutationTools,
             RelayActionPhase.NeedsMutation when state.Intent == RelayLocalIntent.CodeWork => CodeWorkTools,
             RelayActionPhase.NeedsMutation => FileMutationTools,
             RelayActionPhase.NeedsObservation when state.Intent == RelayLocalIntent.OfficeInspect => OfficeInspectTools,
@@ -145,7 +149,7 @@ public static class RelayAdmissibleActionEnvelopeBuilder
 
         if (state.HasAnyToolResult && phase == RelayActionPhase.CanFinalize)
         {
-            candidates = candidates.Concat(["edit", "write", "patch", "officecli_mutate"]).ToArray();
+            candidates = candidates.Concat(["edit", "write", "apply_patch", "officecli_mutate"]).ToArray();
         }
 
         return candidates
@@ -153,6 +157,41 @@ public static class RelayAdmissibleActionEnvelopeBuilder
             .Distinct(StringComparer.Ordinal)
             .ToArray();
     }
+
+    private static bool HasCompletedReadForPendingTarget(RelayTurnState state)
+    {
+        if (string.IsNullOrWhiteSpace(state.PendingOutputFile))
+        {
+            return false;
+        }
+
+        var target = NormalizePathForMatch(state.PendingOutputFile);
+        foreach (var detail in state.CompletedToolDetails)
+        {
+            if (!detail.StartsWith("read:", StringComparison.Ordinal) ||
+                !detail.EndsWith(":success", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = detail["read:".Length..^":success".Length];
+            var normalized = NormalizePathForMatch(value);
+            if (string.Equals(normalized, target, StringComparison.OrdinalIgnoreCase) ||
+                normalized.EndsWith("/" + target, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizePathForMatch(string path) =>
+        path.Trim()
+            .Trim('"', '\'', '`')
+            .Replace('\\', '/')
+            .TrimStart('/')
+            .TrimEnd('/');
 
     private static RelayForbiddenAction[] DetermineForbiddenActions(RelayTurnState state, RelayActionPhase phase)
     {

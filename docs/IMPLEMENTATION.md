@@ -18839,3 +18839,68 @@ Result:
   generated single-file HTML passed structure plus inline JavaScript syntax
   checks:
   `/root/Relay_Agent/dist/e2e/live-tetris-1778974346427/tetris.html`.
+
+## 2026-05-17: OpenCode-Compatible Harness Alignment
+
+Changes:
+
+- Added `docs/HARNESS_ARCHITECTURE.md` to pin the harness boundary:
+  M365 Copilot remains the reasoning controller, Microsoft Agent Framework owns
+  the run/tool/session surface, AG-UI remains the Workbench protocol, and Relay
+  owns only adapters, local function bodies, policy, diagnostics, and
+  packaging.
+- Updated `docs/OPENCODE_TOOL_CONTRACT.md` with an Agent Framework / AG-UI
+  parity matrix and made `apply_patch` the canonical multi-file mutation tool.
+  The legacy `patch` name remains executor-compatible only and is no longer a
+  model-visible prompt/catalog name.
+- Updated the Copilot projection and sidecar tool catalog so multi-file
+  code/project work prefers `apply_patch` and no longer exposes the legacy
+  `patch` tool name.
+- Added project-root detection and prompt context so short paths such as
+  `src/app.js`, `docs/USAGE.md`, and `package.json` resolve under the
+  requested project root during follow-up project work.
+- Moved turn state correlation to prefer the AG-UI run ID. This prevents
+  stale completed tool state from a prior run in the same thread from
+  satisfying a new run.
+- Tightened mutation-target tracking: successful mutations now satisfy the
+  specific changed artifact paths reported by the tool observation, instead of
+  treating any successful patch as satisfying every pending output.
+- Extended the structured `ToolObservation` data with stable metadata
+  (`schemaVersion`, `status`, `artifactIds`, `warnings`, `retryable`, and
+  `dataHash`) and filtered multiline read content out of artifact IDs.
+- Updated the patch parser to accept OpenCode-style multi-hunk `apply_patch`
+  updates. Multiple `@@` hunks in one file now become independent update
+  operations, which avoids joining non-contiguous context into one failing
+  replacement.
+- Updated `scripts/workbench-live-project-e2e.mjs` to run against a fresh
+  Copilot target for isolation, classify provider quota failures, and preserve
+  AG-UI/raw-event diagnostics under `dist/e2e/live-project`.
+- Added explicit Copilot quota detection in the Edge CDP transport. When
+  Microsoft 365 Copilot reports the hourly request limit, Relay now emits a
+  structured provider error instead of waiting until a generic timeout.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:protocol-state-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:agui-client-tool-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+RELAY_LIVE_PROJECT_COPILOT_REPLY_TIMEOUT_SECONDS=60 \
+  RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/responses \
+  PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-project-e2e
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Protocol-state smoke passed.
+- AG-UI client-tool smoke passed.
+- Full `pnpm check` passed.
+- Live signed-in Copilot project E2E was attempted against the real Edge/CDP
+  Copilot profile but could not complete because Microsoft 365 Copilot returned
+  its hourly request limit. Relay detected this as a structured provider
+  failure:
+  `copilot_quota_limited: Microsoft 365 Copilot reported a request limit`.
+  The failure artifacts were written under `dist/e2e/live-project/`.

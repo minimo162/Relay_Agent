@@ -21,12 +21,14 @@ public sealed class RelayAgentFrameworkRunner
         For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
-        If the user asks to create or update a file, do not finalize until a write/patch/edit/office mutation tool result exists.
+        If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
+        apply_patch uses one envelope only: one leading *** Begin Patch, all file hunks, then one final *** End Patch.
+        Exact marker/token strings explicitly requested by the user are required output content, not optional verification notes.
         Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.
         Treat period, version, region, and department tokens in file names and paths as evidence context when the file content omits them.
         Use ask_user only when a critical requirement is genuinely missing. Do not ask for clarification when the user already gave the objective, target files or scope, and desired output.
         Use bash only for explicit build/test/lint/typecheck/git/rg verification commands; never wrap commands in bash/sh -lc.
-        Prefer write/patch for file creation or edits instead of command-generated file mutations.
+        Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.
         Never claim local execution without tool results. Keep final answers concise in the user's language.
         """;
     private readonly IChatClient _chatClient;
@@ -399,7 +401,7 @@ public sealed class RelayAgentFunctionSet(
     public Task<ToolObservation> ApplyPatchAsync(
         string patch,
         CancellationToken cancellationToken = default) =>
-        PatchAsync(patch, cancellationToken);
+        InvokeAsync("apply_patch", Args(("patch", patch)), cancellationToken);
 
     public Task<ToolObservation> WorkspaceStatusAsync(int? limit = null, CancellationToken cancellationToken = default) =>
         InvokeAsync("workspace_status", Args(("limit", limit)), cancellationToken);
@@ -616,10 +618,10 @@ public static class RelayAgentToolCatalog
             "required",
             "write_summary"),
         Tool(
-            nameof(RelayAgentFunctionSet.PatchAsync),
-            "patch",
-            "Apply a structured multi-file patch. Requires user approval.",
-            "patch",
+            nameof(RelayAgentFunctionSet.ApplyPatchAsync),
+            "apply_patch",
+            "Apply a structured multi-file patch in one Begin/End envelope. Requires user approval.",
+            "apply_patch",
             RelayAgentToolSafety.Mutating,
             "workspace.mutate",
             "file_mutation",
@@ -1163,13 +1165,10 @@ public sealed class RelayToolExecutor
 
         var pattern = NormalizeGlobPattern(GetString(call.Args, "pattern") ?? "**/*");
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 50, 1, 200);
-        var args = new List<string> { "--files" };
-        AddGlob(args, pattern);
-        AddRipgrepFilters(args, call.Args);
         var workingDirectory = ResolveSearchDirectory(workspace, call.Args);
         var result = await RunLineProcessAsync(
             rg.ExecutablePath,
-            args,
+            BuildGlobArgs(pattern, call.Args),
             workingDirectory,
             cancellationToken,
             maxLines: limit,
@@ -1178,9 +1177,36 @@ public sealed class RelayToolExecutor
             timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
         if (!result.Success) return ToolObservation.Fail(call.Id, call.Tool, result.Output);
 
+        string? expandedDirectoryPattern = null;
+        if (result.Lines.Count == 0 && TryBuildDirectoryDescendantGlob(pattern, out var descendantPattern))
+        {
+            var descendantResult = await RunLineProcessAsync(
+                rg.ExecutablePath,
+                BuildGlobArgs(descendantPattern, call.Args),
+                workingDirectory,
+                cancellationToken,
+                maxLines: limit,
+                includeLine: null,
+                allowExitOne: true,
+                timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
+            if (!descendantResult.Success)
+            {
+                return ToolObservation.Fail(call.Id, call.Tool, descendantResult.Output);
+            }
+            if (descendantResult.Lines.Count > 0)
+            {
+                result = descendantResult;
+                expandedDirectoryPattern = descendantPattern;
+            }
+        }
+
         var summary = result.Truncated
             ? $"{result.Lines.Count} file candidates (truncated at limit)"
             : $"{result.Lines.Count} file candidates";
+        if (expandedDirectoryPattern is not null)
+        {
+            summary += $" (matched descendants via {expandedDirectoryPattern})";
+        }
         return ToolObservation.Ok(call.Id, call.Tool, summary, result.Lines);
     }
 
@@ -2441,6 +2467,14 @@ public sealed class RelayToolExecutor
         }
     }
 
+    private static List<string> BuildGlobArgs(string pattern, JsonObject callArgs)
+    {
+        var args = new List<string> { "--files" };
+        AddGlob(args, pattern);
+        AddRipgrepFilters(args, callArgs);
+        return args;
+    }
+
     private static string NormalizeGlobPattern(string pattern)
     {
         var trimmed = pattern.Trim();
@@ -2462,6 +2496,29 @@ public sealed class RelayToolExecutor
         }
 
         return pattern;
+    }
+
+    private static bool TryBuildDirectoryDescendantGlob(string pattern, out string descendantPattern)
+    {
+        descendantPattern = "";
+        var normalized = pattern.Trim().Replace('\\', '/').TrimEnd('/');
+        if (normalized.Length == 0 ||
+            normalized.EndsWith("/**", StringComparison.Ordinal) ||
+            normalized.EndsWith("/**/*", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var leaf = Path.GetFileName(normalized);
+        if (string.IsNullOrWhiteSpace(leaf) ||
+            leaf is "*" or "**" ||
+            leaf.Contains('.', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        descendantPattern = $"{normalized}/**/*";
+        return true;
     }
 
     private static bool ContainsGlobWildcard(string text) =>
@@ -2632,7 +2689,7 @@ public static class RelayPatch
     {
         operations = [];
         error = null;
-        var normalized = patch.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
+        var normalized = NormalizePatchEnvelope(patch.Replace("\r\n", "\n").Replace('\r', '\n')).TrimEnd('\n');
         var lines = normalized.Split('\n');
         if (lines.Length < 2 || lines[0] != "*** Begin Patch" || lines[^1] != "*** End Patch")
         {
@@ -2684,14 +2741,34 @@ public static class RelayPatch
                     return false;
                 }
 
+                var operationCountBeforeUpdate = result.Count;
                 var oldText = new StringBuilder();
                 var newText = new StringBuilder();
                 var sawChange = false;
+                void FlushUpdateHunk()
+                {
+                    if (!sawChange)
+                    {
+                        oldText.Clear();
+                        newText.Clear();
+                        return;
+                    }
+                    result.Add(new RelayPatchOperation(
+                        RelayPatchOperationKind.Update,
+                        path,
+                        TrimFinalNewline(oldText.ToString()),
+                        TrimFinalNewline(newText.ToString())));
+                    oldText.Clear();
+                    newText.Clear();
+                    sawChange = false;
+                }
+
                 while (index < lines.Length - 1 && !lines[index].StartsWith("*** ", StringComparison.Ordinal))
                 {
                     var current = lines[index];
                     if (current.StartsWith("@@", StringComparison.Ordinal))
                     {
+                        FlushUpdateHunk();
                         index++;
                         continue;
                     }
@@ -2721,16 +2798,12 @@ public static class RelayPatch
                     }
                     index++;
                 }
-                if (!sawChange)
+                FlushUpdateHunk();
+                if (result.Count == operationCountBeforeUpdate)
                 {
                     error = $"Update file has no changed lines: {path}";
                     return false;
                 }
-                result.Add(new RelayPatchOperation(
-                    RelayPatchOperationKind.Update,
-                    path,
-                    TrimFinalNewline(oldText.ToString()),
-                    TrimFinalNewline(newText.ToString())));
                 continue;
             }
 
@@ -2740,6 +2813,51 @@ public static class RelayPatch
 
         operations = result;
         return true;
+    }
+
+    private static string NormalizePatchEnvelope(string patch)
+    {
+        var lines = patch.Trim().Split('\n');
+        var beginCount = lines.Count(line => line == "*** Begin Patch");
+        var endCount = lines.Count(line => line == "*** End Patch");
+        if (beginCount <= 1 && endCount <= 1)
+        {
+            return string.Join('\n', lines);
+        }
+
+        var outside = false;
+        var body = new List<string>();
+        var inside = false;
+        foreach (var line in lines)
+        {
+            if (line == "*** Begin Patch")
+            {
+                inside = true;
+                continue;
+            }
+
+            if (line == "*** End Patch")
+            {
+                inside = false;
+                continue;
+            }
+
+            if (inside)
+            {
+                body.Add(line);
+            }
+            else if (!string.IsNullOrWhiteSpace(line))
+            {
+                outside = true;
+            }
+        }
+
+        if (outside || body.Count == 0)
+        {
+            return string.Join('\n', lines);
+        }
+
+        return "*** Begin Patch\n" + string.Join('\n', body) + "\n*** End Patch";
     }
 
     private static bool IsSafePatchPath(string path, out string? error)
@@ -2773,8 +2891,96 @@ public sealed record RelayToolProvider(
 
 public sealed record ToolObservation(string ToolCallId, string Tool, bool Success, string Summary, object? Data)
 {
+    public string SchemaVersion => "RelayToolObservation.v1";
+    public string Status => Success ? "success" : "failed";
+    public IReadOnlyList<string> ArtifactIds => ToolObservationArtifacts.Extract(Data);
+    public IReadOnlyList<string> Warnings => [];
+    public bool Retryable => !Success;
+    public string? DataHash => Data is null
+        ? null
+        : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(Data, JsonOptions.Compact))))[..12].ToLowerInvariant();
+
     public static ToolObservation Ok(string id, string tool, string summary, object? data) => new(id, tool, true, summary, data);
     public static ToolObservation Fail(string id, string tool, string summary) => new(id, tool, false, summary, null);
+}
+
+public static class ToolObservationArtifacts
+{
+    public static IReadOnlyList<string> Extract(object? data)
+    {
+        var artifacts = new SortedSet<string>(StringComparer.Ordinal);
+        ExtractValue(data, artifacts);
+        return artifacts.ToArray();
+    }
+
+    private static void ExtractValue(object? value, ISet<string> artifacts)
+    {
+        switch (value)
+        {
+            case null:
+                return;
+            case string text:
+                AddIfPathLike(text, artifacts);
+                return;
+            case JsonElement element:
+                ExtractJsonElement(element, artifacts);
+                return;
+            case JsonObject obj:
+                foreach (var (_, child) in obj) ExtractValue(child, artifacts);
+                return;
+            case JsonArray array:
+                foreach (var child in array) ExtractValue(child, artifacts);
+                return;
+        }
+
+        var type = value.GetType();
+        if (type.IsPrimitive || value is decimal or DateTime or DateTimeOffset)
+        {
+            return;
+        }
+
+        if (value is System.Collections.IEnumerable enumerable && value is not string)
+        {
+            foreach (var item in enumerable) ExtractValue(item, artifacts);
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(value, JsonOptions.Compact));
+            ExtractJsonElement(document.RootElement, artifacts);
+        }
+        catch
+        {
+            // Artifact extraction is best-effort and must not change tool results.
+        }
+    }
+
+    private static void ExtractJsonElement(JsonElement element, ISet<string> artifacts)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                AddIfPathLike(element.GetString(), artifacts);
+                break;
+            case JsonValueKind.Array:
+                foreach (var child in element.EnumerateArray()) ExtractJsonElement(child, artifacts);
+                break;
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject()) ExtractJsonElement(property.Value, artifacts);
+                break;
+        }
+    }
+
+    private static void AddIfPathLike(string? text, ISet<string> artifacts)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 600 || text.Contains('\n') || text.Contains('\r')) return;
+        var normalized = text.Replace('\\', '/');
+        if (normalized.Contains('/') || Regex.IsMatch(normalized, @"^[A-Za-z]:/"))
+        {
+            artifacts.Add(normalized);
+        }
+    }
 }
 
 public sealed record ToolValidation(bool Ok, string? Error)

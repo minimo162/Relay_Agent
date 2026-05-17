@@ -119,6 +119,14 @@ remote-debugging session available:
 pnpm workbench:live-copilot-e2e
 ```
 
+For a fuller live local-work regression that creates a nested project, approves
+local mutations, improves existing files after `read`, and renders the generated
+HTML in Edge:
+
+```bash
+pnpm workbench:live-project-e2e
+```
+
 Start the local sidecar:
 
 ```bash

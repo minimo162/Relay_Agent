@@ -23,6 +23,7 @@
     "sidecar:security-smoke": "node scripts/sidecar-security-smoke.mjs",
     "workbench:ux-e2e": "pnpm build && pnpm sidecar:build && node scripts/workbench-ux-e2e.mjs",
     "workbench:live-copilot-e2e": "pnpm build && pnpm sidecar:build && node scripts/workbench-live-copilot-e2e.mjs",
+    "workbench:live-project-e2e": "pnpm build && pnpm sidecar:build && node scripts/workbench-live-project-e2e.mjs",
     "tools:fetch:linux": "node scripts/release/fetch-relay-tools.mjs --rid linux-x64",
     "tools:fetch:windows": "node scripts/release/fetch-relay-tools.mjs --rid win-x64",
     "sidecar:publish:linux": "pnpm build && pnpm tools:fetch:linux && node scripts/release/package-sidecar.mjs --rid linux-x64",

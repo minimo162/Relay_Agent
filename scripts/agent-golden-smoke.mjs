@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +20,8 @@ const workspace = mkdtempSync(join(tmpdir(), "relay-agent-golden-workspace-"));
 const responses = [
   `${JSON.stringify({ action: "tool", tool: "glob", args: { pattern: "**/*seed*", limit: 5 } })}\n\nSure.`,
   `${JSON.stringify({ action: "final", answer: "検索は glob を使いました。" })}\n\nDone.`,
+  JSON.stringify({ action: "tool", tool: "glob", args: { pattern: "**/nested-project*", limit: 10 } }),
+  JSON.stringify({ action: "final", answer: "ディレクトリ配下を glob で確認しました。" }),
   JSON.stringify({ action: "tool", tool: "write", args: { file_path: "approval.txt", content: "approved write" } }),
   JSON.stringify({ action: "final", answer: "承認済みの書き込みを実行しました。" }),
   JSON.stringify({ action: "tool", tool: "workspace_status", args: { limit: 100 } }),
@@ -29,6 +31,8 @@ const responses = [
 ];
 
 await writeFile(join(workspace, "seed.txt"), "部品売上 seed");
+await mkdir(join(workspace, "nested-project", "src"), { recursive: true });
+await writeFile(join(workspace, "nested-project", "src", "app.js"), "console.log('nested project');\n");
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
   cwd: process.cwd(),
@@ -78,6 +82,25 @@ try {
   if (!hasRunFinished(search.events)) throw new Error(`search run did not finish: ${JSON.stringify(search.events)}`);
   if (assistantText(search.events) !== "検索は glob を使いました。") {
     throw new Error(`search run final answer mismatch: ${assistantText(search.events)}`);
+  }
+
+  const directorySearch = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "golden-directory-search",
+    instruction: "nested-project のファイルを探して",
+  });
+  const directoryGlob = collectToolCall(directorySearch.events, "glob");
+  const directoryGlobOutput = directoryGlob.results.join("\n");
+  if (!directoryGlobOutput.includes("nested-project/src/app.js")) {
+    throw new Error(`directory-like glob did not return descendants: ${directoryGlobOutput}`);
+  }
+  if (!hasRunFinished(directorySearch.events)) {
+    throw new Error(`directory search run did not finish: ${JSON.stringify(directorySearch.events)}`);
+  }
+  if (assistantText(directorySearch.events) !== "ディレクトリ配下を glob で確認しました。") {
+    throw new Error(`directory search final answer mismatch: ${assistantText(directorySearch.events)}`);
   }
 
   const writePrompt = "approval.txt を作って";

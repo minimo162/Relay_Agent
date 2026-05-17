@@ -29,12 +29,25 @@ public static class RelayPromptBuilder
             lines.Add(state.OriginalUserRequest);
         }
 
-        if (!string.IsNullOrWhiteSpace(state.PendingOutputFile) && !state.HasMutationToolCall)
+        if (!string.IsNullOrWhiteSpace(state.PendingOutputFile))
         {
             lines.Add("");
             lines.Add("RELAY_PENDING_MUTATION");
             lines.Add($"Target output file: {state.PendingOutputFile}");
-            lines.Add("No write/patch/edit/office mutation has succeeded yet.");
+            lines.Add("This required output target still lacks a successful write/apply_patch/edit/office mutation.");
+            if (state.HasMultipleOutputFiles)
+            {
+                lines.Add("The user named multiple output files; use apply_patch as one coherent project change set when it is visible.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.ProjectRoot))
+        {
+            lines.Add("");
+            lines.Add("RELAY_PROJECT_CONTEXT");
+            lines.Add($"Project root: {state.ProjectRoot}");
+            lines.Add($"Resolve short project-relative paths such as src/app.js, docs/USAGE.md, package.json, and README.md under {state.ProjectRoot}/ unless the user gives a different explicit root or an absolute path.");
+            lines.Add("Do not read or patch the bare project root as a file; inspect concrete files under the project root.");
         }
 
         if (state.CompletedTools.Length > 0)
@@ -52,7 +65,9 @@ public static class RelayPromptBuilder
                 lines.Add("- " + detail);
             }
             lines.Add("Do not repeat successful read/glob/grep calls unless the same target must be rechecked after a mutation.");
-            lines.Add("If the user-named source files have already been read and the phase still needs a mutation, choose write/edit/patch next instead of read/diff.");
+            lines.Add("Do not repeat successful write/edit/apply_patch/officecli_mutate calls to the same target unless a later tool result shows a concrete problem.");
+            lines.Add("When the user-required output files already have successful mutation results and no verification is explicitly requested, prefer final instead of rewriting them.");
+            lines.Add("If the user-named source files have already been read and the phase still needs a mutation, choose write/edit/apply_patch next instead of read/diff.");
         }
 
         return string.Join("\n", lines);

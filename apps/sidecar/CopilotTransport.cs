@@ -1775,6 +1775,11 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             }
 
             var rawText = snapshot.ConversationText;
+            if (LooksLikeCopilotQuotaLimit(rawText))
+            {
+                throw new InvalidOperationException("copilot_quota_limited: Microsoft 365 Copilot reported a request limit. Wait until the quota window resets and retry.");
+            }
+
             var text = NormalizeVisibleText(rawText);
             var delta = ExtractDelta(normalizedBaseline, text);
             var promptReply = ExtractAssistantAnswerAfterPrompt(rawText, prompt);
@@ -1851,6 +1856,19 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         var fallback = NormalizeAssistantCandidate(best.Length > 0 ? best : networkCapture.LatestCandidate());
         if (fallback.Length > 0 && !LooksIncompleteAssistantResponse(fallback) && (!expectToolJson || ContainsCompleteJsonObject(fallback))) return fallback;
         throw new TimeoutException("Timed out waiting for Copilot response.");
+    }
+
+    private static bool LooksLikeCopilotQuotaLimit(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        return text.Contains("reached the limit on the number of requests", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("number of requests per hour", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("try again in a little while", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("request limit", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("上限", StringComparison.OrdinalIgnoreCase)
+                && (text.Contains("リクエスト", StringComparison.OrdinalIgnoreCase)
+                    || text.Contains("要求", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ContainsCompleteJsonObject(string text)

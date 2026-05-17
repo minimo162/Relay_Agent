@@ -71,6 +71,216 @@ Plan-coherence rule for older sections in this file:
   `rg_files` maps to the Agent Framework `glob` function tool, and
   `rg_search` maps to the Agent Framework `grep` function tool. New plan tasks
   must use the canonical names `glob` and `grep`.
+- Any older text that treats `patch` as the canonical mutation tool name is
+  superseded. The OpenCode-compatible canonical name is `apply_patch`; `patch`
+  is only a compatibility alias.
+
+## Active Harness Architecture Plan
+
+This section is the active harness design plan. It exists because recent live
+Copilot E2E work showed that aligning only tool names is not enough: the
+remaining failures are harness failures around session continuity, approval
+resume, tool-result memory, premature final answers, and custom Relay recovery
+logic. The fix is not another Relay planner. The fix is to adopt mature harness
+semantics from OpenCode and host them through Microsoft Agent Framework.
+
+Reference sources checked for this plan:
+
+- `https://opencode.ai/docs/tools/`
+- `https://opencode.ai/docs/agents/`
+- `https://learn.microsoft.com/en-us/agent-framework/overview/`
+- `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/middleware/`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`
+- `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop`
+- `https://docs.ag-ui.com/introduction`
+- `https://docs.ag-ui.com/concepts/events`
+
+### Harness Principle
+
+Relay should not own an independent agent harness. Relay should own adapters.
+
+The target harness is:
+
+1. **M365 Copilot provider adapter**: Edge CDP transport, Copilot readiness,
+   prompt insertion/submission, response extraction, JSON normalization, and
+   diagnostics. It must not own task planning, tool state, approval state, or
+   final eligibility.
+2. **Microsoft Agent Framework runtime**: the canonical agent run loop,
+   `AgentSession`, function/MCP tools, middleware chain, human approval
+   handling, and tool-result feedback loop.
+3. **OpenCode-compatible local tool contract**: the model-visible local
+   workspace tools and permission semantics should match OpenCode as closely as
+   possible. Relay may implement tool bodies, but the contract should not be a
+   Relay invention.
+4. **AG-UI projection**: the only Workbench-facing run/event/state/approval
+   protocol. Relay UI should render Agent Framework state through AG-UI events
+   rather than a custom run stream.
+
+### OpenCode Semantics to Adopt
+
+OpenCode is the model-facing behavior reference for local workspace work:
+
+- Canonical local tools: `read`, `glob`, `grep`, `edit`, `write`,
+  `apply_patch`, bounded `bash`, and extension tools such as `officecli`.
+- `glob` discovers files by path/name; `grep` searches plaintext/code content;
+  exact `read` inspects files and returns bounded content; Office/PDF content
+  inspection remains exact `read` after discovery.
+- File mutations are under the edit permission class: `edit`, `write`, and
+  `apply_patch` are treated as write actions. Prefer `apply_patch` for
+  multi-file project creation and coherent edits because it preserves one
+  approval surface and one tool observation for a change set.
+- `bash` is an execution tool, not a generic fallback for search/read/write.
+  Use it for bounded verification, build/test commands, git inspection, and
+  explicit shell tasks.
+- `question`/ask-user behavior is a permissioned tool, not free text. It should
+  be visible only when the harness has decided that the task is blocked by a
+  user decision.
+- Permissions are policy, not prompt folklore: `allow`, `ask`, and `deny`
+  should be applied by middleware before tool execution and should work for
+  built-in, extension, and MCP tools.
+- A tool call must always produce a structured tool observation or a structured
+  refusal/error. Copilot must never be left to infer whether a local operation
+  happened.
+
+Relay will use the OpenCode names and semantics. It will not copy OpenCode
+internals unless a later policy decision explicitly allows bundling OpenCode as
+a runtime dependency.
+
+### Microsoft Agent Framework Mapping
+
+Agent Framework is the harness implementation surface:
+
+- Register every model-visible local capability as an Agent Framework function
+  tool or imported local MCP tool. The tool registry is the source of truth for
+  both Copilot prompt projection and executor dispatch.
+- Use `AgentSession` as the canonical continuity boundary. Approval responses,
+  follow-up user messages, and tool observations must resume the same session.
+  `runId` is only a UI/diagnostic identifier.
+- Use agent-run middleware for admission control, session initialization,
+  terminal eligibility, compaction boundaries, and AG-UI event projection.
+- Use function-calling middleware for permission checks, approval conversion,
+  path policy, workspace boundary checks, tool-result normalization, and audit
+  logging.
+- Use `IChatClient` middleware around the Copilot CDP adapter for provider
+  readiness, prompt/response validation, retries that preserve session state,
+  and provider diagnostics.
+- Use Agent Framework approval primitives for side-effect tools. For .NET this
+  means wrapping approval-required functions and resuming the same session with
+  the approval response. The AG-UI HITL bridge should translate approval
+  requests/responses; Relay should not invent a second approval protocol.
+- Use workflows only for genuinely fixed business processes. The generic
+  Workbench remains an agent, because local coding/search/Office tasks are
+  open-ended and tool-choice driven.
+
+### Harness State Machine
+
+The harness must have a deterministic state machine outside Copilot prose:
+
+1. `idle`: no active session work.
+2. `admitting`: workspace, policy, provider readiness, and tool registry are
+   checked before the model sees the task.
+3. `running`: Agent Framework sends messages plus the current tool registry to
+   Copilot through the CDP-backed `IChatClient`.
+4. `tool_requested`: model output contains one or more tool calls accepted by
+   Agent Framework.
+5. `approval_required`: a side-effect tool is paused and surfaced through
+   Agent Framework approval content and AG-UI HITL events.
+6. `tool_executing`: Relay executes the approved function tool or MCP tool.
+7. `observing`: structured tool results are appended to the same
+   `AgentSession`; large outputs are summarized with stable artifact IDs and
+   hashes.
+8. `continuing`: the same session returns to the model with tool observations.
+9. `final_candidate`: a final answer is present, but terminal middleware must
+   check pending tools, approvals, required artifacts, and failure state.
+10. `finished`: final answer is emitted only after terminal eligibility passes.
+11. `blocked`: provider/tool/policy failure that requires a developer or user
+    action. Do not silently fallback to a different harness path.
+
+### Terminal Eligibility Rules
+
+Premature final answers, unnecessary `ask_user`, and "local tools unavailable"
+messages must be prevented structurally:
+
+- Before each model call, the tool registry projection must be non-empty for
+  tasks that require local action. If local tools are unavailable, stop in
+  `blocked` before sending to Copilot.
+- If the current task has required artifacts, pending approvals, pending tool
+  observations, or failed verifications, middleware must reject a plain final
+  answer and continue with the appropriate tool surface.
+- `question`/ask-user is unavailable unless middleware marks the run as
+  genuinely blocked by missing user intent, missing path, missing credentials,
+  or an approval decision.
+- A final answer may summarize only tool-observed facts. It may propose next
+  steps only after the requested local operation either completed or failed
+  with a structured error.
+
+### Transcript and Compaction
+
+OpenCode/OpenWork session behavior is the reference for transcript quality:
+
+- Store each turn as user message, assistant tool call, approval request,
+  approval response, tool observation, assistant continuation, and final answer.
+- Keep stable artifact IDs for created/edited files, command outputs, diffs,
+  Office backups, and search result sets.
+- Compact only through a deterministic summarizer that preserves objective,
+  workspace, completed tool calls, created artifacts, current failures,
+  pending approvals, and next required action.
+- Never replace the tool transcript with a natural-language summary before the
+  agent has finished the task.
+
+### AG-UI Projection
+
+AG-UI is the only UI protocol:
+
+- Agent run lifecycle maps to AG-UI run events.
+- Tool calls map to AG-UI tool-call start/args/end/result events.
+- Session state maps to AG-UI state snapshots and deltas.
+- Approval pauses map to AG-UI human-in-the-loop events.
+- Relay-specific diagnostics are support details, not the primary protocol.
+
+### Diagnostics and Evaluation
+
+Every harness defect must be diagnosable from artifacts:
+
+- prompt projection dump generated from the live Agent Framework tool registry;
+- provider readiness trace for Edge/Copilot CDP;
+- AgentSession transcript export;
+- tool registry snapshot;
+- permission/approval audit log;
+- AG-UI event replay fixture;
+- live Copilot E2E canaries for:
+  - multi-file project creation;
+  - project improvement after creation;
+  - local file discovery with `glob`/`grep`/exact `read`;
+  - Office file inspect/mutate/verify through `officecli`;
+  - approval resume across at least one side-effect tool.
+
+### Non-Goals
+
+- Do not adopt Codex app-server, OpenCode runtime binaries, or OpenAI API
+  dependencies in this milestone.
+- Do not reintroduce Relay-owned runtime crates, custom run streams, or custom
+  tool taxonomies.
+- Do not solve Copilot mistakes by adding broad prompt-only recovery rules.
+- Do not add fallback paths that hide harness defects. If provider readiness,
+  tool registry projection, approval resume, or tool execution is broken, fail
+  loudly with a diagnostic artifact.
+
+### Acceptance Gates
+
+The harness redesign is not complete until:
+
+- live Copilot E2E can create a multi-file project and then improve it in the
+  same session without duplicate first-step loops;
+- side-effect tools pause through Agent Framework approval and resume the same
+  `AgentSession`;
+- local-action tasks never reach Copilot with an empty/invalid tool registry;
+- `ask_user` appears only when terminal middleware marks a true user-blocked
+  state;
+- `final` is emitted only after terminal eligibility passes;
+- AG-UI event replay reconstructs the visible run state; and
+- `docs/IMPLEMENTATION.md` records verification commands and results.
 
 ## OpenCode-Compatible Tool Contract Migration Plan
 
@@ -85,7 +295,7 @@ AG-UI UX, approvals, packaging, and diagnostics.
 Reference systems checked for this direction:
 
 - OpenCode built-in tools: `read`, `grep`, `glob`, `bash`, `edit`, `write`,
-  `patch`, and MCP extension. This is the closest fit to Relay's required
+  `apply_patch`, and MCP extension. This is the closest fit to Relay's required
   local workspace work.
 - Codex app-server: useful reference for threads, approvals, sandboxing,
   streaming diffs, MCP integration, and long-lived runtime state. It is a
@@ -97,7 +307,7 @@ Reference systems checked for this direction:
 
 Reference URLs:
 
-- `https://open-code.ai/en/docs/tools`
+- `https://opencode.ai/docs/tools/`
 - `https://opencode.ai/docs/mcp-servers/`
 - `https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md`
 - `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`
@@ -107,10 +317,10 @@ Reference URLs:
 Design decisions:
 
 - **Adopt OpenCode-compatible local tools as the model-facing contract.**
-  Canonical names are `read`, `glob`, `grep`, `edit`, `write`, `patch`, and
-  bounded `bash`. `apply_patch` may remain as a temporary compatibility alias,
-  but new model-facing prompts, docs, tests, and UX should use `patch` unless a
-  framework API forces the old name.
+  Canonical names are `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`,
+  and bounded `bash`. `patch` may remain as a temporary compatibility alias
+  only where an older Relay path still emits it, but new model-facing prompts,
+  docs, tests, and UX should use OpenCode's `apply_patch` name.
 - **Do not build a Relay tool taxonomy.** Relay-specific helpers may exist
   behind the contract, but Copilot should not see Relay-only tool families for
   ordinary file/code work.
@@ -152,7 +362,7 @@ Migration strategy:
 3. Rename or alias existing tools to the contract:
    - `rg_files` -> internal alias of `glob`;
    - `rg_search` -> internal alias of `grep`;
-   - `apply_patch` -> temporary alias of `patch`;
+   - `patch` -> temporary alias of `apply_patch`;
    - existing exact text replace remains `edit`;
    - file create/replace remains `write`;
    - shell verification remains bounded `bash`.
@@ -169,9 +379,9 @@ Acceptance criteria for this plan:
 - A model-visible tool inventory dump contains only OpenCode-compatible local
   tools plus documented extension tools such as OfficeCLI.
 - Normal code/file E2E completes through `read`/`glob`/`grep`/`edit`/`write`/
-  `patch`/`bash` semantics without adding new Relay-only action names.
-- `apply_patch` remains accepted only as a compatibility alias and is absent
-  from new prompts where `patch` is available.
+  `apply_patch`/`bash` semantics without adding new Relay-only action names.
+- `patch` remains accepted only as a compatibility alias and is absent from
+  new prompts where OpenCode-compatible `apply_patch` is available.
 - Complex project creation and improvement live E2E either succeeds through the
   standard contract or fails with a clear contract/tool-result error; it must
   not trigger new ad hoc Relay planner features.

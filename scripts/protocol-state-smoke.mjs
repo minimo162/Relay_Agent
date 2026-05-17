@@ -145,8 +145,8 @@ try {
   }
   const approvalCall = collectToolCall(projectCodeMutation.events, "request_approval");
   const approval = readApprovalRequest(approvalCall).request;
-  if (approval.functionName !== "patch") {
-    throw new Error(`project/code mutation should expose patch, not Office tools: ${JSON.stringify(approval)}`);
+  if (approval.functionName !== "apply_patch") {
+    throw new Error(`project/code mutation should expose apply_patch, not Office tools: ${JSON.stringify(approval)}`);
   }
 
   console.log("[protocol-state-smoke] ok");

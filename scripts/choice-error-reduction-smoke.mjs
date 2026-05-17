@@ -115,7 +115,7 @@ function assertPromptProjection() {
 
   const needsObservation = prompts.find(({ text }) => text.includes('"phase":"NeedsObservation"'));
   if (!needsObservation) throw new Error("expected a NeedsObservation prompt");
-  for (const hidden of ["bash", "write", "patch", "officecli_mutate", "ask_user"]) {
+  for (const hidden of ["bash", "write", "apply_patch", "officecli_mutate", "ask_user"]) {
     if (new RegExp(`^- ${hidden}\\(`, "m").test(needsObservation.text)) {
       throw new Error(`NeedsObservation prompt exposed hidden tool ${hidden}`);
     }

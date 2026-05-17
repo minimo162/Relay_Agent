@@ -19,7 +19,7 @@ tool contract rather than a Relay-specific taxonomy.
 | `read` | Relay file reader | none | Read an exact file. Office/PDF text extraction is handled by the reader when supported. | `ToolObservation` with bounded text or extracted document text. |
 | `edit` | Relay exact replacement | required | Replace exact text in an existing workspace file. | `ToolObservation` with replacement count and backup path. |
 | `write` | Relay file writer | required | Create or overwrite a workspace file with complete content. | `ToolObservation` with written path and optional backup path. |
-| `patch` | Relay structured patch engine | required | Apply a structured multi-file patch when patch context is known. | `ToolObservation` with changed files and backups. |
+| `apply_patch` | Relay structured patch engine | required | Apply a structured multi-file patch when patch context is known. | `ToolObservation` with changed files and backups. |
 | `bash` | bounded process runner | required | Explicit verification/build/test/lint/typecheck/git/rg commands through structured argv. | `ToolObservation` with capped stdout/stderr and exit status summary. |
 
 ### Extension Tools
@@ -36,7 +36,7 @@ tool contract rather than a Relay-specific taxonomy.
 
 | Legacy name | Contract status |
 | --- | --- |
-| `apply_patch` | Accepted only as an internal compatibility alias for `patch`; it must not appear in the model-visible catalog or new prompts. |
+| `patch` | Accepted only as an internal compatibility alias for `apply_patch`; it must not appear in the model-visible catalog or new prompts. |
 | `rg_files` | Historical/publicly removed name. Do not expose it. Existing planning references map conceptually to `glob`. |
 | `rg_search` | Historical/publicly removed name. Do not expose it. Existing planning references map conceptually to `grep`. |
 | `run_command` | Removed public name. Use bounded `bash` only for explicit verification classes. |
@@ -87,7 +87,7 @@ tool contract rather than a Relay-specific taxonomy.
 - For generated markup, Relay normalizes escaped HTML/XML content that Copilot
   may emit to avoid UI rendering damage.
 
-### `patch`
+### `apply_patch`
 
 - Use for structured multi-file changes when context is known.
 - Parameters: `patch` using Relay's `*** Begin Patch` / `*** End Patch`
@@ -122,7 +122,28 @@ fields into argv locally so Office edits stay auditable and policy-controlled.
 - The Agent Framework registry is the source of truth for model-visible tools.
 - Copilot prompts must derive visible tools from the current admissible action
   envelope and registry, not from a separate static Relay prompt catalog.
-- Prompt-visible tools use canonical names. `apply_patch`, `rg_files`, and
+- Prompt-visible tools use canonical names. `patch`, `rg_files`, and
   `rg_search` are not shown in new prompts.
 - Contract violations fail visibly with diagnostics instead of introducing
   fallback planners or new Relay-only tool names.
+
+## Agent Framework / AG-UI Parity Matrix
+
+| Tool | Agent Framework mapping | Permission class | Approval behavior | AG-UI projection | Current Relay body |
+| --- | --- | --- | --- | --- | --- |
+| `glob` | Function tool | `glob: allow` | none | tool call/result events | ripgrep `--files` plus `-g` filters |
+| `grep` | Function tool | `grep: allow` | none | tool call/result events | ripgrep content search with plaintext guard |
+| `read` | Function tool | `read: allow` | none | tool call/result events | file reader plus Office/PDF text extraction |
+| `edit` | Approval-required function tool | `edit: ask` | Agent Framework approval pause/resume | AG-UI human-in-the-loop approval then tool result | exact string replacement with backup |
+| `write` | Approval-required function tool | `edit: ask` | Agent Framework approval pause/resume | AG-UI human-in-the-loop approval then tool result | complete file create/overwrite with backup |
+| `apply_patch` | Approval-required function tool | `edit: ask` | Agent Framework approval pause/resume | AG-UI human-in-the-loop approval then tool result | structured patch parser/executor with backups |
+| `bash` | Approval-required function tool | `bash: ask` | Agent Framework approval pause/resume | AG-UI human-in-the-loop approval then tool result | bounded argv runner for verification classes |
+| `question` / `ask_user` | Client tool through AG-UI | `question: allow only when state-blocked` | user response required | AG-UI client tool | no local execution |
+| `officecli` | Function tool | `read: allow` or Office read policy | none for read-only operations | tool call/result events | semantic OfficeCLI compiler |
+| `officecli_mutate` | Approval-required function tool | `edit: ask` | Agent Framework approval pause/resume | AG-UI human-in-the-loop approval then tool result | semantic OfficeCLI compiler, backup, verify |
+
+`ToolObservation` is the canonical result envelope for Relay local function
+bodies. It includes `schemaVersion`, `toolCallId`, `tool`, `success`, `status`,
+`summary`, `data`, `artifactIds`, `warnings`, `retryable`, and `dataHash`.
+Large output must be capped or summarized, with exact files recoverable through
+artifact IDs and later `read` calls.

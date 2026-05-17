@@ -20,10 +20,12 @@ public sealed record RelayTurnState(
     string RunKey,
     string OriginalUserRequest,
     string? Workspace,
+    string? ProjectRoot,
     RelayLocalIntent Intent,
     bool HasAnyToolResult,
     bool HasMutationToolCall,
     string? PendingOutputFile,
+    int RequestedOutputFileCount,
     string? ExactFilePath,
     string[] CompletedTools,
     string[] CompletedToolDetails,
@@ -33,7 +35,9 @@ public sealed record RelayTurnState(
 
     public bool HasPendingOutputFile => !string.IsNullOrWhiteSpace(PendingOutputFile);
 
-    public bool RequiresMutationBeforeFinal => HasPendingOutputFile && !HasMutationToolCall;
+    public bool HasMultipleOutputFiles => RequestedOutputFileCount > 1;
+
+    public bool RequiresMutationBeforeFinal => HasPendingOutputFile;
 
     public bool RequiresLocalToolBeforeFinal =>
         RequiresLocalWork &&
@@ -55,12 +59,14 @@ public sealed record RelayTurnState(
             ["stateId"] = StateId,
             ["intent"] = Intent.ToString(),
             ["workspace"] = Workspace,
+            ["projectRoot"] = ProjectRoot,
             ["hasKnownObjective"] = HasKnownObjective,
             ["hasAnyToolResult"] = HasAnyToolResult,
             ["hasMutationToolCall"] = HasMutationToolCall,
             ["requiresLocalToolBeforeFinal"] = RequiresLocalToolBeforeFinal,
             ["requiresMutationBeforeFinal"] = RequiresMutationBeforeFinal,
             ["pendingOutputFile"] = PendingOutputFile,
+            ["requestedOutputFileCount"] = RequestedOutputFileCount,
             ["exactFilePath"] = ExactFilePath,
         };
         node["completedTools"] = new JsonArray(CompletedTools.Select(tool => JsonValue.Create(tool)).ToArray());
@@ -72,7 +78,7 @@ public sealed record RelayTurnState(
 public static class RelayTurnStateFactory
 {
     private static readonly Regex FilePathRegex = new(
-        @"(?<file>(?:[A-Za-z]:)?[\p{L}\p{N}._/\-\\()[\]（）【】 ]+?\.(?:md|txt|html|json|csv|ts|tsx|js|jsx|py|rs|cs|css|csproj|sln|xlsx|xlsm|xls|docx|pptx|pdf))",
+        @"(?<file>(?:[A-Za-z]:)?[\p{L}\p{N}._/\-\\()[\]（）【】 ]+?\.(?:csproj|tsx|jsx|css|md|txt|html|json|csv|ts|js|py|rs|cs|sln|xlsx|xlsm|xls|docx|pptx|pdf))",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static RelayTurnState Create(
@@ -82,6 +88,8 @@ public static class RelayTurnStateFactory
         bool hasAnyToolResult,
         bool hasMutationToolCall,
         string? pendingOutputFile,
+        int requestedOutputFileCount,
+        string? projectRoot,
         IEnumerable<string> completedTools,
         IEnumerable<string> completedToolDetails)
     {
@@ -101,10 +109,12 @@ public static class RelayTurnStateFactory
             runKey,
             originalUserRequest,
             workspace ?? "",
+            projectRoot ?? "",
             intent.ToString(),
             hasAnyToolResult.ToString(),
             hasMutationToolCall.ToString(),
             pendingOutputFile ?? "",
+            requestedOutputFileCount.ToString(),
             exactFilePath ?? "",
             string.Join(",", completed),
             string.Join(",", details),
@@ -114,10 +124,12 @@ public static class RelayTurnStateFactory
             runKey,
             originalUserRequest,
             workspace,
+            string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot,
             intent,
             hasAnyToolResult,
             hasMutationToolCall,
             string.IsNullOrWhiteSpace(pendingOutputFile) ? null : pendingOutputFile,
+            requestedOutputFileCount,
             exactFilePath,
             completed,
             details,
@@ -211,5 +223,58 @@ public static class RelayTurnStateFactory
         var matches = FilePathRegex.Matches(request);
         if (matches.Count == 0) return null;
         return matches[^1].Groups["file"].Value.Trim(' ', '。', '、', ',', ';', ':', '"', '\'', '`');
+    }
+
+    public static string? ExtractProjectRoot(string request, IEnumerable<string> requestedFiles, IEnumerable<string> completedToolDetails)
+    {
+        var backtickRoot = Regex.Matches(request ?? "", @"`(?<root>[\p{L}\p{N}._-]+)`", RegexOptions.CultureInvariant)
+            .Select(match => match.Groups["root"].Value.Trim())
+            .FirstOrDefault(IsLikelyProjectRoot);
+        if (!string.IsNullOrWhiteSpace(backtickRoot))
+        {
+            return backtickRoot;
+        }
+
+        var fileRoot = requestedFiles
+            .Select(FirstPathSegment)
+            .FirstOrDefault(IsLikelyProjectRoot);
+        if (!string.IsNullOrWhiteSpace(fileRoot))
+        {
+            return fileRoot;
+        }
+
+        return completedToolDetails
+            .Select(ExtractTargetFromToolDetail)
+            .Where(target => !string.IsNullOrWhiteSpace(target))
+            .Select(FirstPathSegment)
+            .FirstOrDefault(IsLikelyProjectRoot);
+    }
+
+    private static string? ExtractTargetFromToolDetail(string detail)
+    {
+        var first = detail.IndexOf(':');
+        var last = detail.LastIndexOf(':');
+        if (first < 0 || last <= first + 1)
+        {
+            return null;
+        }
+
+        return detail[(first + 1)..last];
+    }
+
+    private static string? FirstPathSegment(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var normalized = path.Trim(' ', '"', '\'', '`').Replace('\\', '/').TrimStart('/');
+        var slash = normalized.IndexOf('/');
+        return slash > 0 ? normalized[..slash] : null;
+    }
+
+    private static bool IsLikelyProjectRoot(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (value.IndexOfAny(['/', '\\', ':']) >= 0) return false;
+        if (value.Contains('.', StringComparison.Ordinal) && Regex.IsMatch(value, @"\.[A-Za-z0-9]{1,8}$")) return false;
+        return Regex.IsMatch(value, @"^[\p{L}\p{N}._-]{2,80}$", RegexOptions.CultureInvariant);
     }
 }

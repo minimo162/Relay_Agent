@@ -12,6 +12,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
     private static readonly ConcurrentDictionary<string, string> PendingOutputFiles = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, string> OriginalUserRequests = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, string> PendingToolCallDetails = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, string> PendingToolCallDetailsByCallId = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, string> CompletedToolResultDetails = new(StringComparer.Ordinal);
 
     private static readonly ChatClientMetadata Metadata = new(
@@ -96,7 +97,6 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         CaptureOriginalUserRequest(messageList, options);
         if (hasTools)
         {
-            CapturePendingOutputFile(messageList, options);
             protocolState = BuildProtocolState(messageList, options);
             envelope = BuildEnvelope(protocolState, options);
             DumpEnvelopeIfRequested(envelope);
@@ -325,11 +325,12 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static string TruncateLargeGeneratedTextForPrompt(string text)
     {
-        const int head = 1800;
-        const int tail = 500;
-        if (text.Length <= head + tail + 200) return text;
+        const int head = 320;
+        const int tail = 120;
+        if (text.Length <= head + tail + 120) return text;
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..12].ToLowerInvariant();
         return text[..head] +
-            $"\n... [Relay truncated {text.Length - head - tail} chars of generated content for prompt continuity] ...\n" +
+            $"\n... [Relay omitted {text.Length - head - tail} chars of generated content; sha256={hash}; read the file if exact content is needed] ...\n" +
             text[^tail..];
     }
 
@@ -346,18 +347,22 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             envelope?.CanFinalize == true
                 ? """For final answer: {"action":"final","answer":"<concise answer>"}"""
                 : "Do not return action=final in this step; final is not in RELAY_ADMISSIBLE_ACTION_ENVELOPE.allowedActions.",
-            "If the user asks to create or overwrite a file, call write with file_path and complete content.",
+            "If the user asks to create or overwrite a single file, call write with file_path and complete content.",
             "Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.",
             "For local document/data review, use glob/read/grep first and reason from those results. Do not use bash for ordinary file reading or light CSV arithmetic.",
             "For code/project edits, read exact target files without offset/limit before mutating unless the user explicitly asks for a partial inspection.",
-            "For code/project edits on small text files, prefer write with the complete replacement for each affected file after reading it. Use edit for one exact replacement. Use patch only when the user explicitly requests a patch or the patch is very small with certain context.",
-            "If patch reports missing context or file-exists errors, recover by reading the current full file and then using write/edit/patch with current content. Do not loop on diff/read after the needed files are already read.",
-            "When RELAY_COMPLETED_TOOL_RESULTS shows the requested files were read successfully and RELAY_TURN_STATE requires mutation, your next action must be write/edit/patch, not read/diff/final.",
+            "For coherent multi-file project creation or edits, prefer apply_patch with one reviewed change set. Use write for one complete file and edit for one exact replacement.",
+            "apply_patch requires one patch envelope only: one leading *** Begin Patch, any number of Add/Update/Delete file hunks, and one final *** End Patch. Never repeat Begin/End blocks inside the same patch string.",
+            "For multi-file apply_patch, put every file hunk inside that single envelope; do not return separate patch documents or markdown fences inside the JSON string.",
+            "If apply_patch reports missing context or file-exists errors, recover by reading the current full file and then using write/edit/apply_patch with current content. Do not loop on diff/read after the needed files are already read.",
+            "When RELAY_COMPLETED_TOOL_RESULTS shows the requested files were read successfully and RELAY_TURN_STATE requires mutation, your next action must be write/edit/apply_patch, not read/diff/final.",
+            "Exact marker/token strings explicitly requested by the user, such as text in backticks after 検証マーカー or marker, are required output content. Include them exactly in the relevant files before final.",
+            "If a grep/read verification for a user-required exact marker returns zero matches after a mutation, do not repeat the same grep or finalize. Use edit/write/apply_patch to insert the missing exact marker into the relevant file.",
             "For comparisons across files, discover and read every required source file before write/final. Use period/version tokens from file paths as evidence context when content lacks those columns.",
             "Use ask_user only when a critical requirement is genuinely missing. If the user specified objective, scope/files, and desired output, continue with tools instead of asking.",
             "Use bash only for explicit verification/build/test/git/rg commands with direct argv. Never call bash/sh/pwsh/cmd as argv[0], never use -lc, heredocs, pipelines, or shell scripts.",
             "Never use bash for cat/ls/find; use read for exact files and glob for file discovery.",
-            "Prefer write/patch for file creation or edits instead of command-generated file mutations.",
+            "Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.",
             "Return exactly one fenced json code block containing one JSON object, with no prose before or after the block.",
             "The fenced block is required because Copilot's normal markdown rendering can remove code characters such as '*' from JSON string content.",
             "If a JSON string contains HTML/XML/code with angle brackets, JSON-escape '<' as \\u003c and '>' as \\u003e so Copilot UI cannot render it.",
@@ -382,30 +387,48 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
     }
 
-    private static void CapturePendingOutputFile(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    private static void CapturePendingOutputFile(
+        string runKey,
+        IReadOnlyList<string> requestedFiles,
+        IReadOnlyCollection<string> completedToolDetails)
     {
-        if (TryFindPendingOutputFile(messages, out var targetFile))
+        if (TryFindPendingOutputFile(requestedFiles, completedToolDetails, out var targetFile))
         {
-            PendingOutputFiles[GetRunKey(options)] = targetFile;
+            PendingOutputFiles[runKey] = targetFile;
+            return;
         }
+
+        PendingOutputFiles.TryRemove(runKey, out _);
     }
 
-    private static bool TryGetPendingOutputFile(IReadOnlyList<ChatMessage> messages, ChatOptions? options, out string targetFile)
+    private static bool TryGetPendingOutputFile(
+        string runKey,
+        IReadOnlyList<string> requestedFiles,
+        IReadOnlyCollection<string> completedToolDetails,
+        out string targetFile)
     {
-        if (TryFindPendingOutputFile(messages, out targetFile))
+        if (TryFindPendingOutputFile(requestedFiles, completedToolDetails, out targetFile))
         {
             return true;
         }
 
-        return PendingOutputFiles.TryGetValue(GetRunKey(options), out targetFile!) &&
-            !string.IsNullOrWhiteSpace(targetFile);
+        if (PendingOutputFiles.TryGetValue(runKey, out targetFile!) &&
+            !string.IsNullOrWhiteSpace(targetFile) &&
+            !HasTerminalMutationOutcomeForTarget(completedToolDetails, targetFile))
+        {
+            return true;
+        }
+
+        PendingOutputFiles.TryRemove(runKey, out _);
+        targetFile = "";
+        return false;
     }
 
     private static RelayTurnState BuildProtocolState(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
     {
         CaptureOriginalUserRequest(messages, options);
-        CapturePendingOutputFile(messages, options);
         var runKey = GetRunKey(options);
+        var completedToolDetails = UpdateCompletedToolResultDetails(runKey, messages);
         var request = ExtractUserRequestBeforeTools(messages);
         if (string.IsNullOrWhiteSpace(request) &&
             OriginalUserRequests.TryGetValue(runKey, out var retainedRequest))
@@ -413,8 +436,11 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             request = retainedRequest;
         }
 
-        TryGetPendingOutputFile(messages, options, out var pendingOutputFile);
-        var completedToolDetails = UpdateCompletedToolResultDetails(runKey, messages);
+        var requestedOutputFiles = GetRequestedOutputFiles(request);
+        var requestedOutputFileCount = requestedOutputFiles.Length;
+        CapturePendingOutputFile(runKey, requestedOutputFiles, completedToolDetails);
+        var projectRoot = RelayTurnStateFactory.ExtractProjectRoot(request, requestedOutputFiles, completedToolDetails);
+        TryGetPendingOutputFile(runKey, requestedOutputFiles, completedToolDetails, out var pendingOutputFile);
         var completedToolNames = GetCompletedToolNames(messages)
             .Concat(completedToolDetails.Select(ExtractToolNameFromDetail))
             .Where(tool => !string.IsNullOrWhiteSpace(tool))
@@ -428,34 +454,194 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             HasAnyToolResult(messages),
             hasMutationToolCall,
             pendingOutputFile,
+            requestedOutputFileCount,
+            projectRoot,
             completedToolNames,
             completedToolDetails);
     }
 
-    private static bool TryFindPendingOutputFile(IReadOnlyList<ChatMessage> messages, out string targetFile)
+    private static bool TryFindPendingOutputFile(
+        IReadOnlyList<string> requestedFiles,
+        IReadOnlyCollection<string> completedToolDetails,
+        out string targetFile)
     {
         targetFile = "";
-        var userText = GetInitialRequestText(messages);
-        if (!Regex.IsMatch(
-                userText,
-                @"作成|作って|書いて|保存|出力|生成|create|write|save|generate",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        if (requestedFiles.Count == 0)
         {
             return false;
+        }
+
+        foreach (var candidate in requestedFiles)
+        {
+            if (!HasTerminalMutationOutcomeForTarget(completedToolDetails, candidate))
+            {
+                targetFile = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string[] GetRequestedOutputFiles(IReadOnlyList<ChatMessage> messages) =>
+        GetRequestedOutputFiles(GetInitialRequestText(messages));
+
+    private static string[] GetRequestedOutputFiles(string userText)
+    {
+        if (!Regex.IsMatch(
+                userText,
+                @"作成|作って|書いて|保存|出力|生成|改善|変更|更新|修正|追加|削除|置換|編集|create|write|save|generate|improve|change|update|modify|fix|add|delete|remove|replace|edit",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return [];
         }
 
         var matches = Regex.Matches(
             userText,
-            @"(?<file>[\p{L}\p{N}._/\-\\()[\]（）【】]+?\.(?:md|txt|html|json|csv|ts|tsx|js|jsx|py|rs|cs|css|xlsx|docx|pptx))",
+            @"(?<file>[\p{L}\p{N}._/\-\\()[\]（）【】]+?\.(?:csproj|tsx|jsx|css|md|txt|html|json|csv|ts|js|py|rs|cs|xlsx|docx|pptx))",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (matches.Count == 0)
+        var candidates = matches
+            .Select(match => new
+            {
+                File = match.Groups["file"].Value.Trim(),
+                Line = GetContainingLine(userText, match.Index),
+            })
+            .Where(item => item.File.Length > 0)
+            .ToArray();
+        var targeted = candidates
+            .Where(item => IsRequestedMutationTargetLine(item.Line, item.File, userText))
+            .Select(item => item.File)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (targeted.Length > 0)
+        {
+            return targeted;
+        }
+
+        return candidates
+            .Select(item => item.File)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string GetContainingLine(string text, int index)
+    {
+        var start = text.LastIndexOf('\n', Math.Max(0, index));
+        var end = text.IndexOf('\n', index);
+        start = start < 0 ? 0 : start + 1;
+        end = end < 0 ? text.Length : end;
+        return text[start..end];
+    }
+
+    private static bool IsRequestedMutationTargetLine(string line, string file, string fullText)
+    {
+        if (Regex.IsMatch(line, @"必要なら|if needed|optional", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             return false;
         }
 
-        targetFile = matches[^1].Groups["file"].Value.Trim();
-        return targetFile.Length > 0;
+        var createContext = Regex.IsMatch(fullText, @"作成|作って|生成|create|generate", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (createContext && Regex.IsMatch(line, @"必須ファイル|required files?|must include", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
+        var fileIndex = line.IndexOf(file, StringComparison.Ordinal);
+        if (fileIndex < 0)
+        {
+            return false;
+        }
+
+        var afterFile = line[(fileIndex + file.Length)..];
+        var targetSyntax = Regex.IsMatch(afterFile, @"^\s*[`'""）\)]*\s*(に|へ|を)", RegexOptions.CultureInvariant);
+        var mutationAfterFile = Regex.IsMatch(
+            afterFile,
+            @"追加|追記|含め|入れ|実装|変更|更新|修正|置換|削除|add|append|include|insert|implement|change|update|modify|fix|replace|delete",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return targetSyntax && mutationAfterFile;
     }
+
+    private static bool HasSuccessfulMutationForTarget(IEnumerable<string> completedToolDetails, string target)
+    {
+        return HasMutationOutcomeForTarget(completedToolDetails, target, detail =>
+            string.Equals(GetDetailStatus(detail), "success", StringComparison.Ordinal));
+    }
+
+    private static bool HasTerminalMutationOutcomeForTarget(IEnumerable<string> completedToolDetails, string target)
+    {
+        return HasMutationOutcomeForTarget(completedToolDetails, target, detail =>
+            GetDetailStatus(detail) is "success" or "rejected");
+    }
+
+    private static bool HasMutationOutcomeForTarget(
+        IEnumerable<string> completedToolDetails,
+        string target,
+        Func<string, bool> statusPredicate)
+    {
+        var normalizedTarget = NormalizeTargetPath(target);
+        foreach (var detail in completedToolDetails)
+        {
+            if (!statusPredicate(detail))
+            {
+                continue;
+            }
+
+            var tool = ExtractToolNameFromDetail(detail);
+            if (!IsMutationTool(tool))
+            {
+                continue;
+            }
+
+            var targetPart = ExtractToolTargetFromDetail(detail);
+            if (string.IsNullOrWhiteSpace(targetPart))
+            {
+                continue;
+            }
+
+            var normalizedDetailTarget = NormalizeTargetPath(targetPart);
+            if (string.Equals(normalizedDetailTarget, normalizedTarget, StringComparison.OrdinalIgnoreCase) ||
+                normalizedDetailTarget.EndsWith("/" + normalizedTarget, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? ExtractToolTargetFromDetail(string detail)
+    {
+        var first = detail.IndexOf(':');
+        var status = GetDetailStatus(detail);
+        if (first < 0 || string.IsNullOrWhiteSpace(status))
+        {
+            return null;
+        }
+
+        var end = detail.Length - status.Length - 1;
+        return end <= first + 1 ? null : detail[(first + 1)..end];
+    }
+
+    private static string? GetDetailStatus(string detail)
+    {
+        var last = detail.LastIndexOf(':');
+        if (last < 0 || last == detail.Length - 1)
+        {
+            return null;
+        }
+
+        var status = detail[(last + 1)..];
+        return status is "success" or "failed" or "approved" or "rejected"
+            ? status
+            : null;
+    }
+
+    private static string NormalizeTargetPath(string target) =>
+        target.Trim()
+            .Trim('"', '\'', '`')
+            .Replace('\\', '/')
+            .TrimStart('/')
+            .TrimEnd('/');
 
     private static bool HasMutationToolCall(IReadOnlyList<ChatMessage> messages)
     {
@@ -502,7 +688,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static void RememberPendingToolCall(ChatOptions? options, string callId, string toolName, IDictionary<string, object?> arguments)
     {
-        PendingToolCallDetails[ToolCallDetailKey(GetRunKey(options), callId)] = FormatToolCallDetail(toolName, arguments);
+        var detail = FormatToolCallDetail(toolName, arguments);
+        PendingToolCallDetails[ToolCallDetailKey(GetRunKey(options), callId)] = detail;
+        PendingToolCallDetailsByCallId[callId] = detail;
     }
 
     private static string[] UpdateCompletedToolResultDetails(string runKey, IReadOnlyList<ChatMessage> messages)
@@ -523,29 +711,73 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static IEnumerable<string> GetCompletedToolResultDetails(string runKey, IReadOnlyList<ChatMessage> messages)
     {
+        var currentToolCallDetails = GetCurrentToolCallDetails(messages);
         foreach (var content in messages.SelectMany(message => message.Contents))
         {
             switch (content)
             {
                 case FunctionResultContent result:
                     var resultInfo = ReadToolResultInfo(result.Result);
-                    PendingToolCallDetails.TryGetValue(ToolCallDetailKey(runKey, result.CallId), out var callDetail);
+                    currentToolCallDetails.TryGetValue(result.CallId, out var callDetail);
+                    callDetail ??= PendingToolCallDetails.TryGetValue(ToolCallDetailKey(runKey, result.CallId), out var storedCallDetail)
+                        ? storedCallDetail
+                        : null;
+                    callDetail ??= PendingToolCallDetailsByCallId.TryGetValue(result.CallId, out var storedCallDetailByCallId)
+                        ? storedCallDetailByCallId
+                        : null;
                     var toolName = resultInfo.Tool ?? ExtractToolNameFromDetail(callDetail);
                     if (string.IsNullOrWhiteSpace(toolName))
                     {
                         continue;
                     }
 
-                    var status = resultInfo.Success == false ? "failed" : "success";
+                    var status = resultInfo.Status ?? (resultInfo.Success == false ? "failed" : "success");
+                    if (IsMutationTool(toolName) && resultInfo.Artifacts.Length > 0)
+                    {
+                        foreach (var artifact in resultInfo.Artifacts)
+                        {
+                            yield return $"{FormatToolCallDetail(toolName, new Dictionary<string, object?>
+                            {
+                                ["path"] = artifact,
+                            })}:{status}";
+                        }
+                        break;
+                    }
+
+                    callDetail ??= string.IsNullOrWhiteSpace(resultInfo.Target)
+                        ? null
+                        : FormatToolCallDetail(toolName, new Dictionary<string, object?>
+                        {
+                            ["path"] = resultInfo.Target,
+                        });
                     yield return string.IsNullOrWhiteSpace(callDetail)
                         ? $"{toolName}:{status}"
                         : $"{callDetail}:{status}";
                     break;
                 case ToolApprovalResponseContent approval when approval.ToolCall is FunctionCallContent approvedCall:
-                    yield return $"{FormatToolCallDetail(approvedCall.Name, approvedCall.Arguments)}:approved";
+                    yield return $"{FormatToolCallDetail(approvedCall.Name, approvedCall.Arguments)}:{(approval.Approved ? "approved" : "rejected")}";
                     break;
             }
         }
+    }
+
+    private static Dictionary<string, string> GetCurrentToolCallDetails(IReadOnlyList<ChatMessage> messages)
+    {
+        var details = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var content in messages.SelectMany(message => message.Contents))
+        {
+            switch (content)
+            {
+                case FunctionCallContent call:
+                    details[call.CallId] = FormatToolCallDetail(call.Name, call.Arguments);
+                    break;
+                case ToolApprovalResponseContent approval when approval.ToolCall is FunctionCallContent approvedCall:
+                    details[approvedCall.CallId] = FormatToolCallDetail(approvedCall.Name, approvedCall.Arguments);
+                    break;
+            }
+        }
+
+        return details;
     }
 
     private static string ToolCallDetailKey(string runKey, string callId) => runKey + "\u001f" + callId;
@@ -587,11 +819,16 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             ? value.ToString()
             : null;
 
-    private sealed record RelayToolResultInfo(string? Tool, bool? Success);
+    private sealed record RelayToolResultInfo(string? Tool, bool? Success, string? Target, string? Status, string[] Artifacts);
 
     private static RelayToolResultInfo ReadToolResultInfo(object? result)
     {
-        if (result is null) return new RelayToolResultInfo(null, null);
+        if (result is null) return new RelayToolResultInfo(null, null, null, null, []);
+        if (result is string text && text.Contains("Tool call invocation rejected", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RelayToolResultInfo(null, false, null, "rejected", []);
+        }
+
         try
         {
             var json = JsonSerializer.Serialize(result, JsonOptions.Default);
@@ -599,7 +836,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                return new RelayToolResultInfo(null, null);
+                return new RelayToolResultInfo(null, null, null, null, []);
             }
 
             var tool = root.TryGetProperty("tool", out var toolProperty) &&
@@ -610,11 +847,27 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                 successProperty.ValueKind is JsonValueKind.True or JsonValueKind.False
                     ? (bool?)successProperty.GetBoolean()
                     : null;
-            return new RelayToolResultInfo(tool, success);
+            var target = root.TryGetProperty("data", out var dataProperty) &&
+                dataProperty.ValueKind == JsonValueKind.String
+                    ? dataProperty.GetString()
+                    : null;
+            var status = root.TryGetProperty("status", out var statusProperty) &&
+                statusProperty.ValueKind == JsonValueKind.String
+                    ? statusProperty.GetString()
+                    : null;
+            var artifacts = root.TryGetProperty("artifactIds", out var artifactsProperty) &&
+                artifactsProperty.ValueKind == JsonValueKind.Array
+                    ? artifactsProperty.EnumerateArray()
+                        .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString() : null)
+                        .Where(item => !string.IsNullOrWhiteSpace(item))
+                        .Cast<string>()
+                        .ToArray()
+                    : [];
+            return new RelayToolResultInfo(tool, success, target, status, artifacts);
         }
         catch
         {
-            return new RelayToolResultInfo(null, null);
+            return new RelayToolResultInfo(null, null, null, null, []);
         }
     }
 
@@ -776,9 +1029,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static string NormalizeRequestedTool(string tool, JsonObject args)
     {
-        if (tool == "apply_patch")
+        if (tool == "patch")
         {
-            return "patch";
+            return "apply_patch";
         }
 
         if (tool == "bash")
