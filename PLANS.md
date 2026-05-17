@@ -246,6 +246,113 @@ fails, the test must classify the failure as provider/adapter-blocked. It must
 not silently pass by falling back to a mock model, a dedicated search engine, or
 a local heuristic answer.
 
+### 2026-05-17 DCI File Search Improvement Plan
+
+This plan applies arXiv:2605.05242 specifically to Relay's file-search behavior.
+The paper argues that agentic search is bottlenecked when corpus access is
+collapsed into one fixed top-k retrieval call. It highlights exact constraints,
+sparse clue conjunctions, local context checks, intermediate entity discovery,
+and plan revision after partial evidence as first-class search operations.
+
+Relay's file search should therefore become a **direct corpus investigation
+recipe over generic tools**, not a hidden search engine:
+
+- no revived `RelayDocumentSearch*`;
+- no SQLite/FTS/vector retriever as the default file-search path;
+- no fixed file taxonomy or fixed business classification;
+- no separate "資料検索 mode" planner;
+- no fallback heuristic answer when Copilot or tools fail;
+- keep M365 Copilot as the reasoner and Relay as the local tool executor.
+
+#### Target Behavior
+
+When a user gives an ambiguous request such as "この前のアフター系の数字の根拠を探して",
+Relay should let Copilot investigate the local corpus through the OpenCode-like
+tools:
+
+1. use `glob` for corpus shape and candidate discovery;
+2. use `grep` with `allTerms`, `anyTerms`, `excludeTerms`, globs, and context
+   lines to combine weak clues;
+3. use `read` to inspect local context, including negation, "not evidence",
+   prior-period warnings, and Office/PDF extracted anchors;
+4. revise search terms from observed content instead of finalizing after the
+   first weak match;
+5. read exact evidence before final;
+6. answer with the evidence path/snippet and why hard negatives were rejected.
+
+#### Search Harness Requirements
+
+1. **Trajectory State, Not Ranked Candidates**
+   - Track the ordered investigation trajectory as a first-class Agent
+     Framework/AG-UI artifact: query terms, tools, matched paths, read targets,
+     evidence snippets, failed terms, and rejected decoys.
+   - Do not promote candidates merely because file names match. Promotion
+     requires local context evidence from `grep` or `read`.
+
+2. **Evidence Ledger**
+   - Maintain a lightweight run-local ledger derived from tool observations:
+     `candidate`, `evidence`, `negative`, `guide/glossary`,
+     `prior-period`, `generic`, and `not-found`.
+   - The ledger is not a second planner and not a retriever. It is an
+     observable summary of raw tool results used to prevent premature final
+     answers and invented reads.
+
+3. **Search Refinement Readiness**
+   - A final answer is not admissible when:
+     - the latest `grep` returned zero matches;
+     - only guide/glossary documents have been read;
+     - the read document explicitly says it is not evidence;
+     - all observed matches are hard negatives;
+     - a failed `read` was the only attempted evidence inspection.
+   - In those states, the next admissible action should be another `grep`,
+     `glob`, or exact `read` of an observed candidate.
+
+4. **Query Expansion Without Fixed Domain Rules**
+   - Do not hard-code business-specific exceptions such as `Mパーツ`.
+   - Use Copilot to infer expansions from the user's wording and observed
+     content.
+   - Relay should provide tool affordances and guardrails:
+     `allTerms`, `anyTerms`, `excludeTerms`, context lines, result caps,
+     exact-display-path reads, and failure feedback.
+
+5. **Local Context And Hard Negative Handling**
+   - `grep` observations should identify when a match appears with negation or
+     exclusion language, for example "not evidence", "reference only",
+     "prior year", "generic memo", or Japanese equivalents.
+   - `read` observations should make anchors and excerpts clear enough that
+     Copilot can reject false positives without needing hidden ranking.
+
+6. **No Invented Reads**
+   - `read` should be restricted to explicit user paths or paths observed in
+     prior `glob`/`grep`/`read` results during the same run, except for
+     exact workspace paths that actually exist.
+   - If Copilot invents a plausible filename, Relay should return a normal
+     tool observation or guard rejection that instructs Copilot to use observed
+     paths, not crash the run.
+
+7. **Metrics-Driven E2E**
+   - Live and deterministic E2E should record DCI trajectory metrics:
+     raw-tool-only path, weak-clue conjunction, query expansion, coverage,
+     evidence localization, hard-negative rejection, failed-tool count,
+     invented-read count, and final evidence citation.
+   - A run that gets the final answer right by chance but misses local context
+     checks should fail the DCI quality gate.
+
+8. **AG-UI Search UX**
+   - The Workbench should show a compact investigation trail, not a ranked
+     search-result page:
+     searches tried, files surfaced, files read, evidence snippets, rejected
+     decoys, and final answer.
+   - Keep diagnostics collapsible. The default UI remains minimal.
+
+#### Milestone Outcome
+
+After this plan, file search should feel less like "find the highest-ranked
+candidate" and more like "Copilot conducts a local investigation with safe,
+auditable tools." The system should be stronger on ambiguous business language,
+sparse clues, misleading company/file names, prior-period copies, and documents
+whose relevance depends on nearby context.
+
 ### 2026-05-17 Reinvention Review
 
 This review re-checks the active direction against the current public

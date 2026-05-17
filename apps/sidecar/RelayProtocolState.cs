@@ -185,6 +185,19 @@ public static class RelayTurnStateFactory
             return RelayLocalIntent.CodeWork;
         }
 
+        var localFileMention = Regex.IsMatch(
+            text,
+            @"ファイル|フォルダ|資料|検索|探し|探して|見つけ|読んで|確認|要約|workspace|file|folder|document|search|find|read|inspect|summarize",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var discoveryMention = Regex.IsMatch(
+            text,
+            @"ファイル|フォルダ|資料|検索|探し|探して|見つけ|根拠|候補|workspace|file|folder|document|search|find",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!mutationMention && discoveryMention && string.IsNullOrWhiteSpace(exactFilePath))
+        {
+            return RelayLocalIntent.FileSearch;
+        }
+
         if (officeMention || hasOfficePath)
         {
             return mutationMention ? RelayLocalIntent.OfficeMutate : RelayLocalIntent.OfficeInspect;
@@ -214,10 +227,6 @@ public static class RelayTurnStateFactory
             return RelayLocalIntent.Verification;
         }
 
-        var localFileMention = Regex.IsMatch(
-            text,
-            @"ファイル|フォルダ|資料|検索|探し|探して|見つけ|読んで|確認|要約|workspace|file|folder|document|search|find|read|inspect|summarize",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (localFileMention)
         {
             return string.IsNullOrWhiteSpace(exactFilePath)

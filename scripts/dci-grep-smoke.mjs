@@ -112,6 +112,9 @@ try {
   if (evidenceMatch.evidenceState !== "conjunctive_content_match") {
     throw new Error(`evidence match was not conjunctive: ${JSON.stringify(evidenceMatch)}`);
   }
+  if (!evidenceMatch.contextLabels?.includes("possible_evidence")) {
+    throw new Error(`evidence match did not include a DCI context label: ${JSON.stringify(evidenceMatch)}`);
+  }
   for (const term of ["部品", "売上"]) {
     if (!evidenceMatch.matchedTerms?.includes(term)) {
       throw new Error(`evidence match did not record term ${term}: ${JSON.stringify(evidenceMatch)}`);

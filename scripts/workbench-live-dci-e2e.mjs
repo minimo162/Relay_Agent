@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assistantText, collectToolCalls, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
 import { ensureCopilotCdp } from "./lib/copilot-cdp.mjs";
+import { computeDciMetrics } from "./lib/dci-metrics.mjs";
 
 const token = "relay-live-dci-token";
 const port = 17904;
@@ -12,8 +13,16 @@ const preferredCopilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?
 const dataDir = mkdtempSync(join(tmpdir(), "relay-live-dci-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-live-dci-workspace-"));
 const artifactDir = join(process.cwd(), "dist", "e2e", "live-dci");
+const goldPath = "finance/q4/source-a.md";
+const hardNegativePaths = [
+  "archive/fy159/aftermarket-reference.md",
+  "companies/Mパーツ.md",
+  "notes/generic-sales.md",
+  "notes/aftermarket-glossary.md",
+];
 
 mkdirSync(artifactDir, { recursive: true });
+mkdirSync(join(workspace, "archive", "fy159"), { recursive: true });
 mkdirSync(join(workspace, "companies"), { recursive: true });
 mkdirSync(join(workspace, "finance", "q4"), { recursive: true });
 mkdirSync(join(workspace, "notes"), { recursive: true });
@@ -22,7 +31,25 @@ writeFileSync(
   join(workspace, "companies", "Mパーツ.md"),
   [
     "# Mパーツ",
-    "Mパーツは会社名です。このファイルは会社プロフィールであり、部品売上の根拠ファイルではありません。",
+    "Mパーツは会社名です。このファイルは会社プロフィールであり、アフター系の売上根拠ファイルではありません。",
+    "会社名にパーツを含むだけなので、数値根拠としては除外します。",
+  ].join("\n"),
+  "utf8",
+);
+writeFileSync(
+  join(workspace, "archive", "fy159", "aftermarket-reference.md"),
+  [
+    "# FY159 reference",
+    "過年度のアフター系メモ。補修部品の売上を説明するが、FY159の参考資料であり今期4Qの根拠ではありません。",
+  ].join("\n"),
+  "utf8",
+);
+writeFileSync(
+  join(workspace, "notes", "aftermarket-glossary.md"),
+  [
+    "# 用語ガイド",
+    "今期4Qのアフター系の根拠を探すときは、サービス部品、補修部品、パーツ事業の実績という言い換えで再検索します。",
+    "このガイド自体は根拠資料ではありません。会社名としてのMパーツと、売上根拠としてのサービス部品実績は区別してください。",
   ].join("\n"),
   "utf8",
 );
@@ -30,8 +57,8 @@ writeFileSync(
   join(workspace, "finance", "q4", "source-a.md"),
   [
     "# FY160 4Q source memo",
-    "国内サービス部品について、部品 売上の確定実績はこのファイルの集計表に基づく。",
-    "補修部品、パーツ売上、parts sales の表現が同じ文脈で出る。",
+    "アフター系の確定根拠: FY160 4Q 国内サービス部品、補修部品、パーツ事業の売上実績はこのファイルの集計表に基づく。",
+    "確定版として、parts sales と service parts revenue の根拠行を保持する。",
   ].join("\n"),
   "utf8",
 );
@@ -70,10 +97,11 @@ try {
   await waitForStatus();
   const instruction = [
     "このローカルワークスペースだけを使ってください。",
-    "部品売上に関する根拠ファイルを探してください。",
-    "ファイル名だけでは判断できないので、必ず grep で内容を検索してください。",
-    "会社名だけが一致する紛らわしい候補は、内容を確認して候補から外してください。",
-    "必ず grep と read でローカル根拠を確認し、最後に根拠ファイルと理由を日本語で短く答えてください。",
+    "この前話していたアフター系の数字の根拠ファイルを探してください。",
+    "何の言い換えか曖昧な場合は、候補文書の中身から用語を拾って再検索してください。",
+    "用語ガイドだけで終わらず、そこに書かれた言い換えで必ず再検索してください。",
+    "会社名だけが一致する候補、古い参考資料、一般的な売上メモは内容を確認して外してください。",
+    "今期4Qの根拠ファイルを、grep と read で確認してから日本語で短く答えてください。",
   ].join("\n");
   const run = await postAgUi({
     port,
@@ -89,33 +117,50 @@ try {
   }
   const calls = [...collectToolCalls(run.events).values()];
   const names = calls.map((call) => call.name);
+  const dciMetrics = computeDciMetrics(calls, assistantText(run.events), {
+    goldPath,
+    hardNegativePaths,
+    evidencePattern: /売上実績|parts sales|service parts revenue/,
+  });
+  writeFileSync(join(artifactDir, "dci-metrics.json"), `${JSON.stringify(dciMetrics, null, 2)}\n`, "utf8");
   if (!names.includes("grep") || !names.includes("read")) {
     throw new Error(`DCI live run did not use both grep and read: ${names.join(", ")}`);
   }
-  const grepEvidencePaths = calls
-    .filter((call) => call.name === "grep")
-    .flatMap((call) => grepMatchPaths(call));
-  if (!grepEvidencePaths.some((path) => path === "finance/q4/source-a.md")) {
-    throw new Error(`DCI live run did not grep the separated-term evidence file: ${JSON.stringify(grepEvidencePaths)}`);
+  if (!dciMetrics.noRetrieverTools) {
+    throw new Error(`DCI live run used tools outside the raw-corpus DCI set: ${names.join(", ")}`);
   }
-  const readTargets = calls
-    .filter((call) => call.name === "read")
-    .map((call) => readTarget(call))
-    .filter(Boolean);
-  if (!readTargets.some((target) => target.endsWith("finance/q4/source-a.md"))) {
-    throw new Error(`DCI live run did not read the content evidence file: ${JSON.stringify(readTargets)}`);
+  if (!dciMetrics.noFailedTools) {
+    throw new Error("DCI live run had failed tool observations.");
+  }
+  if (!dciMetrics.noInventedReadTargets) {
+    throw new Error(`DCI live run attempted an invented read target: ${JSON.stringify(dciMetrics.readTargets)}`);
+  }
+  if (!dciMetrics.weakClueConjunction) {
+    throw new Error(`DCI live run did not combine weak clues in grep args: ${JSON.stringify(dciMetrics.grepArgs)}`);
+  }
+  if (!dciMetrics.queryExpansionFromAmbiguity) {
+    throw new Error(`DCI live run did not expand the ambiguous user phrase into domain terms: ${JSON.stringify(dciMetrics.grepArgs)}`);
+  }
+  if (!dciMetrics.coverageAny) {
+    throw new Error(`DCI live run did not surface the gold document in grep observations: ${JSON.stringify(dciMetrics.grepMatchPaths)}`);
+  }
+  if (!dciMetrics.localizationExactRead || !dciMetrics.evidenceSpanLocalized) {
+    throw new Error(`DCI live run did not localize evidence by exact read: ${JSON.stringify(dciMetrics.readTargets)}`);
   }
   const final = assistantText(run.events);
   if (/該当なし|見つかりません|確認できない|確認できません|no match|not found/i.test(final)) {
     throw new Error(`final answer incorrectly reported no evidence: ${final}`);
   }
+  if (!dciMetrics.hardNegativeRejected) {
+    throw new Error(`final answer cited a hard negative as evidence: ${final}`);
+  }
   if (!/部品/.test(final) || !/売上/.test(final)) {
-    throw new Error(`final answer did not address parts sales: ${final}`);
+    throw new Error(`final answer did not resolve the ambiguous aftermarket request into parts sales: ${final}`);
   }
   if (!/source-a|finance\/q4/i.test(final)) {
     throw new Error(`final answer did not identify the content evidence file: ${final}`);
   }
-  const result = { workspace, tools: names, final };
+  const result = { workspace, tools: names, dciMetrics, final };
   writeFileSync(join(artifactDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   console.log(`[workbench-live-dci-e2e] ok workspace=${workspace}`);
 } catch (error) {
@@ -159,33 +204,6 @@ function classifyLiveDciFailure(error) {
   if (/invalid JSON|schema|tool projection|expected JSON/i.test(message)) return "schema_validation";
   if (/grep|read|ripgrep|workspace|tool/i.test(message)) return "tool_contract";
   return "unknown";
-}
-
-function grepMatchPaths(call) {
-  const paths = [];
-  for (const result of call.results) {
-    try {
-      const parsed = JSON.parse(result);
-      const matches = parsed?.data?.matches;
-      if (Array.isArray(matches)) {
-        for (const match of matches) {
-          if (typeof match?.displayPath === "string") paths.push(match.displayPath);
-        }
-      }
-    } catch {
-      // Ignore non-JSON fragments; malformed tool results are caught elsewhere.
-    }
-  }
-  return paths;
-}
-
-function readTarget(call) {
-  try {
-    const parsed = JSON.parse(call.args || "{}");
-    return typeof parsed.file_path === "string" ? parsed.file_path.replaceAll("\\", "/") : "";
-  } catch {
-    return "";
-  }
 }
 
 function sleep(ms) {

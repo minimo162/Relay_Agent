@@ -21,6 +21,9 @@ public sealed class RelayAgentFrameworkRunner
         For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
         Use direct corpus interaction for local search: search direct terms, combine weak clues with grep allTerms/anyTerms/excludeTerms when useful, read local context around promising matches, extract new terms/entities from observations, refine the search, cross-check evidence, then answer.
         For compound business concepts, do not rely on one exact glued phrase grep. Prefer grep allTerms for required components plus anyTerms for variants, for example 部品売上 should search allTerms ["部品","売上"] and then read promising files.
+        If grep returns zero matches, broaden or change the terms and grep again before read/final. Do not read README.md as a generic fallback unless the user asked for project instructions or README content.
+        For read, use exact displayPath/path values returned by glob/grep/read observations or explicit user paths. Never invent plausible filenames.
+        If a read result says the file is not the evidence, is only a guide/glossary, or tells you to re-search with other terms, do that grep refinement before final.
         If a grep/read result is only a negative, entity-name, generic, or decoy match, refine with broader conjunctive grep before final. Do not answer no-match from a single weak or negative candidate.
         Do not treat filename/entity matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
@@ -461,17 +464,10 @@ public sealed class RelayAgentFunctionSet(
         var validation = tools.Validate(effectiveWorkspace, call);
         if (!validation.Ok)
         {
-            var failed = ToolObservation.Fail(call.Id, call.Tool, validation.Error ?? "Invalid tool call.");
-            throw new InvalidOperationException(failed.Summary);
+            return ToolObservation.Fail(call.Id, call.Tool, validation.Error ?? "Invalid tool call.");
         }
 
-        var observation = await tools.ExecuteAsync(effectiveWorkspace, call, cancellationToken, approvalGranted: true);
-        if (!observation.Success)
-        {
-            throw new InvalidOperationException(observation.Summary);
-        }
-
-        return observation;
+        return await tools.ExecuteAsync(effectiveWorkspace, call, cancellationToken, approvalGranted: true);
     }
 
     private static JsonObject Args(params (string Key, object? Value)[] values)
@@ -1409,6 +1405,7 @@ public sealed class RelayToolExecutor
             truncated = hasMore,
             sourceTruncated,
             text,
+            contextLabels = ClassifyDciContext(displayPath, text),
             textSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant(),
             warnings,
             continuation = hasMore
@@ -1456,6 +1453,58 @@ public sealed class RelayToolExecutor
             },
         ];
     }
+
+    private static string[] ClassifyDciContext(string displayPath, string text)
+    {
+        var haystack = $"{displayPath}\n{text}";
+        var labels = new SortedSet<string>(StringComparer.Ordinal);
+        if (ContainsAnyDciContext(haystack,
+            "not evidence",
+            "not sales",
+            "not applicable",
+            "対象外",
+            "除外",
+            "根拠ではありません",
+            "根拠資料ではありません",
+            "会社名",
+            "プロフィール"))
+        {
+            labels.Add("negative_context");
+        }
+        if (ContainsAnyDciContext(haystack, "guide", "glossary", "用語", "ガイド", "辞書"))
+        {
+            labels.Add("guide_or_glossary");
+        }
+        if (ContainsAnyDciContext(haystack, "prior", "archive", "fy159", "fy158", "過年度", "旧", "参考資料"))
+        {
+            labels.Add("prior_period");
+        }
+        if (ContainsAnyDciContext(haystack, "generic", "一般", "概説", "メモ"))
+        {
+            labels.Add("generic_context");
+        }
+        if (ContainsAnyDciContext(haystack,
+            "evidence",
+            "source",
+            "basis",
+            "actual",
+            "実績",
+            "確定",
+            "根拠",
+            "集計表",
+            "売上実績"))
+        {
+            labels.Add("possible_evidence");
+        }
+        if (labels.Count == 0)
+        {
+            labels.Add("content_match");
+        }
+        return labels.ToArray();
+    }
+
+    private static bool ContainsAnyDciContext(string haystack, params string[] needles) =>
+        needles.Any(needle => haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
 
     private async Task<ToolObservation> OfficeCliAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
@@ -2482,13 +2531,15 @@ public sealed class RelayToolExecutor
             if (!TryParseRipgrepLine(workingDirectory, line, out var fullPath, out var lineNumber, out var text)) continue;
             if (!LineSatisfiesTerms(text, plan)) continue;
             var matchedTerms = MatchedTerms(text, plan);
+            var displayPath = ToWorkspaceDisplayPath(workspace, fullPath);
             matches.Add(new
             {
                 path = fullPath,
-                displayPath = ToWorkspaceDisplayPath(workspace, fullPath),
+                displayPath,
                 lineNumber,
                 excerpt = Truncate(text, 1200),
                 matchedTerms,
+                contextLabels = ClassifyDciContext(displayPath, text),
                 evidenceState = plan.AllTerms.Length > 1 && plan.AllTerms.All(term => ContainsTerm(text, term, plan.CaseInsensitive))
                     ? "conjunctive_content_match"
                     : "content_match",

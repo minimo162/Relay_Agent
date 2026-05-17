@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assistantText, collectToolCall, collectToolCalls, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
+import { assertDciMetrics, computeDciMetrics } from "./lib/dci-metrics.mjs";
 
 const token = "relay-dci-golden-token";
 const port = 17903;
@@ -18,7 +19,16 @@ writeFileSync(
   join(workspace, "companies", "Mパーツ.md"),
   [
     "# Mパーツ",
-    "Mパーツは会社名です。このメモは売上対象外の会社プロフィールで、部品売上の根拠ではありません。",
+    "Mパーツは会社名です。このメモは売上対象外の会社プロフィールで、アフター系の根拠ではありません。",
+  ].join("\n"),
+  "utf8",
+);
+writeFileSync(
+  join(workspace, "notes", "aftermarket-glossary.md"),
+  [
+    "# 用語ガイド",
+    "今期4Qのアフター系の根拠を探すときは、サービス部品、補修部品、パーツ事業の実績という言い換えで再検索します。",
+    "このガイド自体は根拠資料ではありません。会社名としてのMパーツと、売上根拠としてのサービス部品実績は区別します。",
   ].join("\n"),
   "utf8",
 );
@@ -38,12 +48,13 @@ const responses = [
     action: "tool",
     tool: "grep",
     args: {
-      pattern: "部品|売上|Mパーツ",
+      pattern: "アフター系|Mパーツ|売上",
       includeGlobs: ["**/*.md"],
       contextLines: 1,
       limit: 20,
     },
   }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "notes/aftermarket-glossary.md", limit: 4000 } }),
   JSON.stringify({ action: "tool", tool: "read", args: { file_path: "companies/Mパーツ.md", limit: 4000 } }),
   JSON.stringify({
     action: "tool",
@@ -57,7 +68,7 @@ const responses = [
     },
   }),
   JSON.stringify({ action: "tool", tool: "read", args: { file_path: "evidence/q4-parts-revenue.md", limit: 4000 } }),
-  JSON.stringify({ action: "final", answer: "部品売上の根拠は evidence/q4-parts-revenue.md です。Mパーツ.md は会社名プロフィールなので候補から外します。" }),
+  JSON.stringify({ action: "final", answer: "アフター系の数字は用語ガイド上はサービス部品/補修部品の実績を指すため、根拠は evidence/q4-parts-revenue.md です。Mパーツ.md は会社名プロフィールなので候補から外します。" }),
   JSON.stringify({
     action: "tool",
     tool: "grep",
@@ -105,16 +116,35 @@ try {
   }
   const calls = [...collectToolCalls(run.events).values()];
   const names = calls.map((call) => call.name);
+  const metrics = computeDciMetrics(calls, assistantText(run.events), {
+    goldPath: "evidence/q4-parts-revenue.md",
+    hardNegativePaths: ["companies/Mパーツ.md", "notes/aftermarket-glossary.md", "notes/generic-sales.md"],
+    evidencePattern: /部品 売上|parts and sales/,
+  });
+  assertDciMetrics(metrics, {
+    noRetrieverTools: true,
+    noFailedTools: true,
+    noInventedReadTargets: true,
+    weakClueConjunction: true,
+    queryExpansionFromAmbiguity: true,
+    coverageAny: true,
+    localizationExactRead: true,
+    evidenceSpanLocalized: true,
+    hardNegativeRejected: true,
+  });
   if (names.filter((name) => name === "grep").length < 2) {
     throw new Error(`DCI golden did not refine with multiple grep calls: ${names.join(", ")}`);
   }
-  if (names.filter((name) => name === "read").length < 2) {
+  if (names.filter((name) => name === "read").length < 3) {
     throw new Error(`DCI golden did not inspect local context with read calls: ${names.join(", ")}`);
   }
 
   const final = assistantText(run.events);
   if (!final.includes("evidence/q4-parts-revenue.md")) {
     throw new Error(`final answer did not cite the content-confirmed evidence path: ${final}`);
+  }
+  if (!final.includes("用語ガイド")) {
+    throw new Error(`final answer did not resolve the ambiguous term through the glossary: ${final}`);
   }
   if (!final.includes("候補から外")) {
     throw new Error(`final answer did not explain the misleading entity-name decoy: ${final}`);

@@ -771,15 +771,20 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
     anchors?: unknown;
     evidenceState?: unknown;
     truncated?: unknown;
+    contextLabels?: unknown;
   };
   if (data.schemaVersion === "RelayGrepObservation.v1") {
     const matches = Array.isArray(data.matches) ? data.matches : [];
-    const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; excerpt?: unknown } | undefined;
+    const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; excerpt?: unknown; contextLabels?: unknown } | undefined;
     const path = typeof first?.displayPath === "string" ? compactPath(first.displayPath) : "";
     const line = typeof first?.lineNumber === "number" ? `:${first.lineNumber}` : "";
     const excerpt = typeof first?.excerpt === "string" ? ` — ${first.excerpt.slice(0, 96)}` : "";
+    const labels = Array.isArray(first?.contextLabels)
+      ? first.contextLabels.filter((label): label is string => typeof label === "string").slice(0, 3).join(", ")
+      : "";
+    const labelText = labels ? ` · ${labels}` : "";
     const suffix = data.truncated === true ? " · truncated" : "";
-    return `grep · ${matches.length} evidence match${matches.length === 1 ? "" : "es"}${path ? ` · ${path}${line}` : ""}${excerpt}${suffix}`;
+    return `grep · ${matches.length} content match${matches.length === 1 ? "" : "es"}${path ? ` · ${path}${line}` : ""}${labelText}${excerpt}${suffix}`;
   }
   if (data.schemaVersion === "RelayReadObservation.v1") {
     const path = typeof data.displayPath === "string" ? compactPath(data.displayPath) : "";
@@ -789,7 +794,11 @@ function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; da
       ? `:${anchor.startLine}-${anchor.endLine}`
       : "";
     const evidence = typeof data.evidenceState === "string" ? data.evidenceState : "read";
-    return `read · ${evidence}${path ? ` · ${path}${lineRange}` : ""}`;
+    const labels = Array.isArray(data.contextLabels)
+      ? data.contextLabels.filter((label): label is string => typeof label === "string").slice(0, 3).join(", ")
+      : "";
+    const labelText = labels ? ` · ${labels}` : "";
+    return `read · ${evidence}${path ? ` · ${path}${lineRange}` : ""}${labelText}`;
   }
   return undefined;
 }

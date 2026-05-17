@@ -19330,3 +19330,125 @@ Result:
   tool sequence was `grep`, then `read`; Copilot searched with
   `allTerms:["部品","売上"]`, read `finance/q4/source-a.md`, and answered:
   `finance/q4/source-a.md：本文に「部品 売上の確定実績はこのファイルの集計表に基づく」と明記されており、部品売上の根拠であるため。`
+
+## 2026-05-17: Ambiguous Search E2E Hardening
+
+Change:
+
+- Raised the live DCI search fixture difficulty. The user request now asks for
+  an ambiguous `アフター系の数字の根拠ファイル` instead of directly saying
+  `部品売上`.
+- Added a local corpus that requires content-based disambiguation:
+  a generic evidence file name (`finance/q4/source-a.md`), an entity-name decoy
+  (`companies/Mパーツ.md`), a prior-year reference decoy
+  (`archive/fy159/aftermarket-reference.md`), a term guide
+  (`notes/aftermarket-glossary.md`), and a generic sales note.
+- Strengthened Copilot/Agent Framework instructions so failed or empty searches
+  do not lead to invented `read` targets, README fallbacks, or no-match final
+  answers from guide/decoy documents.
+- Fixed protocol state accounting so failed tool results, such as a failed
+  `read`, no longer count as successful completed tools for evidence-readiness
+  decisions.
+- Adjusted local intent classification to prioritize file discovery when a
+  request clearly asks to find files/documents, even if generic Japanese
+  document words such as `文書` are present.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH pnpm sidecar:build
+PATH=/root/.dotnet:$PATH pnpm agent:protocol-state-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:dci-golden-smoke
+PATH=/root/.dotnet:$PATH pnpm workbench:live-dci-e2e
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Protocol state smoke passed.
+- DCI golden smoke passed with the ambiguous-term guide flow.
+- Live Copilot DCI E2E passed. The observed trajectory was
+  `glob -> grep -> read`; Copilot searched with
+  `allTerms:["4Q","アフター"]` and `anyTerms:["after","aftermarket","保守","部品","サービス"]`,
+  read `finance/q4/source-a.md`, and answered that this file is the FY160 4Q
+  aftermarket/service-parts revenue evidence.
+- Full `pnpm check` passed after the E2E hardening changes.
+
+## 2026-05-17: DCI Paper-Aligned E2E Metrics
+
+Change:
+
+- Updated `scripts/workbench-live-dci-e2e.mjs` to evaluate live Copilot search
+  at the trajectory level rather than only checking the final answer.
+- Added `RelayDciTrajectoryMetrics.v1`, written to
+  `dist/e2e/live-dci/dci-metrics.json`, with checks inspired by
+  arXiv:2605.05242:
+  - raw-corpus DCI tool use only (`glob`, `grep`, `read`);
+  - weak-clue conjunction through `grep allTerms` / `anyTerms`;
+  - query expansion from the ambiguous `アフター系` request into domain terms;
+  - coverage: the gold file is surfaced in grep observations;
+  - localization: the exact gold file is read and contains the evidence span;
+  - hard-negative rejection: final answer cites the gold path and not decoys;
+  - no invented read targets and no failed tool observations.
+- Kept the test zero-index and local-corpus based. It does not add vector
+  search, semantic retrieval, or a separate document-search runner.
+
+Verification:
+
+- `pnpm agent:dci-golden-smoke`
+- `pnpm check`
+
+## 2026-05-17: DCIFS File Search Trajectory Remediation
+
+Change:
+
+- Added deterministic DCI context labels to `grep` and `read` observations:
+  `possible_evidence`, `negative_context`, `guide_or_glossary`,
+  `prior_period`, `generic_context`, and `content_match`. These labels are
+  derived from observed local excerpts and paths, not from a dedicated search
+  engine or company-specific exception list.
+- Added `scripts/lib/dci-metrics.mjs` so deterministic smokes and live Copilot
+  E2E use the same `RelayDciTrajectoryMetrics.v1` definitions for raw-tool use,
+  weak-clue conjunction, query expansion, gold coverage, exact evidence reads,
+  hard-negative rejection, failed tools, and invented read targets.
+- Updated `scripts/dci-golden-smoke.mjs` to assert the shared DCI metrics with
+  mock Copilot responses. The deterministic corpus requires a guide read,
+  decoy rejection, refined conjunctive `grep`, and exact evidence `read`.
+- Hardened `read` admission in the protocol guard. Search/read trajectories may
+  read explicit user paths, paths that exist in the workspace, or paths already
+  surfaced by local observations. Invented read targets are repaired into a
+  local `grep` refinement instead of crashing the run or producing a hidden
+  answer.
+- Changed Agent Framework function invocation to return failed tool
+  observations for validation/execution failures. Tool failures remain visible
+  to Copilot and AG-UI, and no longer become unstructured streaming crashes.
+- Added surfaced `glob`/`grep` artifact paths to completed tool-result details
+  so later protocol decisions can distinguish observed candidates from invented
+  filenames.
+- Updated the Workbench tool-result timeline to show compact DCI labels for
+  `grep` and `read` observations, keeping raw JSON collapsed.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH pnpm sidecar:build
+PATH=/root/.dotnet:$PATH pnpm agent:dci-grep-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:dci-golden-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:agui-replay-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:golden-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:protocol-state-smoke
+PATH=/root/.dotnet:$PATH pnpm workbench:live-dci-e2e
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Deterministic DCI grep and golden smokes passed with shared metric checks.
+- AG-UI replay, agent golden, and protocol state smokes passed.
+- Live Copilot DCI file-search E2E passed after the read-admission repair. The
+  observed tool sequence was `glob -> grep -> read`; Copilot used
+  `allTerms:["アフター","4Q"]` and `anyTerms:["aftermarket","サービス","補修","部品"]`,
+  surfaced `finance/q4/source-a.md`, read that exact file, and rejected the
+  entity-name, prior-period, guide, and generic decoys.

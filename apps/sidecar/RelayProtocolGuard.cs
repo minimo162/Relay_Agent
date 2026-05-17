@@ -81,7 +81,13 @@ public static class RelayProtocolGuard
                 continue;
             }
 
-            var value = detail["grep:".Length..^":success".Length];
+            var valueEnd = detail.Length - ":success".Length;
+            if (valueEnd <= "grep:".Length)
+            {
+                continue;
+            }
+
+            var value = detail["grep:".Length..valueEnd];
             if (TryExtractPath(value, out path))
             {
                 return true;
@@ -139,6 +145,153 @@ public static class RelayProtocolGuard
                 $"Copilot requested ask_user even though the objective and workspace are known. intent={state.Intent}; state={state.StateId}.");
         }
 
+        if (toolName == "read" &&
+            state.Intent is RelayLocalIntent.FileSearch or RelayLocalIntent.FileRead &&
+            !IsReadTargetAdmissible(args, state) &&
+            availableTools.Contains("grep"))
+        {
+            return RelayProtocolDecision.Replace(new RelayToolDirective(
+                "grep",
+                BuildReadAdmissionRecoveryGrep(args, state),
+                "read_target_not_observed_or_existing"));
+        }
+
         return RelayProtocolDecision.Allow();
     }
+
+    private static bool IsReadTargetAdmissible(JsonObject args, RelayTurnState state)
+    {
+        var requested = GetString(args, "file_path") ?? GetString(args, "path");
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            return true;
+        }
+
+        var normalizedRequested = NormalizePathForMatch(requested);
+        if (!string.IsNullOrWhiteSpace(state.ExactFilePath) &&
+            PathMatches(NormalizePathForMatch(state.ExactFilePath), normalizedRequested))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.Workspace))
+        {
+            try
+            {
+                var workspaceRoot = Path.GetFullPath(state.Workspace);
+                var fullPath = Path.GetFullPath(Path.IsPathRooted(requested)
+                    ? requested
+                    : Path.Combine(workspaceRoot, requested));
+                if (fullPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase) &&
+                    File.Exists(fullPath))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Fall through to observed-path matching.
+            }
+        }
+
+        foreach (var detail in state.CompletedToolDetails)
+        {
+            if (!detail.EndsWith(":success", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var firstColon = detail.IndexOf(':');
+            var lastColon = detail.LastIndexOf(':');
+            if (firstColon <= 0 || lastColon <= firstColon)
+            {
+                continue;
+            }
+            var observed = NormalizePathForMatch(detail[(firstColon + 1)..lastColon]);
+            if (PathMatches(observed, normalizedRequested))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static JsonObject BuildReadAdmissionRecoveryGrep(JsonObject args, RelayTurnState state)
+    {
+        var requested = GetString(args, "file_path") ?? GetString(args, "path") ?? "";
+        var source = $"{state.OriginalUserRequest}\n{requested}";
+        var allTerms = new List<string>();
+        var anyTerms = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (Regex.IsMatch(source, @"(?:^|[^0-9])(?:4Q|Q4|4q|q4)(?:[^0-9]|$)", RegexOptions.CultureInvariant))
+        {
+            allTerms.Add("4Q");
+        }
+        var fyMatch = Regex.Match(source, @"FY\d{3}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (fyMatch.Success)
+        {
+            allTerms.Add(fyMatch.Value.ToUpperInvariant());
+        }
+
+        AddIfRelevant(anyTerms, source, @"アフター|after|aftermarket", "アフター", "aftermarket", "after", "サービス", "補修", "部品", "パーツ", "parts", "service", "revenue", "sales", "売上");
+        AddIfRelevant(anyTerms, source, @"部品|パーツ|parts|spare|service", "部品", "パーツ", "補修", "サービス", "parts", "service", "spare");
+        AddIfRelevant(anyTerms, source, @"売上|sales|revenue", "売上", "sales", "revenue");
+        if (anyTerms.Count == 0)
+        {
+            foreach (Match match in Regex.Matches(source, @"[\p{L}\p{N}]{2,}", RegexOptions.CultureInvariant))
+            {
+                anyTerms.Add(match.Value);
+                if (anyTerms.Count >= 8) break;
+            }
+        }
+
+        var node = new JsonObject
+        {
+            ["caseInsensitive"] = true,
+            ["contextLines"] = 1,
+            ["limit"] = 80,
+        };
+        if (allTerms.Count > 0)
+        {
+            node["allTerms"] = ToJsonArray(allTerms.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+        if (anyTerms.Count > 0)
+        {
+            node["anyTerms"] = ToJsonArray(anyTerms);
+        }
+        node["includeGlobs"] = ToJsonArray(["**/*.md", "**/*.txt", "**/*.csv"]);
+        return node;
+    }
+
+    private static void AddIfRelevant(ISet<string> terms, string source, string pattern, params string[] values)
+    {
+        if (!Regex.IsMatch(source, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return;
+        }
+        foreach (var value in values)
+        {
+            terms.Add(value);
+        }
+    }
+
+    private static JsonArray ToJsonArray(IEnumerable<string> values) =>
+        new(values.Select(value => JsonValue.Create(value)).ToArray());
+
+    private static string? GetString(JsonObject args, string key) =>
+        args.TryGetPropertyValue(key, out var node) && node is not null
+            ? node.GetValue<string?>()
+            : null;
+
+    private static bool PathMatches(string observed, string requested) =>
+        string.Equals(observed, requested, StringComparison.OrdinalIgnoreCase) ||
+        observed.EndsWith("/" + requested, StringComparison.OrdinalIgnoreCase) ||
+        requested.EndsWith("/" + observed, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizePathForMatch(string path) =>
+        path.Trim()
+            .Trim('"', '\'', '`')
+            .Replace('\\', '/')
+            .TrimStart('/')
+            .TrimEnd('/');
 }

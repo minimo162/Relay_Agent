@@ -534,6 +534,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.",
             "For local document/data review, use glob/read/grep first and reason from those results. Do not use bash for ordinary file reading or light CSV arithmetic.",
             "For compound business concepts, do not rely on one exact glued phrase grep. Prefer grep allTerms for required components plus anyTerms for variants, for example 部品売上 should search allTerms [\"部品\",\"売上\"] and then read promising files.",
+            "If grep returns zero matches, broaden or change the terms and grep again before read/final. Do not read README.md as a generic fallback unless the user asked for project instructions or README content.",
+            "For read, use exact displayPath/path values returned by glob/grep/read observations or explicit user paths. Never invent plausible filenames.",
+            "If a read result says the file is not the evidence, is only a guide/glossary, or tells you to re-search with other terms, do that grep refinement before final.",
             "If a grep/read result is only a negative, entity-name, generic, or decoy match, refine with broader conjunctive grep before final. Do not answer no-match from a single weak or negative candidate.",
             "If RELAY_TURN_STATE or terminalCriteria requires evidence_read_result, call read on the best candidate file before final, even if grep already found matching lines.",
             "For code/project edits, read exact target files without offset/limit before mutating unless the user explicitly asks for a partial inspection.",
@@ -627,8 +630,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         CapturePendingOutputFile(runKey, requestedOutputFiles, completedToolDetails);
         var projectRoot = RelayTurnStateFactory.ExtractProjectRoot(request, requestedOutputFiles, completedToolDetails);
         TryGetPendingOutputFile(runKey, requestedOutputFiles, completedToolDetails, out var pendingOutputFile);
-        var completedToolNames = GetCompletedToolNames(messages)
-            .Concat(completedToolDetails.Select(ExtractToolNameFromDetail))
+        var completedToolNames = completedToolDetails
+            .Where(IsSuccessfulToolDetail)
+            .Select(ExtractToolNameFromDetail)
             .Where(tool => !string.IsNullOrWhiteSpace(tool))
             .Cast<string>();
         var hasMutationToolCall = HasMutationToolCall(messages) ||
@@ -926,6 +930,17 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                         })}:{status}";
                     }
 
+                    if ((toolName == "glob" || toolName == "grep") && resultInfo.Artifacts.Length > 0)
+                    {
+                        foreach (var artifact in resultInfo.Artifacts.Take(30))
+                        {
+                            yield return $"{FormatToolCallDetail(toolName, new Dictionary<string, object?>
+                            {
+                                ["path"] = artifact,
+                            })}:{status}";
+                        }
+                    }
+
                     if (IsMutationTool(toolName) && resultInfo.Artifacts.Length > 0)
                     {
                         foreach (var artifact in resultInfo.Artifacts)
@@ -998,6 +1013,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         return IsMutationTool(tool) && detail.EndsWith(":success", StringComparison.Ordinal);
     }
 
+    private static bool IsSuccessfulToolDetail(string detail) =>
+        detail.EndsWith(":success", StringComparison.Ordinal);
+
     private static string FormatToolCallDetail(string toolName, IDictionary<string, object?>? arguments)
     {
         var target = GetArgumentString(arguments, "file_path")
@@ -1021,6 +1039,10 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         if (result is string text && text.Contains("Tool call invocation rejected", StringComparison.OrdinalIgnoreCase))
         {
             return new RelayToolResultInfo(null, false, null, "rejected", []);
+        }
+        if (result is string errorText && errorText.TrimStart().StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RelayToolResultInfo(null, false, null, "failed", []);
         }
 
         try
