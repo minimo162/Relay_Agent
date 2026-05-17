@@ -13,6 +13,13 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
+The next active queue is `LIVEFIX*`. It responds to the 2026-05-17 live
+Copilot rerun: request-limit blocking appears cleared, but multi-step project
+E2E still fails at OpenCode `apply_patch` conformance, Copilot CDP composer
+normalization, and post-tool Agent Framework continuation. The fix must keep
+Agent Framework, AG-UI, and OpenCode-compatible semantics as the source of
+truth instead of adding another Relay planner.
+
 ## Execution Rules
 
 - Execute tasks in order unless a task explicitly says it can run in parallel.
@@ -27,10 +34,249 @@ results, sandboxing, streaming, and diagnostics.
 
 ## Task Queue
 
-The `REUSE*` queue below is the next active queue. It exists to reduce
-wheel-reinvention risk by forcing every Relay-owned harness component to map to
-Microsoft Agent Framework, AG-UI, OpenCode, MCP, or a documented Relay-only
-local policy/tool-body need.
+### LIVEFIX01 - Capture Live E2E Baseline And Failure Classes
+
+Status: pending
+
+Scope:
+
+- Record the latest live canary and multi-file project E2E results in
+  `docs/IMPLEMENTATION.md`.
+- Classify failures as:
+  - provider quota;
+  - Copilot CDP prompt insertion/composer normalization;
+  - OpenCode tool contract validation;
+  - Agent Framework continuation/final eligibility;
+  - AG-UI replay/artifact export.
+- Link the concrete artifacts under `dist/e2e/live-copilot/` and
+  `dist/e2e/live-project/` without committing sensitive prompt dumps.
+
+Artifacts:
+
+- Implementation log entry with command, result, and classification.
+- Optional sanitized excerpt or fixture when it is safe to commit.
+
+Acceptance:
+
+- The passing lightweight canary and failing project E2E are recorded as
+  different outcomes.
+- A failed project run is not described as quota-limited when Copilot was
+  available.
+- The next fix task can start from a named failure class, not a vague
+  "Copilot unstable" bucket.
+
+Verification:
+
+- `git diff --check`
+
+### LIVEFIX02 - Add OpenCode `apply_patch` Conformance Gate
+
+Status: pending
+
+Scope:
+
+- Keep `apply_patch(req:patchText)` as the only model-visible patch shape.
+- Validate `patchText` grammar before approval and execution.
+- Return malformed patches as structured tool observations in the same Agent
+  Framework session.
+- Add golden cases for:
+  - valid multi-file add;
+  - valid update;
+  - malformed add-file body missing leading `+`;
+  - duplicate Begin/End envelopes;
+  - legacy executor-only `patch` compatibility.
+
+Artifacts:
+
+- Sidecar conformance validator or existing validator integration.
+- Regression smoke/fixture for malformed patch observations.
+- Updated `docs/OPENCODE_TOOL_CONTRACT.md` only if the public contract changes.
+
+Acceptance:
+
+- A malformed patch never reaches approval as a side-effect action.
+- Copilot receives a structured observation that tells it exactly why the patch
+  failed and can continue in the same `AgentSession`.
+- No new Relay-specific patch tool or argument name is introduced.
+
+Verification:
+
+- `pnpm agent:tool-catalog-smoke`
+- patch conformance smoke
+- `pnpm check`
+
+### LIVEFIX03 - Harden Copilot CDP Composer Normalization
+
+Status: pending
+
+Scope:
+
+- Keep prompt insertion, submission, and response extraction inside the M365
+  Copilot CDP provider adapter.
+- Normalize both intended and visible composer text before corruption checks:
+  line endings, trailing newline, Unicode normalization, zero-width
+  characters, and Copilot markdown/code-fence rendering transformations.
+- Save a small redacted prompt-diff artifact when normalized verification
+  still fails.
+- Do not submit when normalized verification fails; return a provider-adapter
+  blocked error with diagnostics.
+
+Artifacts:
+
+- Provider adapter normalization helper.
+- Unit/smoke coverage for one-character composer differences.
+- Redacted diagnostic fixture.
+
+Acceptance:
+
+- Benign one-character UI normalization differences do not fail live E2E.
+- Real prompt corruption fails before submit and points to the exact
+  normalized diff.
+- The adapter does not make tool/final eligibility decisions.
+
+Verification:
+
+- Copilot prompt insertion smoke
+- `pnpm workbench:live-copilot-e2e` when quota allows
+- `pnpm check`
+
+### LIVEFIX04 - Compact Tool Observations Through Framework State
+
+Status: pending
+
+Scope:
+
+- Make tool observations deterministic, bounded, and artifact-backed before
+  they are projected into Copilot prompts.
+- For `read` and large command outputs, send hash, size, artifact ID, concise
+  summary, and bounded excerpt by default.
+- Preserve exact full content as a local artifact for diagnostics and follow-up
+  tool use.
+- Ensure compaction rules are middleware/framework state rules, not
+  task-specific prompt folklore.
+
+Artifacts:
+
+- Observation compaction implementation or documented wiring to existing
+  framework state.
+- Fixture showing compacted `read` observation for HTML/JS/CSS files.
+- Implementation log entry.
+
+Acceptance:
+
+- Follow-up edit tasks still have enough context to act correctly.
+- Copilot composer payloads are smaller and less prone to CDP insertion
+  corruption.
+- AG-UI replay and support bundles still expose artifact IDs needed for debug.
+
+Verification:
+
+- transcript/observation smoke
+- AG-UI replay smoke
+- `pnpm check`
+
+### LIVEFIX05 - Make Agent Framework Continuation The Terminal Authority
+
+Status: pending
+
+Scope:
+
+- Audit timeout/final/continuation logic after tool observations.
+- Ensure the same `AgentSession` owns continuation after tool result feedback.
+- Move any remaining Relay-only final eligibility or continuation timers into
+  framework middleware or a thin framework-adapter policy.
+- Classify timeout source as provider response, framework continuation,
+  approval wait, or tool execution.
+
+Artifacts:
+
+- Continuation/final eligibility refactor.
+- Session continuation smoke covering: tool error -> retry, successful
+  mutation -> final, and read -> mutation.
+- Implementation log entry.
+
+Acceptance:
+
+- A successful tool call followed by a missing final does not become an
+  unclassified `StreamingError`.
+- A malformed patch observation can continue to a corrected patch or a
+  structured blocked state.
+- `final` and `question` remain middleware decisions.
+
+Verification:
+
+- `pnpm agent:protocol-state-smoke`
+- `pnpm agent:framework-native-prevention-smoke`
+- `pnpm check`
+
+### LIVEFIX06 - Make AG-UI Replay The Live E2E Acceptance Surface
+
+Status: pending
+
+Scope:
+
+- Save AG-UI event logs for lightweight canary and multi-step project E2E.
+- Make the replay smoke validate:
+  - run lifecycle;
+  - tool call args and results;
+  - malformed tool observation;
+  - final or structured blocked state;
+  - artifact references.
+- Keep raw Relay support dumps as attachments, not the primary acceptance
+  format.
+
+Artifacts:
+
+- Live E2E AG-UI event log export.
+- Replay fixture or test update.
+- Implementation log entry.
+
+Acceptance:
+
+- A live E2E failure can be explained from AG-UI replay plus framework trace.
+- Workbench-visible state does not require parsing Relay-only raw event text.
+
+Verification:
+
+- `pnpm agent:agui-replay-smoke`
+- live project E2E artifact inspection
+- `pnpm check`
+
+### LIVEFIX07 - Rerun Live Copilot Project E2E
+
+Status: pending
+
+Scope:
+
+- After LIVEFIX02 through LIVEFIX06 pass deterministic checks, rerun:
+  - lightweight signed-in Copilot canary;
+  - multi-file project creation;
+  - follow-up project improvement.
+- Treat provider quota as provider-blocked.
+- Treat prompt corruption, malformed patch loops, or unclassified streaming
+  errors as harness failures.
+
+Artifacts:
+
+- Ignored live E2E artifacts under `dist/e2e/`.
+- Implementation log entry with commands and outcome.
+
+Acceptance:
+
+- If Copilot is available, the project E2E reaches final output after creation
+  and after improvement.
+- If Copilot is unavailable, the result is a structured provider-blocked state.
+
+Verification:
+
+- `pnpm workbench:live-copilot-e2e`
+- `pnpm workbench:live-project-e2e`
+- `pnpm check`
+
+The completed `REUSE*` queue below is retained as the foundation for the new
+`LIVEFIX*` queue. It reduced wheel-reinvention risk by forcing every
+Relay-owned harness component to map to Microsoft Agent Framework, AG-UI,
+OpenCode, MCP, or a documented Relay-only local policy/tool-body need.
 
 ### REUSE01 - Build Delete/Adapt/Keep Matrix
 

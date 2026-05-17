@@ -161,6 +161,119 @@ Evidence from the latest docs:
   `edit` gates `write`, `edit`, and `apply_patch`; `question` is a tool, not
   free-form prose.
 
+### 2026-05-17 Live E2E Reinvention Guardrail Update
+
+The latest live Copilot rerun changed the diagnosis:
+
+- The lightweight signed-in Copilot canary passed, so the previous hourly
+  request-limit block appears to have cleared.
+- The multi-file project E2E still failed after reaching real Copilot:
+  - one attempt produced a malformed `apply_patch` payload, then recovered with
+    a second patch but timed out waiting for the final Copilot continuation;
+  - the retry created the required files, then failed on the improvement turn
+    because the Copilot composer visible text differed from Relay's prompt by
+    one character before submit.
+
+This must not be fixed by adding another Relay planner, another tool taxonomy,
+or more broad prompt folklore. The failure sits at the adapter boundaries:
+
+1. **OpenCode-compatible tool conformance**: `apply_patch` must be validated as
+   an OpenCode-shaped tool call before approval/execution. Invalid patch grammar
+   should become a structured tool observation in the same Agent Framework
+   session, not a harness crash or a prompt-only repair rule.
+2. **Agent Framework continuation**: after a tool observation, the same
+   `AgentSession` must continue until middleware permits a final answer or
+   returns a structured blocked state. Relay must not own an independent
+   timeout/final heuristic outside framework state.
+3. **AG-UI replayability**: the user-visible run, including the malformed patch,
+   tool observation, continuation attempt, and terminal error, must replay from
+   standard AG-UI events plus framework trace IDs.
+4. **Copilot CDP provider adapter only**: prompt insertion, composer
+   normalization, readiness checks, response extraction, and diagnostics remain
+   Relay-owned only because M365 Copilot is accessed through Edge CDP. This
+   adapter must not decide tool eligibility, approval semantics, or final
+   eligibility.
+
+Reference sources rechecked for this update:
+
+- Microsoft Agent Framework documentation:
+  `https://learn.microsoft.com/en-us/agent-framework/`
+- Agent Framework tool guidance:
+  `https://learn.microsoft.com/en-us/agent-framework/get-started/add-tools`
+- Agent Framework tools overview:
+  `https://learn.microsoft.com/en-us/agent-framework/agents/tools/`
+- Agent Framework workflows:
+  `https://learn.microsoft.com/en-us/agent-framework/workflows/`
+- Agent Framework DevUI:
+  `https://learn.microsoft.com/en-us/agent-framework/devui/`
+- AG-UI architecture and events:
+  `https://docs.ag-ui.com/concepts/architecture`
+  and `https://docs.ag-ui.com/concepts/events`
+- OpenCode tools and CLI/agent permissions:
+  `https://opencode.ai/docs/tools/`
+  and `https://opencode.ai/docs/cli/`
+
+#### Boundary Decisions
+
+- **Do not adopt a new Relay runner.** Keep Agent Framework as the run/session
+  owner and AG-UI as the UI protocol.
+- **Do not embed OpenCode as a runtime in this milestone.** OpenCode remains
+  the public local-tool contract reference: tool names, permission grouping,
+  argument shape, patch semantics, and result expectations. Relay can implement
+  function bodies only where policy and packaging require it.
+- **Do not compensate with hidden fallbacks.** If Copilot CDP insertion,
+  provider readiness, tool registry projection, or session continuation fails,
+  stop with a structured blocked result and diagnostic artifact.
+- **Do not add task-specific local search/Office/code modes.** Search, Office,
+  and code remain common use cases over one generic workbench and one
+  OpenCode-compatible local tool surface.
+
+#### Required Fix Direction
+
+1. **OpenCode conformance harness**
+   - Generate the model-visible catalog from Agent Framework tool metadata.
+   - Keep canonical OpenCode names and shapes, especially
+     `apply_patch(req:patchText)`.
+   - Add golden invalid/valid `apply_patch` cases, including multi-file adds,
+     updates, and malformed add-file lines.
+   - Pre-approval validation should reject malformed `patchText` as a tool
+     observation and continue the same session.
+
+2. **Copilot CDP transport hardening without new planning logic**
+   - Canonicalize composer verification with deterministic normalization
+     (`CRLF/LF`, trailing newline, Unicode normalization, zero-width characters,
+     and Copilot UI markdown transformations) before declaring corruption.
+   - Save a minimal prompt-diff artifact when visible text differs from the
+     intended payload.
+   - Submit only after the normalized composer text matches the intended
+     payload or fails with a provider-adapter diagnostic.
+   - Keep insertion/submission/reply extraction inside the Copilot provider
+     adapter; all tool/final decisions remain framework middleware decisions.
+
+3. **Tool observation compaction and continuation**
+   - Keep exact files as artifacts with hashes and bounded excerpts in the
+     tool observation sent back to Copilot.
+   - Avoid injecting large raw tool payloads into the Copilot composer when an
+     artifact ID plus excerpt is enough for the next action.
+   - Preserve enough content for edit tasks, but make the compaction rule
+     deterministic and testable instead of ad hoc.
+
+4. **Agent Framework terminal middleware**
+   - Continue the same `AgentSession` after tool observations.
+   - Final is allowed only when required artifacts, approvals, and verification
+     gates are satisfied.
+   - `question` is visible only after framework middleware marks the run
+     genuinely user-blocked.
+   - Timeout must classify where it occurred: provider response, framework
+     continuation, approval wait, or tool execution.
+
+5. **AG-UI acceptance artifacts**
+   - Save AG-UI event logs for live canary and multi-step project E2E.
+   - Replay must reconstruct: run lifecycle, tool call args, tool result,
+     approval state if any, final/blocked state, and selected artifacts.
+   - A failed live run is acceptable only when the replay plus trace proves the
+     failure is provider-blocked or a named adapter defect.
+
 ### Reinvention-Reduction Target Architecture
 
 The target architecture must make every nontrivial Relay-owned component answer

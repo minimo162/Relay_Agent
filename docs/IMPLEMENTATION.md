@@ -32,6 +32,46 @@
 
 ## Milestone Log
 
+### 2026-05-17 Live E2E Reinvention Guardrail Plan
+
+After the request-limit reset check, the live signed-in Copilot canary passed,
+but the multi-step project E2E still exposed harness boundary failures:
+
+- `pnpm workbench:live-copilot-e2e` passed with Copilot readiness `Ready`.
+- `pnpm workbench:live-project-e2e` reached real Copilot and created the
+  required project files, but failed first on malformed `apply_patch`
+  handling/final continuation and then on a one-character Copilot composer
+  verification mismatch during the improvement step.
+
+Planning update:
+
+- Added the "Live E2E Reinvention Guardrail Update" to `PLANS.md`.
+- Added the `LIVEFIX01` through `LIVEFIX07` task queue to `tasks.md`.
+- The plan keeps Agent Framework as the run/session/tool/approval authority,
+  AG-UI as the Workbench protocol, and OpenCode-compatible tools as the
+  model-facing local workspace contract. The Copilot CDP layer remains a
+  provider adapter only.
+
+Reference sources rechecked:
+
+- Microsoft Agent Framework docs:
+  https://learn.microsoft.com/en-us/agent-framework/
+- Agent Framework tool guidance:
+  https://learn.microsoft.com/en-us/agent-framework/get-started/add-tools
+- AG-UI architecture and events:
+  https://docs.ag-ui.com/concepts/architecture and
+  https://docs.ag-ui.com/concepts/events
+- OpenCode tools and CLI docs:
+  https://opencode.ai/docs/tools/ and https://opencode.ai/docs/cli/
+
+Verification for this plan-only update:
+
+```bash
+git diff --check
+```
+
+Result: passed.
+
 ### 2026-05-17 OpenCode-Compatible Tool Contract Cutover
 
 Implemented the `tasks.md` OCT01-OCT10 contract migration:
