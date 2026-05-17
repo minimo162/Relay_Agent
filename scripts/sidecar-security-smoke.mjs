@@ -76,6 +76,7 @@ try {
   writeFileSync(sensitiveFile, "PROJECT_SECRET_REVENUE=987654321\nowner=finance.owner@example.com\n", "utf8");
   mkdirSync(join(dataDir, "runs"), { recursive: true });
   mkdirSync(join(dataDir, "run-events"), { recursive: true });
+  mkdirSync(join(dataDir, "traces"), { recursive: true });
   writeFileSync(join(dataDir, "runs", "run-sensitive.json"), JSON.stringify({
     runId: "run-sensitive",
     status: "failed",
@@ -103,6 +104,32 @@ try {
     type: "error",
     message: "Copilot transport failed",
     detail: `stderr: password=hunter2 path=${sensitiveFile}`,
+  }, null, 2), "utf8");
+  writeFileSync(join(dataDir, "traces", "trace-sensitive.json"), JSON.stringify({
+    schemaVersion: "RelayFrameworkTrace.v1",
+    traceId: "trace-sensitive",
+    spans: [
+      {
+        schemaVersion: "RelayFrameworkTraceSpan.v1",
+        traceId: "trace-sensitive",
+        spanId: "span-sensitive",
+        name: "tool.execute",
+        category: "tool",
+        agUiRunId: "run-sensitive",
+        agentSessionId: "session-sensitive",
+        toolCallId: "tool-sensitive",
+        toolName: "read",
+        status: "error",
+        retryable: false,
+        startedAt: "2026-05-17T00:00:00.000Z",
+        attributes: {
+          workspace: sensitiveWorkspace,
+          filePath: sensitiveFile,
+          promptArtifactId: "prompt-sensitive",
+          secret: "PROJECT_SECRET_REVENUE=987654321"
+        }
+      }
+    ]
   }, null, 2), "utf8");
 
   await waitForStatus();
@@ -150,7 +177,7 @@ try {
   if (auditSummary.schemaVersion !== "RelayToolCallAuditSummary.v1") {
     throw new Error(`unexpected audit summary schema: ${auditSummary.schemaVersion}`);
   }
-  if (auditSummary.scannedFiles < 2 || auditSummary.toolLikeRecords < 1) {
+  if (auditSummary.scannedFiles < 3 || auditSummary.toolLikeRecords < 1) {
     throw new Error(`audit summary did not inspect the synthetic run logs: ${JSON.stringify(auditSummary)}`);
   }
   const bundleText = [...entries.values()].join("\n");

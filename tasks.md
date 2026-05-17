@@ -27,11 +27,361 @@ results, sandboxing, streaming, and diagnostics.
 
 ## Task Queue
 
-The `HARN*` queue below is now the active task queue. The older `OCT*` queue
-remains as historical context for completed tool-contract work, but it is
-superseded where live Copilot E2E later exposed harness-level defects. In
-particular, any old completion marker that implies complex live E2E is solved
-must be treated as historical until `HARN09` passes.
+The `REUSE*` queue below is the next active queue. It exists to reduce
+wheel-reinvention risk by forcing every Relay-owned harness component to map to
+Microsoft Agent Framework, AG-UI, OpenCode, MCP, or a documented Relay-only
+local policy/tool-body need.
+
+### REUSE01 - Build Delete/Adapt/Keep Matrix
+
+Status: completed
+
+Scope:
+
+- Inventory every active harness-facing component in `apps/sidecar` and
+  Workbench code, including:
+  - `RelayTurnState`;
+  - `RelayAdmissibleActionEnvelope`;
+  - `RelayProtocolGuard`;
+  - approval bridge/resume code;
+  - tool registry/projection code;
+  - `RelayToolObservation`;
+  - Copilot CDP transport;
+  - Workbench event/state rendering.
+- For each component, classify it as:
+  - `delete`: replaced by Agent Framework / AG-UI / OpenCode / MCP;
+  - `adapt`: thin adapter over a framework primitive;
+  - `keep`: Relay-owned because of M365 Copilot CDP, workspace policy,
+    packaging, OfficeCLI, or local safety.
+- Add the matrix to `docs/HARNESS_ARCHITECTURE.md`.
+
+Artifacts:
+
+- Updated `docs/HARNESS_ARCHITECTURE.md`.
+- Implementation note in `docs/IMPLEMENTATION.md`.
+
+Acceptance:
+
+- No active component remains in an uncategorized "Relay harness" bucket.
+- Every `keep` item has a concrete reason tied to Copilot CDP, local policy,
+  approved local function bodies, packaging, or diagnostics.
+- Every `delete`/`adapt` item names the exact replacement primitive.
+
+Verification:
+
+- `rg -n "delete|adapt|keep|RelayTurnState|RelayAdmissibleActionEnvelope|ApprovalRequired|AG-UI|OpenCode|MCP" docs/HARNESS_ARCHITECTURE.md`
+- `git diff --check`
+
+### REUSE02 - Align `apply_patch` Argument Shape With OpenCode
+
+Status: completed
+
+Scope:
+
+- Change the model-facing `apply_patch` argument from Relay-specific `patch`
+  to OpenCode-compatible `patchText`.
+- Keep executor compatibility for legacy `patch`, but hide it from prompts,
+  catalog snapshots, and new tests.
+- Update the tool catalog smoke, protocol-state smoke, golden smoke, and live
+  project E2E script.
+- Update `docs/OPENCODE_TOOL_CONTRACT.md`.
+
+Artifacts:
+
+- Sidecar tool registration/projection update.
+- Updated smoke fixtures.
+- Implementation note.
+
+Acceptance:
+
+- New prompts and catalog snapshots show `apply_patch(req:patchText)`.
+- Executor still accepts old `patch` only as compatibility.
+- No new model-visible Relay-only patch argument remains.
+
+Verification:
+
+- `pnpm agent:tool-catalog-smoke`
+- `pnpm agent:protocol-state-smoke`
+- `pnpm check`
+
+### REUSE03 - Decide OpenCode Built-In Coverage
+
+Status: completed
+
+Scope:
+
+- Compare Relay's model-facing tools with OpenCode built-ins:
+  `bash`, `edit`, `write`, `read`, `grep`, `glob`, `list`, `apply_patch`,
+  `skill`, `todoread`, `todowrite`, `webfetch`, `websearch`, and `question`.
+- For each tool, decide `adopt now`, `defer`, `deny`, or `extension`.
+- Specifically evaluate:
+  - `list` as a read-only directory overview tool;
+  - `todoread`/`todowrite` as session-scoped planning artifacts for complex
+    work;
+  - `skill` as future packaged guidance, not ad hoc prompt text;
+  - `webfetch`/`websearch` as denied unless policy later allows them.
+- Record the decision in `docs/OPENCODE_TOOL_CONTRACT.md`.
+
+Artifacts:
+
+- Updated `docs/OPENCODE_TOOL_CONTRACT.md`.
+- Optional tool-catalog fixture update only if a tool is adopted.
+
+Acceptance:
+
+- Every OpenCode built-in has an explicit decision.
+- If a tool is not adopted, the reason is policy, scope, or user value, not
+  oversight.
+- No Relay-specific replacement is proposed when an OpenCode tool is the right
+  fit.
+
+Verification:
+
+- `rg -n "list|todoread|todowrite|skill|webfetch|websearch|question" docs/OPENCODE_TOOL_CONTRACT.md`
+- `git diff --check`
+
+### REUSE04 - Evaluate Local MCP Reuse Before More Tool Bodies
+
+Status: completed
+
+Scope:
+
+- Review Agent Framework local MCP support against Relay's current local
+  function tools.
+- Evaluate local MCP candidates for:
+  - filesystem read/list/search;
+  - git status/diff;
+  - sqlite/index access;
+  - future app integrations.
+- For each candidate, decide whether to:
+  - use Agent Framework local MCP;
+  - keep Relay function body;
+  - expose a Relay tool as local MCP later;
+  - reject due to data/security/packaging policy.
+
+Artifacts:
+
+- Add `docs/MCP_REUSE_DECISION.md`.
+- Link the decision from `PLANS.md` and `docs/HARNESS_ARCHITECTURE.md`.
+
+Acceptance:
+
+- No future generic local tool can be added without referencing the MCP reuse
+  decision.
+- Decisions include security, Windows share behavior, approval policy, audit,
+  packaging, and offline usability.
+
+Verification:
+
+- `rg -n "filesystem|git|sqlite|MCP|approval|packaging|security" docs/MCP_REUSE_DECISION.md`
+- `git diff --check`
+
+### REUSE05 - Move Session Continuity To Agent Framework First
+
+Status: completed
+
+Scope:
+
+- Audit all state keyed by run ID, request ID, thread ID, and Relay-specific
+  state IDs.
+- Move continuity-sensitive state to Agent Framework `AgentSession` or a
+  session-scoped transcript store.
+- Keep run IDs only as AG-UI/UI correlation IDs.
+- Demote `RelayTurnState` to a derived projection object, then document the
+  remaining deletion path.
+
+Artifacts:
+
+- Sidecar state refactor.
+- Session continuity smoke.
+- Implementation note.
+
+Acceptance:
+
+- Follow-up user turns and approval responses resume the same Agent Framework
+  session.
+- Completed tool results from an old run cannot satisfy a new run.
+- `RelayTurnState` is no longer a durable source of truth.
+
+Verification:
+
+- Add/update session continuity smoke.
+- `pnpm agent:protocol-state-smoke`
+- `pnpm check`
+
+### REUSE06 - Replace Approval Ledger With Native HITL
+
+Status: completed
+
+Scope:
+
+- Wrap mutating tools with Agent Framework approval-required primitives such as
+  `ApprovalRequiredAIFunction` or the current .NET equivalent.
+- Project approval requests/responses through AG-UI human-in-the-loop events.
+- Keep Relay's backup/diff/audit data as metadata on the approved function
+  result, not as a separate approval protocol.
+- Delete or quarantine any path that can execute a mutation outside the pending
+  approved function call.
+
+Artifacts:
+
+- Approval cutover implementation.
+- AG-UI approval replay fixture.
+- Approval audit fixture.
+
+Acceptance:
+
+- Approve resumes the exact pending function call.
+- Reject records a structured denied observation and does not retry through
+  another mutation path.
+- Workbench approval UI can replay from AG-UI events alone.
+
+Verification:
+
+- `pnpm agent:agui-client-tool-smoke`
+- approval replay smoke
+- `pnpm check`
+
+### REUSE07 - Replace AAE With Middleware-Derived Projection
+
+Status: completed
+
+Scope:
+
+- Keep the useful behavior of `RelayAdmissibleActionEnvelope`, but make Agent
+  Framework middleware/tool registry filtering the source of truth.
+- Generate the Copilot prompt's visible tool list from the framework registry
+  and middleware decision.
+- Ensure final/question/tool availability is enforced before and after Copilot
+  output, not by prompt instructions alone.
+- Add hard assertions that local-action tasks cannot reach Copilot with an
+  empty tool registry.
+
+Artifacts:
+
+- Middleware-derived projection implementation.
+- Prompt dump fixture.
+- Protocol guard regression tests.
+
+Acceptance:
+
+- `RelayAdmissibleActionEnvelope` is either deleted or explicitly reduced to a
+  diagnostic serialization of framework state.
+- `local tools unavailable`, unnecessary `ask_user`, and premature `final` are
+  blocked structurally.
+- Prompt text is a projection, not a policy engine.
+
+Verification:
+
+- `pnpm agent:framework-native-prevention-smoke`
+- `pnpm agent:choice-error-reduction-smoke`
+- `pnpm check`
+
+### REUSE08 - Make AG-UI Replay The Primary E2E Artifact
+
+Status: completed
+
+Scope:
+
+- Save standard AG-UI event logs for deterministic and live E2E runs.
+- Add a replay smoke that reconstructs:
+  - run lifecycle;
+  - tool call start/args/end/result;
+  - approval request/response;
+  - state snapshot/delta;
+  - final output.
+- Ensure Workbench UI can render from replayed AG-UI events without depending
+  on Relay-only raw state.
+
+Artifacts:
+
+- AG-UI event log fixture.
+- Replay smoke script.
+- Implementation note.
+
+Acceptance:
+
+- A failed E2E can be debugged from AG-UI events plus framework trace.
+- Relay-specific raw dumps are support attachments only.
+- No primary Workbench state depends on a custom run-event union.
+
+Verification:
+
+- AG-UI replay smoke.
+- `pnpm check`
+
+### REUSE09 - Add Framework-Compatible Observability
+
+Status: completed
+
+Scope:
+
+- Define an OpenTelemetry-compatible trace shape for:
+  - Copilot provider readiness and send/receive;
+  - prompt projection;
+  - tool call admission;
+  - approval pause/resume;
+  - local tool execution;
+  - final eligibility.
+- Export traces in support bundles while redacting sensitive prompt/file data.
+- Keep prompt dumps as opt-in sensitive artifacts.
+
+Artifacts:
+
+- Trace schema or implementation.
+- Support bundle update.
+- Redaction test.
+
+Acceptance:
+
+- Provider failures such as Copilot quota are distinguishable from harness
+  failures.
+- Tool failures include call ID, tool name, workspace, artifact IDs, and
+  retryability without leaking file contents by default.
+- Traces line up with AG-UI event IDs.
+
+Verification:
+
+- support bundle smoke
+- `pnpm check`
+
+### REUSE10 - Rerun Live Copilot Canaries After Structural Smokes
+
+Status: completed
+
+Scope:
+
+- After REUSE02 through REUSE09 pass deterministic checks, rerun live Copilot
+  E2E canaries:
+  - multi-file project creation;
+  - follow-up project improvement;
+  - file search/discovery;
+  - Office inspect/edit/verify.
+- Treat Copilot quota as provider-blocked, not as pass or harness failure.
+
+Artifacts:
+
+- Live E2E artifacts under ignored diagnostics paths.
+- `docs/IMPLEMENTATION.md` entry with command, date, environment, and result.
+
+Acceptance:
+
+- If Copilot is available, the canaries complete without local-tools-unavailable
+  prose, unnecessary `ask_user`, premature `final`, or duplicated mutation.
+- If Copilot quota blocks the run, the app emits structured
+  `copilot_quota_limited` and the E2E is marked provider-blocked.
+
+Verification:
+
+- `pnpm workbench:live-project-e2e`
+- `pnpm workbench:live-copilot-e2e`
+- `pnpm check`
+
+The `HARN*` and `OCT*` queues below remain as historical context. Their useful
+intent has been folded into the completed `REUSE*` queue above; any older
+pending marker below should not be scheduled without first reconciling it
+against `PLANS.md`, `docs/HARNESS_ARCHITECTURE.md`, and the OpenCode-compatible
+tool contract.
 
 ### HARN01 - Write Harness Architecture ADR
 

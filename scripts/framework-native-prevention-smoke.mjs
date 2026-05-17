@@ -70,6 +70,7 @@ function assertKnownLocalPromptsHideAskUser() {
     throw new Error("expected Copilot prompt dumps for framework-native prevention smoke");
   }
 
+  let sawPatchTextProjection = false;
   for (const file of promptFiles) {
     const text = readFileSync(join(promptDumpDir, file), "utf8");
     if (!text.includes("RELAY_TURN_STATE") || !text.includes("RELAY_TOOL_JSON_ONLY")) {
@@ -85,6 +86,15 @@ function assertKnownLocalPromptsHideAskUser() {
       text.includes('For final answer: {"action":"final"')) {
       throw new Error(`pre-terminal prompt exposed final template: ${file}`);
     }
+    if (/^- apply_patch\([^)]*patchText/m.test(text)) {
+      sawPatchTextProjection = true;
+    }
+    if (/^- apply_patch\([^)]*req:patch(?:[)\s]|$)/m.test(text)) {
+      throw new Error(`apply_patch exposed legacy patch argument in prompt dump ${file}`);
+    }
+  }
+  if (!sawPatchTextProjection) {
+    throw new Error("expected prompt projection to expose apply_patch(req:patchText)");
   }
 }
 

@@ -6,8 +6,10 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:tool-catalog-smoke && pnpm agent:golden-smoke && pnpm agent:protocol-state-smoke && pnpm agent:framework-native-prevention-smoke && pnpm agent:choice-error-reduction-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm agent:tool-catalog-smoke && pnpm agent:golden-smoke && pnpm agent:protocol-state-smoke && pnpm agent:framework-native-prevention-smoke && pnpm agent:choice-error-reduction-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:agui-replay-smoke && pnpm agent:framework-trace-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "agent:agui-client-tool-smoke": "node scripts/agui-client-tool-smoke.mjs",
+    "agent:agui-replay-smoke": "node scripts/agui-replay-smoke.mjs",
+    "agent:framework-trace-smoke": "node scripts/framework-trace-smoke.mjs",
     "agent:golden-smoke": "node scripts/agent-golden-smoke.mjs",
     "agent:framework-native-prevention-smoke": "node scripts/framework-native-prevention-smoke.mjs",
     "agent:choice-error-reduction-smoke": "node scripts/choice-error-reduction-smoke.mjs",

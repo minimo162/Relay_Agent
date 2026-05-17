@@ -42,6 +42,32 @@ Relay-owned code is limited to:
 | UI/run stream | AG-UI | Workbench renders lifecycle, tool, state, approval, and final events from AG-UI. |
 | Diagnostics | Relay adapter layer | Prompt dumps, transcript export, audit logs, support bundles, and E2E artifacts. |
 
+## Delete / Adapt / Keep Matrix
+
+Every active harness-facing component must map to a framework/protocol
+primitive or to a narrow Relay-owned adapter responsibility. This matrix is the
+implementation gate for future harness work.
+
+| Component | Current file(s) | Decision | Replacement / owner | Rationale |
+| --- | --- | --- | --- | --- |
+| Copilot CDP transport | `RelayCopilotChatClient.cs` | keep | Relay provider adapter over Edge CDP | M365 Copilot is the required controller and is only reachable through an already signed-in Edge session. |
+| Copilot readiness/send/receive diagnostics | `RelayCopilotChatClient.cs` | adapt | `IChatClient` middleware + trace spans | Provider quirks are Relay-owned, but traces must line up with Agent Framework and AG-UI run IDs. |
+| Agent run loop | `AgentRunner.cs` | adapt | Microsoft Agent Framework `ChatClientAgent` / `AIAgent` | Relay may compose the agent, but must not create a second runtime loop. |
+| `RelayTurnState` | `RelayTurnState.cs`, `RelayPromptBuilder.cs` | adapt, then delete | Agent Framework `AgentSession` plus middleware-derived projection | It can remain as a derived diagnostic/projection object while continuity moves to `AgentSession`; it must not be durable state. |
+| `RelayAdmissibleActionEnvelope` | `RelayAdmissibleActionEnvelope.cs` | adapt, then delete | Agent Framework tool registry filtering and terminal/admission middleware | The behavior is required, but the source of truth should be middleware, not a parallel planner. |
+| `RelayProtocolGuard` | `RelayProtocolGuard.cs` | adapt | terminal/admission middleware assertions | Keep the hard guards, but express them as middleware policies and regression tests. |
+| Tool registry/projection | `AgentRunner.cs`, `RelayCopilotChatClient.cs` | adapt | Agent Framework function/MCP registry projected to Copilot | Registry is framework-owned; Relay only compacts it for the Copilot JSON compiler prompt. |
+| Local tool function bodies | `AgentRunner.cs`, Office/PDF helpers | keep | OpenCode-compatible function tools | Relay owns these bodies because workspace policy, Windows share behavior, backups, OfficeCLI, and packaging are product requirements. |
+| `RelayToolObservation` / `ToolObservation` | `AgentRunner.cs` | adapt | Agent Framework function result + AG-UI tool result metadata | Keep the structured payload, but it must be the result body of framework tool execution rather than a separate protocol. |
+| Approval bridge | `AgentRunner.cs`, Workbench approval UI | adapt | Agent Framework approval-required functions + AG-UI HITL | Approval cards and audit remain Relay UI/diagnostics; pause/resume authority belongs to the framework. |
+| Approval ledger / resume safety | sidecar approval flow | delete as authority | pending Agent Framework approval request | No mutation path may execute outside the exact pending approved function call. |
+| Workbench `RunEvent` union | `apps/workbench/src/types.ts` | adapt, then delete | Standard AG-UI events/state snapshots | It may remain as a presentation view model during migration, but replay and E2E artifacts must be standard AG-UI. |
+| AG-UI transport | `relay-ag-ui.ts`, `Program.cs` | adapt | AG-UI `HttpAgent` and `MapAGUI` | Keep only mapping/glue needed for the Workbench and support replay. |
+| OpenCode compatibility aliases | executor dispatch | delete from model surface | executor-only compatibility | `patch`, `rg_files`, `rg_search`, `run_command`, and `office_search` cannot appear in prompts/catalogs. |
+| MCP extension decision | docs / future registry | adapt | Agent Framework local MCP import when approved | Evaluate MCP before growing new generic Relay function bodies. |
+| Release packaging | scripts/release | keep | Relay-owned packaging glue | No-admin Windows packaging and bundled local tools are product-specific. |
+| Support bundles | scripts/dist diagnostics | adapt | framework-compatible trace + AG-UI replay log | Relay can collect artifacts, but their primary shape should be framework trace and AG-UI events. |
+
 ## OpenCode Semantics
 
 Relay follows OpenCode's compact local workspace tool model:
@@ -122,6 +148,13 @@ Relay does not adopt Codex app-server or OpenCode runtime binaries in this
 milestone because M365 Copilot must remain the reasoning controller and OpenAI
 API/subscription access cannot be assumed. Their public harness/tool semantics
 remain design references.
+
+## Related Decisions
+
+- `docs/OPENCODE_TOOL_CONTRACT.md` defines the model-visible tool names,
+  argument shapes, and OpenCode built-in coverage decisions.
+- `docs/MCP_REUSE_DECISION.md` defines when Agent Framework local MCP reuse is
+  preferred over adding or expanding Relay local function bodies.
 
 ## Acceptance
 

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "RelayAgUiReplayFixture.v1",
+  "runId": "agui-replay-run-001",
+  "threadId": "agui-replay-thread-001",
+  "events": [
+    {
+      "type": "RUN_STARTED",
+      "runId": "agui-replay-run-001",
+      "threadId": "agui-replay-thread-001",
+      "sequence": 1
+    },
+    {
+      "type": "STATE_SNAPSHOT",
+      "runId": "agui-replay-run-001",
+      "sequence": 2,
+      "snapshot": {
+        "workspace": "/tmp/relay-agui-replay",
+        "status": "running"
+      }
+    },
+    {
+      "type": "TOOL_CALL_START",
+      "runId": "agui-replay-run-001",
+      "sequence": 3,
+      "toolCallId": "tool-approval-001",
+      "toolCallName": "request_approval",
+      "parentMessageId": "assistant-001"
+    },
+    {
+      "type": "TOOL_CALL_ARGS",
+      "runId": "agui-replay-run-001",
+      "sequence": 4,
+      "toolCallId": "tool-approval-001",
+      "delta": "{\"request\":\"{\\\"approvalId\\\":\\\"approval-001\\\",\\\"toolCallId\\\":\\\"tool-write-001\\\",\\\"functionName\\\":\\\"write\\\",\\\"functionArguments\\\":{\\\"file_path\\\":\\\"demo.txt\\\",\\\"content\\\":\\\"hello\\\"}}\"}"
+    },
+    {
+      "type": "TOOL_CALL_END",
+      "runId": "agui-replay-run-001",
+      "sequence": 5,
+      "toolCallId": "tool-approval-001"
+    },
+    {
+      "type": "TOOL_CALL_RESULT",
+      "runId": "agui-replay-run-001",
+      "sequence": 6,
+      "toolCallId": "tool-approval-001",
+      "messageId": "tool-result-approval-001",
+      "content": "{\"approved\":true,\"reason\":\"approved in Relay Workbench\"}"
+    },
+    {
+      "type": "TOOL_CALL_START",
+      "runId": "agui-replay-run-001",
+      "sequence": 7,
+      "toolCallId": "tool-write-001",
+      "toolCallName": "write",
+      "parentMessageId": "assistant-002"
+    },
+    {
+      "type": "TOOL_CALL_ARGS",
+      "runId": "agui-replay-run-001",
+      "sequence": 8,
+      "toolCallId": "tool-write-001",
+      "delta": "{\"file_path\":\"demo.txt\",\"content\":\"hello\"}"
+    },
+    {
+      "type": "TOOL_CALL_END",
+      "runId": "agui-replay-run-001",
+      "sequence": 9,
+      "toolCallId": "tool-write-001"
+    },
+    {
+      "type": "TOOL_CALL_RESULT",
+      "runId": "agui-replay-run-001",
+      "sequence": 10,
+      "toolCallId": "tool-write-001",
+      "messageId": "tool-result-write-001",
+      "content": "{\"schemaVersion\":\"RelayToolObservation.v1\",\"toolCallId\":\"tool-write-001\",\"tool\":\"write\",\"success\":true,\"status\":\"ok\",\"summary\":\"file written\",\"artifactIds\":[\"demo.txt\"],\"warnings\":[],\"retryable\":false,\"dataHash\":\"sha256:fixture\"}"
+    },
+    {
+      "type": "STATE_DELTA",
+      "runId": "agui-replay-run-001",
+      "sequence": 11,
+      "delta": [
+        {
+          "op": "replace",
+          "path": "/status",
+          "value": "completed"
+        }
+      ]
+    },
+    {
+      "type": "TEXT_MESSAGE_START",
+      "runId": "agui-replay-run-001",
+      "sequence": 12,
+      "messageId": "assistant-final-001",
+      "role": "assistant"
+    },
+    {
+      "type": "TEXT_MESSAGE_CONTENT",
+      "runId": "agui-replay-run-001",
+      "sequence": 13,
+      "messageId": "assistant-final-001",
+      "delta": "demo.txt を作成しました。"
+    },
+    {
+      "type": "TEXT_MESSAGE_END",
+      "runId": "agui-replay-run-001",
+      "sequence": 14,
+      "messageId": "assistant-final-001"
+    },
+    {
+      "type": "RUN_FINISHED",
+      "runId": "agui-replay-run-001",
+      "sequence": 15
+    }
+  ]
+}

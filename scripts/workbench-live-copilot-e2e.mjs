@@ -127,6 +127,9 @@ async function waitForExpression(expression, timeoutMs, label) {
       href: location.href,
       readyState: document.readyState,
       body: document.body?.innerText?.slice(0, 1000) ?? "",
+      raw: document.querySelector('#raw')?.textContent?.slice(0, 2000) ?? "",
+      summary: document.querySelector('#summary-text')?.textContent?.slice(0, 1000) ?? "",
+      errorText: Array.from(document.querySelectorAll('#events li.event-error')).map((el) => el.textContent).join('\\n').slice(0, 1000),
       readiness: document.querySelector('#readiness')?.textContent ?? null
     }))()`).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
     await sleep(250);
@@ -167,6 +170,9 @@ function classifyLiveCopilotFailure(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target/i.test(message)) {
     return "environment";
+  }
+  if (/copilot_quota_limited|request limit|hourly request limit/i.test(message)) {
+    return "copilot_quota";
   }
   if (/Prompt did not reach|composer|visible length|input|send/i.test(message)) {
     return "prompt_delivery";

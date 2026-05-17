@@ -96,6 +96,176 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-17 Reinvention Review
+
+This review re-checks the active direction against the current public
+documentation for Microsoft Agent Framework, AG-UI, and OpenCode. The answer is:
+
+> Relay is not fully reinventing the wheel yet, but it is still too close to
+> doing so in the harness layer.
+
+The current implementation is correctly using Agent Framework and AG-UI at the
+outer boundary, and it has moved the model-facing tools toward OpenCode names.
+However, several Relay-owned abstractions still overlap with concepts that the
+frameworks already provide:
+
+1. **Turn/session state**: `RelayTurnState` and run-keyed state are useful as
+   transition scaffolding, but Agent Framework `AgentSession` is the correct
+   long-lived continuity authority. Keeping both as first-class authorities
+   risks duplicated memory, stale tool results, and follow-up run leakage.
+2. **Admissible action envelope**: `RelayAdmissibleActionEnvelope` prevents bad
+   Copilot choices today, but the durable version should be Agent Framework
+   middleware plus tool-registry filtering. Relay can still derive a compact
+   Copilot prompt projection from that framework state; it should not maintain
+   a parallel planner.
+3. **Approval flow**: AG-UI integration documents native HITL behavior through
+   approval-required functions/client tool calls. Relay approval cards,
+   ledgers, and resume logic should become thin render/audit adapters over
+   Agent Framework approval primitives, not an independent approval protocol.
+4. **AG-UI events/state**: AG-UI defines run, tool-call, result, state
+   snapshot/delta, message snapshot, activity, and reasoning events. Workbench
+   state should be replayable from these standard events. Any Relay-only event
+   union should be diagnostics-only or removed.
+5. **OpenCode tool shape**: the tool names are mostly aligned, but argument
+   shapes are not fully aligned. In particular OpenCode documents
+   `apply_patch` with patch text under `patchText`; Relay currently projects
+   `patch`. Relay should migrate the model-facing shape to `patchText` while
+   accepting `patch` only as a compatibility alias.
+6. **Tool coverage**: OpenCode includes `list`, `todowrite`, and `todoread` in
+   addition to `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, `bash`,
+   and `question`. Relay should not copy every tool blindly, but it should make
+   an explicit keep/defer/adopt decision for each OpenCode built-in so gaps are
+   deliberate rather than accidental.
+7. **MCP reuse**: Agent Framework supports local MCP tools, and the docs call
+   out MCP when a prebuilt server already provides a capability. Relay should
+   evaluate local MCP reuse for generic filesystem/git/sqlite-style tools
+   before growing more local function bodies. Security, Windows share behavior,
+   and approval policy may still justify Relay-owned function tools, but that
+   decision must be documented per tool family.
+8. **Observability**: Agent Framework guidance highlights AG-UI plus
+   OpenTelemetry-style observability. Relay's support bundles and prompt dumps
+   are useful, but they should be normalized into framework-native traces and
+   replayable AG-UI event logs.
+
+Evidence from the latest docs:
+
+- Agent Framework's AG-UI integration maps `AIAgent`, streaming agent runs,
+  function tools, approval-required functions, `AgentSession`, and structured
+  state directly to AG-UI concepts.
+- Agent Framework tool guidance says the application/framework parses tool
+  calls, executes functions, and feeds results back; it also recommends MCP
+  tools when an existing MCP server already provides the needed capability.
+- AG-UI defines standard event types for text, tool calls, tool results, state
+  snapshots/deltas, message snapshots, activity snapshots/deltas, and reasoning.
+- OpenCode defines a compact built-in tool set and permission classes where
+  `edit` gates `write`, `edit`, and `apply_patch`; `question` is a tool, not
+  free-form prose.
+
+### Reinvention-Reduction Target Architecture
+
+The target architecture must make every nontrivial Relay-owned component answer
+one question:
+
+> Is this an adapter around Agent Framework, AG-UI, OpenCode semantics, or a
+> local policy/tool body that no approved reusable component provides?
+
+If the answer is "no", the component should be deleted, folded into framework
+middleware, or demoted to diagnostics.
+
+#### Keep As Relay-Owned
+
+- **M365 Copilot CDP provider adapter**: required because the approved LLM
+  controller is Microsoft 365 Copilot through an already-signed-in Edge session.
+  This is the main unavoidable custom layer.
+- **Workspace policy and local safety**: path containment, Windows share
+  handling, backup location, redaction, no-admin packaging, and organization
+  constraints are local product requirements.
+- **Approved local function bodies**: OfficeCLI semantic operations,
+  Office/PDF plaintext extraction, ripgrep invocation, and filesystem mutation
+  bodies may remain local when a prebuilt MCP/tool cannot satisfy policy.
+- **Diagnostics bridge**: prompt dumps, support bundles, quota/provider
+  diagnostics, and release packaging remain Relay-owned, but should emit
+  framework-compatible traces where possible.
+
+#### Move To Framework/Protocol Ownership
+
+- **Session continuity**: Agent Framework `AgentSession` owns transcript and
+  continuation state. Relay run IDs are UI correlation IDs only.
+- **Tool admission and final eligibility**: Agent Framework middleware owns
+  which tools are visible and whether final/question is allowed. The Copilot
+  prompt receives a projection of this state; it is not the source of truth.
+- **Approval**: `ApprovalRequiredAIFunction` or equivalent Agent Framework
+  approval primitives own pause/resume. AG-UI HITL events own the client
+  interaction shape.
+- **UI event model**: Workbench renders AG-UI events and state snapshots/deltas.
+  Relay-specific raw events are support diagnostics only.
+- **Tool contract**: OpenCode-compatible names and argument schemas are the
+  public model-facing surface. Relay aliases are executor-only compatibility.
+
+### Improvement Plan
+
+1. **Create a delete/adapt/keep matrix for every harness component.**
+   Inventory `RelayTurnState`, `RelayAdmissibleActionEnvelope`,
+   `RelayProtocolGuard`, approval bridge code, `RelayToolObservation`, tool
+   registry/projection, Workbench event handling, and Copilot transport. For
+   each item, name the official primitive it should map to, or justify why it
+   must remain Relay-owned.
+2. **Cut over session continuity first.**
+   Make Agent Framework `AgentSession` and the AG-UI thread the durable
+   transcript boundary. Keep `RelayTurnState` only as a derived, per-call
+   diagnostic/projection object until it can be removed.
+3. **Cut over approvals next.**
+   Wrap mutating functions as approval-required Agent Framework tools and map
+   them through AG-UI HITL. Delete any approval resume path that can execute
+   outside the pending function call.
+4. **Replace AAE with middleware-derived projection.**
+   Keep the behavior that prevents local-tools-unavailable, unnecessary
+   `ask_user`, and premature `final`, but implement it as admission/final
+   eligibility middleware. The prompt projection should be generated from the
+   framework registry and middleware decision.
+5. **Align OpenCode tool shapes, not only names.**
+   Migrate `apply_patch` to the OpenCode-style `patchText` model-facing
+   argument. Accept `patch` only as executor compatibility. Evaluate `list`,
+   `todoread`, and `todowrite` explicitly; adopt only if they reduce prompt
+   state or improve long-horizon work without adding a Relay-only taxonomy.
+6. **Evaluate MCP reuse before adding more local function bodies.**
+   For filesystem, git/status/diff, sqlite/index, and future app integrations,
+   compare Agent Framework local MCP tools against Relay-owned functions.
+   Adopt MCP only when it preserves workspace policy, approval behavior, audit
+   logs, and Windows/Linux packaging. The current decision matrix lives in
+   `docs/MCP_REUSE_DECISION.md`.
+7. **Make AG-UI replay the acceptance artifact.**
+   Every live/manual E2E should save a standard AG-UI event log that can replay
+   run lifecycle, tool calls, approvals, state snapshots, and final output.
+   Raw Relay diagnostics can be attached, but cannot be required to understand
+   the user-visible run.
+8. **Normalize observability.**
+   Add an OpenTelemetry-compatible trace shape for provider calls, model
+   projections, tool calls, approvals, and local execution. Keep prompt dumps as
+   sensitive support artifacts, not as the primary debugging model.
+9. **Use live Copilot canaries only after structural smokes pass.**
+   Because M365 Copilot quota can block tests, local deterministic smokes must
+   validate Agent Framework/AG-UI/OpenCode conformance first. Live Copilot E2E
+   remains required for release readiness, but quota failures should be
+   structured provider-blocked results, not harness failures.
+
+### Acceptance Bar For "Not Reinventing The Wheel"
+
+Relay can be considered safely aligned when all of the following are true:
+
+- Every Workbench-visible event is standard AG-UI or a documented AG-UI
+  activity/state payload.
+- Approval-required tools use Agent Framework approval primitives and resume
+  the same `AgentSession`.
+- Model-visible local tool names and argument schemas match OpenCode, except
+  for documented extensions such as `officecli`.
+- Tool availability and final eligibility are enforced by middleware, not by
+  prompt instructions alone.
+- Any Relay-owned tool body has a written reason why an existing MCP/tool
+  implementation was not adopted.
+- A saved AG-UI event log plus framework trace is enough to debug an E2E
+  failure without reading ad hoc Relay-only state.
+
 ### Harness Principle
 
 Relay should not own an independent agent harness. Relay should own adapters.

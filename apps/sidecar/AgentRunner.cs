@@ -22,7 +22,7 @@ public sealed class RelayAgentFrameworkRunner
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
         If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
-        apply_patch uses one envelope only: one leading *** Begin Patch, all file hunks, then one final *** End Patch.
+        apply_patch uses args.patchText with one envelope only: one leading *** Begin Patch, all file hunks, then one final *** End Patch.
         Exact marker/token strings explicitly requested by the user are required output content, not optional verification notes.
         Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.
         Treat period, version, region, and department tokens in file names and paths as evidence context when the file content omits them.
@@ -399,9 +399,9 @@ public sealed class RelayAgentFunctionSet(
         InvokeAsync("patch", Args(("patch", patch)), cancellationToken);
 
     public Task<ToolObservation> ApplyPatchAsync(
-        string patch,
+        string patchText,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("apply_patch", Args(("patch", patch)), cancellationToken);
+        InvokeAsync("apply_patch", Args(("patchText", patchText)), cancellationToken);
 
     public Task<ToolObservation> WorkspaceStatusAsync(int? limit = null, CancellationToken cancellationToken = default) =>
         InvokeAsync("workspace_status", Args(("limit", limit)), cancellationToken);
@@ -1379,7 +1379,7 @@ public sealed class RelayToolExecutor
 
     private async Task<ToolObservation> PatchAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
-        var patch = GetString(call.Args, "patch") ?? "";
+        var patch = GetString(call.Args, "patchText") ?? GetString(call.Args, "patch") ?? "";
         if (string.IsNullOrWhiteSpace(patch)) return ToolObservation.Fail(call.Id, call.Tool, "patch is required.");
 
         if (!RelayPatch.TryParse(patch, out var operations, out var error))
@@ -2172,10 +2172,10 @@ public sealed class RelayToolExecutor
 
     private static ToolValidation ValidatePatch(string workspace, JsonObject args)
     {
-        var patch = GetString(args, "patch");
+        var patch = GetString(args, "patchText") ?? GetString(args, "patch");
         if (string.IsNullOrWhiteSpace(patch))
         {
-            return ToolValidation.Fail("patch requires patch.");
+            return ToolValidation.Fail("apply_patch requires patchText.");
         }
 
         if (!RelayPatch.TryParse(patch, out var operations, out var error))

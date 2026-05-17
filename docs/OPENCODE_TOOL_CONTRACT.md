@@ -90,8 +90,9 @@ tool contract rather than a Relay-specific taxonomy.
 ### `apply_patch`
 
 - Use for structured multi-file changes when context is known.
-- Parameters: `patch` using Relay's `*** Begin Patch` / `*** End Patch`
-  grammar.
+- Parameters: `patchText` using the `*** Begin Patch` / `*** End Patch`
+  grammar. `patch` is accepted only by the executor as a legacy compatibility
+  alias and must not be prompt-visible.
 - Requires approval. Relay validates all target paths inside the workspace and
   creates backups before destructive updates.
 - Failure examples: invalid grammar, unsafe path, add target exists, delete or
@@ -147,3 +148,30 @@ bodies. It includes `schemaVersion`, `toolCallId`, `tool`, `success`, `status`,
 `summary`, `data`, `artifactIds`, `warnings`, `retryable`, and `dataHash`.
 Large output must be capped or summarized, with exact files recoverable through
 artifact IDs and later `read` calls.
+
+## OpenCode Built-In Coverage Decision
+
+Relay treats OpenCode's built-in tools as the reference surface, but does not
+blindly expose every tool before the Agent Framework and AG-UI contract can
+support it cleanly.
+
+| OpenCode tool | Relay decision | Reason |
+| --- | --- | --- |
+| `read` | adopt now | Exact file/document inspection is core to local work; Relay adds Office/PDF plaintext extraction behind the same name. |
+| `glob` | adopt now | Filename/path discovery maps cleanly to ripgrep `--files` and keeps document search generic. |
+| `grep` | adopt now | Plaintext/code content search maps to ripgrep; Office/PDF containers stay `glob` + exact `read`. |
+| `edit` | adopt now | Exact replacement is a common approval-required mutation with simple audit semantics. |
+| `write` | adopt now | Complete-file create/overwrite is needed for generated artifacts and small projects. |
+| `apply_patch` | adopt now | Coherent multi-file changes need one approval and one observation; prompt-visible argument is `patchText`. |
+| `bash` | adopt now, bounded | Needed for explicit tests/builds/git/rg verification. Relay keeps structured `argv` and policy checks. |
+| `list` | defer | Useful for directory overview, but `glob` plus `workspace_status` covers the current MVP without another read tool. Revisit only if E2E shows users need tree summaries. |
+| `todoread` | defer | Planning state should first use Agent Framework session/state and AG-UI state snapshots. Add only if long-horizon live E2E shows a real planning artifact gap. |
+| `todowrite` | defer | Same as `todoread`; avoid a second task-state store until Agent Framework session state is exhausted. |
+| `skill` | defer | Useful for packaged guidance later. Current approved skill behavior is repository documentation plus prompt projection, not model-visible ad hoc skills. |
+| `webfetch` | deny | Current product is local business work with no unrestricted external network execution. |
+| `websearch` | deny | Same policy as `webfetch`; use only if a future policy explicitly permits web access. |
+| `question` | extension via `ask_user` | Relay exposes AG-UI client-user input as `ask_user` for now. It is state-scoped and visible only when middleware says the run is user-blocked. |
+
+New generic local tools must update this table first. If a needed capability
+matches an OpenCode built-in, Relay should adopt that name/shape instead of
+inventing a Relay-specific tool.

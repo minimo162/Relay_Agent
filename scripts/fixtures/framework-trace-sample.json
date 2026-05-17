@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "RelayFrameworkTrace.v1",
+  "traceId": "trace-agui-replay-run-001",
+  "spans": [
+    {
+      "schemaVersion": "RelayFrameworkTraceSpan.v1",
+      "traceId": "trace-agui-replay-run-001",
+      "spanId": "span-provider-001",
+      "name": "copilot.send",
+      "category": "provider",
+      "agUiRunId": "agui-replay-run-001",
+      "agentSessionId": "session-hash-001",
+      "status": "ok",
+      "retryable": false,
+      "startedAt": "2026-05-17T00:00:00.000Z",
+      "endedAt": "2026-05-17T00:00:01.000Z",
+      "attributes": {
+        "provider": "m365-copilot-cdp",
+        "promptArtifactId": "prompt-redacted-001",
+        "responseArtifactId": "response-redacted-001"
+      }
+    },
+    {
+      "schemaVersion": "RelayFrameworkTraceSpan.v1",
+      "traceId": "trace-agui-replay-run-001",
+      "spanId": "span-tool-001",
+      "parentSpanId": "span-provider-001",
+      "name": "tool.execute",
+      "category": "tool",
+      "agUiRunId": "agui-replay-run-001",
+      "agentSessionId": "session-hash-001",
+      "toolCallId": "tool-write-001",
+      "toolName": "write",
+      "status": "ok",
+      "retryable": false,
+      "startedAt": "2026-05-17T00:00:01.000Z",
+      "endedAt": "2026-05-17T00:00:01.200Z",
+      "attributes": {
+        "workspaceHash": "sha256:workspace",
+        "artifactIds": ["demo.txt"],
+        "dataHash": "sha256:fixture"
+      }
+    }
+  ]
+}

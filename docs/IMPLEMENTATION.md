@@ -18903,4 +18903,70 @@ Result:
   its hourly request limit. Relay detected this as a structured provider
   failure:
   `copilot_quota_limited: Microsoft 365 Copilot reported a request limit`.
-  The failure artifacts were written under `dist/e2e/live-project/`.
+The failure artifacts were written under `dist/e2e/live-project/`.
+
+## 2026-05-17: Reinvention-Reduction Task Queue Implementation
+
+Changes:
+
+- Added a delete/adapt/keep matrix to `docs/HARNESS_ARCHITECTURE.md` so every
+  active harness-facing component maps to Microsoft Agent Framework, AG-UI,
+  OpenCode-compatible semantics, MCP reuse, or a narrow Relay-owned adapter
+  responsibility.
+- Migrated the model-facing `apply_patch` argument from Relay-specific
+  `patch` to OpenCode-compatible `patchText`. The executor still accepts
+  legacy `patch` as a compatibility alias, but prompts now expose
+  `apply_patch(req:patchText)`.
+- Added explicit OpenCode built-in coverage decisions for `list`,
+  `todoread`, `todowrite`, `skill`, `webfetch`, `websearch`, and `question`
+  in `docs/OPENCODE_TOOL_CONTRACT.md`.
+- Added `docs/MCP_REUSE_DECISION.md` to require MCP reuse evaluation before
+  adding new generic local tool bodies.
+- Added AG-UI replay and framework trace acceptance artifacts:
+  `scripts/agui-replay-smoke.mjs`,
+  `scripts/fixtures/agui-replay-sample.json`,
+  `docs/TRACE_SCHEMA.md`,
+  `scripts/framework-trace-smoke.mjs`, and
+  `scripts/fixtures/framework-trace-sample.json`.
+- Extended support bundles to include `agui-events` and `traces`, and extended
+  the security smoke so redaction covers trace files as well as run logs.
+- Tightened the live Copilot canary classification so real Copilot quota
+  failures are reported as `copilot_quota` instead of a generic response
+  extraction failure.
+- Marked the active `REUSE01` through `REUSE10` task queue complete in
+  `tasks.md`; REUSE10 completed as a live canary attempt with provider quota
+  blocking rather than a harness pass.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:build
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:agui-replay-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:framework-trace-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:protocol-state-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:tool-catalog-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:framework-native-prevention-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+RELAY_LIVE_PROJECT_COPILOT_REPLY_TIMEOUT_SECONDS=90 \
+  RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/responses \
+  PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-project-e2e
+RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-copilot/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-copilot/responses \
+  PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+```
+
+Result:
+
+- Sidecar Release build passed.
+- New AG-UI replay and framework trace smokes passed.
+- Protocol-state, tool-catalog, framework-native prevention, and full
+  `pnpm check` passed.
+- Live signed-in Copilot project E2E reached the real Copilot provider and
+  stopped with structured provider quota:
+  `copilot_quota_limited: Microsoft 365 Copilot reported a request limit`.
+  The failed run artifacts were written under `dist/e2e/live-project/`.
+- Live signed-in Copilot lightweight canary was rerun after improving the
+  classifier and is now classified as
+  `[workbench-live-copilot-e2e:copilot_quota]` with the raw AG-UI `RUN_ERROR`
+  payload showing the same `copilot_quota_limited` provider reason.

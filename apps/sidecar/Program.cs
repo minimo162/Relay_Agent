@@ -362,7 +362,7 @@ public static class SupportBundle
             "audit/prevention-metrics.json",
             RelayPreventionMetrics.Snapshot().ToJson().ToJsonString(JsonOptions.Default));
 
-        foreach (var directoryName in new[] { "runs", "run-events" })
+        foreach (var directoryName in new[] { "runs", "run-events", "agui-events", "traces" })
         {
             var directory = Path.Combine(dataDirectory, directoryName);
             if (!Directory.Exists(directory)) continue;
@@ -396,7 +396,7 @@ public static class SupportBundle
 
 public static class ToolCallAuditSummary
 {
-    private static readonly string[] AuditDirectories = ["runs", "run-events"];
+    private static readonly string[] AuditDirectories = ["runs", "run-events", "agui-events", "traces"];
 
     public static async Task<string> CreateJsonAsync(string dataDirectory, CancellationToken cancellationToken)
     {

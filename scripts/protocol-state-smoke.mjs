@@ -20,9 +20,9 @@ const responses = [
   JSON.stringify({ action: "tool", tool: "read", args: { file_path: "src/app.js" } }),
   JSON.stringify({
     action: "tool",
-    tool: "patch",
+    tool: "apply_patch",
     args: {
-      patch: "*** Begin Patch\n*** Add File: README.md\n+# Project\n+\n+relayTeamTaskBoard.v1\n*** End Patch\n",
+      patchText: "*** Begin Patch\n*** Add File: README.md\n+# Project\n+\n+relayTeamTaskBoard.v1\n*** End Patch\n",
     },
   }),
 ];
