@@ -4,10 +4,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assistantText, collectToolCalls, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
+import { ensureCopilotCdp } from "./lib/copilot-cdp.mjs";
 
 const token = "relay-live-dci-token";
 const port = 17904;
-const copilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?? process.env.RELAY_COPILOT_CDP_PORT ?? "9360");
+const preferredCopilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?? process.env.RELAY_COPILOT_CDP_PORT ?? "9360");
 const dataDir = mkdtempSync(join(tmpdir(), "relay-live-dci-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-live-dci-workspace-"));
 const artifactDir = join(process.cwd(), "dist", "e2e", "live-dci");
@@ -26,9 +27,9 @@ writeFileSync(
   "utf8",
 );
 writeFileSync(
-  join(workspace, "finance", "q4", "parts-revenue-evidence.md"),
+  join(workspace, "finance", "q4", "source-a.md"),
   [
-    "# FY160 4Q 部品売上 evidence",
+    "# FY160 4Q source memo",
     "国内サービス部品について、部品 売上の確定実績はこのファイルの集計表に基づく。",
     "補修部品、パーツ売上、parts sales の表現が同じ文脈で出る。",
   ].join("\n"),
@@ -36,34 +37,41 @@ writeFileSync(
 );
 writeFileSync(join(workspace, "notes", "generic-sales.md"), "売上高の一般メモ。部品の文脈はありません。\n", "utf8");
 
-const sidecar = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
-  cwd: process.cwd(),
-  env: {
-    ...process.env,
-    RELAY_PORT: String(port),
-    RELAY_LAUNCH_TOKEN: token,
-    RELAY_DATA_DIR: dataDir,
-    RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
-    RELAY_COPILOT_CDP_PORT: String(copilotCdpPort),
-    RELAY_COPILOT_FRESH_TARGET: "1",
-    RELAY_COPILOT_REPLY_TIMEOUT_SECONDS: process.env.RELAY_LIVE_DCI_COPILOT_REPLY_TIMEOUT_SECONDS ?? "240",
-    RELAY_COPILOT_PROMPT_DUMP_DIR: process.env.RELAY_COPILOT_PROMPT_DUMP_DIR ?? join(artifactDir, "prompts"),
-    RELAY_COPILOT_RESPONSE_DUMP_DIR: process.env.RELAY_COPILOT_RESPONSE_DUMP_DIR ?? join(artifactDir, "responses"),
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-
+let copilotCdp;
+let sidecar;
 let sidecarStderr = "";
-sidecar.stderr.on("data", (chunk) => {
-  sidecarStderr += chunk.toString();
-});
 
 try {
-  await assertCopilotCdpAvailable();
+  copilotCdp = await ensureCopilotCdp({
+    preferredPort: preferredCopilotCdpPort,
+    artifactDir,
+  });
+
+  sidecar = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      RELAY_PORT: String(port),
+      RELAY_LAUNCH_TOKEN: token,
+      RELAY_DATA_DIR: dataDir,
+      RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
+      RELAY_COPILOT_CDP_PORT: String(copilotCdp.port),
+      RELAY_COPILOT_FRESH_TARGET: "1",
+      RELAY_COPILOT_REPLY_TIMEOUT_SECONDS: process.env.RELAY_LIVE_DCI_COPILOT_REPLY_TIMEOUT_SECONDS ?? "240",
+      RELAY_COPILOT_PROMPT_DUMP_DIR: process.env.RELAY_COPILOT_PROMPT_DUMP_DIR ?? join(artifactDir, "prompts"),
+      RELAY_COPILOT_RESPONSE_DUMP_DIR: process.env.RELAY_COPILOT_RESPONSE_DUMP_DIR ?? join(artifactDir, "responses"),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  sidecar.stderr.on("data", (chunk) => {
+    sidecarStderr += chunk.toString();
+  });
+
   await waitForStatus();
   const instruction = [
     "このローカルワークスペースだけを使ってください。",
     "部品売上に関する根拠ファイルを探してください。",
+    "ファイル名だけでは判断できないので、必ず grep で内容を検索してください。",
     "会社名だけが一致する紛らわしい候補は、内容を確認して候補から外してください。",
     "必ず grep と read でローカル根拠を確認し、最後に根拠ファイルと理由を日本語で短く答えてください。",
   ].join("\n");
@@ -84,11 +92,27 @@ try {
   if (!names.includes("grep") || !names.includes("read")) {
     throw new Error(`DCI live run did not use both grep and read: ${names.join(", ")}`);
   }
+  const grepEvidencePaths = calls
+    .filter((call) => call.name === "grep")
+    .flatMap((call) => grepMatchPaths(call));
+  if (!grepEvidencePaths.some((path) => path === "finance/q4/source-a.md")) {
+    throw new Error(`DCI live run did not grep the separated-term evidence file: ${JSON.stringify(grepEvidencePaths)}`);
+  }
+  const readTargets = calls
+    .filter((call) => call.name === "read")
+    .map((call) => readTarget(call))
+    .filter(Boolean);
+  if (!readTargets.some((target) => target.endsWith("finance/q4/source-a.md"))) {
+    throw new Error(`DCI live run did not read the content evidence file: ${JSON.stringify(readTargets)}`);
+  }
   const final = assistantText(run.events);
+  if (/該当なし|見つかりません|確認できない|確認できません|no match|not found/i.test(final)) {
+    throw new Error(`final answer incorrectly reported no evidence: ${final}`);
+  }
   if (!/部品/.test(final) || !/売上/.test(final)) {
     throw new Error(`final answer did not address parts sales: ${final}`);
   }
-  if (!/parts-revenue-evidence|根拠|finance/i.test(final)) {
+  if (!/source-a|finance\/q4/i.test(final)) {
     throw new Error(`final answer did not identify the content evidence file: ${final}`);
   }
   const result = { workspace, tools: names, final };
@@ -102,21 +126,8 @@ try {
   writeFileSync(join(artifactDir, "failure.json"), `${JSON.stringify({ classification, message }, null, 2)}\n`, "utf8");
   throw new Error(`[workbench-live-dci-e2e:${classification}] ${message}`);
 } finally {
-  sidecar.kill("SIGTERM");
-}
-
-async function assertCopilotCdpAvailable() {
-  let response;
-  try {
-    response = await fetch(`http://127.0.0.1:${copilotCdpPort}/json/version`);
-  } catch (error) {
-    throw new Error(`Copilot Edge CDP is not reachable on ${copilotCdpPort}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (!response.ok) throw new Error(`Copilot Edge CDP is not reachable on ${copilotCdpPort}: ${response.status}`);
-  const version = await response.json();
-  if (!String(version.Browser ?? "").toLowerCase().includes("edg")) {
-    throw new Error(`CDP port ${copilotCdpPort} does not look like Microsoft Edge: ${JSON.stringify(version)}`);
-  }
+  sidecar?.kill("SIGTERM");
+  copilotCdp?.cleanup();
 }
 
 async function waitForStatus() {
@@ -148,6 +159,33 @@ function classifyLiveDciFailure(error) {
   if (/invalid JSON|schema|tool projection|expected JSON/i.test(message)) return "schema_validation";
   if (/grep|read|ripgrep|workspace|tool/i.test(message)) return "tool_contract";
   return "unknown";
+}
+
+function grepMatchPaths(call) {
+  const paths = [];
+  for (const result of call.results) {
+    try {
+      const parsed = JSON.parse(result);
+      const matches = parsed?.data?.matches;
+      if (Array.isArray(matches)) {
+        for (const match of matches) {
+          if (typeof match?.displayPath === "string") paths.push(match.displayPath);
+        }
+      }
+    } catch {
+      // Ignore non-JSON fragments; malformed tool results are caught elsewhere.
+    }
+  }
+  return paths;
+}
+
+function readTarget(call) {
+  try {
+    const parsed = JSON.parse(call.args || "{}");
+    return typeof parsed.file_path === "string" ? parsed.file_path.replaceAll("\\", "/") : "";
+  } catch {
+    return "";
+  }
 }
 
 function sleep(ms) {

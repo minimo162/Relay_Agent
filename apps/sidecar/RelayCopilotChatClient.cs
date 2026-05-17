@@ -221,7 +221,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         if (plan.Action == "final")
         {
-            var finalDecision = RelayProtocolGuard.ValidateFinal(state, availableTools, envelope);
+            var finalDecision = RelayProtocolGuard.ValidateFinal(state, availableTools, envelope, plan.Answer);
             if (TryApplyProtocolDecision(finalDecision, options, out var finalResponse))
             {
                 return finalResponse;
@@ -533,6 +533,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "If the user asks to create or overwrite a single file, call write with file_path and complete content.",
             "Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.",
             "For local document/data review, use glob/read/grep first and reason from those results. Do not use bash for ordinary file reading or light CSV arithmetic.",
+            "For compound business concepts, do not rely on one exact glued phrase grep. Prefer grep allTerms for required components plus anyTerms for variants, for example 部品売上 should search allTerms [\"部品\",\"売上\"] and then read promising files.",
+            "If a grep/read result is only a negative, entity-name, generic, or decoy match, refine with broader conjunctive grep before final. Do not answer no-match from a single weak or negative candidate.",
+            "If RELAY_TURN_STATE or terminalCriteria requires evidence_read_result, call read on the best candidate file before final, even if grep already found matching lines.",
             "For code/project edits, read exact target files without offset/limit before mutating unless the user explicitly asks for a partial inspection.",
             "For coherent multi-file project creation or edits, prefer apply_patch with one reviewed change set. Use write for one complete file and edit for one exact replacement.",
             "apply_patch requires args.patchText with one patch envelope only: one leading *** Begin Patch, any number of Add/Update/Delete file hunks, and one final *** End Patch. Never repeat Begin/End blocks inside the same patchText string.",
@@ -915,6 +918,14 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                     }
 
                     var status = resultInfo.Status ?? (resultInfo.Success == false ? "failed" : "success");
+                    if (toolName == "grep" && !string.IsNullOrWhiteSpace(resultInfo.Target))
+                    {
+                        yield return $"{FormatToolCallDetail(toolName, new Dictionary<string, object?>
+                        {
+                            ["path"] = resultInfo.Target,
+                        })}:{status}";
+                    }
+
                     if (IsMutationTool(toolName) && resultInfo.Artifacts.Length > 0)
                     {
                         foreach (var artifact in resultInfo.Artifacts)
@@ -1040,6 +1051,11 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                         displayPath.ValueKind == JsonValueKind.String => displayPath.GetString(),
                     JsonValueKind.Object when dataProperty.TryGetProperty("path", out var path) &&
                         path.ValueKind == JsonValueKind.String => path.GetString(),
+                    JsonValueKind.Object when dataProperty.TryGetProperty("matches", out var matches) &&
+                        matches.ValueKind == JsonValueKind.Array &&
+                        matches.EnumerateArray().FirstOrDefault() is { ValueKind: JsonValueKind.Object } firstMatch &&
+                        firstMatch.TryGetProperty("displayPath", out var matchDisplayPath) &&
+                        matchDisplayPath.ValueKind == JsonValueKind.String => matchDisplayPath.GetString(),
                     _ => null,
                 };
             }

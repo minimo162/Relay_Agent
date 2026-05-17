@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 public enum RelayProtocolDecisionKind
 {
@@ -22,7 +23,8 @@ public static class RelayProtocolGuard
     public static RelayProtocolDecision ValidateFinal(
         RelayTurnState state,
         ISet<string> availableTools,
-        RelayAdmissibleActionEnvelope envelope)
+        RelayAdmissibleActionEnvelope envelope,
+        string? proposedAnswer = null)
     {
         if (!envelope.CanFinalize)
         {
@@ -40,6 +42,20 @@ public static class RelayProtocolGuard
             return RelayProtocolDecision.Replace(directive);
         }
 
+        if (state.RequiresReadEvidenceBeforeFinal &&
+            availableTools.Contains("read") &&
+            TryFindEvidenceReadPath(proposedAnswer, state, out var evidencePath))
+        {
+            return RelayProtocolDecision.Replace(new RelayToolDirective(
+                "read",
+                new JsonObject
+                {
+                    ["file_path"] = evidencePath,
+                    ["limit"] = 12000,
+                },
+                "evidence_read_before_final"));
+        }
+
         if (state.RequiresLocalToolBeforeFinal || !envelope.CanFinalize)
         {
             return RelayProtocolDecision.Reject(
@@ -47,6 +63,45 @@ public static class RelayProtocolGuard
         }
 
         return RelayProtocolDecision.Allow();
+    }
+
+    private static bool TryFindEvidenceReadPath(string? proposedAnswer, RelayTurnState state, out string path)
+    {
+        path = "";
+        if (TryExtractPath(proposedAnswer, out path))
+        {
+            return true;
+        }
+
+        foreach (var detail in state.CompletedToolDetails)
+        {
+            if (!detail.StartsWith("grep:", StringComparison.Ordinal) ||
+                !detail.EndsWith(":success", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = detail["grep:".Length..^":success".Length];
+            if (TryExtractPath(value, out path))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractPath(string? text, out string path)
+    {
+        path = "";
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var match = Regex.Match(
+            text,
+            @"(?<path>(?:[A-Za-z]:)?[\p{L}\p{N}._/\-\\()[\]（）【】 ]+?\.(?:md|txt|csv|json|html|css|js|ts|tsx|jsx|py|rs|cs|xlsx|xlsm|xls|docx|pptx|pdf))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return false;
+        path = match.Groups["path"].Value.Trim(' ', '。', '、', ',', ';', ':', '"', '\'', '`');
+        return !string.IsNullOrWhiteSpace(path);
     }
 
     public static RelayProtocolDecision ValidateTool(

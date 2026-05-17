@@ -122,6 +122,16 @@ public static class RelayAdmissibleActionEnvelopeBuilder
             return RelayActionPhase.NeedsObservation;
         }
 
+        if (state.RequiresEvidenceObservationBeforeFinal)
+        {
+            return RelayActionPhase.NeedsObservation;
+        }
+
+        if (state.RequiresReadEvidenceBeforeFinal && registeredTools.Contains("read"))
+        {
+            return RelayActionPhase.NeedsExactRead;
+        }
+
         return RelayActionPhase.CanFinalize;
     }
 
@@ -223,13 +233,17 @@ public static class RelayAdmissibleActionEnvelopeBuilder
         {
             criteria.Add("at_least_one_local_tool_result");
         }
+        if (state.RequiresEvidenceObservationBeforeFinal)
+        {
+            criteria.Add("grep_or_read_evidence_result");
+        }
         if (state.RequiresMutationBeforeFinal || phase == RelayActionPhase.NeedsMutation)
         {
             criteria.Add("successful_mutation_tool_result");
         }
         if (phase == RelayActionPhase.NeedsExactRead)
         {
-            criteria.Add("exact_read_result");
+            criteria.Add(state.RequiresReadEvidenceBeforeFinal ? "evidence_read_result" : "exact_read_result");
         }
         if (phase == RelayActionPhase.NeedsUserInput)
         {

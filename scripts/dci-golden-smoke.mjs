@@ -58,6 +58,17 @@ const responses = [
   }),
   JSON.stringify({ action: "tool", tool: "read", args: { file_path: "evidence/q4-parts-revenue.md", limit: 4000 } }),
   JSON.stringify({ action: "final", answer: "部品売上の根拠は evidence/q4-parts-revenue.md です。Mパーツ.md は会社名プロフィールなので候補から外します。" }),
+  JSON.stringify({
+    action: "tool",
+    tool: "grep",
+    args: {
+      allTerms: ["部品", "売上"],
+      includeGlobs: ["**/*.md"],
+      limit: 20,
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "根拠ファイル: evidence/q4-parts-revenue.md" }),
+  JSON.stringify({ action: "final", answer: "readiness repair inserted read before this final." }),
 ];
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -112,6 +123,24 @@ try {
   const refinedGrep = collectToolCall(run.events, "grep");
   if (!refinedGrep.results.join("\n").includes("RelayGrepObservation.v1")) {
     throw new Error("grep did not return structured DCI observation");
+  }
+
+  const prematureFinal = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "dci-final-readiness",
+    instruction: "部品売上の根拠ファイルを探し、根拠を確認して答えて",
+  });
+  if (!hasRunFinished(prematureFinal.events)) {
+    throw new Error(`DCI final readiness run did not finish: ${JSON.stringify(prematureFinal.events)}`);
+  }
+  const readinessTools = [...collectToolCalls(prematureFinal.events).values()].map((call) => call.name);
+  if (readinessTools.join(",") !== "grep,read") {
+    throw new Error(`premature final was not replaced with evidence read: ${readinessTools.join(", ")}`);
+  }
+  if (assistantText(prematureFinal.events) !== "readiness repair inserted read before this final.") {
+    throw new Error(`final readiness answer mismatch: ${assistantText(prematureFinal.events)}`);
   }
 
   console.log("[dci-golden-smoke] ok");

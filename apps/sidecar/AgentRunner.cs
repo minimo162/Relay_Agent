@@ -20,6 +20,8 @@ public sealed class RelayAgentFrameworkRunner
         Use tools for local files, Office work, code edits, and verification.
         For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
         Use direct corpus interaction for local search: search direct terms, combine weak clues with grep allTerms/anyTerms/excludeTerms when useful, read local context around promising matches, extract new terms/entities from observations, refine the search, cross-check evidence, then answer.
+        For compound business concepts, do not rely on one exact glued phrase grep. Prefer grep allTerms for required components plus anyTerms for variants, for example 部品売上 should search allTerms ["部品","売上"] and then read promising files.
+        If a grep/read result is only a negative, entity-name, generic, or decoy match, refine with broader conjunctive grep before final. Do not answer no-match from a single weak or negative candidate.
         Do not treat filename/entity matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.

@@ -44,6 +44,28 @@ public sealed record RelayTurnState(
         !HasAnyToolResult &&
         !RequiresMutationBeforeFinal;
 
+    public bool HasReadToolResult => CompletedTools.Contains("read", StringComparer.Ordinal);
+
+    public bool HasGrepToolResult => CompletedTools.Contains("grep", StringComparer.Ordinal);
+
+    public bool RequiresEvidenceObservationBeforeFinal =>
+        RequiresLocalEvidenceReadRequest &&
+        HasAnyToolResult &&
+        !HasGrepToolResult &&
+        !HasReadToolResult;
+
+    public bool RequiresReadEvidenceBeforeFinal =>
+        RequiresLocalEvidenceReadRequest &&
+        HasGrepToolResult &&
+        !HasReadToolResult;
+
+    public bool RequiresLocalEvidenceReadRequest =>
+        Intent is RelayLocalIntent.FileSearch or RelayLocalIntent.FileRead or RelayLocalIntent.OfficeInspect &&
+        Regex.IsMatch(
+            OriginalUserRequest,
+            @"根拠|理由|内容|文脈|確認|要約|引用|cite|evidence|context|inspect|summarize|read|読ん|必ず\s*(?:grep|read|ローカル|根拠)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     public bool RequiresLocalWork => Intent is not RelayLocalIntent.GeneralChat;
 
     public bool CanAskUser =>
@@ -65,6 +87,8 @@ public sealed record RelayTurnState(
             ["hasMutationToolCall"] = HasMutationToolCall,
             ["requiresLocalToolBeforeFinal"] = RequiresLocalToolBeforeFinal,
             ["requiresMutationBeforeFinal"] = RequiresMutationBeforeFinal,
+            ["requiresEvidenceObservationBeforeFinal"] = RequiresEvidenceObservationBeforeFinal,
+            ["requiresReadEvidenceBeforeFinal"] = RequiresReadEvidenceBeforeFinal,
             ["pendingOutputFile"] = PendingOutputFile,
             ["requestedOutputFileCount"] = RequestedOutputFileCount,
             ["exactFilePath"] = ExactFilePath,

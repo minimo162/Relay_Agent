@@ -19286,3 +19286,47 @@ Result:
   reachable signed-in Edge CDP on port `9360`. The run failed fast with
   structured classification `environment`; artifacts were written to
   `dist/e2e/live-dci/failure.json`, `workspace.txt`, and `sidecar-stderr.txt`.
+
+## 2026-05-17: Live Copilot DCI Readiness Repair
+
+Change:
+
+- Added a shared live Copilot CDP bootstrap helper for E2E scripts. It probes
+  the preferred Edge CDP port, ignores stale `DevToolsActivePort` files, starts
+  Edge with the Relay profile when needed, waits for `/json/version`, and writes
+  diagnostics to `dist/e2e/live-dci/copilot-cdp.json`.
+- Tightened the live DCI E2E fixture so a decoy exact phrase match is not enough
+  to pass. The content-backed evidence file is intentionally named
+  `finance/q4/source-a.md` and contains separated `部品 売上` text, requiring a
+  conjunctive `grep` rather than a single glued phrase search.
+- Updated Copilot tool-projection and Agent Framework instructions to prefer
+  `grep allTerms` for compound business concepts, refine away negative/entity
+  decoys, and avoid final no-match answers from one weak candidate.
+- Extended the protocol guard so premature final answers on evidence-seeking
+  local tasks are repaired into exact `read` calls when a prior `grep` result
+  exposes a candidate path.
+- Strengthened `scripts/workbench-live-dci-e2e.mjs` acceptance criteria. The
+  live run now fails if Copilot only calls `grep`/`read` in name, reports
+  no-match, reads the decoy, or omits `finance/q4/source-a.md` from the final
+  evidence path.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH pnpm sidecar:build
+PATH=/root/.dotnet:$PATH pnpm agent:dci-golden-smoke
+PATH=/root/.dotnet:$PATH pnpm workbench:live-dci-e2e
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- DCI golden smoke passed, including the final-readiness repair path.
+- Full `pnpm check` passed after adjusting the grep-only smoke prompt so that
+  it continues to test conjunctive `grep` without intentionally triggering the
+  evidence-read guard.
+- Live Copilot DCI E2E passed with the stricter acceptance gate. The observed
+  tool sequence was `grep`, then `read`; Copilot searched with
+  `allTerms:["部品","売上"]`, read `finance/q4/source-a.md`, and answered:
+  `finance/q4/source-a.md：本文に「部品 売上の確定実績はこのファイルの集計表に基づく」と明記されており、部品売上の根拠であるため。`

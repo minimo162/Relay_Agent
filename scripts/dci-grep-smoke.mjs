@@ -88,7 +88,7 @@ try {
     token,
     workspace,
     runId: "dci-conjunctive-grep",
-    instruction: "部品売上の根拠を検索して",
+    instruction: "部品売上という語の組み合わせをgrepで検索して",
   });
   if (!hasRunFinished(conjunctive.events)) {
     throw new Error(`conjunctive run did not finish: ${JSON.stringify(conjunctive.events)}`);
