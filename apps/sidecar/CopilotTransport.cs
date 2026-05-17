@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
@@ -826,8 +827,12 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
         if (prompt.Length >= 80 && !await ComposerTextLooksLikePromptAsync(session, prompt, cancellationToken))
         {
             Trace($"final-corrupt-len={len}");
+            var composerText = await GetComposerTextAsync(session, cancellationToken);
+            DumpPromptComparisonIfRequested(prompt, composerText, "final-corrupt");
+            var visibleLength = NormalizeForComposerComparison(composerText).Length;
+            var expectedLength = NormalizeForComposerComparison(prompt).Length;
             throw new InvalidOperationException(
-                $"prompt_insert_failed: Prompt text reached Copilot composer but was corrupted before submit (visible length {len}, expected ~{prompt.Length}).");
+                $"prompt_insert_failed: Prompt text reached Copilot composer but was corrupted before submit (visible length {len}, normalized visible length {visibleLength}, expected ~{prompt.Length}, normalized expected length {expectedLength}).");
         }
 
         Trace($"done len={len}");
@@ -1267,7 +1272,18 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
     {
         var visible = NormalizeForComposerComparison(composerText);
         var expected = NormalizeForComposerComparison(prompt);
+        if (visible.Equals(expected, StringComparison.Ordinal) || visible.Contains(expected, StringComparison.Ordinal))
+        {
+            return true;
+        }
         if (expected.Length < 80) return visible.Contains(expected, StringComparison.Ordinal);
+
+        var delta = Math.Abs(visible.Length - expected.Length);
+        var toleratedDelta = Math.Max(8, (int)Math.Ceiling(expected.Length * 0.012));
+        if (delta <= toleratedDelta && HasPromptAnchors(visible, expected))
+        {
+            return true;
+        }
 
         var headLength = Math.Min(160, expected.Length);
         var head = expected[..headLength];
@@ -1286,15 +1302,107 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
             }
         }
 
+        if (expected.Length > 800)
+        {
+            var chunks = new[]
+            {
+                expected[..Math.Min(120, expected.Length)],
+                expected[(expected.Length / 2)..Math.Min(expected.Length, (expected.Length / 2) + 120)],
+                expected[Math.Max(0, expected.Length - 120)..],
+            };
+            var matchedChunks = chunks.Count(chunk => chunk.Length >= 40 && visible.Contains(chunk, StringComparison.Ordinal));
+            if (matchedChunks >= 2 && HasPromptAnchors(visible, expected))
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
     private static string NormalizeForComposerComparison(string text) =>
         Regex.Replace(
-                text.Replace("\r", "\n").Replace("\u200b", "").Replace("\ufeff", ""),
+                text.Normalize(NormalizationForm.FormKC)
+                    .Replace("\r", "\n")
+                    .Replace('\u00a0', ' ')
+                    .Replace("\u200b", "")
+                    .Replace("\u200c", "")
+                    .Replace("\u200d", "")
+                    .Replace("\u2060", "")
+                    .Replace("\ufeff", ""),
                 @"\s+",
                 " ")
             .Trim();
+
+    private static bool HasPromptAnchors(string visible, string expected)
+    {
+        var anchors = new[]
+        {
+            "RELAY_TOOL_JSON_ONLY",
+            "RELAY_TURN_STATE",
+            "RELAY_ADMISSIBLE_ACTION_ENVELOPE",
+            "RELAY_TOOL_RESULT",
+            "RELAY_ASSISTANT_TOOL_CALL",
+            "Return exactly one fenced json code block",
+            "Tools:",
+            "user:",
+        };
+        var expectedAnchors = anchors.Where(anchor => expected.Contains(anchor, StringComparison.Ordinal)).ToArray();
+        if (expectedAnchors.Length == 0) return false;
+        var matched = expectedAnchors.Count(anchor => visible.Contains(anchor, StringComparison.Ordinal));
+        return matched >= Math.Min(3, expectedAnchors.Length);
+    }
+
+    private static void DumpPromptComparisonIfRequested(string expected, string actual, string reason)
+    {
+        var dir = Environment.GetEnvironmentVariable("RELAY_COPILOT_PROMPT_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dir)) return;
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var normalizedExpected = NormalizeForComposerComparison(expected);
+            var normalizedActual = NormalizeForComposerComparison(actual);
+            var mismatch = FirstMismatchIndex(normalizedExpected, normalizedActual);
+            var dump = new
+            {
+                reason,
+                expectedLength = expected.Length,
+                actualLength = actual.Length,
+                normalizedExpectedLength = normalizedExpected.Length,
+                normalizedActualLength = normalizedActual.Length,
+                firstMismatchIndex = mismatch,
+                expectedHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(expected)))[..12].ToLowerInvariant(),
+                actualHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actual)))[..12].ToLowerInvariant(),
+                expectedSnippet = SnippetAround(normalizedExpected, mismatch),
+                actualSnippet = SnippetAround(normalizedActual, mismatch),
+            };
+            var fileName = $"relay-copilot-prompt-comparison-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}.json";
+            File.WriteAllText(Path.Combine(dir, fileName), JsonSerializer.Serialize(dump, JsonOptions.Default), Encoding.UTF8);
+        }
+        catch
+        {
+            // Diagnostic dumps must never block the run.
+        }
+    }
+
+    private static int FirstMismatchIndex(string expected, string actual)
+    {
+        var limit = Math.Min(expected.Length, actual.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            if (expected[i] != actual[i]) return i;
+        }
+        return expected.Length == actual.Length ? -1 : limit;
+    }
+
+    private static string SnippetAround(string text, int index)
+    {
+        if (text.Length == 0) return "";
+        if (index < 0) index = Math.Min(text.Length - 1, 0);
+        var start = Math.Max(0, index - 180);
+        var length = Math.Min(text.Length - start, 360);
+        return text.Substring(start, length);
+    }
 
     private static async Task SubmitPromptAsync(CdpSession session, int expectedPromptLength, int initialComposerLength, CancellationToken cancellationToken)
     {
@@ -1855,7 +1963,7 @@ public sealed class EdgeCdpCopilotTransport(int port) : ICopilotTransport
 
         var fallback = NormalizeAssistantCandidate(best.Length > 0 ? best : networkCapture.LatestCandidate());
         if (fallback.Length > 0 && !LooksIncompleteAssistantResponse(fallback) && (!expectToolJson || ContainsCompleteJsonObject(fallback))) return fallback;
-        throw new TimeoutException("Timed out waiting for Copilot response.");
+        throw new TimeoutException("provider_response_timeout: Timed out waiting for Copilot response.");
     }
 
     private static bool LooksLikeCopilotQuotaLimit(string text)

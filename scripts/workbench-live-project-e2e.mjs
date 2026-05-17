@@ -10,6 +10,7 @@ const token = "relay-live-project-e2e-token";
 const port = 17897;
 const workbenchDebugPort = 17997;
 const copilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?? process.env.RELAY_COPILOT_CDP_PORT ?? "9360");
+const runStepTimeoutMs = Number(process.env.RELAY_LIVE_PROJECT_STEP_TIMEOUT_MS ?? "420000");
 const edgePath = process.env.RELAY_E2E_EDGE ?? "/usr/bin/microsoft-edge";
 const dataDir = mkdtempSync(join(tmpdir(), "relay-live-project-e2e-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-live-project-e2e-workspace-"));
@@ -187,13 +188,22 @@ async function readRawEvents() {
   }
 }
 
+function writeAgUiEvents(prefix, events) {
+  writeFileSync(join(artifactDir, `${prefix}-agui-events.json`), `${JSON.stringify(events, null, 2)}\n`, "utf8");
+}
+
 async function dumpWorkbenchArtifacts(prefix) {
   if (!cdp) return;
+  let parsedEvents = null;
   try {
     const raw = await evaluate(`document.querySelector('#raw')?.textContent ?? ''`);
     writeFileSync(join(artifactDir, `${prefix}-raw.json`), raw || "{}", "utf8");
+    parsedEvents = JSON.parse(raw || "{}").events ?? [];
   } catch (error) {
     writeFileSync(join(artifactDir, `${prefix}-raw-error.txt`), error instanceof Error ? error.message : String(error), "utf8");
+  }
+  if (parsedEvents) {
+    writeAgUiEvents(prefix, parsedEvents);
   }
   try {
     const state = await evaluate(`(() => ({
@@ -280,10 +290,11 @@ async function runAndApproveUntilComplete(instruction, label, maxApprovals = 16)
   let approvals = 0;
 
   while (true) {
-    const state = await waitForTerminalOrApproval(240000, label);
+    const state = await waitForTerminalOrApproval(runStepTimeoutMs, label);
     if (state.status === "completed") {
       await captureScreenshot(`${label}-completed.png`);
       const events = await readRawEvents();
+      writeAgUiEvents(label, events);
       return { events, approvals, summary: state.summaryText };
     }
 
@@ -309,6 +320,7 @@ function classifyLiveProjectFailure(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target/i.test(message)) return "environment";
   if (/quota|rate limit|request limit|number of requests per hour|上限/i.test(message)) return "copilot_quota";
+  if (/provider_response_timeout|Timed out waiting for Copilot response/i.test(message)) return "provider_response_timeout";
   if (/Prompt did not reach|composer|visible length|input|send/i.test(message)) return "prompt_delivery";
   if (/invalid JSON|schema|tool projection|expected JSON|legacy tool/i.test(message)) return "schema_validation";
   if (/approval|tool|ripgrep|officecli|workspace|patch|write|read|execution/i.test(message)) return "tool_contract";

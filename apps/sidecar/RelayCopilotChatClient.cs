@@ -274,7 +274,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             FunctionResultContent result => "RELAY_TOOL_RESULT " + JsonSerializer.Serialize(new
             {
                 callId = result.CallId,
-                result = result.Result,
+                result = ToPromptSafeToolResult(result.Result),
             }, JsonOptions.Compact),
             ToolApprovalRequestContent approval => "RELAY_TOOL_APPROVAL_REQUEST " + JsonSerializer.Serialize(new
             {
@@ -321,6 +321,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static bool IsLargeGeneratedTextArgument(string key) =>
         key.Equals("patch", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("patchText", StringComparison.OrdinalIgnoreCase) ||
         key.Equals("content", StringComparison.OrdinalIgnoreCase);
 
     private static string TruncateLargeGeneratedTextForPrompt(string text)
@@ -332,6 +333,108 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         return text[..head] +
             $"\n... [Relay omitted {text.Length - head - tail} chars of generated content; sha256={hash}; read the file if exact content is needed] ...\n" +
             text[^tail..];
+    }
+
+    private static JsonNode? ToPromptSafeToolResult(object? result)
+    {
+        JsonNode? node;
+        try
+        {
+            node = result switch
+            {
+                null => null,
+                JsonElement element => element.ValueKind == JsonValueKind.Undefined ? null : JsonNode.Parse(element.GetRawText()),
+                JsonNode jsonNode => jsonNode.DeepClone(),
+                _ => JsonSerializer.SerializeToNode(result, JsonOptions.Default),
+            };
+        }
+        catch (Exception ex)
+        {
+            return new JsonObject
+            {
+                ["relay_compacted"] = true,
+                ["type"] = result?.GetType().Name ?? "null",
+                ["error"] = $"Tool result could not be serialized for prompt context: {ex.Message}",
+            };
+        }
+
+        return CompactPromptNode(node, depth: 0);
+    }
+
+    private static JsonNode? CompactPromptNode(JsonNode? node, int depth)
+    {
+        const int maxDepth = 7;
+        const int maxArrayItems = 60;
+        const int maxObjectProperties = 90;
+        if (node is null) return null;
+        if (depth > maxDepth)
+        {
+            return new JsonObject
+            {
+                ["relay_compacted"] = true,
+                ["reason"] = "max_depth",
+            };
+        }
+
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var text) && text.Length > 600)
+            {
+                var head = text[..420];
+                var tail = text[^Math.Min(240, text.Length)..];
+                var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..12].ToLowerInvariant();
+                return new JsonObject
+                {
+                    ["relay_compacted"] = true,
+                    ["kind"] = "long_string",
+                    ["excerpt"] = head,
+                    ["tail"] = tail,
+                    ["omittedChars"] = text.Length - head.Length - tail.Length,
+                    ["sha256"] = hash,
+                };
+            }
+            return node.DeepClone();
+        }
+
+        if (node is JsonArray array)
+        {
+            var compact = new JsonArray();
+            var index = 0;
+            foreach (var item in array)
+            {
+                if (index >= maxArrayItems) break;
+                compact.Add(CompactPromptNode(item, depth + 1));
+                index++;
+            }
+            if (array.Count > maxArrayItems)
+            {
+                compact.Add(new JsonObject
+                {
+                    ["relay_compacted"] = true,
+                    ["omittedItems"] = array.Count - maxArrayItems,
+                });
+            }
+            return compact;
+        }
+
+        if (node is JsonObject obj)
+        {
+            var compact = new JsonObject();
+            var count = 0;
+            foreach (var (key, child) in obj)
+            {
+                if (count >= maxObjectProperties) break;
+                compact[key] = CompactPromptNode(child, depth + 1);
+                count++;
+            }
+            if (obj.Count > maxObjectProperties)
+            {
+                compact["relay_compacted_properties"] = obj.Count - maxObjectProperties;
+            }
+            return compact;
+        }
+
+        return node.DeepClone();
     }
 
     private static string BuildToolProjectionPrompt(ChatOptions? options, RelayAdmissibleActionEnvelope? envelope)
@@ -1017,6 +1120,35 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
     private static void ValidateProjectedToolCall(string tool, JsonObject args)
     {
+        if (tool == "apply_patch")
+        {
+            var patchText = GetString(args, "patchText");
+            var legacyPatch = GetString(args, "patch");
+            if (string.IsNullOrWhiteSpace(patchText) && !string.IsNullOrWhiteSpace(legacyPatch))
+            {
+                patchText = legacyPatch;
+                args["patchText"] = patchText;
+                args.Remove("patch");
+            }
+
+            if (string.IsNullOrWhiteSpace(patchText))
+            {
+                throw new InvalidOperationException("apply_patch_invalid: apply_patch requires patchText.");
+            }
+
+            if (!RelayPatch.TryParse(patchText, out _, out var error))
+            {
+                if (RelayPatch.TryRepairCopilotMarkdownAddFilePrefixes(patchText, out var repaired) &&
+                    RelayPatch.TryParse(repaired, out _, out _))
+                {
+                    args["patchText"] = repaired;
+                    return;
+                }
+
+                throw new InvalidOperationException($"apply_patch_invalid: {error ?? "invalid patchText"} Use exactly one apply_patch envelope in patchText.");
+            }
+        }
+
         if (tool == "officecli" && (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs")))
         {
             throw new InvalidOperationException("officecli raw argv is not allowed. Use semantic operation fields.");

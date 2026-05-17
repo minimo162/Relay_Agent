@@ -36,7 +36,7 @@ truth instead of adding another Relay planner.
 
 ### LIVEFIX01 - Capture Live E2E Baseline And Failure Classes
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -71,7 +71,7 @@ Verification:
 
 ### LIVEFIX02 - Add OpenCode `apply_patch` Conformance Gate
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -107,7 +107,7 @@ Verification:
 
 ### LIVEFIX03 - Harden Copilot CDP Composer Normalization
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -142,7 +142,7 @@ Verification:
 
 ### LIVEFIX04 - Compact Tool Observations Through Framework State
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -177,7 +177,7 @@ Verification:
 
 ### LIVEFIX05 - Make Agent Framework Continuation The Terminal Authority
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -211,7 +211,7 @@ Verification:
 
 ### LIVEFIX06 - Make AG-UI Replay The Live E2E Acceptance Surface
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -244,7 +244,7 @@ Verification:
 
 ### LIVEFIX07 - Rerun Live Copilot Project E2E
 
-Status: pending
+Status: completed
 
 Scope:
 

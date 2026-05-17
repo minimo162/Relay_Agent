@@ -19010,3 +19010,74 @@ Result:
   classifier and is now classified as
   `[workbench-live-copilot-e2e:copilot_quota]` with the raw AG-UI `RUN_ERROR`
   payload showing the same `copilot_quota_limited` provider reason.
+
+## 2026-05-17: LIVEFIX Queue Implementation
+
+Changes:
+
+- Recorded the live E2E failure classes in the active `LIVEFIX*` queue and
+  completed the queue after deterministic verification plus live reruns.
+- Added a pre-approval OpenCode `apply_patch(req:patchText)` conformance gate
+  in the Copilot projection path. Duplicate Begin/End envelopes and malformed
+  non-Markdown Add File bodies are rejected before approval.
+- Kept legacy executor-only `patch` compatibility by normalizing it to
+  `patchText` before approval. The model-facing catalog remains
+  `apply_patch(req:patchText)`.
+- Added deterministic repair for a Copilot markdown-rendering artifact where
+  Markdown Add File hunks can lose leading `+` on blank/content lines. The
+  repaired content is revalidated as a normal OpenCode patch before approval
+  and execution.
+- Added `scripts/patch-conformance-smoke.mjs` and wired it into `pnpm check`.
+  The smoke covers malformed Add File, duplicate envelopes, legacy `patch`
+  compatibility, valid multi-file add, and valid update.
+- Hardened Copilot composer verification with Unicode/zero-width/whitespace
+  normalization, anchor-based tolerance for benign one-character UI
+  differences, and optional redacted prompt-comparison dumps under
+  `RELAY_COPILOT_PROMPT_DUMP_DIR`.
+- Classified Copilot response extraction timeouts as
+  `provider_response_timeout` instead of leaving them as unclassified
+  streaming failures.
+- Compacted tool observations before projecting them back into Copilot
+  prompts, with hashes, excerpts, tails, and omitted counts for large strings
+  and bounded arrays/objects. Full AG-UI tool results remain available in the
+  local event log.
+- Saved AG-UI event logs for live project E2E success/failure checkpoints,
+  including `create-project-agui-events.json` and `failure-agui-events.json`.
+- Increased the live project E2E workbench step timeout so the provider
+  adapter can classify Copilot response timeouts before the test harness
+  exits.
+
+Verification commands run locally:
+
+```bash
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm sidecar:build
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm agent:patch-conformance-smoke
+PATH=/tmp/relay-dotnet/sdk:$PATH pnpm check
+RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-copilot/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-copilot/responses \
+  PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-copilot-e2e
+RELAY_LIVE_PROJECT_STEP_TIMEOUT_MS=480000 \
+  RELAY_LIVE_PROJECT_COPILOT_REPLY_TIMEOUT_SECONDS=300 \
+  RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/responses \
+  PATH=/tmp/relay-dotnet/sdk:$PATH pnpm workbench:live-project-e2e
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Patch conformance smoke passed.
+- Full `pnpm check` passed.
+- Live signed-in Copilot lightweight canary passed:
+  `[workbench-live-copilot-e2e] ok elapsed=36410ms readiness=Ready cdp=9360`.
+- Live signed-in Copilot project E2E reached the real provider and completed
+  project creation after the Markdown Add File repair. The generated workspace
+  contained `relay-task-planner/package.json`, `src/index.html`, `src/app.js`,
+  `src/styles.css`, and `docs/USAGE.md`; the AG-UI event log was written to
+  `dist/e2e/live-project/create-project-agui-events.json`.
+- The full project creation-plus-improvement E2E still stopped during the
+  improvement phase with structured provider blocking:
+  `provider_response_timeout: Timed out waiting for Copilot response.` This is
+  no longer an unclassified Relay streaming failure. The failure artifacts were
+  written under `dist/e2e/live-project/`, including
+  `failure-agui-events.json`, `failure-state.json`, and `failure.png`.

@@ -1384,7 +1384,12 @@ public sealed class RelayToolExecutor
 
         if (!RelayPatch.TryParse(patch, out var operations, out var error))
         {
-            return ToolObservation.Fail(call.Id, call.Tool, error ?? "Invalid patch.");
+            if (!RelayPatch.TryRepairCopilotMarkdownAddFilePrefixes(patch, out var repaired) ||
+                !RelayPatch.TryParse(repaired, out operations, out error))
+            {
+                return ToolObservation.Fail(call.Id, call.Tool, error ?? "Invalid patch.");
+            }
+            patch = repaired;
         }
 
         var changed = new List<string>();
@@ -2685,15 +2690,54 @@ public sealed record RelayPatchOperation(
 
 public static class RelayPatch
 {
+    public static bool TryRepairCopilotMarkdownAddFilePrefixes(string patch, out string repaired)
+    {
+        repaired = patch.Replace("\r\n", "\n").Replace('\r', '\n');
+        var lines = repaired.Split('\n');
+        var changed = false;
+        var inRepairableAddFile = false;
+        var output = new List<string>(lines.Length);
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("*** ", StringComparison.Ordinal))
+            {
+                inRepairableAddFile = line.StartsWith("*** Add File: ", StringComparison.Ordinal) &&
+                    IsMarkdownPatchPath(line["*** Add File: ".Length..].Trim());
+                output.Add(line);
+                continue;
+            }
+
+            if (inRepairableAddFile && !line.StartsWith('+'))
+            {
+                output.Add("+" + line);
+                changed = true;
+                continue;
+            }
+
+            output.Add(line);
+        }
+
+        repaired = string.Join('\n', output);
+        return changed;
+    }
+
     public static bool TryParse(string patch, out IReadOnlyList<RelayPatchOperation> operations, out string? error)
     {
         operations = [];
         error = null;
-        var normalized = NormalizePatchEnvelope(patch.Replace("\r\n", "\n").Replace('\r', '\n')).TrimEnd('\n');
+        var normalized = patch.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
         var lines = normalized.Split('\n');
         if (lines.Length < 2 || lines[0] != "*** Begin Patch" || lines[^1] != "*** End Patch")
         {
             error = "patch must start with *** Begin Patch and end with *** End Patch.";
+            return false;
+        }
+        var beginCount = lines.Count(line => line == "*** Begin Patch");
+        var endCount = lines.Count(line => line == "*** End Patch");
+        if (beginCount != 1 || endCount != 1)
+        {
+            error = "patchText must contain exactly one *** Begin Patch and one *** End Patch envelope.";
             return false;
         }
 
@@ -2875,6 +2919,10 @@ public static class RelayPatch
         }
         return true;
     }
+
+    private static bool IsMarkdownPatchPath(string path) =>
+        path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
 
     private static string TrimFinalNewline(string value) =>
         value.EndsWith('\n') ? value[..^1] : value;
