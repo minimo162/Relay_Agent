@@ -1261,15 +1261,17 @@ public sealed class RelayToolExecutor
                 call.Id,
                 call.Tool,
                 $"{document.Kind} extracted, {documentText.Length} chars returned{suffix}{warningSuffix}",
-                new
-                {
-                    kind = document.Kind,
-                    text = documentText,
-                    truncated = document.Truncated,
+                BuildReadObservationData(
+                    workspace,
+                    path,
+                    document.Kind,
+                    documentText,
                     offset,
                     limit,
-                    warnings = document.Warnings,
-                });
+                    info.Exists ? info.Length : 0,
+                    document.Text.Length,
+                    document.Truncated,
+                    document.Warnings));
         }
 
         if (info.Length > 512_000)
@@ -1283,7 +1285,68 @@ public sealed class RelayToolExecutor
         }
         var text = Encoding.UTF8.GetString(bytes);
         var sliced = SliceText(text, offset, limit);
-        return ToolObservation.Ok(call.Id, call.Tool, $"{sliced.Length} chars read", sliced);
+        return ToolObservation.Ok(
+            call.Id,
+            call.Tool,
+            $"{sliced.Length} chars read",
+            BuildReadObservationData(
+                workspace,
+                path,
+                "text",
+                sliced,
+                offset,
+                limit,
+                bytes.Length,
+                text.Length,
+                false,
+                []));
+    }
+
+    private static object BuildReadObservationData(
+        string workspace,
+        string path,
+        string kind,
+        string text,
+        int offset,
+        int limit,
+        long sizeBytes,
+        int knownTotalChars,
+        bool sourceTruncated,
+        IReadOnlyList<string> warnings)
+    {
+        var nextOffset = offset + text.Length;
+        var hasMore = sourceTruncated || nextOffset < knownTotalChars;
+        var displayPath = Path.GetRelativePath(Path.GetFullPath(workspace), path);
+        return new
+        {
+            schemaVersion = "RelayReadObservation.v1",
+            kind,
+            path,
+            displayPath,
+            sizeBytes,
+            encoding = kind.Equals("text", StringComparison.OrdinalIgnoreCase) ? "utf-8" : "extracted-text",
+            offset,
+            limit,
+            returnedChars = text.Length,
+            knownTotalChars,
+            truncated = hasMore,
+            sourceTruncated,
+            text,
+            textSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant(),
+            warnings,
+            continuation = hasMore
+                ? new
+                {
+                    tool = "read",
+                    args = new
+                    {
+                        file_path = displayPath,
+                        offset = nextOffset,
+                        limit,
+                    },
+                }
+                : null,
+        };
     }
 
     private async Task<ToolObservation> OfficeCliAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)

@@ -34,9 +34,56 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
 
         DumpPromptIfRequested(prompt);
-        var response = await transport.SendAsync(prompt, cancellationToken);
+        var response = await SendWithProviderRetryAsync(prompt, messageList, cancellationToken);
         DumpResponseIfRequested(response);
-        return BuildResponse(response, options, messageList);
+        try
+        {
+            return BuildResponse(response, options, messageList);
+        }
+        catch (RelayToolProjectionValidationException ex)
+        {
+            DumpProjectionValidationIfRequested(ex);
+            var repairPrompt = BuildProjectionRepairPrompt(prompt, response, ex);
+            DumpPromptIfRequested(repairPrompt);
+            var repairedResponse = await SendWithProviderRetryAsync(repairPrompt, messageList, cancellationToken);
+            DumpResponseIfRequested(repairedResponse);
+            return BuildResponse(repairedResponse, options, messageList);
+        }
+    }
+
+    private async Task<string> SendWithProviderRetryAsync(
+        string prompt,
+        IReadOnlyList<ChatMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await transport.SendAsync(prompt, cancellationToken);
+        }
+        catch (TimeoutException ex) when (ShouldRetryProviderTimeout(ex, messages))
+        {
+            DumpProviderRetryIfRequested(ex.Message);
+            try
+            {
+                return await transport.SendAsync(prompt, cancellationToken);
+            }
+            catch (TimeoutException retryEx) when (retryEx.Message.Contains("provider_response_timeout", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new TimeoutException($"provider_response_timeout_after_retry: {retryEx.Message}", retryEx);
+            }
+        }
+    }
+
+    private static bool ShouldRetryProviderTimeout(TimeoutException ex, IReadOnlyList<ChatMessage> messages) =>
+        ex.Message.Contains("provider_response_timeout", StringComparison.OrdinalIgnoreCase) &&
+        messages.SelectMany(message => message.Contents).Any(content => content is FunctionResultContent);
+
+    private static void DumpProviderRetryIfRequested(string reason)
+    {
+        var dumpDir = Environment.GetEnvironmentVariable("RELAY_COPILOT_PROMPT_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dumpDir)) return;
+
+        DumpText(dumpDir, "provider-retry", reason);
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -189,7 +236,10 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         var planArgs = plan.Args ?? new JsonObject();
         var toolName = NormalizeRequestedTool(plan.Tool, planArgs);
-        ValidateProjectedToolCall(toolName, planArgs);
+        if (!TryValidateProjectedToolCall(toolName, planArgs, out var validationError))
+        {
+            throw new RelayToolProjectionValidationException(toolName, planArgs.ToJsonString(JsonOptions.Compact), validationError);
+        }
         var toolDecision = RelayProtocolGuard.ValidateTool(toolName, planArgs, state, availableTools, envelope);
         if (TryApplyProtocolDecision(toolDecision, options, out var toolResponse))
         {
@@ -244,6 +294,36 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         {
             ModelId = options?.ModelId ?? Metadata.DefaultModelId,
         };
+
+    private static string BuildProjectionRepairPrompt(
+        string originalPrompt,
+        string invalidResponse,
+        RelayToolProjectionValidationException ex) =>
+        originalPrompt +
+        "\n\nRELAY_TOOL_PROJECTION_VALIDATION_FAILED\n" +
+        "Your previous JSON selected a local tool but failed Relay validation before it could be shown for approval or execution.\n" +
+        "Return one corrected JSON object only. Do not explain. Do not repeat the invalid tool arguments.\n" +
+        "Validation details: " + JsonSerializer.Serialize(new
+        {
+            tool = ex.Tool,
+            error = ex.ValidationError,
+            invalidArgs = ex.ArgumentsJson,
+            invalidResponse,
+        }, JsonOptions.Compact);
+
+    private static void DumpProjectionValidationIfRequested(RelayToolProjectionValidationException ex)
+    {
+        var dumpDir = Environment.GetEnvironmentVariable("RELAY_COPILOT_PROMPT_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dumpDir)) return;
+
+        DumpText(dumpDir, "projection-validation", JsonSerializer.Serialize(new
+        {
+            schemaVersion = "RelayToolProjectionValidation.v1",
+            tool = ex.Tool,
+            error = ex.ValidationError,
+            invalidArgs = ex.ArgumentsJson,
+        }, JsonOptions.Compact));
+    }
 
     private static string RenderMessage(ChatMessage message)
     {
@@ -486,7 +566,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         var text = ExtractUserRequestBeforeTools(messages);
         if (!string.IsNullOrWhiteSpace(text))
         {
-            OriginalUserRequests[GetRunKey(options)] = text;
+            OriginalUserRequests[GetRunKey(options, messages)] = text;
         }
     }
 
@@ -530,7 +610,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
     private static RelayTurnState BuildProtocolState(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
     {
         CaptureOriginalUserRequest(messages, options);
-        var runKey = GetRunKey(options);
+        var runKey = GetRunKey(options, messages);
         var completedToolDetails = UpdateCompletedToolResultDetails(runKey, messages);
         var request = ExtractUserRequestBeforeTools(messages);
         if (string.IsNullOrWhiteSpace(request) &&
@@ -950,10 +1030,19 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                 successProperty.ValueKind is JsonValueKind.True or JsonValueKind.False
                     ? (bool?)successProperty.GetBoolean()
                     : null;
-            var target = root.TryGetProperty("data", out var dataProperty) &&
-                dataProperty.ValueKind == JsonValueKind.String
-                    ? dataProperty.GetString()
-                    : null;
+            string? target = null;
+            if (root.TryGetProperty("data", out var dataProperty))
+            {
+                target = dataProperty.ValueKind switch
+                {
+                    JsonValueKind.String => dataProperty.GetString(),
+                    JsonValueKind.Object when dataProperty.TryGetProperty("displayPath", out var displayPath) &&
+                        displayPath.ValueKind == JsonValueKind.String => displayPath.GetString(),
+                    JsonValueKind.Object when dataProperty.TryGetProperty("path", out var path) &&
+                        path.ValueKind == JsonValueKind.String => path.GetString(),
+                    _ => null,
+                };
+            }
             var status = root.TryGetProperty("status", out var statusProperty) &&
                 statusProperty.ValueKind == JsonValueKind.String
                     ? statusProperty.GetString()
@@ -1034,10 +1123,27 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
     private static bool IsMutationTool(string? tool) =>
         tool is "write" or "edit" or "patch" or "apply_patch" or "officecli_mutate";
 
-    private static string GetRunKey(ChatOptions? options) =>
-        GetAdditionalPropertyString(options, "ag_ui_run_id")
-        ?? GetAdditionalPropertyString(options, "ag_ui_thread_id")
-        ?? "default";
+    private static string GetRunKey(ChatOptions? options, IReadOnlyList<ChatMessage>? messages = null)
+    {
+        var configured = GetAdditionalPropertyString(options, "ag_ui_run_id")
+            ?? GetAdditionalPropertyString(options, "ag_ui_thread_id");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured;
+        }
+
+        if (messages is not null)
+        {
+            var request = ExtractUserRequestBeforeTools(messages);
+            if (!string.IsNullOrWhiteSpace(request))
+            {
+                var workspace = RelayWorkspaceContext.ResolveWorkspace(options) ?? "";
+                return "request-" + HashText(workspace + "\u001f" + request);
+            }
+        }
+
+        return "default";
+    }
 
     private static string CompactToolDescription(string? description)
     {
@@ -1118,8 +1224,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             ? value?.ToString()
             : null;
 
-    private static void ValidateProjectedToolCall(string tool, JsonObject args)
+    private static bool TryValidateProjectedToolCall(string tool, JsonObject args, out string error)
     {
+        error = "";
         if (tool == "apply_patch")
         {
             var patchText = GetString(args, "patchText");
@@ -1133,31 +1240,57 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
             if (string.IsNullOrWhiteSpace(patchText))
             {
-                throw new InvalidOperationException("apply_patch_invalid: apply_patch requires patchText.");
+                error = "apply_patch_invalid: apply_patch requires patchText.";
+                return false;
             }
 
-            if (!RelayPatch.TryParse(patchText, out _, out var error))
+            if (!RelayPatch.TryParse(patchText, out _, out var parseError))
             {
                 if (RelayPatch.TryRepairCopilotMarkdownAddFilePrefixes(patchText, out var repaired) &&
                     RelayPatch.TryParse(repaired, out _, out _))
                 {
                     args["patchText"] = repaired;
-                    return;
+                    DumpPatchRepairIfRequested(patchText, repaired);
+                    return true;
                 }
 
-                throw new InvalidOperationException($"apply_patch_invalid: {error ?? "invalid patchText"} Use exactly one apply_patch envelope in patchText.");
+                error = $"apply_patch_invalid: {parseError ?? "invalid patchText"} Use exactly one apply_patch envelope in patchText.";
+                return false;
             }
         }
 
         if (tool == "officecli" && (args.ContainsKey("argv") || args.ContainsKey("args") || args.ContainsKey("commandArgs")))
         {
-            throw new InvalidOperationException("officecli raw argv is not allowed. Use semantic operation fields.");
+            error = "officecli raw argv is not allowed. Use semantic operation fields.";
+            return false;
         }
         if (tool == "bash" && (args.ContainsKey("command") || args.ContainsKey("shell") || args.ContainsKey("script")))
         {
-            throw new InvalidOperationException("bash raw command strings are not allowed. Use argv as a string array.");
+            error = "bash raw command strings are not allowed. Use argv as a string array.";
+            return false;
         }
+
+        return true;
     }
+
+    private static void DumpPatchRepairIfRequested(string original, string repaired)
+    {
+        var dumpDir = Environment.GetEnvironmentVariable("RELAY_COPILOT_PROMPT_DUMP_DIR");
+        if (string.IsNullOrWhiteSpace(dumpDir)) return;
+
+        var payload = new JsonObject
+        {
+            ["schemaVersion"] = "RelayPatchProjectionRepair.v1",
+            ["originalHash"] = HashText(original),
+            ["repairedHash"] = HashText(repaired),
+            ["originalLength"] = original.Length,
+            ["repairedLength"] = repaired.Length,
+        };
+        DumpText(dumpDir, "patch-repair", payload.ToJsonString(JsonOptions.Compact));
+    }
+
+    private static string HashText(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..12].ToLowerInvariant();
 
     private static string NormalizeRequestedTool(string tool, JsonObject args)
     {
@@ -1254,4 +1387,12 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
 
         return JsonSerializer.Deserialize<object?>(node.ToJsonString(), JsonOptions.Compact);
     }
+}
+
+public sealed class RelayToolProjectionValidationException(string tool, string argumentsJson, string validationError)
+    : InvalidOperationException(validationError)
+{
+    public string Tool { get; } = tool;
+    public string ArgumentsJson { get; } = argumentsJson;
+    public string ValidationError { get; } = validationError;
 }

@@ -57,7 +57,12 @@ public sealed class MockCopilotTransport(IReadOnlyList<string> responses) : ICop
     public Task<string> SendAsync(string prompt, CancellationToken cancellationToken)
     {
         var index = Math.Min(Interlocked.Increment(ref _index) - 1, responses.Count - 1);
-        return Task.FromResult(responses[index]);
+        var response = responses[index];
+        if (string.Equals(response, "__RELAY_MOCK_PROVIDER_TIMEOUT__", StringComparison.Ordinal))
+        {
+            throw new TimeoutException("provider_response_timeout: mock Copilot timeout.");
+        }
+        return Task.FromResult(response);
     }
 }
 

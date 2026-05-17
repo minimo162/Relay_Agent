@@ -13,12 +13,12 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
-The next active queue is `LIVEFIX*`. It responds to the 2026-05-17 live
-Copilot rerun: request-limit blocking appears cleared, but multi-step project
-E2E still fails at OpenCode `apply_patch` conformance, Copilot CDP composer
-normalization, and post-tool Agent Framework continuation. The fix must keep
-Agent Framework, AG-UI, and OpenCode-compatible semantics as the source of
-truth instead of adding another Relay planner.
+The next active queue is `POSTLIVE*`. It responds to the 2026-05-17
+post-LIVEFIX E2E result: the signed-in Copilot canary passes and multi-file
+project creation can complete, but project improvement can still stop after a
+`read` observation with structured `provider_response_timeout`. The fix must
+make Agent Framework continuation, OpenCode-shaped tool observations, and
+AG-UI replay do more of the work instead of adding another Relay planner.
 
 ## Execution Rules
 
@@ -33,6 +33,208 @@ truth instead of adding another Relay planner.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### POSTLIVE01 - Keep Tool Validation Failures Out Of Approval
+
+Status: completed
+
+Scope:
+
+- Audit current validation paths that throw before Agent Framework can feed a
+  tool result back into the same session, starting with `apply_patch_invalid`.
+- Keep invalid mutations away from user approval.
+- Repair malformed Copilot JSON tool projections once in the M365 provider
+  adapter before they can become approval requests; execution-time validation
+  failures remain Agent Framework tool observations.
+- Preserve hard AG-UI `RUN_ERROR` only for provider, framework, or executor
+  health failures that cannot safely continue.
+
+Artifacts:
+
+- Sidecar adapter path for validation repair before approval plus normal
+  framework observation feedback after tool execution starts.
+- Regression smoke covering invalid patch -> correction -> valid patch in the
+  same session.
+- Implementation note explaining why this is Agent Framework continuation
+  rather than a Relay retry planner.
+
+Acceptance:
+
+- Malformed `apply_patch` does not ask the user for approval.
+- Copilot receives one strict repair prompt and may return a corrected
+  OpenCode-shaped tool call without a new user run.
+- AG-UI replay shows only the corrected tool call or a structured blocked
+  state; the invalid mutating call never reaches approval.
+
+Verification:
+
+- `pnpm agent:patch-conformance-smoke`
+- `pnpm agent:protocol-state-smoke`
+- `pnpm check`
+
+### POSTLIVE02 - Define OpenCode-Style Read Observation Projection
+
+Status: completed
+
+Scope:
+
+- Replace raw file-body prompt projection with an OpenCode-style read
+  observation contract: path, size, hash, excerpt, tail, omitted count, and
+  explicit `read` continuation guidance for exact context.
+- Keep full local content in AG-UI/support artifacts and local tool results.
+- Ensure `read(offset, limit)` remains the way to request exact follow-up
+  context instead of injecting entire files into every Copilot turn.
+- Cover HTML/JS/CSS/Markdown reads because live project E2E times out after
+  read observations.
+
+Artifacts:
+
+- Prompt-safe read observation projector.
+- Fixture or smoke showing a large `read` result projected without raw body
+  echo.
+- Documentation update in `docs/OPENCODE_TOOL_CONTRACT.md` if the public
+  read-result semantics are clarified.
+
+Acceptance:
+
+- Copilot prompt payload after `read` is bounded and deterministic.
+- Follow-up edits still have a clear path to exact context through `read`
+  offset/limit.
+- AG-UI replay/support bundles still include enough data to debug the full
+  file read.
+
+Verification:
+
+- read observation projection smoke
+- `pnpm agent:agui-replay-smoke`
+- `pnpm check`
+
+### POSTLIVE03 - Make Provider Timeout A Resumable Framework State
+
+Status: completed
+
+Scope:
+
+- Keep the same Agent Framework `AgentSession` and AG-UI thread when the M365
+  Copilot provider times out after a tool observation.
+- Add a named provider-adapter retry/resume policy only at the Copilot CDP
+  boundary. It must be visible in framework trace/AG-UI diagnostics and must
+  not fabricate a tool/final decision.
+- Surface a user-visible blocked state only after retry policy is exhausted.
+- Ensure timeout classification distinguishes provider response timeout from
+  framework continuation timeout, approval wait, and tool execution timeout.
+
+Artifacts:
+
+- Provider timeout state/trace update.
+- Resume or retry smoke using mock Copilot timeout followed by success.
+- Updated live E2E classification assertions.
+
+Acceptance:
+
+- A provider timeout after a tool result does not lose session context.
+- A retry, when performed, is recorded as provider-adapter behavior.
+- If still blocked, AG-UI replay shows a named provider-blocked terminal state.
+
+Verification:
+
+- provider timeout continuation smoke
+- `pnpm agent:framework-trace-smoke`
+- `pnpm check`
+
+### POSTLIVE04 - Centralize Copilot Patch Projection Repair Diagnostics
+
+Status: completed
+
+Scope:
+
+- Treat Markdown Add File leading-`+` repair as Copilot projection repair, not
+  as relaxed OpenCode patch grammar.
+- Move repair notes into trace/support diagnostics and approval metadata so
+  users can see that the approved patch is the revalidated OpenCode form.
+- Add negative cases showing non-Markdown malformed Add File bodies still fail.
+
+Artifacts:
+
+- Repair metadata in framework trace or tool projection diagnostics.
+- Smoke fixture covering repairable Markdown and non-repairable malformed
+  patch.
+
+Acceptance:
+
+- The model-facing contract remains strict OpenCode `patchText`.
+- Repair is deterministic, narrow, and observable.
+- Non-repairable malformed patches remain blocked before approval.
+
+Verification:
+
+- `pnpm agent:patch-conformance-smoke`
+- `pnpm agent:framework-trace-smoke`
+- `pnpm check`
+
+### POSTLIVE05 - Reduce Relay AAE Authority To Middleware Projection
+
+Status: completed
+
+Scope:
+
+- Review remaining `RelayAdmissibleActionEnvelope` authority after LIVEFIX.
+- Move any remaining durable final/tool/question eligibility into Agent
+  Framework middleware/session state.
+- Keep the envelope only as a Copilot prompt projection and diagnostic
+  serialization, or document the remaining deletion blocker.
+
+Artifacts:
+
+- Middleware/projection refactor or explicit blocker note.
+- Updated `docs/HARNESS_ARCHITECTURE.md` delete/adapt/keep matrix.
+
+Acceptance:
+
+- The framework registry and middleware are the source of tool availability.
+- Prompt text cannot be the only enforcement point for `final`, `ask_user`, or
+  mutation requirements.
+- No new Relay-specific planner state is introduced.
+
+Verification:
+
+- `pnpm agent:protocol-state-smoke`
+- `pnpm agent:framework-native-prevention-smoke`
+- `pnpm check`
+
+### POSTLIVE06 - Split Live E2E Acceptance By Framework Capability
+
+Status: completed
+
+Scope:
+
+- Split live E2E reporting into canary, project creation, project improvement,
+  and provider-blocked continuation outcomes.
+- Save AG-UI event logs and framework traces for each stage.
+- Make project improvement the release-readiness gate once provider availability
+  is sufficient; provider-blocked remains acceptable for development runs only
+  when clearly classified.
+
+Artifacts:
+
+- Updated live E2E script/reporting.
+- AG-UI replay fixture or assertion for project creation and read-continuation
+  provider-blocked outcomes.
+- Implementation log entry.
+
+Acceptance:
+
+- A create-pass/improve-provider-timeout run is reported as exactly that, not
+  as generic failure or full success.
+- The same script can prove a full create -> improve -> render pass when
+  Copilot responds.
+- Release readiness cannot silently ignore project-improvement failure.
+
+Verification:
+
+- `pnpm workbench:live-copilot-e2e`
+- `pnpm workbench:live-project-e2e`
+- `pnpm check`
 
 ### LIVEFIX01 - Capture Live E2E Baseline And Failure Classes
 

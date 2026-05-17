@@ -16,6 +16,8 @@ const token = "relay-patch-conformance-token";
 const port = 17918;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-patch-conformance-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-patch-conformance-workspace-"));
+const validBrokenPatch = "*** Begin Patch\n*** Add File: broken.md\n+recovered from invalid patch\n*** End Patch\n";
+const validNestedPatch = "*** Begin Patch\n*** Add File: nested.md\n+nested recovered\n*** Add File: nested2.md\n+nested2 recovered\n*** End Patch\n";
 const legacyMultiAddPatch = "*** Begin Patch\n*** Add File: valid.md\n+valid patch smoke\n*** Add File: docs/extra.md\n+extra patch smoke\n*** End Patch\n";
 const validUpdatePatch = "*** Begin Patch\n*** Update File: valid.md\n@@\n-valid patch smoke\n+valid patch smoke updated\n*** End Patch\n";
 const responses = [
@@ -30,9 +32,25 @@ const responses = [
     action: "tool",
     tool: "apply_patch",
     args: {
+      patchText: validBrokenPatch,
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "invalid patch recovered" }),
+  JSON.stringify({
+    action: "tool",
+    tool: "apply_patch",
+    args: {
       patchText: "*** Begin Patch\n*** Add File: nested.md\n+nested\n*** End Patch\n*** Begin Patch\n*** Add File: nested2.md\n+nested2\n*** End Patch\n",
     },
   }),
+  JSON.stringify({
+    action: "tool",
+    tool: "apply_patch",
+    args: {
+      patchText: validNestedPatch,
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "duplicate envelope recovered" }),
   JSON.stringify({
     action: "tool",
     tool: "apply_patch",
@@ -85,13 +103,9 @@ async function waitForStatus() {
   throw new Error(`sidecar did not become ready; stderr=${stderr}`);
 }
 
-function assertRunError(events, expected) {
+function assertNoRunError(events, label) {
   const error = events.find((event) => event.type === "RUN_ERROR");
-  if (!error) throw new Error(`expected RUN_ERROR but got: ${JSON.stringify(events)}`);
-  const text = `${error.message ?? ""}\n${error.code ?? ""}`;
-  if (!text.includes(expected)) {
-    throw new Error(`RUN_ERROR did not include ${expected}: ${JSON.stringify(error)}`);
-  }
+  if (error) throw new Error(`${label} unexpectedly failed: ${JSON.stringify(error)}`);
 }
 
 try {
@@ -104,9 +118,25 @@ try {
     runId: "patch-invalid",
     instruction: "broken.md を作成して",
   });
-  assertRunError(invalid.events, "apply_patch_invalid");
-  if (invalid.events.some((event) => event.type === "TOOL_CALL_START" && event.toolCallName === "request_approval")) {
-    throw new Error(`invalid apply_patch reached approval layer: ${JSON.stringify(invalid.events)}`);
+  assertNoRunError(invalid.events, "invalid patch recovery");
+  const invalidApprovalCall = collectToolCall(invalid.events, "request_approval");
+  const invalidApproval = readApprovalRequest(invalidApprovalCall).request;
+  if (invalidApproval.functionName !== "apply_patch") {
+    throw new Error(`expected recovered apply_patch approval, got ${JSON.stringify(invalidApproval)}`);
+  }
+  const invalidApproved = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "patch-invalid",
+    instruction: "broken.md を作成して",
+    messages: approvalMessages("patch-invalid", "broken.md を作成して", invalidApprovalCall, true),
+  });
+  if (!hasRunFinished(invalidApproved.events)) {
+    throw new Error(`invalid recovery run did not finish: ${JSON.stringify(invalidApproved.events)}`);
+  }
+  if (!existsSync(join(workspace, "broken.md"))) {
+    throw new Error("invalid patch recovery did not create broken.md");
   }
 
   const duplicate = await postAgUi({
@@ -114,11 +144,27 @@ try {
     token,
     workspace,
     runId: "patch-duplicate-envelope",
-    instruction: "duplicate patch envelope を試して",
+    instruction: "nested.md と nested2.md を作成して",
   });
-  assertRunError(duplicate.events, "apply_patch_invalid");
-  if (duplicate.events.some((event) => event.type === "TOOL_CALL_START" && event.toolCallName === "request_approval")) {
-    throw new Error(`duplicate envelope apply_patch reached approval layer: ${JSON.stringify(duplicate.events)}`);
+  assertNoRunError(duplicate.events, "duplicate patch recovery");
+  const duplicateApprovalCall = collectToolCall(duplicate.events, "request_approval");
+  const duplicateApproval = readApprovalRequest(duplicateApprovalCall).request;
+  if (duplicateApproval.functionName !== "apply_patch") {
+    throw new Error(`expected recovered duplicate apply_patch approval, got ${JSON.stringify(duplicateApproval)}`);
+  }
+  const duplicateApproved = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "patch-duplicate-envelope",
+    instruction: "nested.md と nested2.md を作成して",
+    messages: approvalMessages("patch-duplicate-envelope", "nested.md と nested2.md を作成して", duplicateApprovalCall, true),
+  });
+  if (!hasRunFinished(duplicateApproved.events)) {
+    throw new Error(`duplicate recovery run did not finish: ${JSON.stringify(duplicateApproved.events)}`);
+  }
+  if (!existsSync(join(workspace, "nested.md")) || !existsSync(join(workspace, "nested2.md"))) {
+    throw new Error("duplicate patch recovery did not create nested files");
   }
 
   const legacy = await postAgUi({

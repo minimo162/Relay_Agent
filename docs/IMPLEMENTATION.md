@@ -19081,3 +19081,98 @@ Result:
   no longer an unclassified Relay streaming failure. The failure artifacts were
   written under `dist/e2e/live-project/`, including
   `failure-agui-events.json`, `failure-state.json`, and `failure.png`.
+
+## 2026-05-17: Post-LIVEFIX Plan Update
+
+Planning update:
+
+- Updated `PLANS.md` with a post-LIVEFIX E2E plan based on the latest live
+  results: signed-in Copilot canary passes, project creation can complete, and
+  project improvement can still stop after a `read` observation with
+  `provider_response_timeout`.
+- Added the `POSTLIVE*` task queue to `tasks.md`.
+- The new queue keeps the current architecture direction: Microsoft Agent
+  Framework owns session/continuation/approval, AG-UI owns user-visible replay,
+  and OpenCode remains the model-facing local tool contract reference.
+- The next implementation focus is not a new Relay planner. It is:
+  keeping invalid mutating projections out of approval, OpenCode-style bounded
+  `read` observations, resumable provider-timeout state, observable Copilot
+  patch projection repair, reducing AAE authority to middleware projection, and
+  splitting live E2E acceptance by framework capability.
+
+Verification:
+
+```bash
+git diff --check
+```
+
+Result:
+
+- Planning-only change; no runtime verification required beyond diff hygiene.
+
+## 2026-05-17: POSTLIVE Remediation Implementation
+
+Change:
+
+- Implemented a provider-adapter validation repair pass for malformed
+  OpenCode-shaped tool projections. Invalid `apply_patch` payloads are repaired
+  by asking Copilot for one corrected JSON object before the Agent Framework
+  approval layer sees the mutating call, so invalid mutations no longer ask the
+  user for approval.
+- Kept the OpenCode patch grammar strict. The existing Markdown Add File
+  leading-`+` repair remains narrow and now emits redacted patch-repair
+  diagnostics when prompt dumps are enabled.
+- Changed `read` tool results to return `RelayReadObservation.v1` data with
+  path, display path, size, offset, limit, returned character count, hash,
+  truncation state, warnings, and continuation guidance. Prompt compaction still
+  bounds large text fields before Copilot sees them.
+- Added a provider-bound timeout retry for `provider_response_timeout` after a
+  tool result. The retry is limited to the M365 Copilot CDP adapter and does
+  not fabricate a tool call or final answer.
+- Added live project E2E stage reporting in
+  `dist/e2e/live-project/stage-result.json`, separating creation, improvement,
+  rendering, and provider-blocked outcomes.
+- Documented that `RelayAdmissibleActionEnvelope` is currently a derived
+  prompt projection/diagnostic object. Agent Framework tools, approval-required
+  functions, Relay executor validation, and AG-UI approval resume remain the
+  actual execution boundary.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/root/.dotnet:$PATH pnpm agent:patch-conformance-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:office-pdf-read-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:provider-timeout-retry-smoke
+PATH=/root/.dotnet:$PATH pnpm check
+PATH=/root/.dotnet:$PATH \
+  RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-copilot/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-copilot/responses \
+  pnpm workbench:live-copilot-e2e
+PATH=/root/.dotnet:$PATH \
+  RELAY_LIVE_PROJECT_STEP_TIMEOUT_MS=480000 \
+  RELAY_LIVE_PROJECT_COPILOT_REPLY_TIMEOUT_SECONDS=300 \
+  RELAY_COPILOT_PROMPT_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/prompts \
+  RELAY_COPILOT_RESPONSE_DUMP_DIR=/root/Relay_Agent/dist/e2e/live-project/responses \
+  pnpm workbench:live-project-e2e
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Patch conformance smoke passed, including invalid patch repair before user
+  approval, legacy `patch` compatibility, valid multi-file add, and valid
+  update.
+- Office/PDF read smoke passed and now asserts structured
+  `RelayReadObservation.v1` read results.
+- Provider timeout retry smoke passed with a mock timeout after a read
+  observation followed by a successful final answer.
+- Full `pnpm check` passed.
+- Live Copilot E2E was rerun, but this Linux workspace did not have a reachable
+  signed-in Edge CDP on port `9360` during the rerun. Both live canary and live
+  project E2E now classify that condition as `environment` instead of
+  `unknown`.
+- Live project E2E wrote stage diagnostics to
+  `dist/e2e/live-project/stage-result.json`, showing `createProject` failed at
+  environment readiness, while `improveProject` and `renderProject` were not
+  started.

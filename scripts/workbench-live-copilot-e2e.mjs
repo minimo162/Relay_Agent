@@ -20,7 +20,12 @@ mkdirSync(artifactDir, { recursive: true });
 writeFileSync(join(workspace, "seed.txt"), "live Copilot E2E workspace\n", "utf8");
 
 async function assertCopilotCdpAvailable() {
-  const response = await fetch(`http://127.0.0.1:${copilotCdpPort}/json/version`);
+  let response;
+  try {
+    response = await fetch(`http://127.0.0.1:${copilotCdpPort}/json/version`);
+  } catch (error) {
+    throw new Error(`Copilot Edge CDP is not reachable on ${copilotCdpPort}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!response.ok) throw new Error(`Copilot Edge CDP is not reachable on ${copilotCdpPort}: ${response.status}`);
   const version = await response.json();
   if (!String(version.Browser ?? "").toLowerCase().includes("edg")) {
@@ -168,7 +173,7 @@ async function captureScreenshot(name) {
 
 function classifyLiveCopilotFailure(error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target/i.test(message)) {
+  if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target|fetch failed|ECONNREFUSED/i.test(message)) {
     return "environment";
   }
   if (/copilot_quota_limited|request limit|hourly request limit/i.test(message)) {

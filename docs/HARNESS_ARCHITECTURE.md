@@ -99,6 +99,19 @@ Middleware responsibilities:
 - terminal eligibility checks;
 - support diagnostics and transcript export.
 
+### POSTLIVE05 Authority Note
+
+`RelayAdmissibleActionEnvelope` remains a derived prompt projection and
+diagnostic object in this milestone, not durable run state. The durable
+execution boundary is still Agent Framework tool registration, approval-required
+function handling, Relay executor validation, and AG-UI approval resume. The
+remaining deletion blocker is that M365 Copilot does not consume Agent
+Framework tool declarations directly; Relay still needs a compact JSON compiler
+projection over the current framework-visible tools so Copilot does not choose
+`final`, `ask_user`, or mutation tools outside the active phase. Future work
+should reduce the envelope to middleware output only, but should not remove the
+executor-side validation or approval gates.
+
 ## Terminal Eligibility
 
 Final answers are allowed only when terminal middleware confirms:

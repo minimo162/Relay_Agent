@@ -274,6 +274,62 @@ Reference sources rechecked for this update:
    - A failed live run is acceptable only when the replay plus trace proves the
      failure is provider-blocked or a named adapter defect.
 
+### 2026-05-17 Post-LIVEFIX E2E Plan
+
+The latest live E2E after `LIVEFIX*` changed the remaining problem again:
+
+- The signed-in Copilot canary passes through the current Edge CDP adapter.
+- Multi-file project creation can complete through the Agent Framework +
+  AG-UI + OpenCode-compatible `apply_patch(req:patchText)` path.
+- The project-improvement turn can still stop after a `read` observation with
+  `provider_response_timeout`. This is now a structured provider-blocked
+  state, but it is not yet a good user experience for multi-step local work.
+
+The next fixes must avoid another Relay planner. The goal is to let Agent
+Framework and OpenCode semantics carry the multi-step loop more directly:
+
+1. **Keep tool-validation failures out of approval and run crashes.**
+   OpenCode-shaped validation failures such as malformed `apply_patch` should
+   be caught before Agent Framework's approval wrapper surfaces them to the
+   user. Copilot gets one strict provider-adapter repair pass for the JSON tool
+   projection; execution-time validation failures remain normal framework tool
+   observations. Invalid mutations must not reach user approval, and AG-UI
+   `RUN_ERROR` remains reserved for provider, framework, or executor health
+   failures that cannot safely continue.
+2. **Make `read` observations OpenCode-style and artifact-backed.**
+   Relay should stop projecting raw file bodies as large prompt payloads.
+   The model-facing observation should include file path, size, hash, a bounded
+   excerpt, and a clear instruction to call `read` again with `offset`/`limit`
+   when exact context is needed. Full content remains available locally and in
+   AG-UI/support artifacts.
+3. **Use Agent Framework continuation as the retry boundary.**
+   If M365 Copilot times out after a tool result, Relay should keep the
+   `AgentSession` and AG-UI run resumable. A provider retry, if used, must be a
+   named provider-adapter policy with trace events, not a hidden planner
+   fallback or a new user-level run.
+4. **Keep Copilot-specific patch repair in the provider/adapter boundary.**
+   Markdown Add File `+` repair is a deterministic Copilot projection repair,
+   not a change to OpenCode patch semantics. The repaired patch must be
+   revalidated before approval and should be traceable in diagnostics.
+5. **Split live E2E acceptance into framework facts.**
+   The acceptance surface should separately prove:
+   - canary prompt send/receive works;
+   - project creation completes;
+   - read -> mutation -> final improvement completes or reaches a named
+     provider-blocked state;
+   - the AG-UI event log and framework trace explain the outcome without raw
+     Relay-only state.
+
+Non-goals for this queue:
+
+- Do not add `project_edit`, `search_files`, or other Relay-specific
+  task-mode tools.
+- Do not embed OpenCode runtime binaries. OpenCode remains the model-facing
+  tool-contract reference for this queue.
+- Do not use broad prompt folklore to paper over invalid tool choices. Prefer
+  tool schema, framework middleware, structured observations, and replayable
+  traces.
+
 ### Reinvention-Reduction Target Architecture
 
 The target architecture must make every nontrivial Relay-owned component answer

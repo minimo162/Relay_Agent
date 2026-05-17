@@ -134,6 +134,9 @@ try {
     if (!detail.includes(`${kind} extracted`)) {
       throw new Error(`${path} did not use extracted ${kind} read path: ${JSON.stringify(run.events)}`);
     }
+    if (!detail.includes("RelayReadObservation.v1") || !detail.includes("\"displayPath\"") || !detail.includes("\"continuation\"")) {
+      throw new Error(`${path} did not return a structured read observation: ${detail}`);
+    }
     if (!new RegExp(`${kind} extracted, [1-9][0-9]* chars (read|returned)`).test(detail)) {
       throw new Error(`${path} extracted no text: ${detail}`);
     }

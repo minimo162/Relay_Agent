@@ -16,6 +16,11 @@ const dataDir = mkdtempSync(join(tmpdir(), "relay-live-project-e2e-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-live-project-e2e-workspace-"));
 const workbenchProfile = mkdtempSync(join(tmpdir(), "relay-live-project-e2e-edge-"));
 const artifactDir = join(process.cwd(), "dist", "e2e", "live-project");
+const stageResults = {
+  createProject: { status: "not_started" },
+  improveProject: { status: "not_started" },
+  renderProject: { status: "not_started" },
+};
 
 mkdirSync(artifactDir, { recursive: true });
 writeFileSync(join(workspace, "seed.txt"), "Relay live project E2E workspace\n", "utf8");
@@ -50,7 +55,12 @@ function sleep(ms) {
 }
 
 async function assertCopilotCdpAvailable() {
-  const response = await fetch(`http://127.0.0.1:${copilotCdpPort}/json/version`);
+  let response;
+  try {
+    response = await fetch(`http://127.0.0.1:${copilotCdpPort}/json/version`);
+  } catch (error) {
+    throw new Error(`Copilot Edge CDP is not reachable on ${copilotCdpPort}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!response.ok) throw new Error(`Copilot Edge CDP is not reachable on ${copilotCdpPort}: ${response.status}`);
   const version = await response.json();
   if (!String(version.Browser ?? "").toLowerCase().includes("edg")) {
@@ -192,6 +202,14 @@ function writeAgUiEvents(prefix, events) {
   writeFileSync(join(artifactDir, `${prefix}-agui-events.json`), `${JSON.stringify(events, null, 2)}\n`, "utf8");
 }
 
+function writeStageResult(extra = {}) {
+  writeFileSync(
+    join(artifactDir, "stage-result.json"),
+    `${JSON.stringify({ ...extra, stages: stageResults }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 async function dumpWorkbenchArtifacts(prefix) {
   if (!cdp) return;
   let parsedEvents = null;
@@ -318,7 +336,7 @@ function assertFile(path, includes = []) {
 
 function classifyLiveProjectFailure(error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target/i.test(message)) return "environment";
+  if (/CDP is not reachable|does not look like Microsoft Edge|Copilot readiness failed|Edge CDP target|fetch failed|ECONNREFUSED/i.test(message)) return "environment";
   if (/quota|rate limit|request limit|number of requests per hour|上限/i.test(message)) return "copilot_quota";
   if (/provider_response_timeout|Timed out waiting for Copilot response/i.test(message)) return "provider_response_timeout";
   if (/Prompt did not reach|composer|visible length|input|send/i.test(message)) return "prompt_delivery";
@@ -406,6 +424,13 @@ async function runFlow() {
   ].join("\n");
 
   const create = await runAndApproveUntilComplete(createInstruction, "create-project");
+  stageResults.createProject = {
+    status: "completed",
+    approvals: create.approvals,
+    tools: collectToolNames(create.events),
+    summary: create.summary,
+  };
+  writeStageResult();
   assertNoLegacyTools(create.events, "create-project");
   assertToolUsed(create.events, ["write", "apply_patch"], "create-project");
 
@@ -430,6 +455,13 @@ async function runFlow() {
   await setValue("#workspace", workspace);
 
   const improve = await runAndApproveUntilComplete(improveInstruction, "improve-project");
+  stageResults.improveProject = {
+    status: "completed",
+    approvals: improve.approvals,
+    tools: collectToolNames(improve.events),
+    summary: improve.summary,
+  };
+  writeStageResult();
   assertNoLegacyTools(improve.events, "improve-project");
   assertReadBeforeMutation(improve.events, "improve-project");
   assertToolUsed(improve.events, ["write", "edit", "apply_patch"], "improve-project");
@@ -437,6 +469,8 @@ async function runFlow() {
   assertFile(join(projectRoot, "src", "app.js"), ["relay-clear-completed-e2e"]);
   assertFile(join(projectRoot, "docs", "USAGE.md"), ["relay-clear-completed-e2e"]);
   await verifyGeneratedApp();
+  stageResults.renderProject = { status: "completed" };
+  writeStageResult();
 
   return {
     workspace,
@@ -459,6 +493,11 @@ try {
   writeFileSync(join(artifactDir, "workspace.txt"), `${workspace}\n`, "utf8");
   const classification = classifyLiveProjectFailure(error);
   const message = error instanceof Error ? error.message : String(error);
+  const currentStage = Object.entries(stageResults).find(([, stage]) => stage.status !== "completed")?.[0] ?? "unknown";
+  if (currentStage !== "unknown") {
+    stageResults[currentStage] = { ...stageResults[currentStage], status: "failed", classification, message };
+  }
+  writeStageResult({ classification, message, currentStage });
   throw new Error(`[workbench-live-project-e2e:${classification}] ${message}`);
 } finally {
   if (cdp) cdp.close();
