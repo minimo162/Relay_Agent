@@ -32,6 +32,42 @@
 
 ## Milestone Log
 
+### 2026-05-18 Minimal Professional Workbench UX Completion
+
+Implemented the `UXMIN-01` through `UXMIN-08` queue from `tasks.md`, keeping
+the product as one AG-UI-first browser Workbench rather than returning to
+separate search, Office, or coding modes.
+
+UI inventory and changes:
+
+- Removed the redundant visible refresh button from the composer. Readiness can
+  still be refreshed from the compact readiness pill.
+- Removed the visible run-id diagnostic from the task header and replaced it
+  with the current run state.
+- Kept the first viewport to the essential surface: workspace, task composer,
+  send/stop, readiness, final answer, approval, and compact activity.
+- Moved raw AG-UI/run diagnostics behind a collapsed `Support` disclosure and
+  added an explicit support-bundle export action.
+- Retuned Workbench design tokens toward a quieter neutral surface, restrained
+  green accent, smaller header scale, wider whitespace, and stable card/control
+  radii.
+- Extended the browser UX E2E gate to assert no old mode labels, no redundant
+  refresh chrome, collapsed diagnostics, desktop/mobile overflow safety, and
+  375px/768px/1024px/1440px viewport coverage.
+- Bumped the release version to `0.3.4` across Workbench, sidecar, and launcher.
+
+Verification:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+pnpm --filter @relay-agent/workbench build
+PATH=$HOME/.dotnet:$PATH pnpm workbench:ux-e2e
+PATH=$HOME/.dotnet:$PATH pnpm check
+```
+
+Result: passed. The UX E2E produced updated screenshots under `dist/e2e/` for
+empty, completed, approval, and mobile Workbench states.
+
 ### 2026-05-18 DCI Interface Resolution Follow-up
 
 Implemented the `DCI2605IR-01` through `DCI2605IR-10` follow-up queue from

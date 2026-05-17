@@ -220,6 +220,7 @@ async function runBrowserFlow() {
     title: document.querySelector('h1')?.textContent,
     detailsOpen: document.querySelector('.details')?.open,
     hasLegacyModes: document.body.textContent.includes('資料を探す') || document.body.textContent.includes('Officeファイルを編集する') || document.body.textContent.includes('コードを書く'),
+    hasRefreshButton: Boolean(document.querySelector('#refresh')),
     readiness: document.querySelector('#readiness')?.textContent,
     sendText: document.querySelector('#send')?.textContent,
     shellWidth: Math.round(document.querySelector('.shell')?.getBoundingClientRect().width ?? 0),
@@ -231,6 +232,7 @@ async function runBrowserFlow() {
   if (initialUx.title !== "Workbench") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
   if (initialUx.detailsOpen !== false) throw new Error(`details should be collapsed by default: ${JSON.stringify(initialUx)}`);
   if (initialUx.hasLegacyModes) throw new Error(`legacy mode labels should not be visible: ${JSON.stringify(initialUx)}`);
+  if (initialUx.hasRefreshButton) throw new Error(`redundant refresh button should not be visible: ${JSON.stringify(initialUx)}`);
   if (!["Ready", "Limited"].includes(initialUx.readiness)) throw new Error(`Copilot-backed UX should be ready or limited: ${JSON.stringify(initialUx)}`);
   if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
   if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
@@ -245,6 +247,7 @@ async function runBrowserFlow() {
   await click("#send");
   await waitForExpression("document.querySelector('#run-state')?.textContent === 'Running' || Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('受け付けました'))", 2000, "visible running progress");
   await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('検索は glob を使いました。'))", 6000, "search final event");
+  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Done'", 3000, "search completed state");
   const searchMs = Date.now() - searchStarted;
   if (searchMs > 6000) throw new Error(`mock search UX took too long: ${searchMs}ms`);
   const resultUx = await evaluate(`(() => ({
@@ -335,6 +338,28 @@ async function runBrowserFlow() {
   if (mobileUx.sendWidth < 240 || mobileUx.composerWidth < 300) throw new Error(`mobile controls are not comfortably sized: ${JSON.stringify(mobileUx)}`);
   if (mobileUx.detailsOpen !== false) throw new Error(`details should remain collapsed on mobile: ${JSON.stringify(mobileUx)}`);
   await captureScreenshot("workbench-mobile.png");
+
+  for (const [width, height] of [[768, 920], [1024, 900]]) {
+    await setViewport(width, height, false);
+    await waitForExpression("Boolean(document.querySelector('.composer-panel') && document.querySelector('#events'))", 2000, `responsive layout ${width}`);
+    const viewportUx = await evaluate(`(() => ({
+      bodyWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      composerWidth: Math.round(document.querySelector('.composer-panel')?.getBoundingClientRect().width ?? 0),
+      sendText: document.querySelector('#send')?.textContent,
+      detailsOpen: document.querySelector('.details')?.open,
+      legacyModes: document.body.textContent.includes('資料を探す') || document.body.textContent.includes('Officeファイルを編集する') || document.body.textContent.includes('コードを書く')
+    }))()`);
+    if (viewportUx.bodyWidth > viewportUx.viewportWidth) {
+      throw new Error(`responsive UI has horizontal overflow at ${width}: ${JSON.stringify(viewportUx)}`);
+    }
+    if (viewportUx.composerWidth < Math.min(520, width - 48)) {
+      throw new Error(`composer is too cramped at ${width}: ${JSON.stringify(viewportUx)}`);
+    }
+    if (viewportUx.sendText !== "送信" || viewportUx.detailsOpen !== false || viewportUx.legacyModes) {
+      throw new Error(`responsive minimal UX regression at ${width}: ${JSON.stringify(viewportUx)}`);
+    }
+  }
 
   return {
     searchMs,

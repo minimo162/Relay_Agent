@@ -1,4 +1,4 @@
-import { Activity, Check, RefreshCw, Send, Square, X } from "lucide-react";
+import { Activity, Check, Download, Send, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Subscription } from "rxjs";
 import { Badge } from "./components/ui/badge";
@@ -280,6 +280,31 @@ export function App() {
     });
   }, [refreshStatus]);
 
+  const downloadSupportBundle = useCallback(() => {
+    const payload = {
+      schemaVersion: "RelayWorkbenchSupportBundle.v1",
+      generatedAt: new Date().toISOString(),
+      workspace,
+      currentRunId,
+      currentStatus,
+      readiness,
+      events,
+      agui: {
+        transport: "/agui/relay",
+        input: activeInputRef.current,
+        events: agUiEventsRef.current,
+      },
+      raw,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `relay-support-${new Date().toISOString().replaceAll(":", "-")}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [currentRunId, currentStatus, events, raw, readiness, workspace]);
+
   const cancelRun = useCallback(async () => {
     const runId = runIdRef.current;
     if (!runId) return;
@@ -400,6 +425,7 @@ export function App() {
                 id="readiness"
                 type="button"
                 data-ready={readiness.ready}
+                aria-label="Refresh readiness"
                 title={readiness.title}
                 onClick={handleRefresh}
               >
@@ -442,13 +468,13 @@ export function App() {
             <div className="field-group">
               <div className="field-row">
                 <label className="field-label" htmlFor="instruction">Task</label>
-                <span id="run-id" className="field-state">{currentRunId ?? ""}</span>
+                <span id="run-id" className="field-state">{statusLabel(currentStatus)}</span>
               </div>
               <Textarea
                 id="instruction"
                 ref={instructionRef}
                 rows={3}
-                placeholder="部品売上に関するファイルを探して"
+                placeholder="何をしますか?"
                 value={instruction}
                 onChange={(event) => setInstruction(event.currentTarget.value)}
                 onKeyDown={(event) => {
@@ -461,15 +487,12 @@ export function App() {
             </div>
 
             <div className="actions">
-              <Button id="refresh" variant="secondary" type="button" disabled={running} onClick={handleRefresh}>
-                <RefreshCw size={15} aria-hidden="true" />
-                更新
-              </Button>
               <Button
                 id="send"
                 type="button"
                 data-running={running ? "true" : "false"}
                 disabled={sendDisabled}
+                aria-label={running ? "Stop run" : "Send task"}
                 onClick={() => void runTask()}
               >
                 {running ? <Square size={15} aria-hidden="true" /> : <Send size={15} aria-hidden="true" />}
@@ -516,7 +539,14 @@ export function App() {
           </Card>
 
           <details className="details">
-            <summary>Details</summary>
+            <summary>Support</summary>
+            <div className="details-header">
+              <span>Redacted local run diagnostics</span>
+              <Button variant="ghost" type="button" onClick={downloadSupportBundle}>
+                <Download size={14} aria-hidden="true" />
+                Export
+              </Button>
+            </div>
             <pre id="raw">{raw}</pre>
           </details>
         </main>

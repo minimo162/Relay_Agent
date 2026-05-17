@@ -2,23 +2,23 @@
 
 :root {
   color-scheme: light;
-  --ra-bg: #f8f5ef;
-  --ra-surface: #fffdf8;
+  --ra-bg: #f7f7f4;
+  --ra-surface: #fbfaf7;
   --ra-surface-strong: #ffffff;
-  --ra-border: #ded6c9;
-  --ra-border-soft: #ede6dc;
-  --ra-text: #221f1a;
-  --ra-muted: #70685d;
-  --ra-muted-soft: #9c9284;
-  --ra-accent: #305f56;
-  --ra-accent-strong: #21453f;
-  --ra-accent-soft: #e8f1ed;
-  --ra-danger: #9f3d34;
-  --ra-danger-soft: #f7e7e4;
-  --ra-ok: #386f55;
-  --ra-ok-soft: #e8f0eb;
-  --ra-warn: #8a651f;
-  --ra-warn-soft: #f8efd9;
+  --ra-border: #ddd9d1;
+  --ra-border-soft: #ece8df;
+  --ra-text: #1d1d1b;
+  --ra-muted: #706f68;
+  --ra-muted-soft: #9a968c;
+  --ra-accent: #2f675d;
+  --ra-accent-strong: #204940;
+  --ra-accent-soft: #e7f1ee;
+  --ra-danger: #9d3f35;
+  --ra-danger-soft: #f7e8e5;
+  --ra-ok: #36725a;
+  --ra-ok-soft: #e7f0eb;
+  --ra-warn: #87621f;
+  --ra-warn-soft: #f7efd9;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
@@ -52,23 +52,23 @@ button:disabled {
 }
 
 .shell {
-  width: min(100%, 1000px);
+  width: min(100%, 960px);
   margin: 0 auto;
-  padding: 76px 48px 88px;
+  padding: 84px 48px 96px;
 }
 
 .topbar {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 40px;
-  margin-bottom: 52px;
+  gap: 36px;
+  margin-bottom: 64px;
 }
 
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   color: var(--ra-muted);
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: 0;
 }
 
@@ -80,8 +80,8 @@ h2 {
 }
 
 h1 {
-  font-size: 40px;
-  line-height: 1.1;
+  font-size: 34px;
+  line-height: 1.08;
 }
 
 h2 {
@@ -92,13 +92,14 @@ h2 {
 }
 
 .status-pill {
-  min-width: 110px;
-  height: 36px;
+  min-width: 98px;
+  height: 34px;
   border: 1px solid var(--ra-border);
   border-radius: 999px;
-  padding: 0 14px;
+  padding: 0 13px;
   color: var(--ra-muted);
-  background: rgba(255, 253, 248, 0.74);
+  background: rgba(255, 255, 255, 0.64);
+  font-size: 13px;
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
 }
 
@@ -128,7 +129,7 @@ h2 {
 
 .workspace-layout {
   display: grid;
-  gap: 30px;
+  gap: 28px;
 }
 
 .ra-card,
@@ -138,14 +139,15 @@ h2 {
 .run-panel,
 .details {
   border: 1px solid var(--ra-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--ra-surface) 94%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ra-surface) 96%, transparent);
 }
 
 .composer-panel {
   display: grid;
-  gap: 28px;
-  padding: 32px;
+  gap: 30px;
+  padding: 34px;
+  border-color: color-mix(in srgb, var(--ra-border) 76%, transparent);
 }
 
 .ra-card[hidden] {
@@ -208,8 +210,8 @@ h2 {
 
 .task-input {
   resize: none;
-  min-height: 136px;
-  padding: 16px;
+  min-height: 148px;
+  padding: 18px;
   line-height: 1.65;
 }
 
@@ -351,8 +353,8 @@ h2 {
 
 .summary-panel {
   display: grid;
-  gap: 12px;
-  padding: 26px 30px;
+  gap: 14px;
+  padding: 30px 34px;
   background: var(--ra-ok-soft);
 }
 
@@ -377,7 +379,7 @@ h2 {
 }
 
 .run-panel {
-  padding: 28px 32px;
+  padding: 30px 34px;
 }
 
 .run-state {
@@ -407,8 +409,8 @@ h2 {
 
 .events {
   display: grid;
-  gap: 16px;
-  margin: 26px 0 0;
+  gap: 18px;
+  margin: 28px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -463,8 +465,8 @@ h2 {
 
 .approval-panel {
   display: grid;
-  gap: 18px;
-  padding: 28px 30px;
+  gap: 20px;
+  padding: 30px 34px;
   border-color: color-mix(in srgb, var(--ra-warn) 36%, var(--ra-border));
   background: var(--ra-warn-soft);
 }
@@ -529,11 +531,32 @@ h2 {
 
 .details {
   padding: 16px 20px;
+  color: var(--ra-muted);
+  background: transparent;
+}
+
+.details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  color: var(--ra-muted);
+  font-size: 12px;
+}
+
+.details-header .secondary-button,
+.details-header .primary-button {
+  min-width: auto;
+}
+
+.details-header .ghost {
+  min-width: auto;
 }
 
 @media (max-width: 720px) {
   .shell {
-    padding: 42px 20px 56px;
+    padding: 42px 20px 58px;
   }
 
   .topbar {
@@ -577,6 +600,11 @@ h2 {
 
   .field-state {
     max-width: 100%;
+  }
+
+  .details-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

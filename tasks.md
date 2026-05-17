@@ -13,10 +13,14 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
-The completed active queue is `DCI2605IR*`. It incorporates the 2026-05-18 DCI
-Interface Resolution Follow-up Plan from `PLANS.md`: increase the resolution
-of the generic Agent Framework/OpenCode-compatible corpus interface without
-reviving a dedicated search engine.
+The completed active queues are `DCI2605IR*` and `UXMIN*`.
+`DCI2605IR*` incorporates the 2026-05-18 DCI Interface Resolution Follow-up
+Plan from `PLANS.md`: increase the resolution of the generic Agent
+Framework/OpenCode-compatible corpus interface without reviving a dedicated
+search engine. `UXMIN*` implements the 2026-05-18 Minimal Professional
+Workbench UX Plan from `PLANS.md`: maximize whitespace, remove nonessential
+controls, and make the browser Workbench a single calm AG-UI-first agent
+surface instead of a mode picker or diagnostic console.
 
 The previous `DCI2605*`, `DCIFS*`, and `POSTLIVE*` queues remain completed
 history below. They should not be extended unless a regression proves those
@@ -35,6 +39,247 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### UXMIN-01 - Inventory And Remove Visual Noise
+
+Status: completed
+
+Scope:
+
+- Audit `apps/workbench/` for visible controls, panels, badges, diagnostics,
+  mode selectors, and AionUi-era or historical runtime affordances.
+- Remove default-surface controls that are not required for normal task
+  execution: rating/reaction buttons, globe/web UI buttons, always-visible
+  runtime chips, unused settings, legacy feature-mode shortcuts, and raw
+  diagnostic panels.
+- Keep only essentials visible by default: workspace, task composer, send/stop,
+  run state, answer, approvals, and explicit support export.
+
+Artifacts:
+
+- Workbench UI inventory recorded in `docs/IMPLEMENTATION.md`.
+- Removed or relocated chrome in Workbench components.
+
+Acceptance:
+
+- The first viewport no longer reads as a dashboard, landing page, mode picker,
+  or diagnostic console.
+- Search, Office editing, coding, and verification remain available as natural
+  language tasks through the same composer.
+- No hidden fallback to old AionUi/OpenCode/OpenWork/Tauri UI paths is added.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### UXMIN-02 - Define Minimal Design Tokens And Layout Primitives
+
+Status: completed
+
+Scope:
+
+- Define Workbench-level Tailwind/shadcn/Radix primitives for spacing,
+  max-widths, surface colors, border radii, focus rings, typography, icon
+  sizing, and state colors.
+- Use a restrained neutral palette with one quiet accent. Avoid decorative
+  gradients, orbs, bokeh, one-note purple/blue themes, and marketing-style
+  composition.
+- Add stable responsive constraints for composer, timeline, approval, diff, and
+  result surfaces so text and controls do not shift or overlap.
+
+Artifacts:
+
+- Updated Workbench styling primitives and shared components.
+- Visual notes in `docs/IMPLEMENTATION.md` explaining the token choices.
+
+Acceptance:
+
+- The UI has a consistent professional visual rhythm across idle, running,
+  approval, error, and complete states.
+- Text fits inside controls at 375px, 768px, 1024px, and 1440px.
+- Keyboard focus and contrast remain visible.
+
+Verification:
+
+- Workbench typecheck/build through `pnpm check`
+- `pnpm workbench:ux-e2e`
+
+### UXMIN-03 - Rebuild The Shell Around One Composer
+
+Status: completed
+
+Scope:
+
+- Restructure the Workbench shell around a single natural-language task
+  composer and one run surface.
+- Keep workspace selection visible but quiet; it should support the task, not
+  dominate the screen.
+- Replace feature-mode framing with concise placeholder/help text inside the
+  composer only when the run is idle.
+
+Artifacts:
+
+- Updated shell/composer components in `apps/workbench/`.
+- E2E fixture covering a generic task start from the idle state.
+
+Acceptance:
+
+- Users do not need to choose `資料を探す`, `Officeファイルを編集する`, or
+  `コードを書く` before submitting a task.
+- The primary action is visually clear and the page has no competing CTAs.
+- The idle state contains no long explanatory copy.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### UXMIN-04 - Render Runs As A Progressive AG-UI Timeline
+
+Status: completed
+
+Scope:
+
+- Use `/agui/relay` events as the canonical Workbench run model.
+- Render final answer and current run state first, then a compact timeline of
+  meaningful tool calls, approvals, diffs, verification results, and errors.
+- Collapse raw AG-UI events, JSON payloads, and long diagnostics behind
+  explicit detail controls.
+
+Artifacts:
+
+- AG-UI timeline components and state mapping.
+- Golden UX fixture with long search/read/edit/verify trajectories.
+
+Acceptance:
+
+- A normal run is understandable without reading raw event payloads.
+- Advanced diagnostics are available but never dominate the default surface.
+- Interrupt/resume and approval events remain visible enough to act on.
+
+Verification:
+
+- official AG-UI replay/golden smoke through `pnpm check`
+- `pnpm workbench:ux-e2e`
+
+### UXMIN-05 - Build Minimal Approval And Diff Surfaces
+
+Status: completed
+
+Scope:
+
+- Create one approval surface that covers code edits, OfficeCLI mutations,
+  file writes, patches, and bounded verification commands.
+- Show concise summary, target path, risk, backup state, diff availability, and
+  approve/reject actions.
+- Keep mutation approval unmistakable without adding persistent sidebars or
+  modal-heavy flow.
+
+Artifacts:
+
+- Shared approval/diff components for AG-UI client-tool approvals.
+- Approval/rejection UX E2E fixture.
+
+Acceptance:
+
+- Mutations cannot proceed without explicit user approval.
+- Rejection and resume are clear and leave an auditable run trace.
+- The same approval surface works across common file, Office, and code tasks.
+
+Verification:
+
+- official AG-UI client-tool approval smoke through `pnpm check`
+- `pnpm workbench:ux-e2e`
+
+### UXMIN-06 - Polish Loading, Error, And Completion States
+
+Status: completed
+
+Scope:
+
+- Design calm states for idle, connecting to Copilot, running, waiting for
+  approval, applying changes, failed, cancelled, and complete.
+- Keep failure messages short and specific. Move raw diagnostics to details and
+  explicit redacted support bundle export.
+- Ensure long-running operations look alive without excessive animation or
+  noisy status text.
+
+Artifacts:
+
+- Updated state components and error detail components.
+- UX fixtures for provider failure, tool failure, invalid output, and success.
+
+Acceptance:
+
+- The UI never appears frozen while an AG-UI run is active.
+- Fail-fast Copilot/provider errors are understandable without exposing raw
+  implementation details by default.
+- Completion clearly distinguishes final answer, changed files, and next
+  available actions.
+
+Verification:
+
+- provider/tool failure smokes through `pnpm check`
+- `pnpm workbench:ux-e2e`
+
+### UXMIN-07 - Add Responsive Accessibility And Visual Regression Gates
+
+Status: completed
+
+Scope:
+
+- Extend Workbench UX E2E coverage for 375px, 768px, 1024px, and 1440px
+  viewports.
+- Check keyboard navigation, focus order, contrast, reduced-motion behavior,
+  text overflow, and stable dimensions for fixed-format controls.
+- Add screenshot or DOM assertions that catch reintroduced visual noise.
+
+Artifacts:
+
+- Updated `pnpm workbench:ux-e2e` coverage.
+- Accessibility and viewport notes in `docs/IMPLEMENTATION.md`.
+
+Acceptance:
+
+- No incoherent overlap or clipped text in supported viewports.
+- The composer, timeline, approval, and error surfaces remain usable with a
+  keyboard.
+- Reintroduced legacy chrome or always-visible diagnostics fails the UX gate.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### UXMIN-08 - Align Product Documentation With The Minimal Workbench
+
+Status: completed
+
+Scope:
+
+- Update `README.md`, `docs/IMPLEMENTATION.md`, `PLANS.md`, and `tasks.md`
+  after implementation so they describe the single minimal AG-UI Workbench.
+- Remove active-architecture wording that implies separate search, Office, or
+  coding product modes.
+- Keep historical AionUi/OpenCode/OpenWork/Tauri references clearly archived.
+
+Artifacts:
+
+- Documentation updates aligned with the implemented UX.
+- Verification log entries for UX and check commands.
+
+Acceptance:
+
+- Documentation describes one browser Workbench over Microsoft Agent Framework,
+  AG-UI, M365 Copilot CDP, and Relay-governed local tools.
+- No user-facing docs instruct users to choose old feature modes.
+- Release notes can be produced without contradicting the active architecture.
+
+Verification:
+
+- `git diff --check`
+- `pnpm check`
 
 ### DCI2605IR-01 - Add DCI Phase And Hypothesis Ledger
 

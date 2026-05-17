@@ -98,6 +98,119 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-18 Minimal Professional Workbench UX Plan
+
+This plan defines the visual and interaction direction for the active browser
+Workbench. It does not change the architecture decision above: the Workbench
+remains one AG-UI-first agent surface over Microsoft Agent Framework and the
+OpenCode-compatible local tool catalog. File search, Office work, coding, and
+verification are common task recipes over that generic agent surface, not
+separate product modes.
+
+Goal:
+
+> Maximize whitespace, remove nonessential controls, and make Relay feel like a
+> quiet professional local workbench rather than a diagnostic console or a mode
+> picker.
+
+#### Design Principles
+
+1. **One primary surface**
+   - The first viewport should contain only the essential work context:
+     workspace, task composer, run state, and the current answer/approval area.
+   - Do not bring back `資料を探す`, `Officeファイルを編集する`, or
+     `コードを書く` as primary mode tabs or cards.
+
+2. **Whitespace as structure**
+   - Use generous outer margins, a constrained reading width, and clear
+     vertical rhythm instead of dense borders and nested panels.
+   - Prefer full-width calm bands and unframed layouts. Use cards only for
+     repeated result items, approvals, and compact tool events where framing
+     improves scanability.
+
+3. **Progressive disclosure**
+   - Final answer, required approval, and the latest meaningful status are
+     visible by default.
+   - Tool traces, raw AG-UI events, JSON diagnostics, support data, and detailed
+     run metadata are collapsed behind explicit detail controls.
+   - Diagnostics must never be the default visual impression of a normal run.
+
+4. **AG-UI-native interaction model**
+   - Render lifecycle, message, tool, state, interrupt/resume, approval, error,
+     and completion events through the `/agui/relay` AG-UI contract.
+   - Avoid custom Workbench-only run concepts when AG-UI already has an event or
+     interaction pattern that fits.
+
+5. **Professional minimal visual language**
+   - Use React + Vite + TypeScript + Tailwind CSS + shadcn/ui + Radix UI +
+     `@ag-ui/client` with lucide-react icons.
+   - Use a restrained neutral palette with one quiet accent. Avoid decorative
+     gradients, orbs, bokeh, one-note purple/blue themes, and marketing-style
+     hero composition.
+   - Use Inter or the system sans stack. Body copy should stay compact and
+     legible; no viewport-scaled typography and no negative letter spacing.
+
+6. **Purposeful controls**
+   - Keep only controls needed for the current run: workspace selection, task
+     input, send/stop, approval accept/reject, copy/open/diff where applicable,
+     and explicit support export.
+   - Remove AionUi-era and diagnostic-first controls from the default surface:
+     web UI buttons, rating/reaction buttons, globe/star/chat-bubble controls,
+     unused settings buttons, mode shortcuts, and always-visible runtime chips.
+   - Prefer icon buttons with accessible labels for secondary actions and
+     text+icon buttons for primary commands.
+
+7. **Calm run states**
+   - Idle, running, waiting for Copilot, awaiting approval, applying changes,
+     failed, and complete states must be visually distinct without large blocks
+     of explanatory text.
+   - Errors should be short, specific, and actionable, with diagnostics available
+     only through details/support export.
+
+8. **Approval clarity without clutter**
+   - Mutations must show a concise summary, target path, risk, backup/diff
+     availability, and clear approve/reject actions.
+   - Approval UI may interrupt the flow, but should not become a modal-heavy
+     or wizard-like experience.
+
+9. **Responsive and accessible by default**
+   - Check 375px, 768px, 1024px, and 1440px layouts.
+   - Text must not overlap or overflow controls. Fixed-format UI elements need
+     stable dimensions.
+   - Preserve visible focus states, keyboard navigation, WCAG contrast, and
+     `prefers-reduced-motion`.
+
+#### Implementation Shape
+
+1. Inventory current Workbench chrome and remove/relocate every control that is
+   not needed for normal task execution.
+2. Define a small Workbench design token layer: spacing, max widths, surface
+   colors, borders, focus rings, typography, icon sizes, and state colors.
+3. Rebuild the shell around one composer and one run surface:
+   workspace selector, task input, primary send/stop action, compact status,
+   answer/approval area, and progressive trace details.
+4. Convert run output to a compact AG-UI timeline:
+   final answer first, then meaningful tool events, approvals, diffs, and
+   verification details on demand.
+5. Create minimal approval/diff components that can handle file edits,
+   OfficeCLI mutations, and bounded bash verification without separate modes.
+6. Add visual regression and UX E2E coverage for idle, running, approval,
+   error, completion, long trace, and mobile layouts.
+
+#### Acceptance Criteria
+
+- The first viewport presents a single calm workbench, not a dashboard, landing
+  page, mode picker, or diagnostic console.
+- A user can submit a natural-language task without choosing a feature mode.
+- Normal successful runs show the final answer and a short trace summary; raw
+  JSON and diagnostics are hidden by default.
+- Mutation runs make approval requirements unmistakable without adding extra
+  permanent chrome.
+- No AionUi-era, OpenCode/OpenWork-era, or old diagnostic buttons are visible in
+  the default Workbench.
+- `pnpm workbench:ux-e2e` verifies the visible user flows.
+- `pnpm check` remains the milestone acceptance gate.
+
 ### 2026-05-17 Direct Corpus Interaction Plan
 
 The arXiv paper "Beyond Semantic Similarity: Rethinking Retrieval for Agentic

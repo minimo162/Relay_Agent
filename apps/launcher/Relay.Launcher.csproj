@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Relay.Launcher</AssemblyName>
     <RootNamespace>Relay.Launcher</RootNamespace>
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>

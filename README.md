@@ -39,10 +39,12 @@ The Workbench is intentionally minimal:
 - one task input;
 - one send action;
 - concise readiness and run status;
-- details collapsed by default.
+- result and approval surfaces only when relevant;
+- support diagnostics collapsed by default with explicit export.
 
-The UI does not expose model/provider/runtime controls. Those are implementation
-details behind the sidecar.
+The UI does not expose separate search, Office, code, model, provider, or
+runtime controls. Those are implementation details behind the sidecar and the
+generic local tool catalog.
 
 ## Sidecar
 
