@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,18 @@ const token = "relay-workspace-picker-smoke-token";
 const port = 17897;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-workspace-picker-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-workspace-picker-target-"));
+const workspacePickerSource = readFileSync(join(process.cwd(), "apps/sidecar/WorkspacePicker.cs"), "utf8");
+for (const needle of [
+  "IFileOpenDialog",
+  "FosPickFolders",
+  "FosForceFileSystem",
+  "SHCreateItemFromParsingName",
+  "FolderBrowserDialog",
+]) {
+  if (!workspacePickerSource.includes(needle)) {
+    throw new Error(`workspace picker source is missing ${needle}`);
+  }
+}
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
   cwd: process.cwd(),

@@ -57,6 +57,9 @@ InstallDirRegKey HKCU "Software\\Relay Agent" "InstallDir"
 !define MUI_ABORTWARNING
 !define MUI_ICON "${icon}"
 !define MUI_UNICON "${icon}"
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_TEXT "Launch Relay Agent"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchRelayAgent
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
@@ -102,7 +105,7 @@ Section "Relay Agent" SecMain
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "NoRepair" 1
 SectionEnd
 
-Section /o "Desktop shortcut" SecDesktop
+Section "Desktop shortcut" SecDesktop
   SetShellVarContext current
   ReadRegStr $1 HKCU "Software\\Relay Agent" "AppDir"
   \${If} $1 == ""
@@ -110,6 +113,15 @@ Section /o "Desktop shortcut" SecDesktop
   \${EndIf}
   CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$1\\Relay.Launcher.exe" "" "$1\\relay-assets\\relay-agent.ico"
 SectionEnd
+
+Function LaunchRelayAgent
+  SetShellVarContext current
+  ReadRegStr $1 HKCU "Software\\Relay Agent" "AppDir"
+  \${If} $1 == ""
+    StrCpy $1 "$INSTDIR"
+  \${EndIf}
+  ExecShell "open" "$1\\Relay.Launcher.exe"
+FunctionEnd
 
 Function StopRunningRelayAgent
   DetailPrint "Stopping any running Relay Agent processes from this user install..."

@@ -613,7 +613,7 @@ export function App() {
                   onClick={() => void chooseWorkspace()}
                 >
                   <FolderOpen size={15} aria-hidden="true" />
-                  {isPickingWorkspace ? "選択中..." : "変更"}
+                  {isPickingWorkspace ? "選択中..." : "フォルダを選択"}
                 </Button>
               </div>
               {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}

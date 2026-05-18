@@ -47,6 +47,12 @@ app icon, remove the installed-app dependency on a manually configured
 fast, replace manual workspace path entry with a native folder picker, and show
 readiness with minimal user-facing UI.
 
+The completed active queue is `INSTALLUX*`. It implements the 2026-05-18
+Installer Defaults, Workspace Picker, And Search Path Contract Plan from
+`PLANS.md`: default desktop shortcut and finish-page launch, no Windows
+launcher console, modern shared-folder workspace picker, and a reliable
+`glob` -> `read` path contract.
+
 The previous `DCI2605*`, `DCIFS*`, and `POSTLIVE*` queues remain completed
 history below. They should not be extended unless a regression proves those
 acceptance criteria have broken.
@@ -64,6 +70,145 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### INSTALLUX-01 - Document Installer, Picker, And Search Path Remediation
+
+Status: completed
+
+Scope:
+
+- Add the installer defaults, no-console launcher, modern shared-folder
+  workspace picker, and `glob` -> `read` path contract plan to `PLANS.md`.
+- Add this executable task queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan keeps the browser Workbench + .NET sidecar architecture.
+- The plan does not revive Tauri, AionUi, OpenCode/OpenWork, or a dedicated
+  document-search engine.
+
+Verification:
+
+- `git diff --check`
+
+### INSTALLUX-02 - Update Installer Defaults And Launcher Subsystem
+
+Status: completed
+
+Scope:
+
+- Make the NSIS desktop shortcut component selected by default.
+- Add a default finish-page launch action that starts the registered versioned
+  `AppDir` launcher.
+- Change the launcher project to a Windows GUI executable so no console window
+  appears during normal program execution.
+- Extend release smoke checks for those installer and launcher guarantees.
+
+Artifacts:
+
+- Updated `scripts/release/build-windows-installer.mjs`.
+- Updated `scripts/release/icon-packaging-smoke.mjs`.
+- Updated `apps/launcher/Relay.Launcher.csproj`.
+
+Acceptance:
+
+- Generated installer remains per-user and non-admin.
+- Finish-page run, desktop shortcut, Start Menu shortcut, and uninstall icon all
+  point at the versioned install payload.
+
+Verification:
+
+- `pnpm release:icon-smoke`
+- `dotnet build apps/launcher/Relay.Launcher.csproj --configuration Release`
+
+### INSTALLUX-03 - Replace Windows Workspace Picker Primary Path
+
+Status: completed
+
+Scope:
+
+- Add a native Windows `IFileOpenDialog` folder picker as the first-choice
+  workspace selection path.
+- Preserve the existing PowerShell picker as a bounded compatibility fallback.
+- Keep Workbench workspace UI minimal but make the action clearer.
+- Ensure shared folders/UNC paths are accepted when the native picker returns
+  them.
+
+Artifacts:
+
+- Updated `apps/sidecar/WorkspacePicker.cs`.
+- Updated Workbench workspace copy/styles as needed.
+
+Acceptance:
+
+- Workspace selection uses a modern Windows folder dialog where available.
+- The `変更` action is clearer and always re-enables after success,
+  cancellation, error, or timeout.
+
+Verification:
+
+- `pnpm sidecar:workspace-picker-smoke`
+- `pnpm workbench:ux-e2e`
+
+### INSTALLUX-04 - Normalize Glob Results And Read Paths
+
+Status: completed
+
+Scope:
+
+- Return `glob` results as workspace-relative display paths valid for later
+  tool calls.
+- Add shared existing-file path resolution for `read` and `edit`.
+- Use platform-correct workspace containment comparisons.
+- Add a smoke test proving a discovered file can be read by a direct
+  subsequent `read`.
+
+Artifacts:
+
+- Updated `apps/sidecar/AgentRunner.cs`.
+- Updated or new smoke coverage.
+
+Acceptance:
+
+- A discovered PDF/Office/plaintext path does not produce a false first
+  `file_path does not exist` read failure when it is inside the workspace.
+
+Verification:
+
+- `pnpm agent:golden-smoke`
+- `pnpm agent:glob-read-path-smoke`
+- `pnpm check`
+
+### INSTALLUX-05 - Version, Verify, Commit, And Release
+
+Status: completed
+
+Scope:
+
+- Bump active package versions.
+- Update `docs/IMPLEMENTATION.md`.
+- Run acceptance checks and release packaging.
+- Commit/push to `main`.
+- Publish a GitHub Release with installer and package assets.
+
+Artifacts:
+
+- Release assets for the next patch version.
+
+Acceptance:
+
+- `pnpm check` passes.
+- GitHub Release is published with checksums and inventory.
+
+Verification:
+
+- `pnpm check`
+- `gh release view`
 
 ### RESPONSIVE-01 - Document Installed Workbench Responsiveness Contract
 

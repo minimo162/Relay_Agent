@@ -20,6 +20,7 @@ assert(
   launcherProject.includes("<ApplicationIcon>..\\..\\assets\\app-icon\\relay-agent.ico</ApplicationIcon>"),
   "launcher project must reference active app icon",
 );
+assert(launcherProject.includes("<OutputType>WinExe</OutputType>"), "launcher must use the Windows GUI subsystem to avoid a console window");
 
 const packageScript = readFileSync(resolve(root, "scripts/release/package-sidecar.mjs"), "utf8");
 assert(packageScript.includes("relay-assets"), "package-sidecar must copy relay-assets");
@@ -32,8 +33,12 @@ for (const needle of [
   "UninstallIcon \"${icon}\"",
   "!define MUI_ICON \"${icon}\"",
   "!define MUI_UNICON \"${icon}\"",
+  "!define MUI_FINISHPAGE_RUN",
+  "!define MUI_FINISHPAGE_RUN_FUNCTION LaunchRelayAgent",
   "relay-assets\\\\relay-agent.ico",
   "StopRunningRelayAgent",
+  "Function LaunchRelayAgent",
+  "ExecShell \"open\" \"$1\\\\Relay.Launcher.exe\"",
   "app-${version}-$0",
   "WriteRegStr HKCU \"Software\\\\Relay Agent\" \"AppDir\" \"$1\"",
   "$LOCALAPPDATA\\\\Programs\\\\Relay Agent",
@@ -45,6 +50,8 @@ for (const needle of [
 
 assert(!nsisScript.includes("RequestExecutionLevel admin"), "installer must not request admin execution level");
 assert(!nsisScript.includes("HKLM"), "installer must not write machine-wide HKLM registry keys");
+assert(nsisScript.includes('Section "Desktop shortcut" SecDesktop'), "desktop shortcut section must be selected by default");
+assert(!nsisScript.includes('Section /o "Desktop shortcut" SecDesktop'), "desktop shortcut must not be opt-in only");
 
 const preflightIndex = nsisScript.indexOf("Call StopRunningRelayAgent");
 const fileCopyIndex = nsisScript.indexOf("File /r");

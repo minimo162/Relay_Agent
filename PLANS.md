@@ -170,6 +170,70 @@ Acceptance:
 - The behavior is covered by a deterministic sidecar idle-exit smoke test and
   documented in the packaging policy and implementation log.
 
+### 2026-05-18 Installer Defaults, Workspace Picker, And Search Path Contract Plan
+
+This plan fixes the installed-app usability regressions reported against the
+browser Workbench path: the installer should default to creating a desktop
+shortcut and launching Relay after setup, the Windows launcher must not show a
+console window, the workspace chooser should feel modern and support shared
+folders, and a path returned by `glob` must be immediately readable by `read`.
+
+Goal:
+
+> A normal Windows user install should leave Relay visible on the desktop,
+> launch it at the end of setup, open without a console window, allow shared
+> folder selection through a modern picker, and avoid false failed `read`
+> events after successful file discovery.
+
+Implementation plan:
+
+1. **Installer defaults**
+   - Make the desktop shortcut component selected by default while still
+     allowing the user to uncheck it.
+   - Add the NSIS finish-page run checkbox and keep it checked by default.
+   - Launch the versioned `AppDir` registered during install so the finish page
+     starts the same payload as Start Menu and desktop shortcuts.
+   - Keep the installer per-user with `RequestExecutionLevel user`; do not add
+     admin prompts or machine-wide registry writes.
+
+2. **No launcher console**
+   - Build `Relay.Launcher` as a Windows GUI subsystem executable for packaged
+     Windows releases.
+   - Keep sidecar stdout/stderr redirected and hidden.
+   - Preserve Linux/package behavior through the same launcher project rather
+     than adding a second launcher runtime.
+
+3. **Modern workspace chooser**
+   - On Windows, prefer the native `IFileOpenDialog` folder picker with
+     `FOS_PICKFOLDERS`, `FOS_FORCEFILESYSTEM`, and `FOS_PATHMUSTEXIST`.
+   - Keep the current workspace as the initial folder when it still exists.
+   - Support UNC/network/shared folders through the dialog address bar.
+   - Keep the PowerShell picker only as a bounded compatibility fallback when
+     the native dialog cannot be created.
+   - Keep the Workbench surface minimal: one compact workspace chip and one
+     folder-selection action, with recovery after cancellation or timeout.
+
+4. **Search path contract**
+   - `glob` must return workspace-relative display paths that are valid inputs
+     to `read`, even when `glob` runs from a searched subfolder.
+   - `read`/`edit` validation and execution must share the same resolver.
+   - Existing files inside the workspace should resolve case-insensitively on
+     Windows and should tolerate exact display paths returned by prior tools.
+   - If a model supplies a stale absolute-looking path, Relay may perform a
+     bounded unique path-tail recovery inside the workspace instead of emitting
+     a false first failure.
+
+Acceptance:
+
+- The generated NSIS script contains a default desktop shortcut section and a
+  default finish-page run action.
+- `Relay.Launcher` packages without a Windows console subsystem.
+- Workspace picker smoke continues to pass, and the source uses the native
+  Windows folder picker before the compatibility fallback.
+- A `glob` result can be passed directly to `read` without producing an
+  avoidable `file_path does not exist` event.
+- `pnpm check` passes before release.
+
 ### 2026-05-18 Installed Workbench Responsiveness Plan
 
 This plan fixes the `0.3.8` installed-app regression where the Workbench can

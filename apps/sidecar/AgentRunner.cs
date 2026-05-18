@@ -1221,14 +1221,20 @@ public sealed class RelayToolExecutor
             }
         }
 
+        var displayPaths = result.Lines
+            .Select(line => ResolveSearchResultPath(workingDirectory, line))
+            .Where(file => IsPathInsideWorkspace(workspace, file))
+            .Select(file => ToWorkspaceDisplayPath(workspace, file))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var summary = result.Truncated
-            ? $"{result.Lines.Count} file candidates (truncated at limit)"
-            : $"{result.Lines.Count} file candidates";
+            ? $"{displayPaths.Length} file candidates (truncated at limit)"
+            : $"{displayPaths.Length} file candidates";
         if (expandedDirectoryPattern is not null)
         {
             summary += $" (matched descendants via {expandedDirectoryPattern})";
         }
-        return ToolObservation.Ok(call.Id, call.Tool, summary, result.Lines);
+        return ToolObservation.Ok(call.Id, call.Tool, summary, displayPaths);
     }
 
     private async Task<ToolObservation> GrepAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -1310,7 +1316,7 @@ public sealed class RelayToolExecutor
 
     private static async Task<ToolObservation> ReadAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
-        var path = ResolveWorkspacePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
+        var path = ResolveExistingWorkspaceFilePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
         var offset = Math.Max(GetInt(call.Args, "offset") ?? 0, 0);
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 8000, 1, 12000);
         var info = new FileInfo(path);
@@ -1622,7 +1628,7 @@ public sealed class RelayToolExecutor
 
     private async Task<ToolObservation> EditAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
     {
-        var path = ResolveWorkspacePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
+        var path = ResolveExistingWorkspaceFilePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
         var oldString = GetString(call.Args, "old_string") ?? GetString(call.Args, "oldString") ?? "";
         var newString = GetString(call.Args, "new_string") ?? GetString(call.Args, "newString") ?? "";
         var replaceAll = GetBool(call.Args, "replace_all") == true || GetBool(call.Args, "replaceAll") == true;
@@ -2732,7 +2738,9 @@ public sealed class RelayToolExecutor
         if (string.IsNullOrWhiteSpace(path)) return ToolValidation.Fail($"{key} is required.");
         try
         {
-            var full = ResolveWorkspacePath(workspace, path);
+            var full = mustExist
+                ? ResolveExistingWorkspaceFilePath(workspace, path)
+                : ResolveWorkspacePath(workspace, path);
             if (mustExist && !File.Exists(full)) return ToolValidation.Fail($"{key} does not exist.");
             return ToolValidation.Pass();
         }
@@ -2812,12 +2820,47 @@ public sealed class RelayToolExecutor
     {
         var root = Path.GetFullPath(workspace);
         var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path));
-        if (!full.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && !string.Equals(full, root, StringComparison.Ordinal))
+        if (!IsPathInsideWorkspace(root, full))
         {
             throw new InvalidOperationException("Path is outside the selected workspace.");
         }
         return full;
+    }
+
+    private static string ResolveExistingWorkspaceFilePath(string workspace, string path)
+    {
+        var full = ResolveWorkspacePath(workspace, path);
+        if (File.Exists(full)) return full;
+
+        var candidates = FindWorkspaceFilesByPathTail(workspace, path, maxCandidates: 2);
+        if (candidates.Count == 1)
+        {
+            return ResolveWorkspacePath(workspace, candidates[0]);
+        }
+
+        return full;
+    }
+
+    private static bool IsPathInsideWorkspace(string workspace, string path)
+    {
+        var root = Path.GetFullPath(workspace);
+        var full = Path.GetFullPath(path);
+        var comparison = WorkspacePathComparison();
+        var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(full, normalizedRoot, comparison) ||
+            full.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison) ||
+            full.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, comparison);
+    }
+
+    private static StringComparison WorkspacePathComparison() =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static string ResolveSearchResultPath(string workingDirectory, string line)
+    {
+        var candidate = line.Trim();
+        return Path.GetFullPath(Path.IsPathRooted(candidate)
+            ? candidate
+            : Path.Combine(workingDirectory, candidate));
     }
 
     private static string ToWorkspaceDisplayPath(string workspace, string path) =>
@@ -2836,7 +2879,7 @@ public sealed class RelayToolExecutor
     private static IReadOnlyList<string> FindWorkspaceFilesByPathTail(string workspace, string requestedPath, int maxCandidates)
     {
         var root = Path.GetFullPath(workspace);
-        var requested = NormalizeWorkspaceRelativePath(requestedPath);
+        var requested = NormalizeRequestedPathForTail(workspace, requestedPath);
         var hasDirectorySegment = requested.Contains('/', StringComparison.Ordinal);
         var fileName = Path.GetFileName(requested.Replace('/', Path.DirectorySeparatorChar));
         var matches = new List<string>();
@@ -2867,6 +2910,34 @@ public sealed class RelayToolExecutor
             .OrderBy(static path => path, StringComparer.Ordinal)
             .Take(maxCandidates)
             .ToArray();
+    }
+
+    private static string NormalizeRequestedPathForTail(string workspace, string requestedPath)
+    {
+        var normalized = NormalizeWorkspaceRelativePath(requestedPath).TrimStart('/');
+        try
+        {
+            var root = Path.GetFullPath(workspace);
+            var full = Path.GetFullPath(Path.IsPathRooted(requestedPath)
+                ? requestedPath
+                : Path.Combine(root, requestedPath));
+            if (IsPathInsideWorkspace(root, full))
+            {
+                return ToWorkspaceDisplayPath(workspace, full);
+            }
+        }
+        catch
+        {
+            // Fall through to string-tail normalization.
+        }
+
+        var workspaceTail = NormalizeWorkspaceRelativePath(Path.GetFullPath(workspace)).TrimEnd('/');
+        var comparison = WorkspacePathComparison();
+        if (normalized.StartsWith(workspaceTail + "/", comparison))
+        {
+            normalized = normalized[(workspaceTail.Length + 1)..];
+        }
+        return normalized;
     }
 
     private static string ResolveWorkspaceDirectory(string workspace, string path)

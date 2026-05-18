@@ -242,7 +242,7 @@ async function runBrowserFlow() {
   if (!["Ready", "Connecting"].includes(initialUx.readiness)) throw new Error(`Copilot-backed UX should be ready or connecting: ${JSON.stringify(initialUx)}`);
   if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
   if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
-  if (!initialUx.workspaceChange?.includes("変更")) throw new Error(`workspace picker action is missing: ${JSON.stringify(initialUx)}`);
+  if (!initialUx.workspaceChange?.includes("フォルダを選択")) throw new Error(`workspace picker action is missing: ${JSON.stringify(initialUx)}`);
   if (initialUx.workspaceButtonDisabled) throw new Error(`workspace picker action should start enabled: ${JSON.stringify(initialUx)}`);
   if (initialUx.workspaceText !== "未選択") throw new Error(`workspace should start as a compact unselected chip: ${JSON.stringify(initialUx)}`);
   if (initialUx.visibleWorkspaceInput) throw new Error(`manual workspace path input should not be visible: ${JSON.stringify(initialUx)}`);

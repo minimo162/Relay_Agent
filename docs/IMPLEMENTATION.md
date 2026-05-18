@@ -32,6 +32,83 @@
 
 ## Milestone Log
 
+### 2026-05-18 Installer Defaults, Workspace Picker, And Search Path Contract
+
+Follow-up to the `0.3.9` installed app report:
+
+- The installer should default to a desktop shortcut and should launch Relay
+  when setup completes.
+- The installed launcher should not show a console window during normal app
+  startup.
+- The Workspace picker felt like the legacy folder browser and could not select
+  shared folders reliably.
+- A real search found a PDF, but the first `read` attempt reported
+  `file_path does not exist` before a later `read` succeeded.
+
+Change:
+
+- Made the NSIS desktop shortcut component selected by default.
+- Added the NSIS finish-page run action and launch function, using the
+  registered versioned `AppDir` payload.
+- Changed `Relay.Launcher` to `WinExe` so packaged Windows starts do not open a
+  console window.
+- Added a native Windows `IFileOpenDialog` folder picker before the bounded
+  PowerShell fallback. The native picker uses filesystem folder selection and
+  supports address-bar UNC/shared-folder paths.
+- Simplified the Workbench workspace action label to `フォルダを選択`.
+- Changed `glob` to return workspace-relative display paths from the selected
+  workspace even when the search runs from a subfolder.
+- Shared `read`/`edit` existing-file resolution with validation, added
+  Windows case-insensitive workspace containment, and added bounded unique
+  path-tail recovery for stale but identifiable paths inside the workspace.
+- Added `agent:glob-read-path-smoke` so a discovered nested Japanese path is
+  immediately readable without a false missing-file event.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.10`.
+
+Verification commands run locally:
+
+```bash
+pnpm release:icon-smoke
+pnpm typecheck
+PATH=$HOME/.dotnet:$PATH dotnet build apps/launcher/Relay.Launcher.csproj --configuration Release
+PATH=$HOME/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:workspace-picker-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:glob-read-path-smoke
+PATH=$HOME/.dotnet:$PATH pnpm agent:golden-smoke
+PATH=$HOME/.dotnet:$PATH pnpm workbench:ux-e2e
+git diff --check
+PATH=$HOME/.dotnet:$PATH pnpm check
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:linux
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=$HOME/.dotnet:$PATH pnpm release:inventory
+tar -C dist/relay-agent-linux-x64 -czf dist/relay-agent-0.3.10-linux-x64.tar.gz .
+7z a -tzip dist/relay-agent-0.3.10-win-x64.zip ./dist/relay-agent-win-x64/*
+sha256sum dist/installer/Relay.Agent-0.3.10-win-x64-setup.exe dist/relay-agent-0.3.10-linux-x64.tar.gz dist/relay-agent-0.3.10-win-x64.zip dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.10-sha256.txt
+```
+
+Result:
+
+- Icon/installer smoke passed and now asserts default desktop shortcut,
+  finish-page launch, and `WinExe` launcher output.
+- Launcher Release build passed.
+- Sidecar Release build passed with zero warnings.
+- Workspace picker smoke passed and now asserts native `IFileOpenDialog`
+  source wiring.
+- `agent:glob-read-path-smoke` passed.
+- `agent:golden-smoke` passed.
+- Workbench UX E2E passed.
+- Full `pnpm check` passed, including the new `agent:glob-read-path-smoke`.
+- Linux and Windows sidecar packages were regenerated.
+- NSIS generated
+  `dist/installer/Relay.Agent-0.3.10-win-x64-setup.exe`.
+- Release assets were generated:
+  `dist/relay-agent-0.3.10-linux-x64.tar.gz`,
+  `dist/relay-agent-0.3.10-win-x64.zip`,
+  `dist/release/relay-agent-0.3.10-sha256.txt`,
+  `dist/release/relay-release-inventory.json`, and
+  `dist/release/relay-sbom.json`.
+
 ### 2026-05-18 Installed Workbench Responsiveness Update
 
 Follow-up to the `0.3.8` installed app report:

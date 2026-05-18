@@ -226,18 +226,18 @@ h2 {
 .workspace-picker {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
 }
 
 .workspace-chip {
   display: flex;
-  min-height: 46px;
+  min-height: 48px;
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--ra-border);
   border-radius: 8px;
-  padding: 0 14px;
+  padding: 0 16px;
   color: var(--ra-text);
   background: var(--ra-surface-strong);
   text-overflow: ellipsis;
