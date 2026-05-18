@@ -6,16 +6,19 @@ Date: 2026-05-16
 
 This document defines the active packaging target for the hard-cutover Relay
 Workbench architecture. It replaces the older Windows/Tauri/NSIS packaging
-policy. The Windows installer remains NSIS-based, but it packages the sidecar
-Workbench architecture rather than the removed Tauri shell.
+policy. Portable archives are the primary sharing format. The Windows installer
+remains NSIS-based as an optional convenience artifact, but it packages the
+sidecar Workbench architecture rather than the removed Tauri shell.
 
 ## Decision Summary
 
 - Active product shape: browser-hosted Relay Workbench served by the
   self-contained .NET sidecar.
 - Supported release artifacts for the current cutover:
-  - Windows x64 user-scope NSIS installer for the sidecar Workbench.
-  - Linux x64 self-contained sidecar archive plus launcher.
+  - Windows x64 portable zip for the sidecar Workbench.
+  - Linux x64 portable self-contained sidecar archive plus launcher.
+  - Optional Windows x64 user-scope NSIS installer for users who want Start
+    Menu shortcuts and an uninstall entry.
 - Unsupported active release paths:
   - Tauri NSIS installer for the old desktop shell.
   - AionUi overlay installer.
@@ -26,9 +29,10 @@ Workbench architecture rather than the removed Tauri shell.
 
 ## Update Policy
 
-- The current Windows release track uses a GitHub Release NSIS installer asset
-  containing the sidecar Workbench, required runtime tools, and
-  release inventory/SBOM-style metadata.
+- The current Windows release track uses a GitHub Release portable zip as the
+  primary artifact. The zip contains the sidecar Workbench, launcher, required
+  runtime tools, portable README, and launch helper. The optional NSIS
+  installer contains the same app payload plus shortcut/uninstall integration.
 - Fresh Windows installs use `%LOCALAPPDATA%\Programs\Relay Agent`. Upgrades
   from older user-scope installs may continue to use the registered legacy
   `%LOCALAPPDATA%\Programs\RelayAgent` path so the installer updates the
@@ -64,23 +68,22 @@ Workbench architecture rather than the removed Tauri shell.
 ## Packaging Config Mapping
 
 - Required publish commands after the packaging milestone:
-  - `pnpm sidecar:publish:windows`
-  - `pnpm sidecar:publish:linux`
-  - `pnpm sidecar:installer:windows`
+  - `pnpm sidecar:portable:windows`
+  - `pnpm sidecar:portable:linux`
+  - `pnpm sidecar:installer:windows` for the optional Windows installer
   - `pnpm release:inventory`
-- The active Windows release workflow should publish the sidecar Workbench NSIS
-  installer and should keep installer terminology because it builds an actual
-  installer.
-- The active Linux release workflow should publish a sidecar archive and
-  launcher, not an installer.
+- The active Windows release workflow should publish the sidecar Workbench
+  portable zip first and the optional NSIS installer second.
+- The active Linux release workflow should publish a versioned portable
+  sidecar archive and launcher, not an installer.
 - Runtime resources such as ripgrep and OfficeCLI must be bundled from
   sidecar-owned `tools/` or `third_party/` locations, not from
   `apps/desktop/src-tauri`.
-- The Windows installer bundle must include, where licensing and platform
-  support allow, `Relay.Sidecar.exe`, Workbench static assets, `rg.exe`,
-  `officecli.exe`, launcher files, active Relay app icons under
-  `relay-assets/`, default config, license/notice files, release inventory, and
-  SBOM-style metadata.
+- The Windows portable bundle and optional installer payload must include,
+  where licensing and platform support allow, `Relay.Sidecar.exe`, Workbench
+  static assets, `rg.exe`, `officecli.exe`, launcher files, active Relay app
+  icons under `relay-assets/`, default config, license/notice files, portable
+  README, release inventory, and SBOM-style metadata.
 - The installer must create Start Menu shortcuts, optional desktop shortcuts,
   an uninstall entry with Relay icons, and per-user registry/app metadata only.
   It must not write machine-wide registry keys or require Program Files

@@ -14,7 +14,7 @@ on:
 
 jobs:
   publish-windows-installer:
-    name: Publish Windows installer
+    name: Publish Windows portable package and installer
     runs-on: windows-latest
     permissions:
       contents: write
@@ -70,6 +70,9 @@ jobs:
       - name: Publish Windows sidecar package
         run: pnpm sidecar:publish:windows
 
+      - name: Create Windows portable zip
+        run: pnpm sidecar:archive:windows
+
       - name: Build user-scope NSIS installer
         run: pnpm sidecar:installer:windows
 
@@ -96,6 +99,7 @@ jobs:
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
             gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar Workbench release."
+          gh release upload "$RELEASE_TAG" "dist/relay-agent-${VERSION}-win-x64.zip" --clobber
           gh release upload "$RELEASE_TAG" "dist/installer/Relay.Agent-${VERSION}-win-x64-setup.exe" --clobber
           gh release upload "$RELEASE_TAG" "dist/release/relay-release-inventory.json" --clobber
           gh release upload "$RELEASE_TAG" "dist/release/relay-sbom.json" --clobber
@@ -148,6 +152,7 @@ jobs:
           fi
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Run active acceptance gate
         run: pnpm check
@@ -155,9 +160,8 @@ jobs:
       - name: Publish Linux sidecar package
         run: pnpm sidecar:publish:linux
 
-      - name: Create Linux tar asset
-        shell: bash
-        run: tar -C dist/relay-agent-linux-x64 -czf dist/relay-agent-linux-x64.tar.gz .
+      - name: Create Linux portable tar asset
+        run: pnpm sidecar:archive:linux
 
       - name: Collect release inventory
         run: pnpm release:inventory
@@ -168,7 +172,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
           RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
+          VERSION: ${{ steps.release_meta.outputs.version }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
             gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar Workbench release."
-          gh release upload "$RELEASE_TAG" "dist/relay-agent-linux-x64.tar.gz" --clobber
+          gh release upload "$RELEASE_TAG" "dist/relay-agent-${VERSION}-linux-x64.tar.gz" --clobber

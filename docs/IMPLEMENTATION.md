@@ -24,13 +24,48 @@
 - Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
   task metadata. The current executable plan is `PLANS.md`, with concrete
   OpenCode-compatible migration steps in `tasks.md`.
-- Packaging policy: `docs/PACKAGING_POLICY.md` now fixes the active release
-  path to a Windows user-scope NSIS installer for the sidecar Workbench plus a
-  Linux sidecar archive/launcher. Tauri NSIS packaging is historical and not an
-  active release path.
+- Packaging policy: the primary release path is now portable archives for the
+  sidecar Workbench: Windows zip plus Linux tarball. The Windows user-scope
+  NSIS installer remains an optional convenience artifact for shortcuts and
+  uninstall integration. Tauri NSIS packaging is historical and not an active
+  release path.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-18 Portable-First Distribution
+
+Follow-up to the distribution discussion: an HTML-only Relay Lite would lose
+the local process, OfficeCLI, ripgrep, Edge CDP, approval, backup, and diff
+capabilities that define Relay. The supported low-friction distribution is
+therefore a portable package, not a standalone HTML file.
+
+Change:
+
+- Added `scripts/release/archive-sidecar.mjs` to create versioned portable
+  archives from the self-contained sidecar packages.
+- Added package-root portable helpers:
+  - `README_PORTABLE.txt`;
+  - `Start Relay Agent.cmd` for Windows;
+  - `start-relay-agent.sh` for Linux.
+- Added `sidecar:archive:*` and `sidecar:portable:*` package scripts.
+- Updated the GitHub release workflow so Windows uploads the portable zip and
+  still uploads the optional NSIS installer; Linux uploads the versioned
+  portable tarball.
+- Updated release inventory generation to include current-version portable
+  archives when present.
+- Updated `README.md`, `PLANS.md`, and `tasks.md` so portable zip/tarball is
+  the primary sharing route.
+
+Verification:
+
+- `pnpm sidecar:portable:windows` passed and wrote
+  `dist/relay-agent-0.3.15-win-x64.zip`.
+- `pnpm sidecar:portable:linux` passed and wrote
+  `dist/relay-agent-0.3.15-linux-x64.tar.gz`.
+- `pnpm release:inventory` passed and recorded the current-version portable
+  archives when present.
+- `pnpm check` passed.
 
 ### 2026-05-18 Tool Projection Harness Remediation
 

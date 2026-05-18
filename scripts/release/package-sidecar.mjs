@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  chmodSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -112,6 +113,51 @@ writeFileSync(
     "",
   ].join("\n"),
 );
+
+writeFileSync(
+  join(output, "README_PORTABLE.txt"),
+  [
+    "Relay Agent Portable",
+    `Version: ${workbenchPackage.version}`,
+    `Package: ${rid}`,
+    "",
+    "How to start:",
+    rid === "win-x64"
+      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Start Relay Agent.cmd or Relay.Launcher.exe.\n3. Your browser opens the local Workbench automatically."
+      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./start-relay-agent.sh or ./Relay.Launcher.\n3. Your browser opens the local Workbench automatically.",
+    "",
+    "No administrator rights are required.",
+    "Relay stores runtime data under the current user's local application data directory, not in the selected work folder.",
+    "Keep this folder intact; relay-tools and wwwroot are required by the launcher.",
+    "",
+  ].join("\n"),
+);
+
+if (rid === "win-x64") {
+  writeFileSync(
+    join(output, "Start Relay Agent.cmd"),
+    [
+      "@echo off",
+      "setlocal",
+      "cd /d \"%~dp0\"",
+      "start \"Relay Agent\" \"%~dp0Relay.Launcher.exe\"",
+      "",
+    ].join("\r\n"),
+  );
+} else if (rid === "linux-x64") {
+  const launcher = join(output, "start-relay-agent.sh");
+  writeFileSync(
+    launcher,
+    [
+      "#!/usr/bin/env sh",
+      "set -eu",
+      "cd \"$(dirname \"$0\")\"",
+      "exec ./Relay.Launcher \"$@\"",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(launcher, 0o755);
+}
 
 console.log(`package-sidecar: wrote ${relativePath(output)}`);
 

@@ -77,6 +77,11 @@ OpenCode-style tool loop alive after empty filename discovery, and require
 Office package integrity before an approved Office mutation can be reported as
 successful.
 
+The active queue is `PORTABLE*`. It implements the 2026-05-18 Portable-First
+Distribution Plan from `PLANS.md`: make installer-free portable packages the
+primary release artifacts while keeping the Windows NSIS installer as an
+optional convenience.
+
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
@@ -101,6 +106,94 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### PORTABLE-01 - Create First-Class Portable Archive Script
+
+Status: completed
+
+Scope:
+
+- Add a release script that creates versioned portable archives from
+  `dist/relay-agent-win-x64` and `dist/relay-agent-linux-x64`.
+- Use zip for Windows and tar.gz for Linux.
+- Keep package contents self-contained and do not require an installer.
+
+Artifacts:
+
+- `scripts/release/archive-sidecar.mjs`.
+- `package.json` portable/archive scripts.
+
+Acceptance:
+
+- `pnpm sidecar:archive:windows` writes
+  `dist/relay-agent-<version>-win-x64.zip`.
+- `pnpm sidecar:archive:linux` writes
+  `dist/relay-agent-<version>-linux-x64.tar.gz`.
+
+### PORTABLE-02 - Add Portable Launch Helpers And README
+
+Status: completed
+
+Scope:
+
+- Add `README_PORTABLE.txt` to each packaged root.
+- Add `Start Relay Agent.cmd` to the Windows package.
+- Add executable `start-relay-agent.sh` to the Linux package.
+
+Artifacts:
+
+- Updated `scripts/release/package-sidecar.mjs`.
+
+Acceptance:
+
+- Package roots contain the relevant launch helper and portable README after
+  `pnpm sidecar:publish:*`.
+- The README states that admin rights are not required and that runtime data
+  stays in user-local storage.
+
+### PORTABLE-03 - Make Release Workflow Upload Portable Assets
+
+Status: completed
+
+Scope:
+
+- Update the release workflow so Windows uploads the portable zip as the first
+  Windows artifact and still uploads the optional installer.
+- Update Linux release output to use the same versioned tarball naming as local
+  packaging.
+
+Artifacts:
+
+- Updated `.github/workflows/release-windows-installer.yml`.
+
+Acceptance:
+
+- Workflow references `pnpm sidecar:archive:windows` and
+  `pnpm sidecar:archive:linux`.
+- Workflow uploads `relay-agent-<version>-win-x64.zip` and
+  `relay-agent-<version>-linux-x64.tar.gz`.
+
+### PORTABLE-04 - Document Portable As Primary Distribution
+
+Status: completed
+
+Scope:
+
+- Update `README.md`, `PLANS.md`, and release inventory behavior to make
+  portable zip/tarball the primary sharing route.
+- Keep installer guidance as optional only.
+
+Artifacts:
+
+- Updated `README.md`.
+- Updated `PLANS.md`.
+- Updated `scripts/release/collect-inventory.mjs`.
+
+Acceptance:
+
+- Documentation no longer implies that Windows users must install Relay Agent
+  to use it.
+- Installer constraints remain documented for users who choose the installer.
 
 ### OCLOOP-01 - Document OpenCode Loop Continuation Plan
 

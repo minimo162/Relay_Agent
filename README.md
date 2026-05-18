@@ -150,22 +150,29 @@ The sidecar prints the localhost Workbench URL with the launch token.
 ## Packaging
 
 The active release workflow publishes the .NET sidecar and static Workbench
-assets. Windows uses a user-scope NSIS installer for the sidecar Workbench;
-Linux uses a self-contained archive and launcher. Tauri NSIS packaging is no
-longer the supported release path.
+assets. The primary distribution is now a portable package: Windows users can
+download the zip, extract it anywhere they can write, and start
+`Start Relay Agent.cmd` or `Relay.Launcher.exe`; Linux users can extract the
+tarball and run `./start-relay-agent.sh` or `./Relay.Launcher`. The Windows
+NSIS installer remains available for users who prefer Start Menu shortcuts and
+an uninstall entry, but it is not required to use Relay Agent. Tauri NSIS
+packaging is no longer the supported release path.
 
 Local publish commands:
 
 ```bash
-pnpm sidecar:publish:linux
-pnpm sidecar:publish:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:portable:windows
+
+# Optional Windows installer
 pnpm sidecar:installer:windows
 pnpm release:inventory
 ```
 
-The Windows installer is designed for a per-user install under a user-writable
-location such as `%LOCALAPPDATA%\Programs\Relay Agent`. It must not require
-administrator rights, UAC elevation, or a personal Windows password.
+Portable packages and the optional Windows installer are designed to run without
+administrator rights, UAC elevation, or a personal Windows password. Runtime
+state is stored under the current user's local application data directory, not
+inside the selected work folder or a shared folder.
 
 The release inventory lists active bundled assets and explicitly records that
 AionUi, OpenCode/OpenWork, Tauri runtime, and old per-mode runners are excluded

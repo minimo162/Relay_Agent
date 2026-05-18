@@ -7,6 +7,7 @@ const root = resolve(import.meta.dirname, "../..");
 const outDir = resolve(root, "dist/release");
 const inventoryPath = resolve(outDir, "relay-release-inventory.json");
 const sbomPath = resolve(outDir, "relay-sbom.json");
+const workbenchPackage = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.json"), "utf8"));
 const inputs = [
   "apps/sidecar/Relay.Sidecar.csproj",
   "apps/launcher/Relay.Launcher.csproj",
@@ -17,6 +18,8 @@ const inputs = [
   "tools/officecli",
   "dist/relay-agent-win-x64/relay-tools",
   "dist/relay-agent-linux-x64/relay-tools",
+  `dist/relay-agent-${workbenchPackage.version}-win-x64.zip`,
+  `dist/relay-agent-${workbenchPackage.version}-linux-x64.tar.gz`,
   "dist/installer",
 ];
 
@@ -51,7 +54,6 @@ const inventory = {
 };
 
 const rootPackage = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-const workbenchPackage = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.json"), "utf8"));
 const sidecarProject = readFileSync(resolve(root, "apps/sidecar/Relay.Sidecar.csproj"), "utf8");
 const dotnetPackages = [...sidecarProject.matchAll(/<PackageReference\s+Include="([^"]+)"\s+Version="([^"]+)"/g)]
   .map((match) => ({ type: "nuget", name: match[1], version: match[2] }));

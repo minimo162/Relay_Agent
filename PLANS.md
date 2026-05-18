@@ -38,6 +38,23 @@ The active product target is a **generic Relay Workbench**:
 - AG-UI-first user experience and event protocol, with a minimal visual surface
   and no diagnostic-first clutter.
 
+Distribution direction:
+
+- The primary user-facing release artifact is a **portable package**, not an
+  installer. Windows users should be able to download a zip, extract it to a
+  user-writable folder, and launch `Start Relay Agent.cmd` or
+  `Relay.Launcher.exe` without administrator rights, UAC elevation, or a
+  personal Windows password.
+- Linux users should be able to extract the tarball and launch
+  `./start-relay-agent.sh` or `./Relay.Launcher`.
+- The Windows NSIS installer remains an optional convenience artifact for Start
+  Menu/uninstall integration, but product docs, release notes, and default
+  sharing guidance should lead with the portable package.
+- Portable packages must still keep Relay state in the user's local application
+  data directory. They must not write caches, indexes, logs, or temp artifacts
+  into shared work folders or into the extracted portable folder unless the
+  user explicitly configures that.
+
 Framework adoption rule:
 
 - Prefer official Microsoft Agent Framework and AG-UI concepts before adding
@@ -97,6 +114,53 @@ Reference sources checked for this plan:
 - `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop`
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
+
+### 2026-05-18 Portable-First Distribution Plan
+
+The HTML-only Relay Lite idea is rejected because local command execution,
+OfficeCLI mutation, recursive workspace operations, Edge CDP, approval logs,
+backups, and diffs cannot be safely implemented from a standalone `file://`
+HTML page. The distribution goal is therefore installer-free sharing through a
+portable package while keeping the full Relay sidecar architecture.
+
+Implementation plan:
+
+1. **Make portable packages first-class release artifacts**
+   - Add explicit archive scripts for `win-x64` and `linux-x64` that turn the
+     existing self-contained sidecar package into versioned release artifacts:
+     `relay-agent-<version>-win-x64.zip` and
+     `relay-agent-<version>-linux-x64.tar.gz`.
+   - Keep the current package layout intact: `Relay.Launcher`,
+     `Relay.Sidecar`, `wwwroot`, `relay-tools`, `relay-assets`, default config,
+     and release contents manifest.
+
+2. **Add user-facing portable launch affordances**
+   - Include `README_PORTABLE.txt` in each package.
+   - Include `Start Relay Agent.cmd` in the Windows package so nontechnical
+     users do not need to identify the launcher executable manually.
+   - Include `start-relay-agent.sh` in the Linux package.
+
+3. **Keep installer optional**
+   - Continue to build the Windows user-scope NSIS installer for users who want
+     Start Menu and uninstall integration.
+   - Do not describe the installer as required for normal use.
+   - Keep all installer constraints: no admin rights, no HKLM, no Program Files
+     default, and no personal Windows password.
+
+4. **Update release automation**
+   - GitHub release workflow uploads the Windows portable zip before the
+     optional installer.
+   - Linux release workflow uploads the versioned Linux portable tarball.
+   - Release inventory and SBOM include the current-version portable archives
+     when present.
+
+5. **Acceptance criteria**
+   - `pnpm sidecar:portable:windows` produces the Windows portable zip.
+   - `pnpm sidecar:portable:linux` produces the Linux portable tarball.
+   - Package roots contain `README_PORTABLE.txt` and the platform launch helper.
+   - `pnpm release:inventory` records the current-version portable archives
+     when generated.
+   - `pnpm check` remains green.
 
 ### 2026-05-18 OpenCode-Style Generic Harness Reset Plan
 
