@@ -98,6 +98,75 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-18 CopilotKit Chatbot UX Reset Plan
+
+This plan resets the Workbench UX from a Relay-specific workbench layout into a
+standard chatbot experience built on CopilotKit. The current custom composer,
+result panel, activity panel, and approval panel no longer match the desired
+product direction. The new surface should feel like a normal professional
+assistant: one chat transcript, one input, one workspace selector, and inline
+approval when a local mutation needs confirmation.
+
+Reference sources checked for this plan:
+
+- CopilotKit v2 React package contracts in `@copilotkit/react-core@1.57.1`:
+  `CopilotKitProvider`, `CopilotChat`, `CopilotChatConfigurationProvider`,
+  `selfManagedAgents`, `humanInTheLoop`, and `useHumanInTheLoop`.
+- AG-UI client package contract in `@ag-ui/client@0.0.53`: `HttpAgent`,
+  `RunAgentInput`, state, context, and forwarded props.
+- UI design reference from the local `ui-ux-pro-max` design-system search:
+  minimal single-column AI-native chatbot surface, Inter/system typography,
+  generous whitespace, subdued controls, visible focus, and no diagnostic-first
+  chrome.
+
+Goal:
+
+> Replace the custom Relay Workbench UI with a CopilotKit-first chatbot while
+> preserving Relay's existing Agent Framework + AG-UI + M365 Copilot sidecar.
+
+Architecture:
+
+1. **CopilotKit is the Workbench UI layer**
+   - Use `@copilotkit/react-core/v2` and CopilotKit v2 styles for the active
+     chat surface.
+   - Render `CopilotChat` as the primary UI instead of the custom Relay
+     composer, summary, activity list, and separate approval panel.
+   - Keep the visual shell minimal: title, readiness pill, workspace selector,
+     chat, and a collapsed support export.
+
+2. **Relay remains the local execution and governance layer**
+   - Do not use CopilotKit Cloud or a separate CopilotKit runtime endpoint.
+   - Connect CopilotKit to the existing `/agui/relay` endpoint through
+     `selfManagedAgents` and an AG-UI `HttpAgent`.
+   - Inject the selected workspace into AG-UI `state`, `context`, and
+     `forwardedProps` for every run so the sidecar's Agent Framework runner
+     still receives the same local execution boundary.
+
+3. **Approvals move to CopilotKit HITL**
+   - Register `request_approval` as a CopilotKit human-in-the-loop tool.
+   - Render mutation approval inline in the chat transcript with clear
+     "実行する" and "実行しない" actions.
+   - Let CopilotKit/AG-UI carry the resume message instead of maintaining a
+     parallel custom Relay approval panel.
+
+4. **No legacy UI fallback**
+   - Remove the custom run/activity-first Workbench path as the primary user
+     experience.
+   - Do not reintroduce AionUi, Tauri, OpenWork/OpenCode runtime, or
+     document-search-specific UI modes.
+   - Keep diagnostics collapsed and exportable; the default surface should be a
+     regular chatbot.
+
+5. **Acceptance**
+   - The page first reads as a normal chat application, not a diagnostic
+     console.
+   - Workspace selection remains native and visible before sending local tasks.
+   - Readiness remains visible but not dominant.
+   - Search, Office editing, and coding requests all enter through the same
+     chat input.
+   - Local mutations still require explicit approval.
+   - `pnpm check` and Workbench UX E2E pass after the reset.
+
 ### 2026-05-18 Browser Session Lifecycle And Installer Lock Plan
 
 This plan fixes the remaining installer-lock class of failures at the source.

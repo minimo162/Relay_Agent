@@ -1,24 +1,16 @@
-import { Activity, Check, Download, FolderOpen, Send, Square, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Subscription } from "rxjs";
-import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
-import { Card } from "./components/ui/card";
-import { Textarea } from "./components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import {
-  approvalFromToolCall,
-  buildApprovalMessages,
-  buildRunAgentInput,
-  createRelayAgUiAgent,
-  eventKey,
-  normalizeApproval,
-  runEventFromAgUi,
-  updateToolCallDraft,
-  type RelayAgUiEvent,
-  type RelayAgUiToolCallDraft,
-} from "./lib/relay-ag-ui";
-import type { ApprovalState, RunEvent, RunStatus, StatusResponse, WorkspacePickResponse } from "./types";
+  CopilotChat,
+  CopilotChatConfigurationProvider,
+  CopilotKitProvider,
+  useDefaultRenderTool,
+  useHumanInTheLoop,
+  type CopilotChatLabels,
+} from "@copilotkit/react-core/v2";
+import { Download, ExternalLink, FolderOpen } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { z } from "zod";
+import { createRelayAgUiAgent, relayAgentId } from "./lib/relay-ag-ui";
+import type { StatusResponse, WorkspacePickResponse } from "./types";
 
 const workspaceStorageKey = "relay.workbench.workspace";
 const workspaceHistoryKey = "relay.workbench.workspaceHistory";
@@ -30,47 +22,39 @@ type ReadinessState = {
   label: "Checking" | "Ready" | "Connecting" | "Sign in needed" | "Local issue" | "Provider error";
   ready: "true" | "partial" | "false" | "pending" | undefined;
   title: string;
+  raw: string;
 };
 
 const initialReadiness: ReadinessState = {
   label: "Checking",
   ready: undefined,
   title: "",
+  raw: "",
+};
+
+const approvalRequestSchema = z.object({
+  request: z.union([z.string(), z.record(z.unknown())]).optional(),
+}).passthrough();
+
+type ApprovalRequestArgs = z.infer<typeof approvalRequestSchema>;
+
+const chatLabels: Partial<CopilotChatLabels> = {
+  chatInputPlaceholder: "何をしますか?",
+  chatDisclaimerText: "",
+  welcomeMessageText: "ローカルのファイル検索、Office編集、コード作成を自然文で依頼できます。",
+  modalHeaderTitle: "Relay Agent",
+  chatInputToolbarToolsButtonLabel: "ツール",
+  chatInputToolbarAddButtonLabel: "追加",
 };
 
 export function App() {
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(workspaceStorageKey) ?? "");
   const [workspaceHistory, setWorkspaceHistory] = useState(loadWorkspaceHistory);
-  const [instruction, setInstruction] = useState("");
-  const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
-  const [events, setEvents] = useState<RunEvent[]>([]);
-  const [assistantText, setAssistantText] = useState("");
-  const [raw, setRaw] = useState("");
-  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [currentStatus, setCurrentStatus] = useState<RunStatus | "idle">("idle");
-  const [currentApproval, setCurrentApproval] = useState<ApprovalState | null>(null);
-  const [sendDisabled, setSendDisabled] = useState(false);
   const [workspaceError, setWorkspaceError] = useState("");
   const [isPickingWorkspace, setIsPickingWorkspace] = useState(false);
-
-  const eventKeysRef = useRef(new Set<string>());
-  const eventSequenceRef = useRef(0);
-  const streamRef = useRef<Subscription | null>(null);
-  const agentRef = useRef<ReturnType<typeof createRelayAgUiAgent> | null>(null);
-  const statusRef = useRef<RunStatus | "idle">("idle");
-  const runIdRef = useRef<string | null>(null);
-  const cancelledRunRef = useRef<string | null>(null);
-  const instructionRef = useRef<HTMLTextAreaElement | null>(null);
-  const lastInstructionRef = useRef("");
+  const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
+  const [supportBusy, setSupportBusy] = useState(false);
   const threadIdRef = useRef(loadThreadId());
-  const agUiEventsRef = useRef<RelayAgUiEvent[]>([]);
-  const activeInputRef = useRef<unknown>(null);
-  const toolCallDraftsRef = useRef(new Map<string, RelayAgUiToolCallDraft>());
-
-  useEffect(() => {
-    statusRef.current = currentStatus;
-    runIdRef.current = currentRunId;
-  }, [currentRunId, currentStatus]);
 
   const api = useCallback((path: string): string => {
     const url = new URL(path, window.location.origin);
@@ -81,6 +65,69 @@ export function App() {
   const authHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
     return token ? { ...extra, "X-Relay-Token": token } : extra;
   }, []);
+
+  const refreshStatus = useCallback(async () => {
+    const response = await fetch(api("/api/status"), {
+      headers: authHeaders(),
+    });
+    if (!response.ok) throw new Error(`Status failed: ${response.status}`);
+    const status = (await response.json()) as StatusResponse;
+    const copilot = status.checks.find((check) => check.name === "copilot-cdp");
+    const optionalFailures = status.checks.filter((check) => check.required === false && !check.ready);
+    const requiredLocalFailure = status.checks.find((check) =>
+      check.required !== false && check.name !== "copilot-cdp" && !check.ready
+    );
+    const raw = JSON.stringify(status, null, 2);
+    if (status.ready) {
+      setReadiness({
+        label: "Ready",
+        ready: "true",
+        title: optionalFailures.length > 0
+          ? `Optional capability unavailable: ${optionalFailures.map((check) => check.name).join(", ")}`
+          : "",
+        raw,
+      });
+    } else if (requiredLocalFailure) {
+      setReadiness({
+        label: "Local issue",
+        ready: "false",
+        title: requiredLocalFailure.detail,
+        raw,
+      });
+    } else if (copilot?.state === "sign_in_required") {
+      setReadiness({
+        label: "Sign in needed",
+        ready: "partial",
+        title: "Open Copilot in Edge and sign in, then retry.",
+        raw,
+      });
+    } else if (copilot?.state === "provider_error") {
+      setReadiness({
+        label: "Provider error",
+        ready: "false",
+        title: copilot.detail,
+        raw,
+      });
+    } else {
+      setReadiness({
+        label: "Connecting",
+        ready: "pending",
+        title: copilot?.detail ?? "Relay is connecting to Copilot.",
+        raw,
+      });
+    }
+  }, [api, authHeaders]);
+
+  const handleRefresh = useCallback(() => {
+    void refreshStatus().catch((error) => {
+      setReadiness({
+        label: "Provider error",
+        ready: "false",
+        title: error instanceof Error ? error.message : String(error),
+        raw: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [refreshStatus]);
 
   useEffect(() => {
     const clientId = loadWorkbenchClientId();
@@ -137,218 +184,9 @@ export function App() {
     };
   }, [api, authHeaders]);
 
-  const closeEventStream = useCallback((abort = true) => {
-    if (abort) agentRef.current?.abortRun();
-    streamRef.current?.unsubscribe();
-    streamRef.current = null;
-    agentRef.current = null;
-  }, []);
-
-  const setRunChrome = useCallback((status: RunStatus | "idle", runId: string | null) => {
-    statusRef.current = status;
-    runIdRef.current = runId;
-    setCurrentStatus(status);
-    setCurrentRunId(runId);
-    if (status !== "approval_required") {
-      setCurrentApproval(null);
-    }
-  }, []);
-
-  const appendRunEvent = useCallback((event: RunEvent): boolean => {
-    const key = eventKey(event);
-    if (eventKeysRef.current.has(key)) return false;
-    eventKeysRef.current.add(key);
-    setEvents((current) => [...current, event]);
-    return true;
-  }, []);
-
-  const replaceEvents = useCallback((nextEvents: readonly RunEvent[]) => {
-    eventKeysRef.current = new Set();
-    eventSequenceRef.current = 0;
-    const deduped: RunEvent[] = [];
-    for (const event of nextEvents) {
-      const key = eventKey(event);
-      if (eventKeysRef.current.has(key)) continue;
-      eventKeysRef.current.add(key);
-      deduped.push(event);
-    }
-    setEvents(deduped);
-  }, []);
-
-  const setRawSnapshot = useCallback(() => {
-    setRaw(JSON.stringify({
-      transport: "/agui/relay",
-      input: activeInputRef.current,
-      events: agUiEventsRef.current,
-    }, null, 2));
-  }, []);
-
-  const resetRunTranscript = useCallback(() => {
-    toolCallDraftsRef.current = new Map();
-    agUiEventsRef.current = [];
-    activeInputRef.current = null;
-    setAssistantText("");
-    replaceEvents([]);
-  }, [replaceEvents]);
-
-  const applyEventState = useCallback((runId: string, event: RunEvent) => {
-    if (event.type === "completed") {
-      if (statusRef.current !== "approval_required") {
-        setRunChrome("completed", runId);
-      }
-    } else if (event.type === "error") {
-      setRunChrome("failed", runId);
-    } else if (event.type === "cancelled") {
-      setRunChrome("cancelled", runId);
-    } else if (event.type === "approval_requested") {
-      setRunChrome("approval_required", runId);
-    } else if (event.type === "approval_resolved") {
-      setCurrentApproval(null);
-    }
-  }, [setRunChrome]);
-
-  const applyAgUiState = useCallback((event: RelayAgUiEvent) => {
-    if (!event.state || !Object.prototype.hasOwnProperty.call(event.state, "approval")) return;
-    setCurrentApproval(normalizeApproval(event.state.approval));
-  }, []);
-
-  const consumeAgUiEvent = useCallback((runId: string, event: RelayAgUiEvent) => {
-    const enrichedEvent: RelayAgUiEvent = {
-      ...event,
-      runId,
-      sequence: ++eventSequenceRef.current,
-      timestamp: event.timestamp ?? new Date().toISOString(),
-    };
-
-    agUiEventsRef.current = [...agUiEventsRef.current, enrichedEvent].slice(-200);
-    setRawSnapshot();
-
-    if (enrichedEvent.type === "TEXT_MESSAGE_CONTENT" && enrichedEvent.delta) {
-      setAssistantText((current) => current + enrichedEvent.delta);
-    }
-
-    const draft = updateToolCallDraft(enrichedEvent, toolCallDraftsRef.current);
-    if (draft) {
-      const approval = approvalFromToolCall(draft);
-      if (approval) {
-        setCurrentApproval(approval);
-        setRunChrome("approval_required", runId);
-      }
-    }
-
-    const runEvent = runEventFromAgUi(enrichedEvent);
-    if (runEvent.type === "completed" && statusRef.current === "approval_required") return;
-    const added = appendRunEvent(runEvent);
-    if (!added) return;
-    applyEventState(runId, runEvent);
-    applyAgUiState(enrichedEvent);
-  }, [appendRunEvent, applyAgUiState, applyEventState, setRawSnapshot, setRunChrome]);
-
-  const startAgUiRun = useCallback((input: ReturnType<typeof buildRunAgentInput>, resetTranscript: boolean) => {
-    closeEventStream();
-    cancelledRunRef.current = null;
-    if (resetTranscript) resetRunTranscript();
-    activeInputRef.current = input;
-    setRunChrome("running", input.runId);
-    setSendDisabled(false);
-    setRawSnapshot();
-
-    const agent = createRelayAgUiAgent(api("/agui/relay"), authHeaders());
-    agentRef.current = agent;
-    const subscription = agent.run(input).subscribe({
-      next: (event) => {
-        consumeAgUiEvent(input.runId, event as RelayAgUiEvent);
-      },
-      error: (error: unknown) => {
-        if (cancelledRunRef.current === input.runId) return;
-        const detail = error instanceof Error ? error.message : String(error);
-        const failureEvent: RunEvent = {
-          type: "error",
-          message: "AG-UI run failed",
-          detail,
-          runId: input.runId,
-          sequence: ++eventSequenceRef.current,
-          timestamp: new Date().toISOString(),
-        };
-        appendRunEvent(failureEvent);
-        setRunChrome("failed", input.runId);
-        setRaw(JSON.stringify({ transport: "/agui/relay", error: detail }, null, 2));
-      },
-      complete: () => {
-        streamRef.current = null;
-        agentRef.current = null;
-        if (runIdRef.current === input.runId && statusRef.current === "running") {
-          setRunChrome("completed", input.runId);
-        }
-      },
-    });
-    streamRef.current = subscription;
-  }, [
-    api,
-    appendRunEvent,
-    authHeaders,
-    closeEventStream,
-    consumeAgUiEvent,
-    resetRunTranscript,
-    setRawSnapshot,
-    setRunChrome,
-  ]);
-
-  const refreshStatus = useCallback(async () => {
-    const response = await fetch(api("/api/status"), {
-      headers: authHeaders(),
-    });
-    if (!response.ok) throw new Error(`Status failed: ${response.status}`);
-    const status = (await response.json()) as StatusResponse;
-    const copilot = status.checks.find((check) => check.name === "copilot-cdp");
-    const optionalFailures = status.checks.filter((check) => check.required === false && !check.ready);
-    const requiredLocalFailure = status.checks.find((check) => check.required !== false && check.name !== "copilot-cdp" && !check.ready);
-    if (status.ready) {
-      setReadiness({
-        label: "Ready",
-        ready: "true",
-        title: optionalFailures.length > 0
-          ? `Optional capability unavailable: ${optionalFailures.map((check) => check.name).join(", ")}`
-          : "",
-      });
-    } else if (requiredLocalFailure) {
-      setReadiness({
-        label: "Local issue",
-        ready: "false",
-        title: requiredLocalFailure.detail,
-      });
-    } else if (copilot?.state === "sign_in_required") {
-      setReadiness({
-        label: "Sign in needed",
-        ready: "partial",
-        title: "Open Copilot in Edge and sign in, then retry.",
-      });
-    } else if (copilot?.state === "provider_error") {
-      setReadiness({
-        label: "Provider error",
-        ready: "false",
-        title: copilot.detail,
-      });
-    } else {
-      setReadiness({
-        label: "Connecting",
-        ready: "pending",
-        title: copilot?.detail ?? "Relay is connecting to Copilot.",
-      });
-    }
-    setRaw(JSON.stringify(status, null, 2));
-  }, [api, authHeaders]);
-
-  const handleRefresh = useCallback(() => {
-    void refreshStatus().catch((error) => {
-      setReadiness({
-        label: "Provider error",
-        ready: "false",
-        title: error instanceof Error ? error.message : String(error),
-      });
-      setRaw(error instanceof Error ? error.message : String(error));
-    });
-  }, [refreshStatus]);
+  useEffect(() => {
+    handleRefresh();
+  }, [handleRefresh]);
 
   useEffect(() => {
     const pollMs = readiness.ready === "true" ? 30_000 : 2_000;
@@ -395,11 +233,9 @@ export function App() {
       setWorkspace(result.path);
       saveWorkspace(result.path, setWorkspaceHistory);
     } catch (error) {
-      if (timedOut) {
-        setWorkspaceError("フォルダ選択がタイムアウトしました。もう一度「変更」を押してください。");
-      } else {
-        setWorkspaceError(error instanceof Error ? error.message : String(error));
-      }
+      setWorkspaceError(timedOut
+        ? "フォルダ選択がタイムアウトしました。もう一度押してください。"
+        : error instanceof Error ? error.message : String(error));
     } finally {
       window.clearTimeout(timeout);
       setIsPickingWorkspace(false);
@@ -412,191 +248,89 @@ export function App() {
         method: "POST",
         headers: authHeaders(),
       });
+      handleRefresh();
     } catch {
       window.open("https://m365.cloud.microsoft/chat", "_blank", "noopener,noreferrer");
     }
+  }, [api, authHeaders, handleRefresh]);
+
+  const downloadSupportBundle = useCallback(async () => {
+    setSupportBusy(true);
+    try {
+      const response = await fetch(api("/api/support-bundle"), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ includeSensitive: false }),
+      });
+      if (!response.ok) throw new Error(`Support bundle failed: ${response.status}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `relay-support-${new Date().toISOString().replaceAll(":", "-")}.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSupportBusy(false);
+    }
   }, [api, authHeaders]);
 
-  const downloadSupportBundle = useCallback(() => {
-    const payload = {
-      schemaVersion: "RelayWorkbenchSupportBundle.v1",
-      generatedAt: new Date().toISOString(),
-      workspace,
-      currentRunId,
-      currentStatus,
-      readiness,
-      events,
-      agui: {
-        transport: "/agui/relay",
-        input: activeInputRef.current,
-        events: agUiEventsRef.current,
-      },
-      raw,
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `relay-support-${new Date().toISOString().replaceAll(":", "-")}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }, [currentRunId, currentStatus, events, raw, readiness, workspace]);
-
-  const cancelRun = useCallback(async () => {
-    const runId = runIdRef.current;
-    if (!runId) return;
-    setSendDisabled(true);
-    cancelledRunRef.current = runId;
-    closeEventStream(true);
-    const event: RunEvent = {
-      type: "cancelled",
-      message: "Stopped",
-      runId,
-      sequence: ++eventSequenceRef.current,
-      timestamp: new Date().toISOString(),
-    };
-    appendRunEvent(event);
-    setRunChrome("cancelled", runId);
-    setSendDisabled(false);
-  }, [appendRunEvent, closeEventStream, setRunChrome]);
-
-  const runTask = useCallback(async () => {
-    if (statusRef.current === "running") {
-      await cancelRun();
-      return;
-    }
-
-    const userText = instruction.trim();
-    if (!userText) return;
-
-    if (!workspace.trim()) {
-      setWorkspaceError("ワークスペースを選択してください。");
-      return;
-    }
-    saveWorkspace(workspace, setWorkspaceHistory);
-    setCurrentApproval(null);
-    lastInstructionRef.current = userText;
-
-    const runId = createRunId("run");
-    const input = buildRunAgentInput({
-      runId,
+  const agent = useMemo(() =>
+    createRelayAgUiAgent({
+      url: api("/agui/relay"),
+      headers: authHeaders(),
       threadId: threadIdRef.current,
       workspace,
-      instruction: userText,
-    });
-    startAgUiRun(input, true);
-  }, [cancelRun, instruction, startAgUiRun, workspace]);
-
-  const respondToApproval = useCallback(async (approved: boolean) => {
-    const approval = currentApproval;
-    if (!approval) return;
-
-    setCurrentApproval(null);
-    const parentRunId = currentRunId ?? undefined;
-    const runId = createRunId(approved ? "approve" : "reject");
-    try {
-      const messages = buildApprovalMessages({
-        runId,
-        userText: lastInstructionRef.current || instruction,
-        approval,
-        approved,
-      });
-      const input = buildRunAgentInput({
-        runId,
-        parentRunId,
-        threadId: threadIdRef.current,
-        workspace,
-        messages,
-      });
-      startAgUiRun(input, false);
-    } catch (error) {
-      setRunChrome("failed", parentRunId ?? null);
-      appendRunEvent({
-        type: "error",
-        message: approved ? "承認後の実行に失敗しました" : "却下に失敗しました",
-        detail: error instanceof Error ? error.message : String(error),
-        runId: parentRunId,
-        sequence: ++eventSequenceRef.current,
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }, [appendRunEvent, currentApproval, currentRunId, instruction, setRunChrome, startAgUiRun, workspace]);
-
-  useEffect(() => {
-    handleRefresh();
-    return () => closeEventStream(true);
-  }, [closeEventStream, handleRefresh]);
-
-  useEffect(() => {
-    const element = instructionRef.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(Math.max(element.scrollHeight, 132), 320)}px`;
-  }, [instruction]);
-
-  const summaryEvent = useMemo(() => {
-    const text = assistantText.trim();
-    if (text) {
-      return {
-        type: "final",
-        message: "Result",
-        detail: text,
-      } satisfies RunEvent;
-    }
-    const finalEvent = [...events].reverse().find((event) => event.type === "final");
-    const errorEvent = [...events].reverse().find((event) => event.type === "error");
-    return finalEvent ?? (currentStatus === "failed" ? errorEvent : undefined);
-  }, [assistantText, currentStatus, events]);
+    }), [api, authHeaders, workspace]);
 
   const compactWorkspace = workspace ? compactPath(workspace) : "未選択";
-  const running = currentStatus === "running";
+  const chatReady = readiness.label === "Ready";
 
   return (
-    <TooltipProvider>
-      <section className="shell">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Relay Agent</p>
-            <h1>Workbench</h1>
-          </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className="status-pill"
-                id="readiness"
-                type="button"
-                data-ready={readiness.ready}
-                aria-label="Refresh readiness"
-                title={readiness.title}
-                onClick={handleRefresh}
-              >
-                {readiness.label}
-              </button>
-            </TooltipTrigger>
-            {readiness.title ? <TooltipContent>{readiness.title}</TooltipContent> : null}
-          </Tooltip>
-        </header>
-
-        <main className="workspace-layout">
-          {readiness.label === "Sign in needed" ? (
-            <div className="signin-row" role="status">
-              <span>Copilot にサインインしてください。</span>
-              <Button variant="secondary" type="button" onClick={() => void openCopilot()}>
-                Open Copilot
-              </Button>
-              <Button variant="ghost" type="button" onClick={handleRefresh}>
-                Retry
-              </Button>
+    <CopilotKitProvider
+      selfManagedAgents={{ [relayAgentId]: agent }}
+      properties={{ workspace, relay_workspace: workspace, relayWorkspace: workspace }}
+    >
+      <CopilotChatConfigurationProvider
+        agentId={relayAgentId}
+        threadId={threadIdRef.current}
+        hasExplicitThreadId
+        labels={chatLabels}
+      >
+        <RelayChatTools />
+        <section className="shell" data-testid="relay-chatbot-shell">
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">Relay Agent</p>
+              <h1>Chat</h1>
             </div>
-          ) : null}
+            <button
+              className="status-pill"
+              id="readiness"
+              type="button"
+              data-ready={readiness.ready}
+              title={readiness.title}
+              onClick={handleRefresh}
+            >
+              {readiness.label}
+            </button>
+          </header>
 
-          <Card className="composer-panel" aria-label="Task composer">
-            <div className="field-group">
-              <div className="field-row">
-                <span className="field-label" id="workspace-label">Workspace</span>
-                <span id="workspace-state" className="field-state">{workspace ? "Selected" : "Required"}</span>
+          <main className="chat-layout">
+            {readiness.label === "Sign in needed" ? (
+              <div className="signin-row" role="status">
+                <span>Copilot にサインインしてください。</span>
+                <button type="button" className="text-button" onClick={() => void openCopilot()}>
+                  Open Copilot <ExternalLink size={14} aria-hidden="true" />
+                </button>
               </div>
-              <div className="workspace-picker" aria-labelledby="workspace-label">
+            ) : null}
+
+            <section className="workspace-bar" aria-label="Workspace">
+              <div>
+                <span className="label">Workspace</span>
                 <div
                   id="workspace"
                   className="workspace-chip"
@@ -605,202 +339,157 @@ export function App() {
                 >
                   {compactWorkspace}
                 </div>
-                <Button
-                  id="workspace-change"
-                  variant="secondary"
-                  type="button"
-                  disabled={isPickingWorkspace}
-                  onClick={() => void chooseWorkspace()}
-                >
-                  <FolderOpen size={15} aria-hidden="true" />
-                  {isPickingWorkspace ? "選択中..." : "フォルダを選択"}
-                </Button>
+                <input id="workspace-path" type="hidden" value={workspace} readOnly />
               </div>
-              {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
-              <input
-                id="workspace-path"
-                type="hidden"
-                value={workspace}
-                readOnly
-              />
-              <div id="workspace-history" className="workspace-history" hidden={workspaceHistory.length === 0}>
-                {workspaceHistory.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    title={item}
-                    onClick={() => setWorkspace(item)}
-                  >
-                    {compactPath(item)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="field-group">
-              <div className="field-row">
-                <label className="field-label" htmlFor="instruction">Task</label>
-                <span id="run-id" className="field-state">{statusLabel(currentStatus)}</span>
-              </div>
-              <Textarea
-                id="instruction"
-                ref={instructionRef}
-                rows={3}
-                placeholder="何をしますか?"
-                value={instruction}
-                onChange={(event) => setInstruction(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                    event.preventDefault();
-                    void runTask();
-                  }
-                }}
-              />
-            </div>
-
-            <div className="actions">
-              <Button
-                id="send"
+              <button
+                id="workspace-change"
+                className="secondary-button"
                 type="button"
-                data-running={running ? "true" : "false"}
-                disabled={sendDisabled || (!running && !workspace.trim())}
-                aria-label={running ? "Stop run" : "Send task"}
-                onClick={() => void runTask()}
+                disabled={isPickingWorkspace}
+                onClick={() => void chooseWorkspace()}
               >
-                {running ? <Square size={15} aria-hidden="true" /> : <Send size={15} aria-hidden="true" />}
-                {running ? "停止" : "送信"}
-              </Button>
-            </div>
-          </Card>
+                <FolderOpen size={15} aria-hidden="true" />
+                {isPickingWorkspace ? "選択中..." : "フォルダを選択"}
+              </button>
+            </section>
 
-          <Card
-            id="summary"
-            className="summary-panel"
-            hidden={!summaryEvent}
-            data-kind={summaryEvent?.type}
-          >
-            <p id="summary-label" className="summary-label">
-              {summaryEvent && (summaryEvent.type === "final" || summaryEvent.type === "completed") ? "Result" : "Error"}
-            </p>
-            <div id="summary-text" className="summary-text">{summaryEvent?.detail || summaryEvent?.message || ""}</div>
-          </Card>
+            {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
 
-          <ApprovalPanel
-            approval={currentApproval}
-            currentRunId={currentRunId}
-            currentStatus={currentStatus}
-            onApprove={() => respondToApproval(true)}
-            onReject={() => respondToApproval(false)}
-          />
-
-          <Card className="run-panel" aria-live="polite">
-            <div className="run-header">
-              <h2>
-                <Activity size={16} aria-hidden="true" />
-                Activity
-              </h2>
-              <span id="run-state" className="run-state" data-status={currentStatus}>
-                {currentStatus === "approval_required" ? "Waiting" : statusLabel(currentStatus)}
-              </span>
-            </div>
-            <ol id="events" className="events">
-              {events.length === 0 ? <EmptyActivity /> : events.map((event) => (
-                <EventItem key={eventKey(event)} event={event} />
+            <div id="workspace-history" className="workspace-history" hidden={workspaceHistory.length === 0}>
+              {workspaceHistory.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  title={item}
+                  onClick={() => {
+                    setWorkspace(item);
+                    saveWorkspace(item, setWorkspaceHistory);
+                  }}
+                >
+                  {compactPath(item)}
+                </button>
               ))}
-            </ol>
-          </Card>
-
-          <details className="details">
-            <summary>Support</summary>
-            <div className="details-header">
-              <span>Redacted local run diagnostics</span>
-              <Button variant="ghost" type="button" onClick={downloadSupportBundle}>
-                <Download size={14} aria-hidden="true" />
-                Export
-              </Button>
             </div>
-            <pre id="raw">{raw}</pre>
-          </details>
-        </main>
-      </section>
-    </TooltipProvider>
+
+            {!workspace ? (
+              <section className="empty-chat" aria-label="Workspace required">
+                <p>最初に作業フォルダを選択してください。</p>
+              </section>
+            ) : (
+              <section className="chat-card" data-ready={chatReady ? "true" : "false"}>
+                <CopilotChat
+                  agentId={relayAgentId}
+                  threadId={threadIdRef.current}
+                  labels={chatLabels}
+                  autoScroll="pin-to-bottom"
+                  throttleMs={120}
+                  input={{ autoFocus: true, showDisclaimer: false, bottomAnchored: true }}
+                  welcomeScreen
+                  onError={(event) => {
+                    const error = "error" in event ? event.error : new Error("Copilot chat error");
+                    setReadiness({
+                      label: "Provider error",
+                      ready: "false",
+                      title: error.message,
+                      raw: error.stack ?? error.message,
+                    });
+                  }}
+                />
+              </section>
+            )}
+
+            <details className="details">
+              <summary>Support</summary>
+              <div className="details-header">
+                <span>Redacted diagnostics</span>
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={supportBusy}
+                  onClick={() => void downloadSupportBundle()}
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Export
+                </button>
+              </div>
+              <pre id="raw">{readiness.raw}</pre>
+            </details>
+          </main>
+        </section>
+      </CopilotChatConfigurationProvider>
+    </CopilotKitProvider>
   );
 }
 
-function ApprovalPanel({
-  approval,
-  currentRunId,
-  currentStatus,
-  onApprove,
-  onReject,
+function RelayChatTools() {
+  useDefaultRenderTool({
+    render: ({ name, status, result }) => (
+      <div className="tool-card">
+        <span>{name}</span>
+        <strong>{toolStatusLabel(status)}</strong>
+        {result ? <p>{compactToolResult(result)}</p> : null}
+      </div>
+    ),
+  }, []);
+
+  useHumanInTheLoop<ApprovalRequestArgs>({
+    name: "request_approval",
+    description: "Approve or reject a Relay local mutation.",
+    parameters: approvalRequestSchema,
+    render: ApprovalRequestCard,
+  }, []);
+
+  return null;
+}
+
+function ApprovalRequestCard({
+  args,
+  status,
+  respond,
 }: {
-  approval: ApprovalState | null;
-  currentRunId: string | null;
-  currentStatus: RunStatus | "idle";
-  onApprove: () => Promise<void>;
-  onReject: () => Promise<void>;
+  args: Partial<ApprovalRequestArgs> | ApprovalRequestArgs;
+  status: "inProgress" | "executing" | "complete";
+  result: string | undefined;
+  respond: ((result: unknown) => Promise<void>) | undefined;
+  name: string;
+  description: string;
 }) {
-  const hidden = !approval || currentStatus !== "approval_required" || !currentRunId;
-  const toolCall = approval?.toolCall;
-  const target = toolCall ? approvalTarget(toolCall.args) : "";
-  const operation = toolCall ? approvalOperation(toolCall.tool, toolCall.args) : "";
+  const request = parseApprovalRequest(args.request);
+  const target = approvalTarget(request);
+  const operation = approvalOperation(request);
+  const completed = status === "complete";
 
   return (
-    <Card id="approval" className="approval-panel" hidden={hidden}>
-      {toolCall && currentRunId ? (
-        <>
-          <div className="approval-header">
-            <strong>確認が必要です</strong>
-            <Badge tone="warning">{toolCall.tool}</Badge>
-          </div>
-          <p className="approval-copy">許可すると、この操作をローカルワークスペースで実行します。</p>
-          <dl className="approval-facts">
-            <dt>操作</dt>
-            <dd>{operation || "-"}</dd>
-            <dt>対象</dt>
-            <dd>{target || "-"}</dd>
-          </dl>
-          <details className="approval-raw">
-            <summary>Raw</summary>
-            <pre>{JSON.stringify(toolCall, null, 2)}</pre>
-          </details>
-          <div className="approval-actions">
-            <Button variant="secondary" type="button" onClick={() => void onReject()}>
-              <X size={15} aria-hidden="true" />
-              実行しない
-            </Button>
-            <Button type="button" onClick={() => void onApprove()}>
-              <Check size={15} aria-hidden="true" />
-              許可して続行
-            </Button>
-          </div>
-        </>
+    <section className="approval-card" aria-live="polite">
+      <div className="approval-heading">
+        <strong>{completed ? "確認済み" : "実行前の確認"}</strong>
+        <span>{operation || "local action"}</span>
+      </div>
+      <dl>
+        <dt>対象</dt>
+        <dd>{target || "-"}</dd>
+        <dt>操作</dt>
+        <dd>{operation || "-"}</dd>
+      </dl>
+      {!completed && respond ? (
+        <div className="approval-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void respond({ approved: false, reason: "rejected in Relay Workbench" })}
+          >
+            実行しない
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void respond({ approved: true, reason: "approved in Relay Workbench" })}
+          >
+            実行する
+          </button>
+        </div>
       ) : null}
-    </Card>
-  );
-}
-
-function EventItem({ event }: { event: RunEvent }) {
-  const display = eventDisplay(event);
-  return (
-    <li className={`event event-${event.type}`}>
-      <span className="event-marker">{display.marker}</span>
-      <div>
-        <strong>{display.message}</strong>
-        {display.detail ? <p>{display.detail}</p> : null}
-      </div>
-    </li>
-  );
-}
-
-function EmptyActivity() {
-  return (
-    <li className="event event-empty">
-      <span className="event-marker">idle</span>
-      <div>
-        <strong>まだ実行していません</strong>
-      </div>
-    </li>
+    </section>
   );
 }
 
@@ -826,13 +515,13 @@ function loadWorkspaceHistory(): string[] {
 function loadThreadId(): string {
   const existing = localStorage.getItem(threadStorageKey);
   if (existing) return existing;
-  const next = createRunId("thread");
+  const next = createId("thread");
   localStorage.setItem(threadStorageKey, next);
   return next;
 }
 
 function loadWorkbenchClientId(): string {
-  const next = createRunId("client");
+  const next = createId("client");
   try {
     const existing = sessionStorage.getItem(workbenchClientStorageKey);
     if (existing) return existing;
@@ -843,7 +532,7 @@ function loadWorkbenchClientId(): string {
   return next;
 }
 
-function createRunId(prefix: string): string {
+function createId(prefix: string): string {
   const random = Math.random().toString(36).slice(2, 9);
   return `relay-${prefix}-${Date.now().toString(36)}-${random}`;
 }
@@ -855,193 +544,99 @@ function compactPath(path: string): string {
   return `.../${parts.slice(-3).join("/")}`;
 }
 
-function approvalTarget(args: Record<string, unknown>): string {
+function parseApprovalRequest(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return isRecord(parsed) ? parsed : { raw: value };
+    } catch {
+      return { raw: value };
+    }
+  }
+  return isRecord(value) ? value : {};
+}
+
+function approvalTarget(request: Record<string, unknown>): string {
+  const functionArguments = parseFunctionArguments(request.functionArguments);
   const value =
-    args.filePath ??
-    args.file_path ??
-    args.path ??
-    args.target ??
-    args.oldPath ??
-    args.old_path ??
-    args.command ??
+    functionArguments.filePath ??
+    functionArguments.file_path ??
+    functionArguments.path ??
+    functionArguments.target ??
+    functionArguments.oldPath ??
+    functionArguments.old_path ??
+    request.filePath ??
+    request.file_path ??
+    request.path ??
+    request.target ??
+    "";
+  return typeof value === "string" ? compactPath(value) : JSON.stringify(value);
+}
+
+function approvalOperation(request: Record<string, unknown>): string {
+  const functionArguments = parseFunctionArguments(request.functionArguments);
+  const value =
+    functionArguments.operation ??
+    functionArguments.command ??
+    functionArguments.action ??
+    request.functionName ??
+    request.operation ??
+    request.command ??
+    request.action ??
     "";
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function approvalOperation(tool: string, args: Record<string, unknown>): string {
-  const value = args.operation ?? args.command ?? args.action ?? tool;
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-function eventDisplay(event: RunEvent): { marker: string; message: string; detail?: string } {
-  if (event.type === "tool_call_started") {
-    return {
-      marker: "tool",
-      message: `${event.message} を準備しています`,
-      detail: compactIdentifier(event.detail),
-    };
-  }
-
-  if (event.type === "tool_call_completed") {
-    return {
-      marker: "tool",
-      message: "Tool completed",
-      detail: summarizeToolResult(event.detail),
-    };
-  }
-
-  if (event.type === "approval_requested") {
-    return {
-      marker: "wait",
-      message: "Approval requested",
-      detail: compactIdentifier(event.detail),
-    };
-  }
-
-  if (event.type === "completed") {
-    return { marker: "done", message: "Done" };
-  }
-
-  if (event.type === "cancelled") {
-    return { marker: "stop", message: "Stopped" };
-  }
-
-  if (event.type === "error") {
-    return {
-      marker: "error",
-      message: "Failed",
-      detail: event.detail || event.message,
-    };
-  }
-
-  if (event.type === "final") {
-    return {
-      marker: "answer",
-      message: "Assistant",
-      detail: event.detail,
-    };
-  }
-
-  if (event.type === "status") {
-    if (event.message === "Run started") return { marker: "run", message: "Run started" };
-    if (event.message === "Assistant response started") return { marker: "reply", message: "Response started" };
-    if (event.message === "Assistant response completed") return { marker: "reply", message: "Response completed" };
-    if (event.message === "Tool arguments") return { marker: "tool", message: "Tool arguments ready" };
-    if (event.message === "Tool call prepared") {
-      return { marker: "tool", message: "Tool call prepared", detail: compactIdentifier(event.detail) };
+function parseFunctionArguments(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
     }
-    if (event.message === "State updated") return { marker: "state", message: "State updated" };
   }
+  return isRecord(value) ? value : {};
+}
 
+function compactToolResult(result: unknown): string {
+  const parsed = typeof result === "string" ? tryParseJson(result) : result;
+  if (isRecord(parsed)) {
+    const summary = parsed.summary;
+    if (typeof summary === "string" && summary.trim()) return summary.trim();
+
+    const tool = typeof parsed.tool === "string" ? parsed.tool : "";
+    const success = typeof parsed.success === "boolean" ? parsed.success : undefined;
+    if (tool) return success === false ? `${tool} failed` : `${tool} completed`;
+  }
+  if (Array.isArray(parsed)) return `${parsed.length} items`;
+
+  const text = typeof result === "string" ? result : String(result);
+  if (looksLikeJson(text)) return "Completed";
+  return text.length <= 220 ? text : `${text.slice(0, 220)}...`;
+}
+
+function toolStatusLabel(status: string): string {
   return {
-    marker: shortMarker(event.type),
-    message: event.message,
-    detail: event.detail,
-  };
+    inProgress: "準備中",
+    executing: "実行中",
+    complete: "完了",
+  }[status] ?? status;
 }
 
-function shortMarker(value: string): string {
-  const normalized = value.replaceAll("_", " ");
-  if (normalized.length <= 10) return normalized;
-  return normalized.split(" ").map((part) => part[0]).join("").slice(0, 8);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function compactIdentifier(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  if (value.length <= 42) return value;
-  return `${value.slice(0, 20)}...${value.slice(-12)}`;
-}
-
-function summarizeToolResult(detail: string | undefined): string | undefined {
-  if (!detail) return undefined;
+function tryParseJson(value: string): unknown {
   try {
-    const parsed = JSON.parse(detail) as {
-      tool?: unknown;
-      success?: unknown;
-      summary?: unknown;
-      data?: unknown;
-      error?: unknown;
-    };
-    const dciSummary = summarizeDciObservation(parsed);
-    if (dciSummary) return dciSummary;
-    const parts = [];
-    if (typeof parsed.tool === "string") parts.push(parsed.tool);
-    if (typeof parsed.summary === "string") parts.push(parsed.summary);
-    if (Array.isArray(parsed.data)) parts.push(`${parsed.data.length} item${parsed.data.length === 1 ? "" : "s"}`);
-    if (typeof parsed.error === "string") parts.push(parsed.error);
-    if (parts.length > 0) return parts.join(" · ");
+    return JSON.parse(value);
   } catch {
-    // Non-JSON tool results are already bounded upstream.
+    return value;
   }
-  return detail.length > 180 ? `${detail.slice(0, 180)}...` : detail;
 }
 
-function summarizeDciObservation(parsed: { tool?: unknown; summary?: unknown; data?: unknown }): string | undefined {
-  if (!parsed.data || typeof parsed.data !== "object") return undefined;
-  const data = parsed.data as {
-    schemaVersion?: unknown;
-    matches?: unknown;
-    displayPath?: unknown;
-    anchors?: unknown;
-    evidenceState?: unknown;
-    truncated?: unknown;
-    contextLabels?: unknown;
-  };
-  if (data.schemaVersion === "RelayGrepObservation.v1") {
-    const matches = Array.isArray(data.matches) ? data.matches : [];
-    const terms = [
-      ...stringArray((data as { allTerms?: unknown }).allTerms),
-      ...stringArray((data as { anyTerms?: unknown }).anyTerms),
-    ].slice(0, 4).join(", ");
-    if (matches.length === 0) {
-      const suffix = data.truncated === true ? " · truncated" : "";
-      return `grep · no content matches${terms ? ` · ${terms}` : ""}${suffix}`;
-    }
-    const first = matches[0] as { displayPath?: unknown; lineNumber?: unknown; startLine?: unknown; endLine?: unknown; excerpt?: unknown; contextLabels?: unknown; scope?: unknown } | undefined;
-    const path = typeof first?.displayPath === "string" ? compactPath(first.displayPath) : "";
-    const line = typeof first?.startLine === "number" && typeof first?.endLine === "number" && first.endLine !== first.startLine
-      ? `:${first.startLine}-${first.endLine}`
-      : typeof first?.lineNumber === "number" ? `:${first.lineNumber}` : "";
-    const scope = typeof first?.scope === "string" && first.scope !== "line" ? ` · ${first.scope}` : "";
-    const excerpt = typeof first?.excerpt === "string" ? ` — ${first.excerpt.slice(0, 96)}` : "";
-    const labels = Array.isArray(first?.contextLabels)
-      ? first.contextLabels.filter((label): label is string => typeof label === "string").slice(0, 3).join(", ")
-      : "";
-    const labelText = labels ? ` · ${labels}` : "";
-    const suffix = data.truncated === true ? " · truncated" : "";
-    const termText = terms ? ` · ${terms}` : "";
-    return `grep · ${matches.length} content match${matches.length === 1 ? "" : "es"}${termText}${path ? ` · ${path}${line}` : ""}${scope}${labelText}${excerpt}${suffix}`;
-  }
-  if (data.schemaVersion === "RelayReadObservation.v1") {
-    const path = typeof data.displayPath === "string" ? compactPath(data.displayPath) : "";
-    const anchors = Array.isArray(data.anchors) ? data.anchors : [];
-    const anchor = anchors[0] as { startLine?: unknown; endLine?: unknown } | undefined;
-    const lineRange = typeof anchor?.startLine === "number" && typeof anchor?.endLine === "number"
-      ? `:${anchor.startLine}-${anchor.endLine}`
-      : "";
-    const evidence = typeof data.evidenceState === "string" ? data.evidenceState : "read";
-    const labels = Array.isArray(data.contextLabels)
-      ? data.contextLabels.filter((label): label is string => typeof label === "string").slice(0, 3).join(", ")
-      : "";
-    const labelText = labels ? ` · ${labels}` : "";
-    return `read · ${evidence}${path ? ` · ${path}${lineRange}` : ""}${labelText}`;
-  }
-  return undefined;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
-    : [];
-}
-
-function statusLabel(status: RunStatus | "idle"): string {
-  return {
-    idle: "Idle",
-    running: "Running",
-    completed: "Done",
-    failed: "Failed",
-    approval_required: "Waiting",
-    cancelled: "Stopped",
-  }[status];
+function looksLikeJson(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
 }

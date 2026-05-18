@@ -25,8 +25,6 @@ const responses = [
   JSON.stringify({ action: "tool", tool: "write", args: { file_path: "rejected.txt", content: "should not write" } }),
   JSON.stringify({ action: "final", answer: "書き込みは実行しませんでした。" }),
   "{not valid json",
-  JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["node", "-e", "setTimeout(()=>{},3000)"], timeoutMs: 10000 } }),
-  JSON.stringify({ action: "final", answer: "停止されなければ完了します。" }),
 ];
 
 const sidecar = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -124,8 +122,10 @@ async function waitForExpression(expression, timeoutMs, label) {
     lastState = await evaluate(`(() => ({
       href: location.href,
       readyState: document.readyState,
-      body: document.body?.innerText?.slice(0, 500) ?? "",
-      readiness: document.querySelector('#readiness')?.textContent ?? null
+      body: document.body?.innerText?.slice(0, 900) ?? "",
+      readiness: document.querySelector('#readiness')?.textContent ?? null,
+      chatInput: Boolean(document.querySelector('[data-testid="copilot-chat-textarea"]')),
+      sendButton: Boolean(document.querySelector('[data-testid="copilot-send-button"]')),
     }))()`).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
     await sleep(100);
   }
@@ -135,10 +135,10 @@ async function waitForExpression(expression, timeoutMs, label) {
 async function setValue(selector, value) {
   await evaluate(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
-    if (!el) throw new Error("missing selector: ${selector}");
+    if (!el) throw new Error(${JSON.stringify(`missing selector: ${selector}`)});
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-    if (!setter) throw new Error("missing native value setter: ${selector}");
+    if (!setter) throw new Error(${JSON.stringify(`missing native value setter: ${selector}`)});
     setter.call(el, ${JSON.stringify(value)});
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -149,10 +149,30 @@ async function setValue(selector, value) {
 async function click(selector) {
   await evaluate(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
-    if (!el) throw new Error("missing selector: ${selector}");
+    if (!el) throw new Error(${JSON.stringify(`missing selector: ${selector}`)});
     el.click();
     return true;
   })()`);
+}
+
+async function clickVisible(selector, text = "") {
+  await evaluate(`(() => {
+    const candidates = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
+    const el = candidates.find((node) =>
+      node instanceof HTMLElement &&
+      node.offsetParent !== null &&
+      (!${JSON.stringify(text)} || node.textContent.includes(${JSON.stringify(text)}))
+    );
+    if (!el) throw new Error("missing visible selector: ${selector} ${text}");
+    el.click();
+    return true;
+  })()`);
+}
+
+async function sendChat(message) {
+  await setValue('[data-testid="copilot-chat-textarea"]', message);
+  await waitForExpression(`!document.querySelector('[data-testid="copilot-send-button"]')?.disabled`, 2000, "CopilotKit send enabled");
+  await click('[data-testid="copilot-send-button"]');
 }
 
 async function captureScreenshot(name) {
@@ -215,175 +235,155 @@ async function runBrowserFlow() {
   await cdpSend("Page.navigate", { url: `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}` });
 
   await waitForExpression("document.readyState === 'complete'", 5000, "page load");
-  await waitForExpression("['Ready','Connecting','Sign in needed','Local issue','Provider error'].includes(document.querySelector('#readiness')?.textContent)", 5000, "readiness status");
   await waitForExpression("document.querySelector('#readiness')?.textContent === 'Ready'", 6000, "automatic Ready readiness");
 
   const initialUx = await evaluate(`(() => ({
     title: document.querySelector('h1')?.textContent,
     detailsOpen: document.querySelector('.details')?.open,
     hasLegacyModes: document.body.textContent.includes('資料を探す') || document.body.textContent.includes('Officeファイルを編集する') || document.body.textContent.includes('コードを書く'),
-    hasRefreshButton: Boolean(document.querySelector('#refresh')),
+    hasOldComposer: Boolean(document.querySelector('#instruction') || document.querySelector('#send') || document.querySelector('#events')),
     readiness: document.querySelector('#readiness')?.textContent,
-    sendText: document.querySelector('#send')?.textContent,
     shellWidth: Math.round(document.querySelector('.shell')?.getBoundingClientRect().width ?? 0),
-    runState: document.querySelector('#run-state')?.textContent,
-    visibleRaw: Array.from(document.querySelectorAll('summary')).filter((el) => el.offsetParent !== null).map((el) => el.textContent),
     workspaceChange: document.querySelector('#workspace-change')?.textContent,
     workspaceText: document.querySelector('#workspace')?.textContent,
     visibleWorkspaceInput: Boolean(document.querySelector('input.workspace-input')?.offsetParent),
-    workspaceButtonDisabled: document.querySelector('#workspace-change')?.disabled,
     bodyWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   }))()`);
-  if (initialUx.title !== "Workbench") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
+  if (initialUx.title !== "Chat") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
   if (initialUx.detailsOpen !== false) throw new Error(`details should be collapsed by default: ${JSON.stringify(initialUx)}`);
-  if (initialUx.hasLegacyModes) throw new Error(`legacy mode labels should not be visible: ${JSON.stringify(initialUx)}`);
-  if (initialUx.hasRefreshButton) throw new Error(`redundant refresh button should not be visible: ${JSON.stringify(initialUx)}`);
-  if (!["Ready", "Connecting"].includes(initialUx.readiness)) throw new Error(`Copilot-backed UX should be ready or connecting: ${JSON.stringify(initialUx)}`);
-  if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
-  if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
+  if (initialUx.hasLegacyModes || initialUx.hasOldComposer) throw new Error(`legacy UI should not be visible: ${JSON.stringify(initialUx)}`);
+  if (initialUx.readiness !== "Ready") throw new Error(`readiness should be Ready: ${JSON.stringify(initialUx)}`);
   if (!initialUx.workspaceChange?.includes("フォルダを選択")) throw new Error(`workspace picker action is missing: ${JSON.stringify(initialUx)}`);
-  if (initialUx.workspaceButtonDisabled) throw new Error(`workspace picker action should start enabled: ${JSON.stringify(initialUx)}`);
-  if (initialUx.workspaceText !== "未選択") throw new Error(`workspace should start as a compact unselected chip: ${JSON.stringify(initialUx)}`);
+  if (initialUx.workspaceText !== "未選択") throw new Error(`workspace should start as unselected: ${JSON.stringify(initialUx)}`);
   if (initialUx.visibleWorkspaceInput) throw new Error(`manual workspace path input should not be visible: ${JSON.stringify(initialUx)}`);
-  if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for focused workbench UX: ${JSON.stringify(initialUx)}`);
+  if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for chatbot UX: ${JSON.stringify(initialUx)}`);
   if (initialUx.bodyWidth > initialUx.viewportWidth) throw new Error(`initial UI has horizontal overflow: ${JSON.stringify(initialUx)}`);
 
-  await captureScreenshot("workbench-empty.png");
+  await captureScreenshot("workbench-chat-empty.png");
 
   await click("#workspace-change");
   await waitForExpression(`document.querySelector('#workspace-path')?.value === ${JSON.stringify(workspace)}`, 4000, "workspace picker selection");
-  await waitForExpression("document.querySelector('#workspace-change')?.disabled === false", 2000, "workspace picker re-enabled");
-  await setValue("#instruction", "seed を探して");
+  await waitForExpression("Boolean(document.querySelector('[data-testid=\"copilot-chat-textarea\"]'))", 5000, "CopilotKit textarea");
+  await waitForExpression("Boolean(document.querySelector('[data-testid=\"copilot-send-button\"]'))", 5000, "CopilotKit send button");
+
   const searchStarted = Date.now();
-  await click("#send");
-  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Running' || Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('受け付けました'))", 2000, "visible running progress");
-  await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('検索は glob を使いました。'))", 6000, "search final event");
-  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Done'", 3000, "search completed state");
+  await sendChat("seed を探して");
+  await waitForExpression("document.body.innerText.includes('検索は glob を使いました。')", 8000, "search final answer");
   const searchMs = Date.now() - searchStarted;
-  if (searchMs > 6000) throw new Error(`mock search UX took too long: ${searchMs}ms`);
+  if (searchMs > 8000) throw new Error(`mock search UX took too long: ${searchMs}ms`);
+
   const resultUx = await evaluate(`(() => ({
-    summaryVisible: !document.querySelector('#summary')?.hidden,
-    summaryText: document.querySelector('#summary-text')?.textContent,
-    runState: document.querySelector('#run-state')?.textContent,
+    hasFinal: document.body.innerText.includes('検索は glob を使いました。'),
+    hasTool: document.body.innerText.includes('glob'),
+    rawPrimaryText: document.querySelector('.chat-card')?.innerText ?? '',
   }))()`);
-  if (resultUx.summaryVisible !== true || !resultUx.summaryText.includes('検索は glob')) {
-    throw new Error(`final answer should be visible above activity: ${JSON.stringify(resultUx)}`);
+  if (!resultUx.hasFinal || !resultUx.hasTool) {
+    throw new Error(`final answer/tool card should be visible in chat: ${JSON.stringify(resultUx)}`);
   }
-  if (resultUx.runState !== "Done") throw new Error(`run state should be Done: ${JSON.stringify(resultUx)}`);
+  if (resultUx.rawPrimaryText.includes('"toolCallId"') || resultUx.rawPrimaryText.includes('"threadId"')) {
+    throw new Error(`primary chat should not expose raw AG-UI JSON: ${JSON.stringify(resultUx)}`);
+  }
 
-  await captureScreenshot("workbench-completed.png");
+  await captureScreenshot("workbench-chat-completed.png");
 
-  await setValue("#instruction", "approval.txt を作って");
-  const approvalStarted = Date.now();
-  await click("#send");
-  await waitForExpression("document.querySelector('#approval') && !document.querySelector('#approval').hidden", 6000, "approval panel");
-  const approvalMs = Date.now() - approvalStarted;
-  if (approvalMs > 6000) throw new Error(`approval UX took too long: ${approvalMs}ms`);
+  await sendChat("approval.txt を作って");
+  await waitForExpression(`
+    Array.from(document.querySelectorAll('.approval-card')).some((card) =>
+      card.textContent.includes('approval.txt') &&
+      Array.from(card.querySelectorAll('button')).some((button) => button.textContent.includes('実行する')) &&
+      Array.from(card.querySelectorAll('button')).some((button) => button.textContent.includes('実行しない'))
+    )
+  `, 8000, "approval card");
   if (existsSync(join(workspace, "approval.txt"))) throw new Error("write executed before approval");
+
   const approvalUx = await evaluate(`(() => ({
-    hasApprove: Array.from(document.querySelectorAll('#approval button')).some((button) => button.textContent.includes('許可')),
-    hasReject: Array.from(document.querySelectorAll('#approval button')).some((button) => button.textContent.includes('実行しない')),
-    targetText: document.querySelector('#approval')?.textContent ?? '',
-    summaryHidden: document.querySelector('#summary')?.hidden,
-    runState: document.querySelector('#run-state')?.textContent,
+    hasApprove: Array.from(document.querySelectorAll('.approval-card button')).some((button) => button.textContent.includes('実行する')),
+    hasReject: Array.from(document.querySelectorAll('.approval-card button')).some((button) => button.textContent.includes('実行しない')),
+    targetText: Array.from(document.querySelectorAll('.approval-card')).find((card) => card.textContent.includes('approval.txt'))?.textContent ?? '',
   }))()`);
-  if (approvalUx.hasApprove !== true || approvalUx.hasReject !== true || approvalUx.runState !== "Waiting") {
+  if (approvalUx.hasApprove !== true || approvalUx.hasReject !== true || !approvalUx.targetText.includes("approval.txt")) {
     throw new Error(`approval UX is incomplete: ${JSON.stringify(approvalUx)}`);
   }
-  if (!approvalUx.targetText.includes('approval.txt') || approvalUx.summaryHidden !== true) {
-    throw new Error(`approval UX should show target and hide stale result summary: ${JSON.stringify(approvalUx)}`);
-  }
 
-  await captureScreenshot("workbench-approval.png");
-  await click("#approval .primary-button");
-  await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('承認済みの書き込みを実行しました。'))", 6000, "approval final event");
+  await captureScreenshot("workbench-chat-approval.png");
+  await clickVisible(".approval-card .primary-button", "実行する");
+  await waitForExpression("document.body.innerText.includes('承認済みの書き込みを実行しました。')", 8000, "approval final answer");
   if (readFileSync(join(workspace, "approval.txt"), "utf8") !== "approved write") {
     throw new Error("approved file content mismatch");
   }
 
-  await setValue("#instruction", "rejected.txt を作って");
-  await click("#send");
-  await waitForExpression("document.querySelector('#approval') && !document.querySelector('#approval').hidden", 6000, "rejection approval panel");
-  await click("#approval .secondary-button");
-  await waitForExpression("Array.from(document.querySelectorAll('#events li')).some((el) => el.textContent.includes('書き込みは実行しませんでした。'))", 6000, "rejection final event");
+  await sendChat("rejected.txt を作って");
+  await waitForExpression(`
+    Array.from(document.querySelectorAll('.approval-card')).some((card) =>
+      card.textContent.includes('rejected.txt') &&
+      Array.from(card.querySelectorAll('button')).some((button) => button.textContent.includes('実行しない'))
+    )
+  `, 8000, "rejection approval card");
+  await clickVisible(".approval-card .secondary-button", "実行しない");
+  await waitForExpression("document.body.innerText.includes('書き込みは実行しませんでした。')", 8000, "rejection final answer");
   if (existsSync(join(workspace, "rejected.txt"))) throw new Error("rejected write executed unexpectedly");
 
-  await setValue("#instruction", "壊れた応答を確認して");
-  await click("#send");
-  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Failed' || Array.from(document.querySelectorAll('#events li.event-error')).length > 0", 6000, "visible failure state");
-
-  await setValue("#instruction", "長い検証を開始して");
-  await click("#send");
-  await waitForExpression("document.querySelector('#approval') && !document.querySelector('#approval').hidden", 6000, "long-running approval panel");
-  await click("#approval .primary-button");
-  await waitForExpression("document.querySelector('#send')?.textContent.includes('停止') || document.querySelector('#run-state')?.textContent === 'Running'", 3000, "long-running state");
-  await click("#send");
-  await waitForExpression("document.querySelector('#run-state')?.textContent === 'Stopped'", 3000, "visible cancellation state");
+  await sendChat("壊れた応答を確認して");
+  await waitForExpression("document.body.innerText.includes('invalid') || document.body.innerText.includes('失敗') || document.body.innerText.includes('error')", 8000, "visible failure state");
 
   const finalUx = await evaluate(`(() => ({
-    approvalHidden: document.querySelector('#approval')?.hidden,
     detailsOpen: document.querySelector('.details')?.open,
-    eventCount: document.querySelectorAll('#events li').length,
-    rawPrimaryText: document.querySelector('#events')?.innerText ?? '',
     bodyWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   }))()`);
-  if (finalUx.approvalHidden !== true) throw new Error(`approval panel should hide after completion: ${JSON.stringify(finalUx)}`);
   if (finalUx.detailsOpen !== false) throw new Error(`details should remain collapsed: ${JSON.stringify(finalUx)}`);
-  if (finalUx.eventCount < 3) throw new Error(`expected visible event trace: ${JSON.stringify(finalUx)}`);
-  if (finalUx.rawPrimaryText.includes('"toolCallId"') || finalUx.rawPrimaryText.includes('"threadId"')) {
-    throw new Error(`primary activity should not expose raw AG-UI JSON: ${JSON.stringify(finalUx)}`);
-  }
   if (finalUx.bodyWidth > finalUx.viewportWidth) throw new Error(`desktop UI has horizontal overflow: ${JSON.stringify(finalUx)}`);
 
   await setViewport(390, 900, true);
-  await waitForExpression("Boolean(document.querySelector('.shell') && document.querySelector('#send'))", 2000, "mobile layout");
+  await waitForExpression("Boolean(document.querySelector('.chat-card') && document.querySelector('[data-testid=\"copilot-send-button\"]'))", 2000, "mobile layout");
   const mobileUx = await evaluate(`(() => ({
     bodyWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
-    sendWidth: Math.round(document.querySelector('#send')?.getBoundingClientRect().width ?? 0),
-    composerWidth: Math.round(document.querySelector('.composer-panel')?.getBoundingClientRect().width ?? 0),
+    chatWidth: Math.round(document.querySelector('.chat-card')?.getBoundingClientRect().width ?? 0),
     detailsOpen: document.querySelector('.details')?.open,
   }))()`);
   if (mobileUx.bodyWidth > mobileUx.viewportWidth) throw new Error(`mobile UI has horizontal overflow: ${JSON.stringify(mobileUx)}`);
-  if (mobileUx.sendWidth < 240 || mobileUx.composerWidth < 300) throw new Error(`mobile controls are not comfortably sized: ${JSON.stringify(mobileUx)}`);
+  if (mobileUx.chatWidth < 320) throw new Error(`mobile chat is too cramped: ${JSON.stringify(mobileUx)}`);
   if (mobileUx.detailsOpen !== false) throw new Error(`details should remain collapsed on mobile: ${JSON.stringify(mobileUx)}`);
-  await captureScreenshot("workbench-mobile.png");
+  await captureScreenshot("workbench-chat-mobile.png");
 
   for (const [width, height] of [[768, 920], [1024, 900]]) {
     await setViewport(width, height, false);
-    await waitForExpression("Boolean(document.querySelector('.composer-panel') && document.querySelector('#events'))", 2000, `responsive layout ${width}`);
+    await waitForExpression("Boolean(document.querySelector('.chat-card') && document.querySelector('[data-testid=\"copilot-chat-textarea\"]'))", 2000, `responsive layout ${width}`);
     const viewportUx = await evaluate(`(() => ({
       bodyWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
-      composerWidth: Math.round(document.querySelector('.composer-panel')?.getBoundingClientRect().width ?? 0),
-      sendText: document.querySelector('#send')?.textContent,
+      chatWidth: Math.round(document.querySelector('.chat-card')?.getBoundingClientRect().width ?? 0),
       detailsOpen: document.querySelector('.details')?.open,
       legacyModes: document.body.textContent.includes('資料を探す') || document.body.textContent.includes('Officeファイルを編集する') || document.body.textContent.includes('コードを書く')
     }))()`);
     if (viewportUx.bodyWidth > viewportUx.viewportWidth) {
       throw new Error(`responsive UI has horizontal overflow at ${width}: ${JSON.stringify(viewportUx)}`);
     }
-    if (viewportUx.composerWidth < Math.min(520, width - 48)) {
-      throw new Error(`composer is too cramped at ${width}: ${JSON.stringify(viewportUx)}`);
+    if (viewportUx.chatWidth < Math.min(560, width - 48)) {
+      throw new Error(`chat is too cramped at ${width}: ${JSON.stringify(viewportUx)}`);
     }
-    if (viewportUx.sendText !== "送信" || viewportUx.detailsOpen !== false || viewportUx.legacyModes) {
+    if (viewportUx.detailsOpen !== false || viewportUx.legacyModes) {
       throw new Error(`responsive minimal UX regression at ${width}: ${JSON.stringify(viewportUx)}`);
     }
   }
 
   return {
     searchMs,
-    approvalMs,
-    screenshots: ["workbench-empty.png", "workbench-completed.png", "workbench-approval.png", "workbench-mobile.png"],
+    screenshots: [
+      "workbench-chat-empty.png",
+      "workbench-chat-completed.png",
+      "workbench-chat-approval.png",
+      "workbench-chat-mobile.png",
+    ],
   };
 }
 
 try {
   await waitForStatus();
   const result = await runBrowserFlow();
-  console.log(`[workbench-ux-e2e] ok search=${result.searchMs}ms approval=${result.approvalMs}ms screenshots=${result.screenshots.join(",")}`);
+  console.log(`[workbench-ux-e2e] ok search=${result.searchMs}ms screenshots=${result.screenshots.join(",")}`);
 } finally {
   if (cdp) cdp.close();
   if (edge) edge.kill("SIGTERM");

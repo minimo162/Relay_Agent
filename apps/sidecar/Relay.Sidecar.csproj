@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Relay.Sidecar</AssemblyName>
     <RootNamespace>Relay.Sidecar</RootNamespace>
-    <Version>0.3.11</Version>
+    <Version>0.3.12</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>

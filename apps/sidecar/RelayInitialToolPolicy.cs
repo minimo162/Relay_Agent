@@ -108,7 +108,7 @@ public static class RelayInitialToolPolicy
             text = text.Replace(token, " ", StringComparison.OrdinalIgnoreCase);
         }
         var candidates = text
-            .Split([' ', '\t', '\r', '\n', '　', '。', '、', ',', ';', ':', '/', '\\'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Split(new[] { ' ', '\t', '\r', '\n', '　', '。', '、', ',', ';', ':', '/', '\\' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(token => token.Length >= 2)
             .Where(token => !token.Contains(':'))
             .Where(token => !token.Contains('*'))

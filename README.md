@@ -5,16 +5,16 @@ Relay Agent is a local business-agent workbench:
 > Copilot thinks. Relay executes local tools safely.
 
 The active product is a browser-hosted local web workbench served by a
-self-contained .NET sidecar. The user works from one workspace and one natural
-language composer. Search, Office editing, and code editing are internal tool
+self-contained .NET sidecar. The user works from one workspace and one normal
+CopilotKit chat. Search, Office editing, and code editing are internal tool
 capabilities rather than separate visible modes.
 
 ## Current Architecture
 
 ```text
 Browser Workbench
-  one composer, file-explorer workspace picker, concise run status, result and
-  approval cards
+  CopilotKit chatbot, file-explorer workspace picker, concise readiness, inline
+  tool rendering, and human-in-the-loop approval
 
 .NET Relay Sidecar
   serves the Workbench, exposes the official AG-UI run endpoint,
@@ -37,10 +37,10 @@ fallback paths.
 The Workbench is intentionally minimal:
 
 - one workspace selected through the OS file explorer;
-- one task input;
-- one send action;
+- one CopilotKit chat transcript;
+- one chat input and send action;
 - concise readiness and run status;
-- result and approval surfaces only when relevant;
+- inline tool summaries and approvals only when relevant;
 - support diagnostics collapsed by default with explicit export.
 
 The UI does not expose separate search, Office, code, model, provider, or

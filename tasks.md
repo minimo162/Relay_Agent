@@ -53,7 +53,12 @@ Installer Defaults, Workspace Picker, And Search Path Contract Plan from
 launcher console, modern shared-folder workspace picker, and a reliable
 `glob` -> `read` path contract.
 
-The active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
+The active queue is `CKCHAT*`. It implements the 2026-05-18 CopilotKit Chatbot
+UX Reset Plan from `PLANS.md`: replace the custom Relay Workbench composer,
+activity, result, and approval surface with a CopilotKit-first chatbot backed by
+the existing AG-UI `/agui/relay` self-managed agent.
+
+The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
 catalog, prevent hidden retriever/image JSON projection drift, and normalize
@@ -77,6 +82,166 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### CKCHAT-01 - Document CopilotKit Chatbot Reset
+
+Status: completed
+
+Scope:
+
+- Add the CopilotKit chatbot reset plan to `PLANS.md`.
+- Add this executable task queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan keeps the .NET sidecar, Microsoft Agent Framework, AG-UI transport,
+  and M365 Copilot CDP provider as the active backend architecture.
+- The plan treats CopilotKit as the Workbench UI layer, not a replacement LLM
+  runtime or cloud dependency.
+
+Verification:
+
+- `git diff --check`
+
+### CKCHAT-02 - Adopt CopilotKit Chat Surface
+
+Status: completed
+
+Scope:
+
+- Replace the custom Workbench composer/result/activity layout with
+  `CopilotKitProvider`, `CopilotChatConfigurationProvider`, and `CopilotChat`.
+- Use `selfManagedAgents` to connect CopilotKit to the existing `/agui/relay`
+  AG-UI endpoint.
+- Keep a minimal header with readiness and native workspace picker.
+
+Artifacts:
+
+- Updated `apps/workbench/src/App.tsx`.
+- Updated `apps/workbench/src/main.tsx`.
+- Updated Workbench package dependencies and lockfile.
+
+Acceptance:
+
+- The primary page is a normal chatbot with one input and transcript.
+- There are no visible legacy mode labels or diagnostic-first activity panels.
+- The selected workspace is injected into each AG-UI run.
+
+Verification:
+
+- `pnpm --filter @relay-agent/workbench typecheck`
+- `pnpm --filter @relay-agent/workbench build`
+
+### CKCHAT-03 - Move Mutation Approval To CopilotKit HITL
+
+Status: completed
+
+Scope:
+
+- Register `request_approval` through CopilotKit human-in-the-loop support.
+- Render an inline approval card with target, operation, approve, and reject
+  actions.
+- Remove the custom Relay approval panel from the primary UI.
+
+Artifacts:
+
+- Updated `apps/workbench/src/App.tsx`.
+
+Acceptance:
+
+- Mutation requests pause in chat and do not execute until the user approves.
+- Rejection resumes the AG-UI run without creating local mutation artifacts.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+
+### CKCHAT-04 - Restyle Workbench As Minimal Chatbot
+
+Status: completed
+
+Scope:
+
+- Import CopilotKit v2 styles.
+- Replace Relay-specific panel CSS with focused chatbot layout overrides.
+- Preserve generous whitespace, professional typography, visible focus states,
+  responsive behavior, and collapsed support diagnostics.
+
+Artifacts:
+
+- Updated `apps/workbench/src/styles.css`.
+
+Acceptance:
+
+- Desktop and mobile screenshots show a minimal chatbot rather than a
+  workbench dashboard.
+- The UI has no horizontal overflow across tested viewport sizes.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+
+### CKCHAT-05 - Update E2E, Docs, And Verification Log
+
+Status: completed
+
+Scope:
+
+- Update Workbench UX E2E selectors and assertions for the CopilotKit chatbot.
+- Update `README.md`, `docs/IMPLEMENTATION.md`, and active architecture notes
+  where they describe the Workbench surface.
+- Run the canonical active check.
+
+Artifacts:
+
+- Updated `scripts/workbench-ux-e2e.mjs`.
+- Updated docs.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Verification outcomes are recorded in `docs/IMPLEMENTATION.md`.
+
+Verification:
+
+- `pnpm check`
+
+### CKCHAT-06 - Version, Commit, Push, And Release
+
+Status: completed
+
+Scope:
+
+- Bump active package versions for the next patch release.
+- Build release packages and installer.
+- Commit and push to `main`.
+- Publish the next GitHub Release with generated assets.
+
+Artifacts:
+
+- `dist/installer/Relay.Agent-0.3.12-win-x64-setup.exe`.
+- `dist/relay-agent-0.3.12-win-x64.zip`.
+- `dist/relay-agent-0.3.12-linux-x64.tar.gz`.
+- `dist/release/relay-agent-0.3.12-sha256.txt`.
+- Next patch release on GitHub.
+
+Acceptance:
+
+- Release exists, points at the pushed commit, and includes installer and
+  checksums.
+
+Verification:
+
+- `pnpm sidecar:publish:linux`
+- `pnpm sidecar:publish:windows`
+- `pnpm sidecar:installer:windows`
+- `pnpm release:inventory`
+- `gh release view`
 
 ### PROJECTIONFIX-01 - Document Harness Remediation Scope
 

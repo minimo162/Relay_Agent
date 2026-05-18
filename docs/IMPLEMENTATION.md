@@ -20030,3 +20030,52 @@ Result:
   `allTerms:["アフター","4Q"]` and `anyTerms:["aftermarket","サービス","補修","部品"]`,
   surfaced `finance/q4/source-a.md`, read that exact file, and rejected the
   entity-name, prior-period, guide, and generic decoys.
+
+## 2026-05-18: CopilotKit Chatbot Workbench Reset
+
+Change:
+
+- Replaced the custom Relay composer, activity panel, result panel, and primary
+  approval panel with a CopilotKit v2 chatbot surface.
+- Connected CopilotKit to the existing AG-UI `/agui/relay` endpoint through a
+  self-managed `HttpAgent`, while preserving workspace injection through AG-UI
+  state, context, and forwarded props.
+- Moved mutation approval rendering into CopilotKit human-in-the-loop support
+  with inline approve/reject actions in the chat transcript.
+- Restyled the Workbench around a minimal professional chatbot shell: title,
+  readiness pill, native workspace picker, chat transcript, and collapsed
+  support export.
+- Updated Workbench UX E2E to assert the CopilotKit chat input, inline tool
+  summaries, approval/rejection resume, no raw AG-UI JSON in the primary chat,
+  and responsive no-overflow behavior.
+- Fixed a .NET SDK 8 build ambiguity in `RelayInitialToolPolicy` while
+  preserving the existing Agent Framework/AG-UI/OpenCode-compatible tool
+  harness.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+pnpm --filter @relay-agent/workbench build
+pnpm workbench:ux-e2e
+pnpm check
+pnpm sidecar:publish:linux
+pnpm sidecar:publish:windows
+pnpm sidecar:installer:windows
+pnpm release:inventory
+```
+
+Result:
+
+- Workbench typecheck and production build passed.
+- Workbench browser UX E2E passed with screenshots
+  `workbench-chat-empty.png`, `workbench-chat-completed.png`,
+  `workbench-chat-approval.png`, and `workbench-chat-mobile.png`.
+- Full `pnpm check` passed, including hard-cut guard, sidecar build/smokes,
+  AG-UI client-tool/replay smokes, DCI smokes, Office/PDF read smokes,
+  security smoke, and release inventory/SBOM generation.
+- Release packaging for `0.3.12` completed. Generated assets include
+  `Relay.Agent-0.3.12-win-x64-setup.exe`,
+  `relay-agent-0.3.12-win-x64.zip`,
+  `relay-agent-0.3.12-linux-x64.tar.gz`, release inventory, SBOM, and
+  `relay-agent-0.3.12-sha256.txt`.
