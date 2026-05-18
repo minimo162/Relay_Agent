@@ -34,10 +34,11 @@ for (const needle of [
   "!define MUI_UNICON \"${icon}\"",
   "relay-assets\\\\relay-agent.ico",
   "StopRunningRelayAgent",
-  "VerifyRelayInstallUnlocked",
+  "app-${version}-$0",
+  "WriteRegStr HKCU \"Software\\\\Relay Agent\" \"AppDir\" \"$1\"",
   "$LOCALAPPDATA\\\\Programs\\\\Relay Agent",
   "$LOCALAPPDATA\\\\Programs\\\\RelayAgent",
-  "Relay Agent is still running and cannot be updated",
+  "Do not overwrite a running Relay.Sidecar.exe",
 ]) {
   assert(nsisScript.includes(needle), `NSIS generator is missing icon wiring: ${needle}`);
 }
@@ -46,10 +47,14 @@ assert(!nsisScript.includes("RequestExecutionLevel admin"), "installer must not 
 assert(!nsisScript.includes("HKLM"), "installer must not write machine-wide HKLM registry keys");
 
 const preflightIndex = nsisScript.indexOf("Call StopRunningRelayAgent");
-const lockCheckIndex = nsisScript.indexOf("Call VerifyRelayInstallUnlocked");
 const fileCopyIndex = nsisScript.indexOf("File /r");
+const versionedPayloadIndex = nsisScript.indexOf("app-${version}-$0");
 assert(preflightIndex >= 0 && preflightIndex < fileCopyIndex, "process stop preflight must run before File /r");
-assert(lockCheckIndex >= 0 && lockCheckIndex < fileCopyIndex, "locked-binary check must run before File /r");
+assert(versionedPayloadIndex >= 0 && versionedPayloadIndex < fileCopyIndex, "versioned payload directory must be selected before File /r");
+assert(
+  !nsisScript.includes('Delete "$INSTDIR\\\\Relay.Sidecar.exe"'),
+  "installer must not delete/overwrite a potentially running root Relay.Sidecar.exe before copy",
+);
 
 for (const packagedAsset of [
   "dist/relay-agent-win-x64/relay-assets/relay-agent.ico",

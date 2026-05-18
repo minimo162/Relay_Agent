@@ -33,12 +33,14 @@ Workbench architecture rather than the removed Tauri shell.
   from older user-scope installs may continue to use the registered legacy
   `%LOCALAPPDATA%\Programs\RelayAgent` path so the installer updates the
   existing app instead of silently creating a duplicate install.
-- Before copying package files, the Windows installer must stop same-user
-  `Relay.Sidecar.exe` and `Relay.Launcher.exe` processes whose executable paths
-  are under known Relay install roots, then verify that the installed binaries
-  are unlocked. If they remain locked, the installer must show a concise
-  close-and-retry message instead of falling through to a raw NSIS
-  `error opening file for writing` prompt.
+- Before copying package files, the Windows installer should attempt to stop
+  same-user `Relay.Sidecar.exe` and `Relay.Launcher.exe` processes whose
+  executable paths are under known Relay install roots. The installer must not
+  depend on that stop succeeding: package files are copied into a fresh
+  versioned payload directory under the install root, and shortcuts/registry
+  metadata are repointed to that payload. This avoids overwriting a running
+  `Relay.Sidecar.exe` and prevents raw NSIS `error opening file for writing`
+  prompts during normal upgrades.
 - The current Linux release track uses a GitHub Release archive plus launcher
   and the same release inventory/SBOM-style metadata.
 - In-app auto-update is out of scope for this phase.

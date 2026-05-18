@@ -32,6 +32,57 @@
 
 ## Milestone Log
 
+### 2026-05-18 Versioned Payload Installer Update
+
+Follow-up to the `0.3.6` installer-lock fix after Windows still reported:
+
+```text
+Relay Agent is still running and cannot be updated.
+Locked file: C:\Users\m242054\AppData\Local\Programs\Relay Agent\Relay.Sidecar.exe
+```
+
+Change:
+
+- Rechecked the older stable commit
+  `40622c03d049f89e9b2501a39b88eb796c298912`. The old Tauri line installed a
+  Windows Job Object with `KILL_ON_JOB_CLOSE`, so sidecar children died with the
+  desktop process and did not commonly remain as locked orphaned executables.
+- Kept the active browser Workbench architecture and changed the installer
+  approach instead of reviving Tauri. Because the current launcher opens a
+  browser and exits, a sidecar can remain alive independently; the installer
+  must therefore avoid overwriting that executable path.
+- Changed the generated NSIS install section to copy the package into a fresh
+  runtime payload directory under the install root:
+  `$INSTDIR\app-<version>-<tick>`.
+- Repointed Start Menu shortcuts, optional desktop shortcuts, uninstall
+  `DisplayIcon`, and Relay's `AppDir` registry value to the versioned payload.
+- Kept the process-stop preflight as best-effort, but removed the blocking
+  locked-file abort from the install path. A still-running old sidecar may keep
+  serving an already-open browser tab, but it no longer blocks installation of
+  the new payload.
+- Updated packaging policy and smoke coverage so future installers must select
+  a versioned payload before `File /r` and must not delete or overwrite
+  `$INSTDIR\Relay.Sidecar.exe` before copying.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.7`.
+
+Verification commands run locally:
+
+```bash
+PATH=$HOME/.dotnet:$PATH pnpm release:icon-smoke
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=$HOME/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Installer generated-script smoke passed.
+- Windows package generated successfully.
+- NSIS generated `dist/installer/Relay.Agent-0.3.7-win-x64-setup.exe`.
+- Generated NSIS shows `File /r` targeting the fresh payload selected by
+  `StrCpy $1 "$INSTDIR\app-0.3.7-$0"`, not the root install directory.
+- Full `pnpm check` passed.
+
 ### 2026-05-18 User-Scope Installer Locked-File Remediation
 
 Implemented the `INSTALLLOCK-01` through `INSTALLLOCK-06` queue from

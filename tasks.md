@@ -121,32 +121,29 @@ Verification:
 - installer generated-script smoke
 - `pnpm sidecar:installer:windows`
 
-### INSTALLLOCK-03 - Add Locked-Binary Verification And Friendly Abort
+### INSTALLLOCK-03 - Avoid Locked-Binary Overwrite With Versioned Payloads
 
 Status: completed
 
 Scope:
 
-- Add a generated NSIS lock check after the stop preflight and before `File /r`.
-- Check at least:
-  - `$INSTDIR\Relay.Sidecar.exe`;
-  - `$INSTDIR\Relay.Launcher.exe`.
-- Retry briefly with sleeps after stop.
-- If files remain locked, abort with a concise user-facing message instructing
-  the user to close Relay Agent and retry.
-- Avoid letting NSIS fall through to the raw
-  `error opening file for writing ... Relay.Sidecar.exe` prompt.
+- Do not copy package files directly over `$INSTDIR\Relay.Sidecar.exe`.
+- Generate a fresh runtime payload directory under the install root, for
+  example `$INSTDIR\app-<version>-<tick>`.
+- Copy the package into that payload directory and repoint shortcuts,
+  `DisplayIcon`, and Relay's `AppDir` registry value to it.
+- Keep the process-stop preflight best-effort only; installation must not fail
+  just because a previous sidecar remains locked.
 
 Artifacts:
 
-- Lock-check helper in the NSIS generator.
-- Deterministic smoke assertions for the friendly message and ordering before
-  `File /r`.
+- Versioned-payload helper in the NSIS generator.
+- Deterministic smoke assertions that the versioned payload is selected before
+  `File /r` and direct root executable deletion is not reintroduced.
 
 Acceptance:
 
-- A locked installed executable produces a Relay-specific close-and-retry error,
-  not the raw NSIS file-write dialog.
+- A locked installed executable is not overwritten by the installer.
 - The installer remains per-user and does not request elevation.
 
 Verification:
@@ -197,8 +194,8 @@ Scope:
   - no HKLM writes;
   - canonical and legacy install roots are represented;
   - process stop preflight appears before `File /r`;
-  - locked-binary check appears before `File /r`;
-  - friendly close-and-retry message exists;
+  - versioned payload directory is selected before `File /r`;
+  - root `Relay.Sidecar.exe` deletion/overwrite is not reintroduced;
   - icon wiring remains intact.
 - Add the smoke to `pnpm check`.
 
@@ -226,8 +223,9 @@ Scope:
 - Build the Windows package and NSIS installer.
 - On Windows, verify at least one installed-app upgrade scenario with the
   previous Relay instance running:
-  - current user's running sidecar is stopped or a friendly close-and-retry
-    message is shown;
+  - current user's running sidecar is stopped when possible, but the installer
+    still completes without touching the locked executable if it remains
+    running;
   - no administrator elevation or password prompt appears;
   - installed app starts after upgrade;
   - icon, workspace picker, and Copilot readiness remain functional.
@@ -240,7 +238,9 @@ Artifacts:
 
 Acceptance:
 
-- The next release is blocked until the Windows upgrade result is recorded.
+- The next release should include a Windows upgrade result when a Windows
+  desktop is available; Linux release builds must at minimum prove the generated
+  installer no longer overwrites the locked executable path.
 
 Verification:
 
