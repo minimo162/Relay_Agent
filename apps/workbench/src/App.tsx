@@ -6,7 +6,16 @@ import {
   useHumanInTheLoop,
   type CopilotChatLabels,
 } from "@copilotkit/react-core/v2";
-import { Download, ExternalLink, FileText, FolderOpen, GitCompareArrows } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  FileText,
+  FolderOpen,
+  GitCompareArrows,
+  MessageSquareText,
+  ShieldCheck,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { createRelayAgUiAgent, relayAgentId } from "./lib/relay-ag-ui";
@@ -39,11 +48,11 @@ const approvalRequestSchema = z.object({
 type ApprovalRequestArgs = z.infer<typeof approvalRequestSchema>;
 
 const chatLabels: Partial<CopilotChatLabels> = {
-  chatInputPlaceholder: "依頼内容を入力...",
+  chatInputPlaceholder: "メッセージを入力（例: このPDFの誤字を探して）",
   chatDisclaimerText: "",
-  welcomeMessageText: "作業フォルダ内の検索、PDF確認、Office編集、コード作成をこのチャットから依頼できます。",
+  welcomeMessageText: "普通のチャットと同じように依頼してください。必要なローカルツールはCopilotが選び、Relayが安全に実行します。",
   modalHeaderTitle: "Relay Agent",
-  chatInputToolbarToolsButtonLabel: "ツール",
+  chatInputToolbarToolsButtonLabel: "添付 / ツール",
   chatInputToolbarAddButtonLabel: "追加",
 };
 
@@ -417,7 +426,7 @@ export function App() {
               <span className="brand-mark" aria-hidden="true">R</span>
               <div>
                 <h1>Relay Agent</h1>
-                <p className="subtitle">Copilot-guided local workbench</p>
+                <p className="subtitle">Copilot とローカルツールをつなぐチャット</p>
               </div>
             </div>
             <button
@@ -427,6 +436,7 @@ export function App() {
               data-ready={readiness.ready}
               title={readiness.title}
               onClick={handleRefresh}
+              aria-label={`接続状態: ${readiness.label}`}
             >
               {readiness.label}
             </button>
@@ -434,7 +444,7 @@ export function App() {
 
           <main className="chat-layout">
             {readiness.label === "Sign in needed" ? (
-              <div className="signin-row" role="status">
+              <div className="signin-row" role="status" aria-live="polite">
                 <span>Copilot にサインインしてください。</span>
                 <button type="button" className="text-button" onClick={() => void openCopilot()}>
                   Open Copilot <ExternalLink size={14} aria-hidden="true" />
@@ -467,8 +477,10 @@ export function App() {
               </button>
             </section>
 
-            {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
-            {starterNotice ? <p className="starter-notice" aria-live="polite">{starterNotice}</p> : null}
+            {workspaceError ? (
+              <p id="workspace-error" className="workspace-error" role="alert">{workspaceError}</p>
+            ) : null}
+            {starterNotice ? <p className="starter-notice" role="status" aria-live="polite">{starterNotice}</p> : null}
 
             <div id="workspace-history" className="workspace-history" hidden={visibleWorkspaceHistory.length === 0}>
               {visibleWorkspaceHistory.map((item) => (
@@ -487,8 +499,48 @@ export function App() {
             </div>
 
             {!workspace ? (
-              <section className="empty-chat" aria-label="Workspace required">
-                <p>最初に作業フォルダを選択してください。</p>
+              <section className="empty-chat" aria-label="はじめかた">
+                <div className="onboarding-card">
+                  <div className="onboarding-heading">
+                    <MessageSquareText size={20} aria-hidden="true" />
+                    <div>
+                      <h2>チャットを始める</h2>
+                      <p>最初に作業フォルダを選ぶだけで使えます。</p>
+                    </div>
+                  </div>
+                  <ol className="onboarding-steps">
+                    <li>
+                      <span>1</span>
+                      <div>
+                        <strong>フォルダを選択</strong>
+                        <p>検索・編集・作成の対象にするローカルフォルダを指定します。</p>
+                      </div>
+                    </li>
+                    <li>
+                      <span>2</span>
+                      <div>
+                        <strong>自然文で依頼</strong>
+                        <p>ファイル検索、PDF確認、Office編集、コード作成を普通に入力します。</p>
+                      </div>
+                    </li>
+                    <li>
+                      <span>3</span>
+                      <div>
+                        <strong>変更は確認して実行</strong>
+                        <p>ファイルを書き換える前に、Relay がチャット内で承認を求めます。</p>
+                      </div>
+                    </li>
+                  </ol>
+                  <button
+                    className="primary-button onboarding-action"
+                    type="button"
+                    disabled={isPickingWorkspace}
+                    onClick={() => void chooseWorkspace()}
+                  >
+                    <FolderOpen size={15} aria-hidden="true" />
+                    {isPickingWorkspace ? "選択中..." : "作業フォルダを選ぶ"}
+                  </button>
+                </div>
               </section>
             ) : (
               <>
@@ -536,9 +588,9 @@ export function App() {
             )}
 
             <details className="details">
-              <summary>Support</summary>
+              <summary>診断</summary>
               <div className="details-header">
-                <span>Redacted diagnostics</span>
+                <span>共有用に伏せ字化した診断情報</span>
                 <button
                   className="text-button"
                   type="button"
@@ -561,8 +613,11 @@ export function App() {
 function RelayChatTools() {
   useDefaultRenderTool({
     render: ({ name, status, result }) => (
-      <div className="tool-card">
-        <span>{name}</span>
+      <div className="tool-card" aria-live="polite">
+        <div className="tool-card-heading">
+          <span>tool</span>
+          <code>{name}</code>
+        </div>
         <strong>{toolStatusLabel(status)}</strong>
         {result ? <p>{compactToolResult(result)}</p> : null}
       </div>
@@ -599,7 +654,14 @@ function ApprovalRequestCard({
   return (
     <section className="approval-card" aria-live="polite">
       <div className="approval-heading">
-        <strong>{completed ? "確認済み" : "実行前の確認"}</strong>
+        <strong>
+          {completed ? (
+            <CheckCircle2 size={16} aria-hidden="true" />
+          ) : (
+            <ShieldCheck size={16} aria-hidden="true" />
+          )}
+          {completed ? "確認済み" : "実行前の確認"}
+        </strong>
         <span>{operation || "local action"}</span>
       </div>
       <dl>

@@ -59,9 +59,9 @@ button:disabled {
 }
 
 .shell {
-  width: min(100%, 920px);
+  width: min(100%, 980px);
   margin: 0 auto;
-  padding: 26px 28px 34px;
+  padding: 24px 28px 34px;
 }
 
 .topbar {
@@ -69,7 +69,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .label {
@@ -103,9 +103,16 @@ button:disabled {
 
 h1 {
   margin: 0;
-  font-size: 23px;
+  font-size: 24px;
   font-weight: 660;
   line-height: 1.12;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 640;
   letter-spacing: 0;
 }
 
@@ -159,7 +166,7 @@ h1 {
 
 .chat-layout {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .signin-row {
@@ -174,12 +181,12 @@ h1 {
 .workspace-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
+  gap: 16px;
   align-items: center;
   border: 1px solid var(--ra-border-soft);
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.72);
+  border-radius: 14px;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, 0.8);
 }
 
 .workspace-bar > div {
@@ -291,7 +298,7 @@ h1 {
 }
 
 .starter-chip {
-  min-height: 34px;
+  min-height: 32px;
   border: 1px solid var(--ra-border-soft);
   padding: 0 12px;
   color: var(--ra-text);
@@ -311,18 +318,87 @@ h1 {
   display: grid;
   min-height: clamp(360px, calc(100vh - 232px), 540px);
   place-items: center;
-  border: 1px dashed var(--ra-border);
-  border-radius: 16px;
+  border: 1px solid var(--ra-border-soft);
+  border-radius: 18px;
   color: var(--ra-muted);
-  background: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.58);
 }
 
 .empty-chat p {
   margin: 0;
 }
 
+.onboarding-card {
+  display: grid;
+  width: min(100%, 560px);
+  gap: 24px;
+  padding: 42px 40px;
+}
+
+.onboarding-heading {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  color: var(--ra-text);
+}
+
+.onboarding-heading svg {
+  margin-top: 3px;
+  color: var(--ra-accent);
+}
+
+.onboarding-heading p {
+  margin: 6px 0 0;
+  color: var(--ra-muted);
+}
+
+.onboarding-steps {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.onboarding-steps li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.onboarding-steps li > span {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--ra-border-soft);
+  border-radius: 999px;
+  color: var(--ra-muted);
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 640;
+}
+
+.onboarding-steps strong {
+  display: block;
+  color: var(--ra-text);
+  font-weight: 610;
+}
+
+.onboarding-steps p {
+  margin: 4px 0 0;
+  color: var(--ra-muted);
+  font-size: 13px;
+}
+
+.onboarding-action {
+  width: fit-content;
+  justify-self: start;
+}
+
 .chat-card {
-  height: clamp(540px, calc(100vh - 190px), 740px);
+  height: clamp(520px, calc(100vh - 220px), 720px);
   min-height: 0;
   border: 1px solid var(--ra-border);
   border-radius: 18px;
@@ -365,6 +441,28 @@ h1 {
   font-size: 13px;
 }
 
+.tool-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tool-card-heading span {
+  color: var(--ra-muted-soft);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.tool-card-heading code {
+  overflow: hidden;
+  color: var(--ra-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-card strong {
   color: var(--ra-text);
   font-weight: 600;
@@ -389,8 +487,15 @@ h1 {
 }
 
 .approval-heading strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 16px;
   font-weight: 620;
+}
+
+.approval-heading strong svg {
+  color: var(--ra-warn);
 }
 
 .approval-heading span {
@@ -487,9 +592,18 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .onboarding-card {
+    gap: 22px;
+    padding: 34px 24px;
+  }
+
   .secondary-button,
   .primary-button,
   .starter-chip {
+    width: 100%;
+  }
+
+  .onboarding-action {
     width: 100%;
   }
 

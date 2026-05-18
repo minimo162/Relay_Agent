@@ -115,6 +115,95 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-19 Standard Chatbot UX And Tool Harness Alignment Plan
+
+The next UX target is a first-time-friendly, standard chatbot experience. Relay
+should feel like one professional chat app that happens to operate local tools,
+not a specialized dashboard with internal runtime terms. The local tool and
+harness contract should likewise stay close to mature public patterns:
+CopilotKit renders the chat surface, AG-UI carries lifecycle/tool/result/state
+events, Microsoft Agent Framework owns the function-tool loop and approval
+handoff, and OpenCode remains the reference for model-visible local workspace
+tool names and permission semantics.
+
+Reference sources checked for this plan:
+
+- CopilotKit `CopilotChat` is the inline prebuilt chat surface intended for a
+  dedicated chat route or pane, with user-facing labels, welcome screens,
+  suggestions, and customizable slots:
+  `https://docs.showcase.copilotkit.ai/pydantic-ai/prebuilt-components/chat`.
+- CopilotKit human-in-the-loop guidance treats approvals as inline tool-call
+  pauses where the agent keeps context and the user decides whether to resume:
+  `https://docs.showcase.copilotkit.ai/llamaindex/human-in-the-loop`.
+- AG-UI defines the standard streaming event vocabulary for runs, messages,
+  tool calls, tool results, state, errors, and completion:
+  `https://docs.ag-ui.com/sdk/js/core/events`.
+- Microsoft Agent Framework handles the model tool-calling loop and supports
+  function tools, local MCP tools, and provider-hosted tools. Local function
+  tools are appropriate when Relay must enforce local resources, security
+  boundaries, and error handling:
+  `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`.
+- Microsoft Agent Framework approval guidance uses approval-required function
+  tools and response content to resume the same session after the user approves
+  or rejects the call:
+  `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`.
+- OpenCode's built-in tool list and permission model remain the reference for
+  Relay's model-visible local workspace tools:
+  `https://opencode.ai/docs/tools/`.
+
+Implementation plan:
+
+1. **Make the Workbench read as a normal chatbot**
+   - Keep a single centered chat column with one workspace picker, one
+     CopilotKit chat, and a collapsed diagnostics disclosure.
+   - Replace developer-facing copy such as `Workbench` and broad mode language
+     with first-time-friendly language: choose a folder, type a request, review
+     local changes before they run.
+   - Keep starter actions as small suggestions, not mode tabs. PDF helper chips
+     remain optional accelerators below the workspace.
+   - Add a calm empty state before workspace selection that explains the three
+     steps without exposing internal architecture.
+   - Keep support JSON collapsed and explicitly labeled as diagnostics.
+
+2. **Keep AG-UI/CopilotKit as the UI contract**
+   - Continue to render the main conversation through `CopilotChat`.
+   - Continue to render mutation approvals through CopilotKit's
+     `useHumanInTheLoop`/AG-UI tool-call flow.
+   - Keep tool events concise and standard: exact tool name, status, short
+     result. Do not create a separate Relay activity panel or per-feature mode.
+   - Add accessibility affordances expected of a normal chat app: visible focus,
+     `aria-live` notices for status changes, and `role=alert` errors.
+
+3. **Keep the model-visible tool contract standard**
+   - Do not add feature-specific model-visible tools for search, Office,
+     coding, or PDF review.
+   - Keep the public catalog aligned to OpenCode-style local tools:
+     `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`, bounded `bash`,
+     plus Relay's documented OfficeCLI extension tools and workspace/diff
+     review tools.
+   - Keep Microsoft Agent Framework function-tool registration and approval
+     semantics as the backend harness contract.
+   - Treat custom Relay schemas as execution observations and diagnostics, not
+     as a second model-visible tool system.
+
+4. **Add regression gates**
+   - Add a Workbench standard-chat smoke that verifies the UI keeps
+     `CopilotChat`, `useDefaultRenderTool`, and `useHumanInTheLoop`; avoids
+     old mode labels; includes first-time workspace guidance; and keeps errors
+     accessible.
+   - Keep `agent:tool-catalog-smoke` as the authoritative model-visible tool
+     inventory gate.
+   - Include the new smoke in `pnpm check`.
+
+5. **Acceptance criteria**
+   - First-time users see one chat, one folder picker, obvious starter
+     suggestions, and no old mode chooser.
+   - Mutations still pause for approval inline in the chat.
+   - The model-visible tool names remain OpenCode-compatible, with no revived
+     `RelayDocumentSearch*`, AionUi, OpenWork, Tauri, or per-mode runners.
+   - `pnpm check`, release inventory, portable packages, and the optional
+     Windows user-scope installer pass for the bumped release version.
+
 ### 2026-05-18 Portable-First Distribution Plan
 
 The HTML-only Relay Lite idea is rejected because local command execution,

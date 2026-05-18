@@ -33,6 +33,81 @@
 
 ## Milestone Log
 
+### 2026-05-19 Standard Chatbot UX And Tool Harness Alignment
+
+This slice keeps Relay on the browser Workbench + .NET sidecar path, but makes
+the visible product feel like a normal first-time-friendly chatbot instead of a
+mode picker or diagnostics console.
+
+Change:
+
+- Added the standard chatbot UX and tool harness alignment plan to
+  `PLANS.md` and completed the executable `STANDARDCHAT*` queue in `tasks.md`.
+- Kept the Workbench on CopilotKit chat, AG-UI run/tool/approval events,
+  Microsoft Agent Framework tool approval semantics, and the OpenCode-style
+  generic local tool catalog.
+- Reworked the Workbench copy, empty state, workspace onboarding, tool cards,
+  approval cards, and diagnostics label so users see one chat, one folder
+  picker, and inline tool evidence.
+- Added accessible `role=alert`, `role=status`, and `aria-live` affordances for
+  setup and workspace notices.
+- Added `scripts/workbench-standard-chat-smoke.mjs` and included it in
+  `pnpm check` so old visible modes and dedicated search-mode labels cannot
+  return unnoticed.
+- Adjusted ripgrep raw-line capping for context-window reads so the returned
+  match cap stays bounded while context evidence is not truncated before
+  ranking.
+- Updated README wording to describe Relay as one standard chat over local
+  tools.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.19`.
+
+References checked:
+
+- `https://docs.showcase.copilotkit.ai/pydantic-ai/prebuilt-components/chat`
+- `https://docs.showcase.copilotkit.ai/llamaindex/human-in-the-loop`
+- `https://docs.ag-ui.com/sdk/js/core/events`
+- `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`
+- `https://opencode.ai/docs/tools/`
+
+Verification commands run locally:
+
+```bash
+pnpm agent:workbench-standard-chat-smoke
+pnpm typecheck
+pnpm agent:dci-context-window-grep-smoke
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm check
+pnpm workbench:ux-e2e
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.19-win-x64.zip dist/relay-agent-0.3.19-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.19-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.19-sha256.txt
+```
+
+Result:
+
+- Standard chat smoke passed, including CopilotKit, AG-UI approval hooks,
+  first-time guidance, accessibility affordances, and old-mode guard checks.
+- Workbench typecheck passed.
+- DCI context-window grep smoke passed after increasing raw ripgrep line intake
+  while keeping output caps.
+- Sidecar Release build passed with zero warnings.
+- Full `pnpm check` passed, including hard-cut guard, Workbench build, sidecar
+  build/smokes, Copilot CDP manager smoke, workspace picker smoke, AG-UI
+  client-tool/replay smokes, DCI smokes, Office/PDF read smokes, OfficeCLI
+  registry smoke, sidecar security smoke, and release inventory/SBOM
+  generation.
+- Workbench browser UX E2E passed with screenshots
+  `workbench-chat-empty.png`, `workbench-chat-completed.png`,
+  `workbench-chat-approval.png`, and `workbench-chat-mobile.png`.
+- Release packaging for `0.3.19` completed. Generated assets include
+  `Relay.Agent-0.3.19-win-x64-setup.exe`,
+  `relay-agent-0.3.19-win-x64.zip`,
+  `relay-agent-0.3.19-linux-x64.tar.gz`, release inventory, SBOM, and
+  `relay-agent-0.3.19-sha256.txt`.
+
 ### 2026-05-19 Page-Aware Long PDF Review
 
 Follow-up to the PDF attachment release: long PDFs can exceed the useful

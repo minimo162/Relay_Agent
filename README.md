@@ -5,16 +5,16 @@ Relay Agent is a local business-agent workbench:
 > Copilot thinks. Relay executes local tools safely.
 
 The active product is a browser-hosted local web workbench served by a
-self-contained .NET sidecar. The user works from one workspace and one normal
-CopilotKit chat. Search, PDF review, Office editing, and code editing are internal tool
-capabilities rather than separate visible modes.
+self-contained .NET sidecar. The user works from one workspace and one standard
+CopilotKit chat. Search, PDF review, Office editing, and code editing are
+internal tool capabilities rather than separate visible modes.
 
 ## Current Architecture
 
 ```text
 Browser Workbench
-  CopilotKit chatbot, file-explorer workspace picker, concise readiness, inline
-  tool rendering, and human-in-the-loop approval
+  standard CopilotKit chatbot, file-explorer workspace picker, concise
+  readiness, inline tool rendering, and human-in-the-loop approval
 
 .NET Relay Sidecar
   serves the Workbench, exposes the official AG-UI run endpoint,
@@ -34,10 +34,12 @@ fallback paths.
 
 ## Workbench
 
-The Workbench is intentionally minimal:
+The Workbench is intentionally minimal and should feel like a normal chatbot:
 
 - one workspace selected through the OS file explorer;
 - one compact CopilotKit chat transcript as the primary surface;
+- first-time guidance that explains: choose a folder, type a request, approve
+  local mutations before they run;
 - small PDF attachment chips for common proofreading and PDF comparison
   requests;
 - one chat input and send action;
@@ -68,7 +70,10 @@ folders.
 The Relay chrome around the chat is deliberately compact: the selected
 workspace stays close to the chat, duplicate current-workspace history chips
 are hidden, and the chat pane is bounded to keep the transcript, tools, and
-approvals visible without turning the Workbench into a dashboard.
+approvals visible without turning the Workbench into a dashboard. Model-visible
+tool names remain close to established local-agent tools such as `glob`,
+`grep`, `read`, `edit`, `write`, `apply_patch`, and bounded `bash`; OfficeCLI
+is exposed as a documented extension with the same approval and audit rules.
 
 ## Sidecar
 

@@ -270,11 +270,13 @@ async function runBrowserFlow() {
   const compactLayoutUx = await evaluate(`(() => {
     const topbar = document.querySelector('.topbar')?.getBoundingClientRect();
     const workspaceBar = document.querySelector('.workspace-bar')?.getBoundingClientRect();
+    const starterRow = document.querySelector('.starter-row')?.getBoundingClientRect();
     const chatCard = document.querySelector('.chat-card')?.getBoundingClientRect();
     const history = document.querySelector('#workspace-history');
     return {
       topbarWorkspaceGap: Math.round((workspaceBar?.top ?? 0) - (topbar?.bottom ?? 0)),
-      workspaceChatGap: Math.round((chatCard?.top ?? 0) - (workspaceBar?.bottom ?? 0)),
+      workspaceNextGap: Math.round(((starterRow ?? chatCard)?.top ?? 0) - (workspaceBar?.bottom ?? 0)),
+      starterChatGap: starterRow ? Math.round((chatCard?.top ?? 0) - starterRow.bottom) : 0,
       chatTop: Math.round(chatCard?.top ?? 0),
       chatHeight: Math.round(chatCard?.height ?? 0),
       chatBottom: Math.round(chatCard?.bottom ?? 0),
@@ -283,10 +285,10 @@ async function runBrowserFlow() {
       historyText: history?.textContent ?? '',
     };
   })()`);
-  if (compactLayoutUx.topbarWorkspaceGap > 22 || compactLayoutUx.workspaceChatGap > 18) {
+  if (compactLayoutUx.topbarWorkspaceGap > 22 || compactLayoutUx.workspaceNextGap > 18 || compactLayoutUx.starterChatGap > 18) {
     throw new Error(`layout gaps are too large: ${JSON.stringify(compactLayoutUx)}`);
   }
-  if (compactLayoutUx.chatTop > 190 || compactLayoutUx.chatHeight > 740 || compactLayoutUx.chatBottom > compactLayoutUx.viewportHeight - 28) {
+  if (compactLayoutUx.chatTop > 210 || compactLayoutUx.chatHeight > 740 || compactLayoutUx.chatBottom > compactLayoutUx.viewportHeight - 28) {
     throw new Error(`chat viewport should stay compact and above the fold: ${JSON.stringify(compactLayoutUx)}`);
   }
   if (!compactLayoutUx.historyHidden || compactLayoutUx.historyText.includes(workspace)) {

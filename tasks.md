@@ -94,6 +94,12 @@ comparison reliable by extending the generic `read` tool with page maps and
 page ranges, while preserving document-to-document correspondence and avoiding
 a dedicated PDF runner.
 
+The completed active queue is `STANDARDCHAT*`. It implements the 2026-05-19 Standard
+Chatbot UX And Tool Harness Alignment Plan from `PLANS.md`: make the Workbench
+read as a first-time-friendly standard chatbot while keeping CopilotKit,
+AG-UI, Microsoft Agent Framework approvals, and the OpenCode-compatible local
+tool contract as the standard harness surfaces.
+
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
@@ -118,6 +124,123 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### STANDARDCHAT-01 - Document Standard Chatbot Direction
+
+Status: completed
+
+Scope:
+
+- Add the standard chatbot UX and tool harness alignment plan to `PLANS.md`.
+- Add this executable `STANDARDCHAT*` queue to `tasks.md`.
+- Ground the plan in CopilotKit, AG-UI, Microsoft Agent Framework, and
+  OpenCode references rather than Relay-specific UI/runtime invention.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan explicitly keeps search, Office, coding, and PDF review as recipes
+  over one generic chat and tool catalog.
+- The plan rejects separate visible modes and separate model-visible
+  feature-specific tools.
+
+### STANDARDCHAT-02 - Polish Workbench Into A Normal Chatbot
+
+Status: completed
+
+Scope:
+
+- Update Workbench copy, empty state, workspace guidance, starter suggestions,
+  tool rendering, approval copy, and diagnostics labeling so first-time users
+  understand the app without seeing internal runtime jargon.
+- Preserve the existing CopilotKit chat component and AG-UI connection.
+- Add `role=alert` and `aria-live` affordances for user-visible errors and
+  status notices.
+
+Artifacts:
+
+- Updated `apps/workbench/src/App.tsx`.
+- Updated `apps/workbench/src/styles.css`.
+
+Acceptance:
+
+- The main surface is one chat with one folder picker.
+- Workspace selection guidance explains the flow in three short steps.
+- Tool and approval cards remain inline and concise.
+- No old visible mode labels such as `資料を探す`, `Officeファイルを編集する`,
+  or `コードを書く` are reintroduced.
+
+### STANDARDCHAT-03 - Add Standard Chat UX Smoke
+
+Status: completed
+
+Scope:
+
+- Add a static smoke test that enforces the standard chat surface and harness
+  boundaries.
+- Include the smoke in `pnpm check`.
+
+Artifacts:
+
+- `scripts/workbench-standard-chat-smoke.mjs`.
+- Updated `package.json`.
+
+Acceptance:
+
+- The smoke verifies `CopilotChat`, `useDefaultRenderTool`, and
+  `useHumanInTheLoop` remain wired.
+- The smoke verifies first-time workspace guidance and accessible error/status
+  affordances exist.
+- The smoke fails if old mode labels or dedicated document-search mode names
+  return to the Workbench.
+
+### STANDARDCHAT-04 - Update Docs, Versions, And Verification Log
+
+Status: completed
+
+Scope:
+
+- Update README and `docs/IMPLEMENTATION.md` to reflect the standard chatbot
+  UX and unchanged standard tool/harness contract.
+- Bump Workbench, sidecar, and launcher versions for the release.
+
+Artifacts:
+
+- Updated `README.md`.
+- Updated `docs/IMPLEMENTATION.md`.
+- Updated version fields in Workbench, sidecar, and launcher manifests.
+
+Acceptance:
+
+- Documentation describes Relay as one standard chat over local tools.
+- Verification commands and release artifacts are recorded.
+
+### STANDARDCHAT-05 - Verify, Commit, Push, And Release
+
+Status: completed
+
+Scope:
+
+- Run the acceptance gate and package release artifacts.
+- Commit to `main`, push, and create the GitHub Release.
+
+Artifacts:
+
+- Passing `pnpm check`.
+- Windows/Linux portable packages.
+- Optional Windows installer.
+- Release inventory, SBOM, checksum file.
+- Git commit and GitHub Release.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Release artifacts are generated for the bumped version.
+- The release is published on GitHub.
 
 ### PORTABLE-01 - Create First-Class Portable Archive Script
 

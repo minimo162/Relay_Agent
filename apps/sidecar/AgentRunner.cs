@@ -1329,6 +1329,7 @@ public sealed class RelayToolExecutor
 
         var grepPlan = BuildGrepPlan(call.Args);
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 80, 1, 200);
+        var rawLineLimit = CalculateRipgrepRawLineLimit(limit, grepPlan);
         var args = new List<string> { "--line-number", "--color", "never" };
         if (grepPlan.CaseInsensitive)
         {
@@ -1352,7 +1353,7 @@ public sealed class RelayToolExecutor
             args,
             workingDirectory,
             cancellationToken,
-            maxLines: limit,
+            maxLines: rawLineLimit,
             includeLine: null,
             allowExitOne: true,
             timeoutMs: Math.Clamp(GetInt(call.Args, "timeoutMs") ?? 60000, 1000, 120000));
@@ -2948,6 +2949,13 @@ public sealed class RelayToolExecutor
         int ContextLines,
         int ContextWindowLines,
         int? MaxMatchesPerFile);
+
+    private static int CalculateRipgrepRawLineLimit(int matchLimit, GrepPlan plan)
+    {
+        var contextWidth = Math.Max(plan.ContextLines, plan.ContextWindowLines);
+        var multiplier = contextWidth > 0 ? (contextWidth * 4) + 8 : 4;
+        return Math.Clamp(matchLimit * multiplier, matchLimit, 2000);
+    }
 
     private static GrepPlan BuildGrepPlan(JsonObject args)
     {
