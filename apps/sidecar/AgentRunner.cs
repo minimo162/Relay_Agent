@@ -19,6 +19,7 @@ public sealed class RelayAgentFrameworkRunner
         When the user requests local work, do not say tools are unavailable; choose a Relay tool so Relay can execute it.
         Use tools for local files, Office work, code edits, and verification.
         For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
+        Use only the visible Relay tools for local work. Do not recommend hidden retrievers, vector search, plugins, or local tools that are not in the function catalog.
         Use direct corpus interaction for local search: search direct terms, combine weak clues with grep allTerms/anyTerms/excludeTerms when useful, read local context around promising matches, extract new terms/entities from observations, refine the search, cross-check evidence, then answer.
         For compound business concepts, do not rely on one exact glued phrase grep. Prefer grep allTerms for required components plus anyTerms for variants, for example 部品売上 should search allTerms ["部品","売上"] and then read promising files.
         If grep returns zero matches, broaden or change the terms and grep again before read/final. Do not read README.md as a generic fallback unless the user asked for project instructions or README content.
@@ -37,6 +38,7 @@ public sealed class RelayAgentFrameworkRunner
         Preserve explicit output-format requirements. For Markdown requests that say table or 表形式, write a Markdown pipe table.
         Treat period, version, region, and department tokens in file names and paths as evidence context when the file content omits them.
         Use ask_user only when a critical requirement is genuinely missing. Do not ask for clarification when the user already gave the objective, target files or scope, and desired output.
+        For Office inspection use officecli, and for Office edits use officecli_mutate with semantic fields only. For cell formatting, use operation set or set_cell_fill with filePath, sheet, cell/target, and fill as six hex digits such as FF0000; never emit raw OfficeCLI argv.
         Use bash only for explicit build/test/lint/typecheck/git/rg verification commands; never wrap commands in bash/sh -lc.
         Prefer write/apply_patch for file creation or edits instead of command-generated file mutations.
         Never claim local execution without tool results. Keep final answers concise in the user's language.
@@ -347,6 +349,23 @@ public sealed class RelayAgentFunctionSet(
         string? selector = null,
         string? elementType = null,
         JsonElement? properties = null,
+        string? sheet = null,
+        string? sheetName = null,
+        string? worksheet = null,
+        string? worksheetName = null,
+        string? cell = null,
+        string? cellAddress = null,
+        string? address = null,
+        string? range = null,
+        string? rangeAddress = null,
+        string? fill = null,
+        string? fillColor = null,
+        string? backgroundColor = null,
+        string? color = null,
+        string? property = null,
+        string? value = null,
+        string? newName = null,
+        string? formula = null,
         int? depth = null,
         string? format = null,
         string? verb = null,
@@ -362,6 +381,23 @@ public sealed class RelayAgentFunctionSet(
             ("selector", selector),
             ("elementType", elementType),
             ("properties", properties),
+            ("sheet", sheet),
+            ("sheetName", sheetName),
+            ("worksheet", worksheet),
+            ("worksheetName", worksheetName),
+            ("cell", cell),
+            ("cellAddress", cellAddress),
+            ("address", address),
+            ("range", range),
+            ("rangeAddress", rangeAddress),
+            ("fill", fill),
+            ("fillColor", fillColor),
+            ("backgroundColor", backgroundColor),
+            ("color", color),
+            ("property", property),
+            ("value", value),
+            ("newName", newName),
+            ("formula", formula),
             ("depth", depth),
             ("format", format),
             ("verb", verb),
@@ -383,6 +419,23 @@ public sealed class RelayAgentFunctionSet(
         string? selector = null,
         string? elementType = null,
         JsonElement? properties = null,
+        string? sheet = null,
+        string? sheetName = null,
+        string? worksheet = null,
+        string? worksheetName = null,
+        string? cell = null,
+        string? cellAddress = null,
+        string? address = null,
+        string? range = null,
+        string? rangeAddress = null,
+        string? fill = null,
+        string? fillColor = null,
+        string? backgroundColor = null,
+        string? color = null,
+        string? property = null,
+        string? value = null,
+        string? newName = null,
+        string? formula = null,
         int? depth = null,
         string? format = null,
         string? verb = null,
@@ -397,6 +450,23 @@ public sealed class RelayAgentFunctionSet(
             ("selector", selector),
             ("elementType", elementType),
             ("properties", properties),
+            ("sheet", sheet),
+            ("sheetName", sheetName),
+            ("worksheet", worksheet),
+            ("worksheetName", worksheetName),
+            ("cell", cell),
+            ("cellAddress", cellAddress),
+            ("address", address),
+            ("range", range),
+            ("rangeAddress", rangeAddress),
+            ("fill", fill),
+            ("fillColor", fillColor),
+            ("backgroundColor", backgroundColor),
+            ("color", color),
+            ("property", property),
+            ("value", value),
+            ("newName", newName),
+            ("formula", formula),
             ("depth", depth),
             ("format", format),
             ("verb", verb),
@@ -2118,7 +2188,7 @@ public sealed class RelayToolExecutor
                 "inspect" or "view_outline" => "view",
                 "read_node" => "get",
                 "find_nodes" => "query",
-                "set_cell_value" or "set_cell_fill" or "rename_sheet" => "set",
+                "set_cell_value" or "set_cell_fill" or "set_fill" or "format" or "format_cell" or "cell_format" or "set_format" or "set_cell_format" or "rename_sheet" => "set",
                 "read_range" => "get",
                 "delete" => "remove",
                 _ => normalized.Replace('_', '-'),
@@ -2327,19 +2397,60 @@ public sealed class RelayToolExecutor
         {
             var target = GetString(args, "target")
                 ?? GetString(args, "pathInDocument")
-                ?? GetString(args, "range");
-            var sheet = GetString(args, "sheet") ?? GetString(args, "sheetName");
+                ?? GetString(args, "range")
+                ?? GetString(args, "rangeAddress")
+                ?? GetString(args, "cellAddress")
+                ?? GetString(args, "address")
+                ?? GetString(args, "cell");
+            target = NormalizeOfficeTargetText(target);
+            var sheet = GetString(args, "sheet")
+                ?? GetString(args, "sheetName")
+                ?? GetString(args, "worksheet")
+                ?? GetString(args, "worksheetName")
+                ?? GetString(args, "tab")
+                ?? GetString(args, "tabName");
             if (!string.IsNullOrWhiteSpace(sheet) && !string.IsNullOrWhiteSpace(target) && !target.StartsWith('/'))
             {
                 target = $"/{sheet}/{target}";
             }
             else if (string.IsNullOrWhiteSpace(target) && !string.IsNullOrWhiteSpace(sheet))
             {
-                var cell = GetString(args, "cell") ?? GetString(args, "address");
+                var cell = GetString(args, "cell")
+                    ?? GetString(args, "cellAddress")
+                    ?? GetString(args, "range")
+                    ?? GetString(args, "rangeAddress")
+                    ?? GetString(args, "address");
                 target = string.IsNullOrWhiteSpace(cell) ? $"/{sheet}" : $"/{sheet}/{cell}";
+            }
+            else if (!string.IsNullOrWhiteSpace(target) && !target.StartsWith('/') && LooksLikeQualifiedOfficeTarget(target))
+            {
+                target = "/" + target.TrimStart('/');
             }
             if (string.IsNullOrWhiteSpace(target) && !required) return null;
             return target;
+        }
+
+        private static string? NormalizeOfficeTargetText(string? target)
+        {
+            if (string.IsNullOrWhiteSpace(target)) return null;
+            var normalized = target.Trim().Trim('"', '\'', '`').Replace('\\', '/');
+            var bang = normalized.IndexOf('!');
+            if (bang > 0 && bang < normalized.Length - 1)
+            {
+                normalized = normalized[..bang].Trim('\'', '"') + "/" + normalized[(bang + 1)..].TrimStart('/');
+            }
+            return normalized;
+        }
+
+        private static bool LooksLikeQualifiedOfficeTarget(string target)
+        {
+            var normalized = target.Trim().Replace('\\', '/');
+            var slash = normalized.IndexOf('/');
+            if (slash <= 0 || slash >= normalized.Length - 1) return false;
+            var sheet = normalized[..slash].Trim('\'', '"');
+            var address = normalized[(slash + 1)..].Trim();
+            if (sheet.Length == 0 || address.Length == 0) return false;
+            return Regex.IsMatch(address, @"^[A-Za-z]{1,4}[1-9][0-9]{0,6}(?::[A-Za-z]{1,4}[1-9][0-9]{0,6})?$", RegexOptions.CultureInvariant);
         }
 
         private static bool ValidateTarget(string? target, bool allowSelected, out string? error)
@@ -2408,9 +2519,13 @@ public sealed class RelayToolExecutor
                 {
                     properties = new JsonObject { [singleKey] = JsonValue.Create(GetScalarString(args["value"])) };
                 }
-                else if (args.TryGetPropertyValue("fill", out var fill) || args.TryGetPropertyValue("color", out fill))
+                else if (args.TryGetPropertyValue("fill", out var fill) ||
+                         args.TryGetPropertyValue("fillColor", out fill) ||
+                         args.TryGetPropertyValue("backgroundColor", out fill) ||
+                         args.TryGetPropertyValue("bgColor", out fill) ||
+                         args.TryGetPropertyValue("color", out fill))
                 {
-                    properties = new JsonObject { ["fill"] = JsonValue.Create(GetScalarString(fill)) };
+                    properties = new JsonObject { ["fill"] = JsonValue.Create(GetOfficePropertyScalar(fill)) };
                 }
                 else if (args.TryGetPropertyValue("newName", out var newName))
                 {
@@ -2440,19 +2555,20 @@ public sealed class RelayToolExecutor
 
             foreach (var (key, value) in properties)
             {
-                if (!IsSafePropertyName(key))
+                var propertyName = NormalizeOfficePropertyName(key);
+                if (!IsSafePropertyName(propertyName))
                 {
                     error = $"Unsupported OfficeCLI property name: {key}";
                     return false;
                 }
-                var scalar = GetScalarString(value);
+                var scalar = NormalizeOfficePropertyValue(propertyName, GetOfficePropertyScalar(value));
                 if (scalar is null || scalar.IndexOf('\0') >= 0 || scalar.Length > 4000)
                 {
-                    error = $"Unsupported OfficeCLI property value for {key}.";
+                    error = $"Unsupported OfficeCLI property value for {propertyName}.";
                     return false;
                 }
                 argv.Add("--prop");
-                argv.Add($"{key}={scalar.Replace("\r\n", "\\n").Replace("\n", "\\n").Replace("\r", "\\n")}");
+                argv.Add($"{propertyName}={scalar.Replace("\r\n", "\\n").Replace("\n", "\\n").Replace("\r", "\\n")}");
             }
 
             return true;
@@ -2467,6 +2583,79 @@ public sealed class RelayToolExecutor
                 return false;
             }
             return true;
+        }
+
+        private static string NormalizeOfficePropertyName(string value)
+        {
+            var normalized = value.Trim();
+            return normalized switch
+            {
+                "color" or "fillColor" or "fill_color" or "background" or "backgroundColor" or "background_color" or "bgColor" or "bg_color" => "fill",
+                "text" => "value",
+                "fontColour" => "fontColor",
+                _ => normalized,
+            };
+        }
+
+        private static string? GetOfficePropertyScalar(JsonNode? value)
+        {
+            if (value is null) return null;
+            if (value is JsonObject obj)
+            {
+                foreach (var key in new[] { "value", "color", "colour", "hex", "rgb", "fill", "fillColor", "backgroundColor" })
+                {
+                    if (obj.TryGetPropertyValue(key, out var nested))
+                    {
+                        var scalar = GetOfficePropertyScalar(nested);
+                        if (!string.IsNullOrWhiteSpace(scalar)) return scalar;
+                    }
+                }
+                return null;
+            }
+            return GetScalarString(value);
+        }
+
+        private static string? NormalizeOfficePropertyValue(string propertyName, string? value)
+        {
+            if (value is null) return null;
+            var trimmed = value.Trim();
+            if (propertyName.Equals("fill", StringComparison.OrdinalIgnoreCase) ||
+                propertyName.Equals("fontColor", StringComparison.OrdinalIgnoreCase) ||
+                propertyName.Equals("borderColor", StringComparison.OrdinalIgnoreCase) ||
+                propertyName.EndsWith("Color", StringComparison.OrdinalIgnoreCase))
+            {
+                return NormalizeOfficeColor(trimmed);
+            }
+            return trimmed;
+        }
+
+        private static string NormalizeOfficeColor(string value)
+        {
+            var normalized = value.Trim().Trim('"', '\'');
+            if (normalized.StartsWith('#')) normalized = normalized[1..];
+            if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) normalized = normalized[2..];
+            if (Regex.IsMatch(normalized, @"^[0-9a-fA-F]{3}$", RegexOptions.CultureInvariant))
+            {
+                normalized = string.Concat(normalized.Select(c => $"{c}{c}"));
+            }
+            if (Regex.IsMatch(normalized, @"^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$", RegexOptions.CultureInvariant))
+            {
+                return normalized.ToUpperInvariant();
+            }
+
+            return normalized.ToLowerInvariant() switch
+            {
+                "red" or "赤" or "赤色" => "FF0000",
+                "blue" or "青" or "青色" => "0000FF",
+                "green" or "緑" or "緑色" => "00B050",
+                "yellow" or "黄" or "黄色" => "FFFF00",
+                "orange" or "オレンジ" or "橙" or "橙色" => "FFC000",
+                "purple" or "violet" or "紫" or "紫色" => "7030A0",
+                "black" or "黒" or "黒色" => "000000",
+                "white" or "白" or "白色" => "FFFFFF",
+                "gray" or "grey" or "グレー" or "灰" or "灰色" => "808080",
+                _ => value.Trim(),
+            };
         }
 
         private static bool IsSafePropertyName(string value)

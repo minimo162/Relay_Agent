@@ -53,6 +53,13 @@ Installer Defaults, Workspace Picker, And Search Path Contract Plan from
 launcher console, modern shared-folder workspace picker, and a reliable
 `glob` -> `read` path contract.
 
+The active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
+Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
+editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
+catalog, prevent hidden retriever/image JSON projection drift, and normalize
+natural Office cell-formatting requests into Relay's semantic OfficeCLI
+adapter before approval.
+
 The previous `DCI2605*`, `DCIFS*`, and `POSTLIVE*` queues remain completed
 history below. They should not be extended unless a regression proves those
 acceptance criteria have broken.
@@ -70,6 +77,132 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### PROJECTIONFIX-01 - Document Harness Remediation Scope
+
+Status: completed
+
+Scope:
+
+- Add the tool projection harness remediation plan to `PLANS.md`.
+- Add this executable task queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan does not revive dedicated document-search engines, AionUi,
+  OpenWork/OpenCode runtime paths, Codex app-server, or Tauri.
+- The plan frames the fix as Agent Framework/AG-UI/OpenCode-compatible tool
+  projection and semantic OfficeCLI normalization.
+
+Verification:
+
+- `git diff --check`
+
+### PROJECTIONFIX-02 - Harden Copilot Projection Instructions
+
+Status: completed
+
+Scope:
+
+- Strengthen the Copilot tool-projection prompt so JSON must be selectable
+  text in one fenced `json` block.
+- Explicitly forbid image/card/canvas/screenshot/attachment JSON output.
+- Forbid final answers from recommending unavailable local tools, including
+  hidden retrievers.
+- Clarify OpenCode-style local search sequencing and semantic OfficeCLI cell
+  formatting arguments.
+
+Artifacts:
+
+- Updated `apps/sidecar/RelayCopilotChatClient.cs`.
+
+Acceptance:
+
+- Prompt dumps include the text-only JSON and no-unavailable-tool rules.
+- The visible tool list remains the source of truth for what Copilot may use
+  or recommend.
+
+Verification:
+
+- `pnpm agent:choice-error-reduction-smoke`
+
+### PROJECTIONFIX-03 - Normalize OfficeCLI Formatting Semantics
+
+Status: completed
+
+Scope:
+
+- Normalize `format` and common formatting aliases to OfficeCLI `set`.
+- Normalize worksheet/sheet/cell/range aliases into `/Sheet/Cell` targets.
+- Normalize common color names and object-shaped fill/color properties into
+  OfficeCLI scalar color values.
+- Keep raw argv rejected and mutation approval-gated.
+
+Artifacts:
+
+- Updated `apps/sidecar/AgentRunner.cs`.
+
+Acceptance:
+
+- Natural Copilot output for "Sheet1 A1 red" becomes an approved
+  `officecli_mutate` proposal without executing before approval.
+- Invalid raw argv remains rejected.
+
+Verification:
+
+- `pnpm agent:officecli-registry-smoke`
+
+### PROJECTIONFIX-04 - Add Regression Coverage And Verify
+
+Status: completed
+
+Scope:
+
+- Extend existing smoke tests for prompt projection and OfficeCLI semantic
+  formatting.
+- Run the canonical active acceptance gate.
+- Update implementation notes with the remediation and verification result.
+
+Artifacts:
+
+- Updated smoke tests.
+- Updated `docs/IMPLEMENTATION.md`.
+
+Acceptance:
+
+- `pnpm check` passes.
+
+Verification:
+
+- `pnpm check`
+
+### PROJECTIONFIX-05 - Version, Commit, Push, And Release
+
+Status: completed
+
+Scope:
+
+- Bump active package versions.
+- Build Linux/Windows release packages and the per-user NSIS installer.
+- Commit and push to `main`.
+- Publish the next GitHub Release with checksums/inventory.
+
+Artifacts:
+
+- Release assets for the next patch version.
+
+Acceptance:
+
+- GitHub Release exists and points at the pushed commit.
+
+Verification:
+
+- `gh release view`
 
 ### INSTALLUX-01 - Document Installer, Picker, And Search Path Remediation
 

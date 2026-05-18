@@ -80,7 +80,14 @@ public static class RelayProtocolGuard
                     ["file_path"] = citedEvidencePath,
                     ["limit"] = 12000,
                 },
-                "cited_evidence_read_before_final"));
+                    "cited_evidence_read_before_final"));
+        }
+
+        if (MentionsUnavailableLocalTool(proposedAnswer, availableTools))
+        {
+            RelayPreventionMetrics.RecordHiddenToolViolation("final_unavailable_tool_suggestion");
+            return RelayProtocolDecision.Reject(
+                "Copilot final answer recommended a local tool or retriever that is not in the visible Relay tool catalog.");
         }
 
         if (state.RequiresLocalToolBeforeFinal || !envelope.CanFinalize)
@@ -164,6 +171,18 @@ public static class RelayProtocolGuard
 
     private static bool ContainsAny(string text, params string[] needles) =>
         needles.Any(needle => text.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0);
+
+    private static bool MentionsUnavailableLocalTool(string? proposedAnswer, ISet<string> availableTools)
+    {
+        if (string.IsNullOrWhiteSpace(proposedAnswer)) return false;
+        if (availableTools.Any(tool => tool.Contains("retriever", StringComparison.OrdinalIgnoreCase))) return false;
+
+        var text = proposedAnswer.Trim();
+        return Regex.IsMatch(
+            text,
+            @"\b[A-Za-z0-9_-]*retriever\b|biling_retriever|vector\s+search|semantic\s+search|意味検索",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
 
     private static bool TryFindEvidenceReadPath(string? proposedAnswer, RelayTurnState state, out string path)
     {

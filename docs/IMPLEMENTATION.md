@@ -32,6 +32,63 @@
 
 ## Milestone Log
 
+### 2026-05-18 Tool Projection Harness Remediation
+
+Follow-up to the live Workbench report where search suggested an unavailable
+retriever and Office editing looped through unsupported `format`, target, and
+fill-color variants.
+
+Change:
+
+- Added the projection harness remediation plan to `PLANS.md` and the
+  executable `PROJECTIONFIX*` queue to `tasks.md`.
+- Hardened the Copilot tool-projection prompt while keeping the Agent
+  Framework/AG-UI/OpenCode-compatible generic tool catalog as the source of
+  truth:
+  - JSON projection must be selectable text in one fenced `json` block, not an
+    image, card, canvas, screenshot, or attachment.
+  - Final answers may not recommend unavailable local tools or hidden
+    retrievers.
+  - Local file search must stay on visible `glob`, `grep`, and `read` tools.
+  - Office cell formatting must use semantic `officecli_mutate` fields.
+- Extended the semantic OfficeCLI adapter so natural Copilot formatting output
+  normalizes into OfficeCLI `set` semantics:
+  - `format`/`cell_format`/`set_format` aliases map to `set`;
+  - worksheet/sheet/cell/range aliases normalize into OfficeCLI targets such
+    as `/Sheet1/A1`;
+  - `red`/`赤` and other common color names normalize to six-digit OfficeCLI
+    hex values;
+  - object-shaped color properties such as `{ "color": "red" }` normalize to
+    scalar fill properties.
+- Added a narrow final-answer protocol guard for unavailable retriever/tool
+  suggestions, preserving fail-fast behavior instead of silently introducing a
+  fallback search path.
+- Extended smoke coverage for the projection prompt and OfficeCLI formatting
+  approval path.
+
+Verification commands run locally:
+
+```bash
+PATH=/root/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=/root/.dotnet:$PATH pnpm agent:choice-error-reduction-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:officecli-registry-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:tool-catalog-smoke
+PATH=/root/.dotnet:$PATH pnpm agent:golden-smoke
+PATH=/root/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Choice-error prompt smoke passed and verified the text-only JSON and
+  unavailable-retriever rules are present in prompt dumps.
+- OfficeCLI registry smoke passed with Copilot-style formatting args
+  (`operation=format`, `worksheet`, `cellAddress`, nested `fill.color=red`)
+  pausing for AG-UI approval without leaking raw argv or creating backups
+  before approval.
+- Tool catalog and golden Agent Framework smokes passed.
+- Full `pnpm check` passed.
+
 ### 2026-05-18 Installer Defaults, Workspace Picker, And Search Path Contract
 
 Follow-up to the `0.3.9` installed app report:

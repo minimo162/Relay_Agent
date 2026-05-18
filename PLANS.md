@@ -170,6 +170,91 @@ Acceptance:
 - The behavior is covered by a deterministic sidecar idle-exit smoke test and
   documented in the packaging policy and implementation log.
 
+### 2026-05-18 Tool Projection Harness Remediation Plan
+
+This plan addresses the latest live Workbench results without reviving a
+dedicated document-search engine, custom Office-edit mode, AionUi, OpenWork, or
+Tauri. The failures are projection-harness failures:
+
+- Copilot suggested an unavailable retriever after local search observations
+  instead of staying inside the visible Agent Framework/OpenCode-compatible
+  tool catalog.
+- Copilot sometimes renders JSON-like output through non-text UI surfaces.
+- Office editing produced natural but unsupported semantic arguments
+  (`operation=format`, `Sheet1/A1` variants, `fill=red`) that Relay rejected
+  after approval instead of normalizing into the supported OfficeCLI `set`
+  contract before approval.
+
+Goal:
+
+> Keep the product generic and framework-native: Copilot chooses from the
+> current tool catalog, Microsoft Agent Framework/AG-UI carry the tool and
+> approval lifecycle, and Relay performs only narrow provider/tool adapters.
+
+Implementation plan:
+
+1. **Projection prompt hardening**
+   - Keep the single compiler prompt shape and the Agent Framework tool list.
+   - Require JSON as selectable text in one fenced `json` block; explicitly
+     disallow images, cards, canvases, screenshots, or attachments for JSON.
+   - Forbid final answers from recommending unavailable local tools or
+     hidden retrievers. If a capability is not in the visible `Tools:` list,
+     Copilot must not name it as the next step.
+   - For local file search, guide Copilot to use OpenCode-style generic tools:
+     `glob` for candidate files, `read` for exact Office/PDF/document
+     candidates, and `grep` for plaintext/code content. Do not conclude
+     "not found" from grep-only evidence when file candidates still exist.
+   - For Office cell formatting, guide Copilot to emit semantic
+     `officecli_mutate` fields (`operation=set` or `set_cell_fill`, `filePath`,
+     `sheet`, `cell`, `fill`) instead of raw argv or unsupported operations.
+
+2. **Protocol/final-answer guard**
+   - Preserve Agent Framework final answers as the terminal path.
+   - Add a narrow terminal validation rule: a final answer must not advertise
+     unavailable local tool names such as retrievers or vector-search tools
+     unless those tools are in the visible catalog. This is a harness
+     admissibility rule, not a search-ranking rule.
+   - Continue to fail fast or route back to an admissible local tool rather
+     than silently falling back to a weaker planner.
+
+3. **Semantic OfficeCLI normalization**
+   - Keep Copilot away from raw OfficeCLI argv.
+   - Normalize common semantic Office requests into OfficeCLI's existing `set`
+     operation:
+     - `format`, `cell_format`, `set_format`, `format_cell`, and
+       `set_cell_format` become `set`.
+     - `worksheet`, `worksheetName`, `tab`, `cellAddress`, `rangeAddress`,
+       `Sheet1!A1`, and `Sheet1/A1` normalize to OfficeCLI targets such as
+       `/Sheet1/A1`.
+     - Human color names such as `red`/`赤` normalize to OfficeCLI color hex
+       values such as `FF0000`.
+     - Object-shaped color properties such as `{ "color": "red" }` normalize
+       to scalar `fill=FF0000` where the semantic operation is cell fill or
+       formatting.
+   - Keep approval before mutation, backups after approval, and verification
+     after mutation.
+
+4. **Regression coverage**
+   - Extend the OfficeCLI registry smoke so natural Copilot-style formatting
+     output pauses for AG-UI approval without leaking raw argv and without
+     executing before approval.
+   - Extend the choice-error smoke so prompt dumps prove JSON image/canvas
+     output and unavailable retriever suggestions are forbidden.
+   - Keep `pnpm check` as the release gate.
+
+Acceptance:
+
+- A request such as `"C:\\Users\\...\\Book2.xlsx"のSheet1のA1セルを赤くして`
+  produces a single approved `officecli_mutate` proposal using OfficeCLI `set`
+  semantics, not unsupported `format`, invalid target paths, or invalid color
+  values.
+- Search final answers do not recommend hidden tools such as
+  `biling_retriever`; they either continue with visible tools or report only
+  the evidence gathered from visible tools.
+- Copilot JSON projection instructions explicitly require text-only fenced
+  JSON and reject image/card/canvas JSON rendering.
+- `pnpm check` passes before release.
+
 ### 2026-05-18 Installer Defaults, Workspace Picker, And Search Path Contract Plan
 
 This plan fixes the installed-app usability regressions reported against the

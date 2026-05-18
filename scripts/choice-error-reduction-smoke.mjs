@@ -115,6 +115,15 @@ function assertPromptProjection() {
 
   const needsObservation = prompts.find(({ text }) => text.includes('"phase":"NeedsObservation"'));
   if (!needsObservation) throw new Error("expected a NeedsObservation prompt");
+  for (const required of [
+    "The JSON must be selectable text, not an image",
+    "Do not use, mention, or recommend hidden tools",
+    "Do not suggest external retrievers",
+  ]) {
+    if (!prompts.some(({ text }) => text.includes(required))) {
+      throw new Error(`expected prompt projection rule: ${required}`);
+    }
+  }
   for (const hidden of ["bash", "write", "apply_patch", "officecli_mutate", "ask_user"]) {
     if (new RegExp(`^- ${hidden}\\(`, "m").test(needsObservation.text)) {
       throw new Error(`NeedsObservation prompt exposed hidden tool ${hidden}`);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectToolCall, postAgUi, readApprovalRequest } from "./lib/agui-smoke.mjs";
@@ -8,6 +8,7 @@ import { collectToolCall, postAgUi, readApprovalRequest } from "./lib/agui-smoke
 const token = "relay-officecli-registry-token";
 const port = 17897;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-officecli-registry-data-"));
+const promptDumpDir = mkdtempSync(join(tmpdir(), "relay-officecli-registry-prompts-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-officecli-registry-workspace-"));
 
 writeFileSync(join(workspace, "Book2.xlsx"), "placeholder workbook");
@@ -18,10 +19,10 @@ const responses = [
     tool: "officecli",
     args: {
       filePath: "Book2.xlsx",
-      operation: "set_cell_fill",
-      sheet: "Sheet1",
-      cell: "A1",
-      color: "FF0000",
+      operation: "format",
+      worksheet: "Sheet1",
+      cellAddress: "A1",
+      properties: { fill: { color: "red" } },
     },
   }),
   JSON.stringify({
@@ -44,6 +45,7 @@ const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.c
     RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
     RELAY_ALLOW_MOCK_COPILOT: "1",
     RELAY_COPILOT_MOCK_RESPONSES_JSON: JSON.stringify(responses),
+    RELAY_COPILOT_PROMPT_DUMP_DIR: promptDumpDir,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -74,9 +76,16 @@ try {
   if (args.argv) {
     throw new Error(`semantic OfficeCLI approval leaked raw argv: ${JSON.stringify(args)}`);
   }
+  if (args.operation !== "format" || args.worksheet !== "Sheet1" || args.cellAddress !== "A1") {
+    throw new Error(`semantic OfficeCLI aliases were not preserved for registry normalization: ${JSON.stringify(args)}`);
+  }
+  if (args.properties?.fill?.color !== "red") {
+    throw new Error(`semantic OfficeCLI color object was not preserved for registry normalization: ${JSON.stringify(args)}`);
+  }
   if (existsSync(join(dataDir, "backups"))) {
     throw new Error("OfficeCLI mutation created a backup before approval");
   }
+  assertPromptProjection();
 
   const rawRun = await postAgUi({
     port,
@@ -95,6 +104,22 @@ try {
   console.log("[officecli-registry-smoke] ok");
 } finally {
   child.kill("SIGTERM");
+}
+
+function assertPromptProjection() {
+  const prompts = readdirSync(promptDumpDir)
+    .filter((name) => name.includes("-prompt-"))
+    .map((name) => readFileSync(join(promptDumpDir, name), "utf8"))
+    .filter((text) => text.includes("RELAY_TOOL_JSON_ONLY"));
+  if (prompts.length === 0) {
+    throw new Error("expected Relay tool projection prompt dump");
+  }
+  const combined = prompts.join("\n---prompt---\n");
+  for (const required of ["operation set or set_cell_fill", "fill as six hex digits", "Do not use operation format", "sheet", "cell"]) {
+    if (!combined.includes(required)) {
+      throw new Error(`OfficeCLI prompt projection is missing ${required}`);
+    }
+  }
 }
 
 async function waitForStatus() {
