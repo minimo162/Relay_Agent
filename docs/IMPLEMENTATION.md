@@ -32,6 +32,67 @@
 
 ## Milestone Log
 
+### 2026-05-18 Installed Workbench Responsiveness Update
+
+Follow-up to the `0.3.8` installed app report:
+
+- Workbench took too long to become usable after install.
+- Copilot was connected and `/api/status` returned `ready: true`, but the
+  Workbench did not automatically change to Ready.
+- The workspace `変更` button could become unusable while native folder
+  selection was pending or hidden.
+
+Change:
+
+- Added automatic Workbench readiness polling while not Ready, plus focus and
+  visible-tab refresh hooks.
+- Changed sidecar readiness checks so required checks run in parallel and
+  optional OfficeCLI smoke warms in the background instead of delaying initial
+  `Ready`.
+- Hardened Windows workspace selection with PowerShell STA mode and a topmost
+  owner window for `FolderBrowserDialog`.
+- Added Workbench-side picker timeout/abort handling so the button always
+  returns from `選択中...` after success, cancellation, failure, or timeout.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.9`.
+
+Verification commands run locally:
+
+```bash
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:smoke
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:workspace-picker-smoke
+PATH=$HOME/.dotnet:$PATH pnpm workbench:ux-e2e
+PATH=$HOME/.dotnet:$PATH pnpm check
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:linux
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=$HOME/.dotnet:$PATH pnpm release:inventory
+tar -C dist/relay-agent-linux-x64 -czf dist/relay-agent-0.3.9-linux-x64.tar.gz .
+7z a -tzip dist/relay-agent-0.3.9-win-x64.zip ./dist/relay-agent-win-x64/*
+sha256sum dist/installer/Relay.Agent-0.3.9-win-x64-setup.exe dist/relay-agent-0.3.9-linux-x64.tar.gz dist/relay-agent-0.3.9-win-x64.zip dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.9-sha256.txt
+```
+
+Result:
+
+- Sidecar Release build passed.
+- Workbench typecheck passed.
+- `pnpm sidecar:smoke` passed.
+- `pnpm sidecar:workspace-picker-smoke` passed.
+- `pnpm workbench:ux-e2e` passed and now asserts automatic Ready readiness,
+  enabled workspace picker action before selection, and picker re-enable after
+  selection.
+- Full `pnpm check` passed, including idle-exit, Copilot CDP, workspace picker,
+  AG-UI, Agent Framework, DCI, ripgrep, Office/PDF, OfficeCLI registry,
+  security, icon, and inventory smoke coverage.
+- Linux and Windows sidecar packages were regenerated.
+- NSIS generated
+  `dist/installer/Relay.Agent-0.3.9-win-x64-setup.exe`.
+- Release assets were generated:
+  `dist/relay-agent-0.3.9-linux-x64.tar.gz`,
+  `dist/relay-agent-0.3.9-win-x64.zip`,
+  `dist/release/relay-agent-0.3.9-sha256.txt`,
+  `dist/release/relay-release-inventory.json`, and
+  `dist/release/relay-sbom.json`.
+
 ### 2026-05-18 Browser Session Lifecycle And Idle Exit
 
 Follow-up to the `0.3.7` versioned-payload installer update after the user

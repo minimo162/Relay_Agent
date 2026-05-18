@@ -310,28 +310,62 @@ public sealed class ToolReadiness(ICopilotTransport copilot, ToolResolver resolv
 {
     private ReadinessCheck? _officeCache;
     private DateTimeOffset _officeCacheAt;
+    private Task<ReadinessCheck>? _officeProbeTask;
+    private readonly object _officeGate = new();
 
     public async Task<IReadOnlyList<ReadinessCheck>> CheckAllAsync(CancellationToken cancellationToken)
     {
-        var checks = new List<ReadinessCheck>
-        {
-            await ToolReadinessChecks.CheckExecutableAsync(resolver.ResolveRipgrep(), ["--version"], AppContext.BaseDirectory, cancellationToken),
-            await CheckOfficeCliCachedAsync(cancellationToken),
-            await copilot.CheckAsync(cancellationToken),
-        };
-        return checks;
+        var ripgrepTask = ToolReadinessChecks.CheckExecutableAsync(
+            resolver.ResolveRipgrep(),
+            ["--version"],
+            AppContext.BaseDirectory,
+            cancellationToken);
+        var copilotTask = copilot.CheckAsync(cancellationToken);
+        var office = CheckOfficeCliCachedOrStart();
+
+        await Task.WhenAll(ripgrepTask, copilotTask);
+        return [await ripgrepTask, office, await copilotTask];
     }
 
-    private async Task<ReadinessCheck> CheckOfficeCliCachedAsync(CancellationToken cancellationToken)
+    private ReadinessCheck CheckOfficeCliCachedOrStart()
     {
         if (_officeCache is not null && DateTimeOffset.UtcNow - _officeCacheAt < TimeSpan.FromMinutes(3))
         {
             return _officeCache;
         }
 
-        _officeCache = await ToolReadinessChecks.CheckOfficeCliAsync(resolver.ResolveOfficeCli(), dataDirectory, cancellationToken);
-        _officeCacheAt = DateTimeOffset.UtcNow;
-        return _officeCache;
+        lock (_officeGate)
+        {
+            if (_officeProbeTask is { IsCompleted: true })
+            {
+                try
+                {
+                    _officeCache = _officeProbeTask.GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    _officeCache = new ReadinessCheck(
+                        "officecli",
+                        false,
+                        $"OfficeCLI readiness check failed: {ex.Message}",
+                        Required: false,
+                        State: "provider_error");
+                }
+                _officeCacheAt = DateTimeOffset.UtcNow;
+                _officeProbeTask = null;
+                return _officeCache;
+            }
+
+            _officeProbeTask ??= Task.Run(() =>
+                ToolReadinessChecks.CheckOfficeCliAsync(resolver.ResolveOfficeCli(), dataDirectory, CancellationToken.None));
+        }
+
+        return new ReadinessCheck(
+            "officecli",
+            false,
+            "OfficeCLI readiness check is warming up in the background.",
+            Required: false,
+            State: "connecting");
     }
 }
 

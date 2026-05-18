@@ -216,6 +216,7 @@ async function runBrowserFlow() {
 
   await waitForExpression("document.readyState === 'complete'", 5000, "page load");
   await waitForExpression("['Ready','Connecting','Sign in needed','Local issue','Provider error'].includes(document.querySelector('#readiness')?.textContent)", 5000, "readiness status");
+  await waitForExpression("document.querySelector('#readiness')?.textContent === 'Ready'", 6000, "automatic Ready readiness");
 
   const initialUx = await evaluate(`(() => ({
     title: document.querySelector('h1')?.textContent,
@@ -230,6 +231,7 @@ async function runBrowserFlow() {
     workspaceChange: document.querySelector('#workspace-change')?.textContent,
     workspaceText: document.querySelector('#workspace')?.textContent,
     visibleWorkspaceInput: Boolean(document.querySelector('input.workspace-input')?.offsetParent),
+    workspaceButtonDisabled: document.querySelector('#workspace-change')?.disabled,
     bodyWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   }))()`);
@@ -241,6 +243,7 @@ async function runBrowserFlow() {
   if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
   if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
   if (!initialUx.workspaceChange?.includes("変更")) throw new Error(`workspace picker action is missing: ${JSON.stringify(initialUx)}`);
+  if (initialUx.workspaceButtonDisabled) throw new Error(`workspace picker action should start enabled: ${JSON.stringify(initialUx)}`);
   if (initialUx.workspaceText !== "未選択") throw new Error(`workspace should start as a compact unselected chip: ${JSON.stringify(initialUx)}`);
   if (initialUx.visibleWorkspaceInput) throw new Error(`manual workspace path input should not be visible: ${JSON.stringify(initialUx)}`);
   if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for focused workbench UX: ${JSON.stringify(initialUx)}`);
@@ -250,6 +253,7 @@ async function runBrowserFlow() {
 
   await click("#workspace-change");
   await waitForExpression(`document.querySelector('#workspace-path')?.value === ${JSON.stringify(workspace)}`, 4000, "workspace picker selection");
+  await waitForExpression("document.querySelector('#workspace-change')?.disabled === false", 2000, "workspace picker re-enabled");
   await setValue("#instruction", "seed を探して");
   const searchStarted = Date.now();
   await click("#send");

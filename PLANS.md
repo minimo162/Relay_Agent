@@ -170,6 +170,83 @@ Acceptance:
 - The behavior is covered by a deterministic sidecar idle-exit smoke test and
   documented in the packaging policy and implementation log.
 
+### 2026-05-18 Installed Workbench Responsiveness Plan
+
+This plan fixes the `0.3.8` installed-app regression where the Workbench can
+feel slow to become usable, can remain visually stuck on a stale readiness
+state even though `/api/status` is already `ready: true`, and can leave the
+workspace picker action disabled while a native picker is hidden or stuck.
+
+The support bundle reported:
+
+```json
+{
+  "app": "Relay Agent",
+  "version": "0.3.8",
+  "ready": true,
+  "checks": [
+    { "name": "ripgrep", "ready": true, "required": true },
+    { "name": "officecli", "ready": true, "required": false },
+    { "name": "copilot-cdp", "ready": true, "required": true }
+  ]
+}
+```
+
+That means the provider and local tools can be ready while the Workbench chrome
+is still stale. The fix belongs in the active Workbench/sidecar path, not in an
+installer fallback or a mode-specific runner.
+
+Goal:
+
+> The installed Workbench should paint quickly, automatically become Ready when
+> the sidecar does, and always recover the workspace picker button after native
+> picker cancellation, hidden-dialog failure, or timeout.
+
+Implementation plan:
+
+1. **Readiness auto-refresh**
+   - Keep the manual readiness pill refresh, but add automatic polling while
+     readiness is `Checking`, `Connecting`, or any non-ready state.
+   - Poll on window focus and when the tab becomes visible.
+   - Stop high-frequency polling once `Ready` is reached, but keep a low-cost
+     refresh path for manual support inspection.
+
+2. **Fast first status**
+   - Make `/api/status` avoid blocking the whole response on optional OfficeCLI
+     smoke checks.
+   - Run required checks in parallel.
+   - Start OfficeCLI readiness in the background and return a non-required
+     warming-up check until the result is cached.
+   - `ready` should reflect required readiness (`ripgrep` and `copilot-cdp`),
+     not optional Office smoke latency.
+
+3. **Workspace picker reliability**
+   - On Windows, run the PowerShell folder picker in STA mode when using
+     Windows PowerShell.
+   - Give the folder dialog a topmost owner form so it does not appear behind
+     Edge.
+   - Keep the UI button in a clear `選択中...` state while the native picker is
+     open.
+   - Add a bounded frontend timeout and keep server-side process cancellation
+     wired so a hidden or stalled picker cannot leave the button disabled
+     indefinitely.
+
+4. **Verification**
+   - Extend Workbench UX E2E to assert:
+     - readiness auto reaches `Ready`;
+     - workspace change button is enabled before selection;
+     - workspace picker completes and re-enables the button.
+   - Keep `pnpm check` as the release gate.
+
+Acceptance:
+
+- Installed Workbench no longer requires clicking the readiness pill to turn
+  `Ready` after Copilot is already connected.
+- Workspace selection works from a native file explorer/folder picker and the
+  button cannot remain disabled indefinitely.
+- Optional OfficeCLI smoke cannot delay the initial `Ready` state.
+- No legacy AionUi/Tauri/OpenCode/OpenWork path is reintroduced.
+
 ### 2026-05-18 Minimal Professional Workbench UX Plan
 
 This plan defines the visual and interaction direction for the active browser

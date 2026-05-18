@@ -13,6 +13,12 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
+The completed active queue is `RESPONSIVE*`. It implements the 2026-05-18
+Installed Workbench Responsiveness Plan from `PLANS.md`: make installed
+Workbench first paint and readiness reflection faster, make readiness
+auto-refresh after Copilot connects, and make workspace folder selection
+visibly recoverable.
+
 The completed active queue is `LIFECYCLE*`. It implements the 2026-05-18
 Browser Session Lifecycle And Installer Lock Plan from `PLANS.md`: make the
 browser-launched sidecar shut down after the last Workbench tab closes, while
@@ -58,6 +64,142 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### RESPONSIVE-01 - Document Installed Workbench Responsiveness Contract
+
+Status: completed
+
+Scope:
+
+- Add the installed Workbench responsiveness plan to `PLANS.md`.
+- Capture the observed support bundle state: `/api/status` can already be
+  `ready: true` while the Workbench chrome remains stale.
+- Define acceptance around automatic readiness refresh, non-blocking optional
+  OfficeCLI readiness, and workspace picker recovery.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan does not revive legacy active paths.
+- The plan separates required readiness from optional OfficeCLI smoke latency.
+
+Verification:
+
+- `git diff --check`
+
+### RESPONSIVE-02 - Make Sidecar Status Return Required Readiness Quickly
+
+Status: completed
+
+Scope:
+
+- Update sidecar `ToolReadiness` so ripgrep and Copilot checks run in parallel.
+- Make OfficeCLI readiness optional and non-blocking on first status calls:
+  return a warming-up optional check while the smoke test runs in the
+  background, then cache the result.
+- Keep the detailed OfficeCLI result visible in later support status output.
+
+Artifacts:
+
+- Sidecar readiness implementation update.
+
+Acceptance:
+
+- `/api/status` can report `ready: true` as soon as required checks are ready.
+- Optional OfficeCLI smoke latency does not delay the initial Ready state.
+- OfficeCLI failures remain visible but non-required.
+
+Verification:
+
+- `pnpm sidecar:smoke`
+- `pnpm check`
+
+### RESPONSIVE-03 - Add Workbench Readiness Auto-Polling
+
+Status: completed
+
+Scope:
+
+- Add automatic readiness polling while Workbench is not Ready.
+- Refresh on tab visibility/focus.
+- Preserve the manual readiness pill refresh and the minimal UI.
+
+Artifacts:
+
+- Workbench readiness hook update.
+
+Acceptance:
+
+- When `/api/status` changes to `ready: true`, the Workbench becomes Ready
+  without a manual click.
+- Polling does not spam the sidecar after Ready.
+
+Verification:
+
+- `pnpm typecheck`
+- `pnpm workbench:ux-e2e`
+
+### RESPONSIVE-04 - Harden Workspace Picker Visibility And Recovery
+
+Status: completed
+
+Scope:
+
+- Run Windows PowerShell picker in STA mode where supported.
+- Add a topmost owner window for the FolderBrowserDialog so the picker appears
+  above Edge.
+- Add a bounded Workbench-side timeout and abort handling so the `変更` button
+  is always re-enabled after hidden-dialog failure or timeout.
+- Keep the native picker as the primary path; do not reintroduce direct manual
+  path entry as the normal UX.
+
+Artifacts:
+
+- `WorkspacePicker.cs` update.
+- Workbench picker timeout/recovery update.
+
+Acceptance:
+
+- Workspace picker button is enabled before selection.
+- While picker is active, the button communicates the pending state.
+- After success, cancellation, error, or timeout, the button is enabled again.
+
+Verification:
+
+- `pnpm sidecar:workspace-picker-smoke`
+- `pnpm workbench:ux-e2e`
+
+### RESPONSIVE-05 - Package, Commit, And Release
+
+Status: completed
+
+Scope:
+
+- Bump active versions to the next patch release.
+- Update implementation log with verification results.
+- Run `pnpm check`, build Linux/Windows packages, build Windows installer,
+  inventory/SBOM, checksums.
+- Commit/push to `main`.
+- Publish GitHub Release assets.
+
+Artifacts:
+
+- `Relay.Agent-<version>-win-x64-setup.exe`
+- Linux tarball, Windows zip, checksums, inventory, SBOM.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Release assets are present on GitHub.
+
+Verification:
+
+- `pnpm check`
+- `gh release view`
 
 ### LIFECYCLE-01 - Document Browser Session Lifecycle Contract
 

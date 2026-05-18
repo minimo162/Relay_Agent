@@ -48,7 +48,16 @@ $dialog.ShowNewFolderButton = $false
 if ($env:RELAY_WORKSPACE_PICKER_DEFAULT -and (Test-Path -LiteralPath $env:RELAY_WORKSPACE_PICKER_DEFAULT)) {
   $dialog.SelectedPath = $env:RELAY_WORKSPACE_PICKER_DEFAULT
 }
-$result = $dialog.ShowDialog()
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.StartPosition = 'CenterScreen'
+$owner.WindowState = 'Minimized'
+try {
+  $result = $dialog.ShowDialog($owner)
+} finally {
+  $owner.Dispose()
+}
 if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
   Write-Output $dialog.SelectedPath
@@ -57,9 +66,16 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 exit 2
 """;
 
+        var args = new List<string>();
+        if (string.Equals(Path.GetFileName(shell), "powershell.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("-STA");
+        }
+        args.AddRange(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]);
+
         var result = await RunPickerProcessAsync(
             shell,
-            ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            args,
             currentPath,
             cancellationToken);
         return ResultFromProcess(result, cancelExitCode: 2);
@@ -122,7 +138,7 @@ exit 2
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        timeout.CancelAfter(ReadPickerTimeout());
         using var process = new Process();
         process.StartInfo = new ProcessStartInfo
         {
@@ -187,6 +203,15 @@ exit 2
         {
             // Best-effort cleanup.
         }
+    }
+
+    private static TimeSpan ReadPickerTimeout()
+    {
+        if (int.TryParse(Environment.GetEnvironmentVariable("RELAY_WORKSPACE_PICKER_TIMEOUT_MS"), out var milliseconds))
+        {
+            return TimeSpan.FromMilliseconds(Math.Clamp(milliseconds, 10_000, 300_000));
+        }
+        return TimeSpan.FromMinutes(2);
     }
 
     private sealed record PickerProcessResult(int ExitCode, string Output, string Error);

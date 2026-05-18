@@ -350,14 +350,36 @@ export function App() {
     });
   }, [refreshStatus]);
 
+  useEffect(() => {
+    const pollMs = readiness.ready === "true" ? 30_000 : 2_000;
+    const interval = window.setInterval(handleRefresh, pollMs);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") handleRefresh();
+    };
+    window.addEventListener("focus", handleRefresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleRefresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [handleRefresh, readiness.ready]);
+
   const chooseWorkspace = useCallback(async () => {
     setIsPickingWorkspace(true);
     setWorkspaceError("");
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 120_000);
     try {
       const response = await fetch(api("/api/workspace/pick"), {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ currentPath: workspace }),
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error(`Workspace picker failed: ${response.status}`);
       const result = (await response.json()) as WorkspacePickResponse;
@@ -373,8 +395,13 @@ export function App() {
       setWorkspace(result.path);
       saveWorkspace(result.path, setWorkspaceHistory);
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      if (timedOut) {
+        setWorkspaceError("フォルダ選択がタイムアウトしました。もう一度「変更」を押してください。");
+      } else {
+        setWorkspaceError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
+      window.clearTimeout(timeout);
       setIsPickingWorkspace(false);
     }
   }, [api, authHeaders, workspace]);
@@ -586,7 +613,7 @@ export function App() {
                   onClick={() => void chooseWorkspace()}
                 >
                   <FolderOpen size={15} aria-hidden="true" />
-                  変更
+                  {isPickingWorkspace ? "選択中..." : "変更"}
                 </Button>
               </div>
               {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
