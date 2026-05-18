@@ -20079,3 +20079,58 @@ Result:
   `relay-agent-0.3.12-win-x64.zip`,
   `relay-agent-0.3.12-linux-x64.tar.gz`, release inventory, SBOM, and
   `relay-agent-0.3.12-sha256.txt`.
+
+## 2026-05-18: CopilotKit Chat Layout Density
+
+Change:
+
+- Reviewed CopilotKit prebuilt chat, AG-UI, and human-in-the-loop examples.
+  The examples keep `CopilotChat` as the primary bounded pane and leave
+  workspace/context chrome outside the chat but visually secondary.
+- Tightened the Workbench shell, header, workspace row, chat gap, tool cards,
+  approval cards, and mobile spacing so the page reads as one cohesive
+  CopilotKit chat application.
+- Bounded the CopilotKit chat viewport instead of relying on the previous
+  oversized `76vh` minimum. CopilotKit still owns transcript rendering,
+  scrolling, composer placement, tool summaries, and inline approvals.
+- Hid the currently selected workspace from recent-workspace chips while
+  preserving the hidden `#workspace-path` state contract.
+- Added Workbench UX E2E layout-density assertions for header-to-workspace gap,
+  workspace-to-chat gap, chat top, chat height, chat bottom, and selected
+  workspace history duplication.
+
+References checked:
+
+- `https://docs.showcase.copilotkit.ai/pydantic-ai/prebuilt-components/chat`
+- `https://docs.showcase.copilotkit.ai/mastra/backend/ag-ui`
+- `https://www.mintlify.com/CopilotKit/CopilotKit/examples/human-in-the-loop`
+- Local package contracts in `@copilotkit/react-core@1.57.1` and
+  `@copilotkit/react-ui@1.57.1`.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+pnpm workbench:ux-e2e
+pnpm check
+pnpm sidecar:publish:linux
+pnpm sidecar:publish:windows
+pnpm sidecar:installer:windows
+pnpm release:inventory
+```
+
+Result:
+
+- Workbench typecheck passed.
+- Workbench browser UX E2E passed with screenshots
+  `workbench-chat-empty.png`, `workbench-chat-completed.png`,
+  `workbench-chat-approval.png`, and `workbench-chat-mobile.png`.
+- Full `pnpm check` passed, including hard-cut guard, Workbench build,
+  sidecar build/smokes, AG-UI client-tool/replay smokes, DCI smokes,
+  Office/PDF read smokes, OfficeCLI registry smoke, sidecar security smoke,
+  and release inventory/SBOM generation.
+- Release packaging for `0.3.13` completed. Generated assets include
+  `Relay.Agent-0.3.13-win-x64-setup.exe`,
+  `relay-agent-0.3.13-win-x64.zip`,
+  `relay-agent-0.3.13-linux-x64.tar.gz`, release inventory, SBOM, and
+  `relay-agent-0.3.13-sha256.txt`.

@@ -257,7 +257,7 @@ async function runBrowserFlow() {
   if (!initialUx.workspaceChange?.includes("フォルダを選択")) throw new Error(`workspace picker action is missing: ${JSON.stringify(initialUx)}`);
   if (initialUx.workspaceText !== "未選択") throw new Error(`workspace should start as unselected: ${JSON.stringify(initialUx)}`);
   if (initialUx.visibleWorkspaceInput) throw new Error(`manual workspace path input should not be visible: ${JSON.stringify(initialUx)}`);
-  if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for chatbot UX: ${JSON.stringify(initialUx)}`);
+  if (initialUx.shellWidth > 980) throw new Error(`shell is too wide for chatbot UX: ${JSON.stringify(initialUx)}`);
   if (initialUx.bodyWidth > initialUx.viewportWidth) throw new Error(`initial UI has horizontal overflow: ${JSON.stringify(initialUx)}`);
 
   await captureScreenshot("workbench-chat-empty.png");
@@ -266,6 +266,32 @@ async function runBrowserFlow() {
   await waitForExpression(`document.querySelector('#workspace-path')?.value === ${JSON.stringify(workspace)}`, 4000, "workspace picker selection");
   await waitForExpression("Boolean(document.querySelector('[data-testid=\"copilot-chat-textarea\"]'))", 5000, "CopilotKit textarea");
   await waitForExpression("Boolean(document.querySelector('[data-testid=\"copilot-send-button\"]'))", 5000, "CopilotKit send button");
+
+  const compactLayoutUx = await evaluate(`(() => {
+    const topbar = document.querySelector('.topbar')?.getBoundingClientRect();
+    const workspaceBar = document.querySelector('.workspace-bar')?.getBoundingClientRect();
+    const chatCard = document.querySelector('.chat-card')?.getBoundingClientRect();
+    const history = document.querySelector('#workspace-history');
+    return {
+      topbarWorkspaceGap: Math.round((workspaceBar?.top ?? 0) - (topbar?.bottom ?? 0)),
+      workspaceChatGap: Math.round((chatCard?.top ?? 0) - (workspaceBar?.bottom ?? 0)),
+      chatTop: Math.round(chatCard?.top ?? 0),
+      chatHeight: Math.round(chatCard?.height ?? 0),
+      chatBottom: Math.round(chatCard?.bottom ?? 0),
+      viewportHeight: window.innerHeight,
+      historyHidden: history?.hasAttribute('hidden') ?? false,
+      historyText: history?.textContent ?? '',
+    };
+  })()`);
+  if (compactLayoutUx.topbarWorkspaceGap > 22 || compactLayoutUx.workspaceChatGap > 18) {
+    throw new Error(`layout gaps are too large: ${JSON.stringify(compactLayoutUx)}`);
+  }
+  if (compactLayoutUx.chatTop > 190 || compactLayoutUx.chatHeight > 740 || compactLayoutUx.chatBottom > compactLayoutUx.viewportHeight - 28) {
+    throw new Error(`chat viewport should stay compact and above the fold: ${JSON.stringify(compactLayoutUx)}`);
+  }
+  if (!compactLayoutUx.historyHidden || compactLayoutUx.historyText.includes(workspace)) {
+    throw new Error(`current workspace should not duplicate as a history chip: ${JSON.stringify(compactLayoutUx)}`);
+  }
 
   const searchStarted = Date.now();
   await sendChat("seed を探して");

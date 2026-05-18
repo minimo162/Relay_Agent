@@ -37,7 +37,7 @@ fallback paths.
 The Workbench is intentionally minimal:
 
 - one workspace selected through the OS file explorer;
-- one CopilotKit chat transcript;
+- one compact CopilotKit chat transcript as the primary surface;
 - one chat input and send action;
 - concise readiness and run status;
 - inline tool summaries and approvals only when relevant;
@@ -51,6 +51,11 @@ Normal users do not type workspace paths. Use `変更` / `Change` to choose a
 folder from the OS file explorer. Recent workspaces are stored user-locally and
 Relay does not write caches, indexes, or picker state into selected/shared
 folders.
+
+The Relay chrome around the chat is deliberately compact: the selected
+workspace stays close to the chat, duplicate current-workspace history chips
+are hidden, and the chat pane is bounded to keep the transcript, tools, and
+approvals visible without turning the Workbench into a dashboard.
 
 ## Sidecar
 

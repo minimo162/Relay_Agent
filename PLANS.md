@@ -98,6 +98,75 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-18 CopilotKit Chat Layout Density Plan
+
+This plan refines the CopilotKit chatbot reset after reviewing CopilotKit usage
+examples and the current Workbench screenshots. The product direction remains a
+normal CopilotKit chatbot, but the first reset left the shell, workspace row,
+history chips, chat card, and support block too far apart. The fix is to keep
+the official CopilotKit chat surface as the main visual object and make Relay's
+surrounding chrome compact, aligned, and secondary.
+
+Reference sources checked for this plan:
+
+- CopilotKit prebuilt chat examples show `CopilotChat` rendered as the primary
+  pane inside a bounded container, with little surrounding chrome:
+  `https://docs.showcase.copilotkit.ai/pydantic-ai/prebuilt-components/chat`.
+- CopilotKit AG-UI docs confirm messages, tool calls, state updates, and run
+  lifecycle flow through AG-UI events:
+  `https://docs.showcase.copilotkit.ai/mastra/backend/ag-ui`.
+- CopilotKit HITL examples keep approval UI inline with the agent interaction
+  instead of moving it into a separate dashboard:
+  `https://www.mintlify.com/CopilotKit/CopilotKit/examples/human-in-the-loop`.
+- CopilotKit v2 component contracts in `@copilotkit/react-core@1.57.1` and
+  `@copilotkit/react-ui@1.57.1` confirm that Relay can keep the self-managed
+  AG-UI agent and tune layout with container CSS rather than replacing the
+  component internals.
+- The local `ui-ux-pro-max` design-system search recommends an AI-native,
+  minimal single-column chatbot surface with restrained controls, visible focus
+  states, and compact context cards.
+
+Goal:
+
+> Keep the CopilotKit-first chatbot, but reduce unnecessary vertical separation
+> so the Workbench reads as one cohesive chat application.
+
+Layout decisions:
+
+1. **Compact Relay chrome**
+   - Reduce shell top/bottom padding and header spacing.
+   - Keep `Relay Agent`, `Chat`, readiness, and workspace selection visible,
+     but visually subordinate to the chat.
+   - Keep the workspace picker in the normal flow and close to the chat input
+     context, not as a large dashboard section.
+
+2. **Remove redundant workspace history noise**
+   - Do not render the currently selected workspace as a history chip.
+   - Show recent workspaces only when they are genuinely alternate choices.
+   - Keep the hidden `#workspace-path` contract for tests and sidecar state.
+
+3. **Give CopilotKit a stable compact chat viewport**
+   - Replace oversized `min-height: 76vh` behavior with a bounded chat height
+     that fits the visible viewport after header/workspace chrome.
+   - Let CopilotKit own message rendering, scrolling, composer placement, and
+     HITL cards inside that viewport.
+   - Keep tool and approval cards compact enough that they feel like chat
+     events rather than separate panels.
+
+4. **Tighten E2E acceptance**
+   - Add layout-density assertions for header-to-workspace gap,
+     workspace-to-chat gap, chat height, and hidden current-workspace history.
+   - Continue asserting no legacy mode labels, no old composer, collapsed
+     support diagnostics, and responsive no-overflow behavior.
+
+5. **Acceptance**
+   - Desktop screenshots show the chat card above the fold with a compact
+     header/workspace area.
+   - The selected workspace does not duplicate as a history chip.
+   - The Workbench still uses CopilotKit + AG-UI `/agui/relay`; no custom
+     transcript or mode-specific UI is reintroduced.
+   - `pnpm workbench:ux-e2e` and `pnpm check` pass.
+
 ### 2026-05-18 CopilotKit Chatbot UX Reset Plan
 
 This plan resets the Workbench UX from a Relay-specific workbench layout into a

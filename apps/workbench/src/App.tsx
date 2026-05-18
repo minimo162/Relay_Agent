@@ -285,6 +285,10 @@ export function App() {
       workspace,
     }), [api, authHeaders, workspace]);
 
+  const visibleWorkspaceHistory = useMemo(
+    () => workspaceHistory.filter((item) => item !== workspace).slice(0, 3),
+    [workspace, workspaceHistory],
+  );
   const compactWorkspace = workspace ? compactPath(workspace) : "未選択";
   const chatReady = readiness.label === "Ready";
 
@@ -355,8 +359,8 @@ export function App() {
 
             {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
 
-            <div id="workspace-history" className="workspace-history" hidden={workspaceHistory.length === 0}>
-              {workspaceHistory.map((item) => (
+            <div id="workspace-history" className="workspace-history" hidden={visibleWorkspaceHistory.length === 0}>
+              {visibleWorkspaceHistory.map((item) => (
                 <button
                   key={item}
                   type="button"

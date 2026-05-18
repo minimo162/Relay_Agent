@@ -53,10 +53,16 @@ Installer Defaults, Workspace Picker, And Search Path Contract Plan from
 launcher console, modern shared-folder workspace picker, and a reliable
 `glob` -> `read` path contract.
 
-The active queue is `CKCHAT*`. It implements the 2026-05-18 CopilotKit Chatbot
-UX Reset Plan from `PLANS.md`: replace the custom Relay Workbench composer,
-activity, result, and approval surface with a CopilotKit-first chatbot backed by
-the existing AG-UI `/agui/relay` self-managed agent.
+The completed active queue is `CKCHAT*`. It implements the 2026-05-18
+CopilotKit Chatbot UX Reset Plan from `PLANS.md`: replace the custom Relay
+Workbench composer, activity, result, and approval surface with a
+CopilotKit-first chatbot backed by the existing AG-UI `/agui/relay`
+self-managed agent.
+
+The active queue is `CKLAYOUT*`. It implements the 2026-05-18 CopilotKit Chat
+Layout Density Plan from `PLANS.md`: keep CopilotKit as the primary chat UI
+while tightening Relay's surrounding chrome, hiding redundant current-workspace
+history, bounding the chat viewport, and adding layout-density E2E assertions.
 
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
@@ -82,6 +88,146 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### CKLAYOUT-01 - Document CopilotKit Layout Density Plan
+
+Status: completed
+
+Scope:
+
+- Add the CopilotKit layout-density plan to `PLANS.md`.
+- Add this executable task queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan keeps CopilotKit, AG-UI, the .NET sidecar, and M365 Copilot CDP as
+  the active runtime/UI architecture.
+- The plan fixes spacing through container/layout refinement, not by
+  reintroducing custom Relay transcript UI.
+
+Verification:
+
+- `git diff --check -- . ':(exclude)apps/sidecar/wwwroot/assets/*'`
+
+### CKLAYOUT-02 - Tighten Chat Shell And Workspace Context
+
+Status: completed
+
+Scope:
+
+- Compact the shell, header, workspace row, chat gap, support block, tool card,
+  and approval card spacing.
+- Bound the CopilotKit chat viewport so it stays visually connected to the
+  workspace row and does not create excessive empty vertical space.
+- Hide the currently selected workspace from the recent-workspace chip list.
+
+Artifacts:
+
+- Updated `apps/workbench/src/App.tsx`.
+- Updated `apps/workbench/src/styles.css`.
+
+Acceptance:
+
+- The selected workspace appears only in the workspace row, not again as a
+  history chip.
+- The chat card starts close to the workspace row and remains above the fold in
+  desktop screenshots.
+- CopilotKit still owns the transcript, composer, tool rendering, and HITL
+  approval placement.
+
+Verification:
+
+- `pnpm --filter @relay-agent/workbench typecheck`
+- `pnpm workbench:ux-e2e`
+
+Result:
+
+- Shell, header, workspace row, chat gap, tool cards, approval cards, and
+  mobile spacing were tightened.
+- CopilotKit remains the transcript/composer/tool/approval owner.
+- The selected workspace is filtered out of the recent-workspace chips.
+- `pnpm --filter @relay-agent/workbench typecheck` passed.
+- `pnpm workbench:ux-e2e` passed.
+
+### CKLAYOUT-03 - Add Layout Density E2E Checks
+
+Status: completed
+
+Scope:
+
+- Extend Workbench UX E2E with explicit layout-density assertions.
+- Capture updated desktop/mobile screenshots after the compact layout.
+
+Artifacts:
+
+- Updated `scripts/workbench-ux-e2e.mjs`.
+
+Acceptance:
+
+- E2E fails if header/workspace/chat gaps regress to the previous oversized
+  layout.
+- E2E continues checking no legacy modes, no old composer, collapsed support,
+  approval resume, and responsive no-overflow.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+
+Result:
+
+- Added desktop gap, chat top, chat height, chat bottom, and selected-workspace
+  history assertions.
+- `pnpm workbench:ux-e2e` passed and refreshed desktop/mobile screenshots.
+
+### CKLAYOUT-04 - Version, Verify, Commit, Push, And Release
+
+Status: completed
+
+Scope:
+
+- Bump active package versions for the next patch release.
+- Update `README.md` and `docs/IMPLEMENTATION.md` with the compact CopilotKit
+  layout change and verification results.
+- Run the canonical checks.
+- Build release packages and installer.
+- Commit and push to `main`.
+- Publish the next GitHub Release with generated assets.
+
+Artifacts:
+
+- Next patch release on GitHub.
+
+Acceptance:
+
+- Release exists, points at the pushed commit, and includes installer,
+  archives, checksums, release inventory, and SBOM.
+
+Verification:
+
+- `pnpm check`
+- `pnpm sidecar:publish:linux`
+- `pnpm sidecar:publish:windows`
+- `pnpm sidecar:installer:windows`
+- `pnpm release:inventory`
+- `gh release view`
+
+Result:
+
+- Version bumped to `0.3.13` for the Workbench, sidecar, and launcher.
+- `README.md` and `docs/IMPLEMENTATION.md` now document the compact
+  CopilotKit layout change, references, and verification results.
+- `pnpm check`, release publishes, installer generation, and release inventory
+  generation passed locally.
+- Release artifacts generated:
+  `Relay.Agent-0.3.13-win-x64-setup.exe`,
+  `relay-agent-0.3.13-win-x64.zip`,
+  `relay-agent-0.3.13-linux-x64.tar.gz`,
+  `relay-agent-0.3.13-sha256.txt`, release inventory, and SBOM.
 
 ### CKCHAT-01 - Document CopilotKit Chatbot Reset
 

@@ -59,17 +59,17 @@ button:disabled {
 }
 
 .shell {
-  width: min(100%, 1040px);
+  width: min(100%, 960px);
   margin: 0 auto;
-  padding: 80px 48px 88px;
+  padding: 34px 32px 42px;
 }
 
 .topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 32px;
-  margin-bottom: 54px;
+  gap: 18px;
+  margin-bottom: 18px;
 }
 
 .eyebrow,
@@ -81,10 +81,10 @@ button:disabled {
 }
 
 h1 {
-  margin: 8px 0 0;
-  font-size: 35px;
+  margin: 3px 0 0;
+  font-size: 27px;
   font-weight: 630;
-  line-height: 1.08;
+  line-height: 1.12;
   letter-spacing: 0;
 }
 
@@ -132,7 +132,7 @@ h1 {
 
 .chat-layout {
   display: grid;
-  gap: 22px;
+  gap: 12px;
 }
 
 .signin-row {
@@ -147,16 +147,16 @@ h1 {
 .workspace-bar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  align-items: end;
+  gap: 14px;
+  align-items: center;
   border-bottom: 1px solid var(--ra-border-soft);
-  padding-bottom: 22px;
+  padding-bottom: 14px;
 }
 
 .workspace-bar > div {
   display: grid;
   min-width: 0;
-  gap: 9px;
+  gap: 5px;
 }
 
 .workspace-chip {
@@ -182,7 +182,7 @@ h1 {
 .workspace-history {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .workspace-history[hidden] {
@@ -191,10 +191,10 @@ h1 {
 
 .workspace-history button {
   max-width: 100%;
-  min-height: 30px;
+  min-height: 28px;
   border: 1px solid var(--ra-border-soft);
   border-radius: 999px;
-  padding: 0 11px;
+  padding: 0 10px;
   overflow: hidden;
   color: var(--ra-muted);
   background: rgba(255, 255, 255, 0.4);
@@ -249,7 +249,7 @@ h1 {
 
 .empty-chat {
   display: grid;
-  min-height: 460px;
+  min-height: clamp(360px, calc(100vh - 232px), 540px);
   place-items: center;
   border: 1px dashed var(--ra-border);
   border-radius: 14px;
@@ -262,7 +262,8 @@ h1 {
 }
 
 .chat-card {
-  min-height: min(76vh, 780px);
+  height: clamp(540px, calc(100vh - 214px), 720px);
+  min-height: 0;
   border: 1px solid var(--ra-border);
   border-radius: 14px;
   background: var(--ra-surface);
@@ -275,12 +276,14 @@ h1 {
 }
 
 .chat-card [data-copilotkit] {
-  min-height: min(76vh, 780px);
+  min-height: 0;
+  height: 100%;
 }
 
 .chat-card .cpk-copilot-chat,
 .chat-card .cpk-chat-view {
-  min-height: min(76vh, 780px);
+  min-height: 0;
+  height: 100%;
 }
 
 .chat-card textarea {
@@ -291,7 +294,7 @@ h1 {
 .approval-card {
   border: 1px solid var(--ra-border-soft);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   background: var(--ra-surface-soft);
 }
 
@@ -314,7 +317,7 @@ h1 {
 
 .approval-card {
   display: grid;
-  gap: 16px;
+  gap: 12px;
   background: var(--ra-warn-soft);
 }
 
@@ -365,7 +368,7 @@ h1 {
 .details {
   border: 1px solid var(--ra-border-soft);
   border-radius: 10px;
-  padding: 15px 18px;
+  padding: 12px 14px;
   color: var(--ra-muted);
   background: transparent;
 }
@@ -404,17 +407,17 @@ h1 {
 
 @media (max-width: 760px) {
   .shell {
-    padding: 42px 20px 58px;
+    padding: 26px 16px 34px;
   }
 
   .topbar {
     display: grid;
-    gap: 18px;
-    margin-bottom: 34px;
+    gap: 12px;
+    margin-bottom: 16px;
   }
 
   h1 {
-    font-size: 31px;
+    font-size: 25px;
   }
 
   .signin-row,
@@ -432,7 +435,8 @@ h1 {
   .chat-card [data-copilotkit],
   .chat-card .cpk-copilot-chat,
   .chat-card .cpk-chat-view {
-    min-height: 640px;
+    height: min(68vh, 640px);
+    min-height: 520px;
   }
 
   .approval-heading {
