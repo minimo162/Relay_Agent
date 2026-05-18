@@ -23,6 +23,8 @@ var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayTool
 var agUiHostedAgent = agentRunner.CreateHostedAgent();
 
 var app = builder.Build();
+await using var lifecycle = new SidecarLifecycle(app.Lifetime, options.IdleExit);
+lifecycle.Start();
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.None,
@@ -51,6 +53,7 @@ app.Use(async (context, next) =>
         return;
     }
 
+    using var requestLease = lifecycle.TrackRequest(context.Request.Path);
     await next();
 });
 
@@ -109,6 +112,37 @@ app.MapPost("/api/copilot/open", async (CancellationToken cancellationToken) =>
     var result = await new EdgeCdpManager(options.DataDirectory).ResolveAsync(startIfMissing: true, cancellationToken);
     return Results.Json(new CopilotOpenResponse(result.Ready, result.Detail, result.State), JsonOptions.Default);
 });
+
+app.MapPost("/api/session/heartbeat", async (HttpRequest request, CancellationToken cancellationToken) =>
+{
+    var body = await JsonSerializer.DeserializeAsync<WorkbenchSessionRequest>(
+        request.Body,
+        JsonOptions.Default,
+        cancellationToken);
+    if (string.IsNullOrWhiteSpace(body?.ClientId))
+    {
+        return Results.BadRequest(new ErrorResponse("Workbench clientId is required."));
+    }
+
+    return Results.Json(lifecycle.Heartbeat(body.ClientId.Trim()), JsonOptions.Default);
+});
+
+app.MapPost("/api/session/closed", async (HttpRequest request, CancellationToken cancellationToken) =>
+{
+    var body = await JsonSerializer.DeserializeAsync<WorkbenchSessionRequest>(
+        request.Body,
+        JsonOptions.Default,
+        cancellationToken);
+    if (string.IsNullOrWhiteSpace(body?.ClientId))
+    {
+        return Results.BadRequest(new ErrorResponse("Workbench clientId is required."));
+    }
+
+    return Results.Json(lifecycle.Close(body.ClientId.Trim()), JsonOptions.Default);
+});
+
+app.MapGet("/api/session/status", () =>
+    Results.Json(lifecycle.Status(), JsonOptions.Default));
 
 app.MapAGUI("/agui/relay", agUiHostedAgent);
 
@@ -228,7 +262,8 @@ public sealed record RelayOptions(
     string Token,
     string DataDirectory,
     string WorkbenchDist,
-    string PublicOrigin)
+    string PublicOrigin,
+    SidecarIdleExitOptions IdleExit)
 {
     public static RelayOptions FromEnvironment(string[] args)
     {
@@ -250,7 +285,7 @@ public sealed record RelayOptions(
         }
 
         Directory.CreateDirectory(data);
-        return new RelayOptions(port, token, data, dist, publicOrigin);
+        return new RelayOptions(port, token, data, dist, publicOrigin, SidecarIdleExitOptions.FromEnvironment());
     }
 
     private static string CreateToken()

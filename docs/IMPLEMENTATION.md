@@ -32,6 +32,65 @@
 
 ## Milestone Log
 
+### 2026-05-18 Browser Session Lifecycle And Idle Exit
+
+Follow-up to the `0.3.7` versioned-payload installer update after the user
+correctly identified that avoiding locked-file overwrite does not solve the
+root problem of a browser-launched sidecar remaining alive indefinitely after
+the Workbench tab closes.
+
+Change:
+
+- Keep the active browser Workbench + .NET sidecar architecture. Do not revive
+  Tauri, AionUi, OpenCode/OpenWork, or a separate desktop shell.
+- Add an invisible Workbench session lease:
+  - per-tab `clientId` stored in session storage;
+  - immediate and periodic `/api/session/heartbeat`;
+  - best-effort `/api/session/closed` beacon on tab close/navigation.
+- Add a sidecar lifecycle monitor that tracks fresh Workbench clients, active
+  requests, startup grace, heartbeat TTL, and idle quiet period before calling
+  `StopApplication()`.
+- Enable idle exit only from the launcher with
+  `RELAY_ENABLE_IDLE_EXIT=1`. Direct development and smoke-test sidecar runs
+  remain stable unless explicitly configured.
+- Add deterministic smoke coverage so a fresh heartbeat keeps the sidecar alive
+  and a close event lets it exit.
+- Bump Workbench, sidecar, and launcher versions to `0.3.8`.
+
+Verification commands run locally:
+
+```bash
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:idle-exit-smoke
+PATH=$HOME/.dotnet:$PATH pnpm check
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:linux
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=$HOME/.dotnet:$PATH pnpm release:inventory
+tar -C dist/relay-agent-linux-x64 -czf dist/relay-agent-0.3.8-linux-x64.tar.gz .
+7z a -tzip dist/relay-agent-0.3.8-win-x64.zip ./dist/relay-agent-win-x64/*
+sha256sum dist/installer/Relay.Agent-0.3.8-win-x64-setup.exe dist/relay-agent-0.3.8-linux-x64.tar.gz dist/relay-agent-0.3.8-win-x64.zip dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.8-sha256.txt
+```
+
+Result:
+
+- Workbench typecheck, production build, sidecar Release build, sidecar smoke,
+  and the new idle-exit smoke passed as part of `pnpm check`.
+- Full `pnpm check` passed, including AG-UI, Agent Framework, DCI, ripgrep,
+  Office/PDF, OfficeCLI registry, security, icon, and release inventory smoke
+  coverage.
+- `pnpm sidecar:idle-exit-smoke` proved that a fresh Workbench heartbeat keeps
+  an idle-exit-enabled sidecar alive and that `/api/session/closed` lets the
+  process exit cleanly.
+- Linux and Windows sidecar packages were regenerated.
+- NSIS generated
+  `dist/installer/Relay.Agent-0.3.8-win-x64-setup.exe`.
+- Release assets were generated:
+  `dist/relay-agent-0.3.8-linux-x64.tar.gz`,
+  `dist/relay-agent-0.3.8-win-x64.zip`,
+  `dist/release/relay-agent-0.3.8-sha256.txt`,
+  `dist/release/relay-release-inventory.json`, and
+  `dist/release/relay-sbom.json`.
+
 ### 2026-05-18 Versioned Payload Installer Update
 
 Follow-up to the `0.3.6` installer-lock fix after Windows still reported:

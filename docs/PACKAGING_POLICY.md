@@ -92,6 +92,12 @@ Workbench architecture rather than the removed Tauri shell.
   `RELAY_COPILOT_CDP_PORT`; Edge CDP attachment/startup and profile storage are
   app-managed under user-local Relay data. Diagnostic overrides may remain
   available for development and live E2E.
+- The installed launcher enables sidecar idle-exit for browser Workbench
+  sessions. The Workbench sends session heartbeats and a close beacon; after the
+  last tab closes or heartbeats expire, the sidecar stops itself after the
+  configured quiet period. This is the primary way to prevent lingering
+  `Relay.Sidecar.exe` processes during normal use. Installer process-stop
+  preflight remains best-effort cleanup, not the main lifecycle mechanism.
 - Workspace selection is part of the active app UX. Normal users choose a
   workspace through the OS file explorer. Direct path entry is not the primary
   installed flow, and no picker state may be written into the selected/shared

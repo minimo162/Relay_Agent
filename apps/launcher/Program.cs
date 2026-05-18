@@ -34,6 +34,10 @@ startInfo.Environment["RELAY_PORT"] = port.ToString();
 startInfo.Environment["RELAY_LAUNCH_TOKEN"] = token;
 startInfo.Environment["RELAY_DATA_DIR"] = dataDir;
 startInfo.Environment["RELAY_WORKBENCH_DIST"] = workbenchDist;
+startInfo.Environment["RELAY_ENABLE_IDLE_EXIT"] = "1";
+startInfo.Environment["RELAY_IDLE_EXIT_MS"] = Environment.GetEnvironmentVariable("RELAY_IDLE_EXIT_MS") ?? "60000";
+startInfo.Environment["RELAY_IDLE_STARTUP_GRACE_MS"] = Environment.GetEnvironmentVariable("RELAY_IDLE_STARTUP_GRACE_MS") ?? "180000";
+startInfo.Environment["RELAY_IDLE_HEARTBEAT_TTL_MS"] = Environment.GetEnvironmentVariable("RELAY_IDLE_HEARTBEAT_TTL_MS") ?? "30000";
 
 using var process = Process.Start(startInfo);
 if (process is null)

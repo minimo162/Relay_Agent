@@ -98,6 +98,78 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-18 Browser Session Lifecycle And Installer Lock Plan
+
+This plan fixes the remaining installer-lock class of failures at the source.
+The `0.3.7` versioned-payload installer prevents a running
+`Relay.Sidecar.exe` from blocking package copy, but it does not prevent the old
+sidecar process from living indefinitely after the browser Workbench tab is
+closed. The historical stable Tauri line avoided many of these locks because
+the desktop process owned child lifetime through the Windows process tree/job
+relationship. The active browser-hosted architecture needs an explicit browser
+session lease instead.
+
+Goal:
+
+> A sidecar launched for the installed Workbench should shut itself down after
+> the last Workbench browser tab disappears, while developer/test sidecars stay
+> stable unless idle-exit is explicitly enabled.
+
+Architecture:
+
+1. **Workbench session lease**
+   - The Workbench creates a per-tab/session `clientId`.
+   - It posts an immediate heartbeat and then sends periodic heartbeats while
+     the tab is alive.
+   - It sends a best-effort `pagehide`/`beforeunload` close beacon when the tab
+     closes or navigates away.
+   - This is invisible UI plumbing. It must not add new controls or diagnostic
+     clutter to the minimal Workbench surface.
+
+2. **Sidecar lifecycle monitor**
+   - The sidecar records active Workbench clients, their last heartbeat time,
+     active HTTP requests, and recent request activity.
+   - When idle-exit is enabled, the sidecar stops itself after:
+     - startup grace has elapsed;
+     - no fresh Workbench client lease remains;
+     - no local request is in flight;
+     - the configured quiet period has elapsed.
+   - Heartbeat expiry covers browser/process crashes where the close beacon is
+     not delivered.
+
+3. **Launcher-owned production policy**
+   - The launcher enables idle-exit for installed/browser-launched sessions
+     with conservative timeouts.
+   - Direct `dotnet run`, smoke tests, and development sessions do not enable
+     idle-exit by default. They may opt in with environment variables.
+   - This avoids flaky development runs while making normal installed use
+     self-cleaning.
+
+4. **No fallback runtime**
+   - Do not reintroduce Tauri, AionUi, OpenCode/OpenWork, or a background
+     updater just to handle process lifetime.
+   - Do not depend on the installer killing processes as the primary lifecycle
+     mechanism. Installer preflight remains best-effort cleanup.
+
+Environment contract:
+
+- `RELAY_ENABLE_IDLE_EXIT=1` enables sidecar idle shutdown.
+- `RELAY_DISABLE_IDLE_EXIT=1` disables it and wins over enable.
+- `RELAY_IDLE_EXIT_MS` controls the post-idle quiet period.
+- `RELAY_IDLE_STARTUP_GRACE_MS` controls the initial no-client grace window.
+- `RELAY_IDLE_HEARTBEAT_TTL_MS` controls stale client expiry.
+
+Acceptance:
+
+- Closing the browser Workbench tab lets the installed sidecar exit without the
+  user needing Task Manager.
+- A failed close beacon still exits after heartbeat TTL plus quiet period.
+- Existing development and smoke commands do not unexpectedly stop sidecars.
+- The Windows installer remains per-user and continues to avoid locked-file
+  overwrite failures.
+- The behavior is covered by a deterministic sidecar idle-exit smoke test and
+  documented in the packaging policy and implementation log.
+
 ### 2026-05-18 Minimal Professional Workbench UX Plan
 
 This plan defines the visual and interaction direction for the active browser

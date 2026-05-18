@@ -23,6 +23,7 @@ import type { ApprovalState, RunEvent, RunStatus, StatusResponse, WorkspacePickR
 const workspaceStorageKey = "relay.workbench.workspace";
 const workspaceHistoryKey = "relay.workbench.workspaceHistory";
 const threadStorageKey = "relay.workbench.threadId";
+const workbenchClientStorageKey = "relay.workbench.clientId";
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
 
 type ReadinessState = {
@@ -80,6 +81,61 @@ export function App() {
   const authHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
     return token ? { ...extra, "X-Relay-Token": token } : extra;
   }, []);
+
+  useEffect(() => {
+    const clientId = loadWorkbenchClientId();
+    let closed = false;
+    const payload = () => JSON.stringify({ clientId });
+
+    const heartbeat = async () => {
+      if (closed) return;
+      try {
+        await fetch(api("/api/session/heartbeat"), {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: payload(),
+        });
+      } catch {
+        // Readiness polling already surfaces sidecar connectivity failures.
+      }
+    };
+
+    const closeSession = () => {
+      if (closed) return;
+      closed = true;
+      const body = payload();
+      const blob = new Blob([body], { type: "application/json" });
+      if (!(typeof navigator.sendBeacon === "function" && navigator.sendBeacon(api("/api/session/closed"), blob))) {
+        void fetch(api("/api/session/closed"), {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body,
+          keepalive: true,
+        }).catch(() => undefined);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void heartbeat();
+    };
+    const onPageHide = (event: PageTransitionEvent) => {
+      if (!event.persisted) closeSession();
+    };
+
+    void heartbeat();
+    const interval = window.setInterval(() => void heartbeat(), 10_000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", closeSession);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", closeSession);
+      closeSession();
+    };
+  }, [api, authHeaders]);
 
   const closeEventStream = useCallback((abort = true) => {
     if (abort) agentRef.current?.abortRun();
@@ -745,6 +801,18 @@ function loadThreadId(): string {
   if (existing) return existing;
   const next = createRunId("thread");
   localStorage.setItem(threadStorageKey, next);
+  return next;
+}
+
+function loadWorkbenchClientId(): string {
+  const next = createRunId("client");
+  try {
+    const existing = sessionStorage.getItem(workbenchClientStorageKey);
+    if (existing) return existing;
+    sessionStorage.setItem(workbenchClientStorageKey, next);
+  } catch {
+    // Stale ids expire server-side if sessionStorage is unavailable.
+  }
   return next;
 }
 

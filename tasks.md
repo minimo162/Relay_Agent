@@ -13,6 +13,12 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
+The completed active queue is `LIFECYCLE*`. It implements the 2026-05-18
+Browser Session Lifecycle And Installer Lock Plan from `PLANS.md`: make the
+browser-launched sidecar shut down after the last Workbench tab closes, while
+keeping development/test sidecars stable unless idle-exit is explicitly
+enabled.
+
 The completed active queue is `INSTALLLOCK*`. It implements the 2026-05-18
 User-Scope Installer Locked-File Remediation Plan from `PLANS.md`: make the
 Windows user-scope NSIS installer handle upgrades where `Relay.Sidecar.exe` is
@@ -52,6 +58,181 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### LIFECYCLE-01 - Document Browser Session Lifecycle Contract
+
+Status: completed
+
+Scope:
+
+- Add the Workbench heartbeat, close beacon, sidecar idle monitor, and launcher
+  enablement contract to `PLANS.md`.
+- Keep the plan aligned with the active browser Workbench + .NET sidecar
+  architecture.
+- Explicitly state that installer process-kill preflight is best-effort cleanup,
+  not the primary lifecycle mechanism.
+
+Artifacts:
+
+- `PLANS.md` lifecycle plan.
+- `tasks.md` executable queue.
+
+Acceptance:
+
+- The plan explains why the `0.3.7` versioned-payload fix is insufficient by
+  itself.
+- The plan does not revive Tauri, AionUi, OpenCode/OpenWork, or a background
+  updater as an active fallback.
+
+Verification:
+
+- `git diff --check`
+
+### LIFECYCLE-02 - Add Sidecar Idle-Exit Lifecycle Monitor
+
+Status: completed
+
+Scope:
+
+- Add a sidecar lifecycle component that records active Workbench clients,
+  heartbeat freshness, active request count, and last request time.
+- Add authenticated endpoints:
+  - `POST /api/session/heartbeat`
+  - `POST /api/session/closed`
+  - `GET /api/session/status`
+- Add middleware hooks around HTTP requests so the sidecar does not exit while
+  a request is active.
+- Make idle exit opt-in through `RELAY_ENABLE_IDLE_EXIT=1`, disabled by
+  `RELAY_DISABLE_IDLE_EXIT=1`, and configurable with bounded millisecond env
+  values.
+
+Artifacts:
+
+- Sidecar lifecycle source.
+- Program startup integration.
+
+Acceptance:
+
+- Idle exit is disabled by default for direct development/test sidecar runs.
+- When enabled, the sidecar stops itself only after startup grace, no fresh
+  client heartbeat, no active requests, and idle quiet-period expiry.
+- Session endpoints remain protected by Relay launch token and origin policy.
+
+Verification:
+
+- `pnpm sidecar:idle-exit-smoke`
+- `pnpm sidecar:smoke`
+
+### LIFECYCLE-03 - Add Invisible Workbench Heartbeat And Close Beacon
+
+Status: completed
+
+Scope:
+
+- Create a stable per-tab Workbench `clientId` in session storage.
+- Send an immediate heartbeat, periodic heartbeats, and a visible-tab heartbeat
+  refresh.
+- Send a best-effort close beacon on `pagehide` and `beforeunload`.
+- Do not add any new visible Workbench controls or diagnostic-first UI.
+
+Artifacts:
+
+- Workbench lifecycle hook in `apps/workbench/src/App.tsx`.
+
+Acceptance:
+
+- A live Workbench tab keeps an idle-exit-enabled sidecar alive.
+- Closing or navigating away from the tab allows the sidecar to exit after the
+  configured quiet period.
+- The minimal Workbench visual surface is unchanged.
+
+Verification:
+
+- `pnpm typecheck`
+- `pnpm workbench:ux-e2e` when browser support is available.
+
+### LIFECYCLE-04 - Enable Idle Exit Only From Launcher
+
+Status: completed
+
+Scope:
+
+- Update the launcher to set `RELAY_ENABLE_IDLE_EXIT=1` for installed
+  Workbench launches.
+- Set conservative default launcher timeouts so first-load Copilot warmup is
+  not killed before the Workbench sends its first heartbeat.
+- Keep direct sidecar launches free of idle-exit unless explicitly configured.
+
+Artifacts:
+
+- Launcher environment wiring.
+
+Acceptance:
+
+- Normal installed launches self-clean after the Workbench tab closes.
+- Existing smoke/development scripts do not need to race against idle exit.
+
+Verification:
+
+- `pnpm sidecar:idle-exit-smoke`
+- `pnpm check`
+
+### LIFECYCLE-05 - Add Deterministic Idle-Exit Smoke Coverage
+
+Status: completed
+
+Scope:
+
+- Add a Node smoke test that starts the built sidecar with short idle-exit
+  values, posts a heartbeat, verifies the process remains alive, posts a close
+  event, and verifies the process exits.
+- Add the smoke test to root `pnpm check`.
+
+Artifacts:
+
+- `scripts/sidecar-idle-exit-smoke.mjs`
+- `package.json` script entries.
+
+Acceptance:
+
+- The smoke fails if the sidecar exits while a fresh client is present.
+- The smoke fails if the sidecar does not exit after the client closes.
+
+Verification:
+
+- `pnpm sidecar:idle-exit-smoke`
+- `pnpm check`
+
+### LIFECYCLE-06 - Package, Document, Commit, And Release
+
+Status: completed
+
+Scope:
+
+- Bump Workbench, sidecar, and launcher to the next patch version.
+- Update packaging policy and implementation log.
+- Generate Linux/Windows packages, Windows NSIS installer, release inventory,
+  and SHA256 manifest.
+- Commit and push to `main`.
+- Create a GitHub Release with installer, archives, manifest, and inventory.
+
+Artifacts:
+
+- Updated docs.
+- `dist/installer/Relay.Agent-<version>-win-x64-setup.exe`
+- `dist/relay-agent-<version>-linux-x64.tar.gz`
+- `dist/relay-agent-<version>-win-x64.zip`
+- Release inventory and checksums.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Release assets are visible on GitHub.
+
+Verification:
+
+- `pnpm check`
+- `gh release view`
 
 ### INSTALLLOCK-01 - Confirm Install-Root And Lock Failure Contract
 
