@@ -53,6 +53,7 @@ InstallDir "$LOCALAPPDATA\\Programs\\Relay Agent"
 InstallDirRegKey HKCU "Software\\Relay Agent" "InstallDir"
 
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 !define MUI_ABORTWARNING
 !define MUI_ICON "${icon}"
 !define MUI_UNICON "${icon}"
@@ -76,8 +77,20 @@ VIAddVersionKey "ProductVersion" "${version}"
 Section "Relay Agent" SecMain
   SectionIn RO
   SetShellVarContext current
+  Call StopRunningRelayAgent
+  Call VerifyRelayInstallUnlocked
   SetOutPath "$INSTDIR"
   CreateDirectory "$INSTDIR"
+  RMDir /r "$INSTDIR\\wwwroot"
+  RMDir /r "$INSTDIR\\relay-tools"
+  RMDir /r "$INSTDIR\\relay-assets"
+  Delete "$INSTDIR\\Relay.Sidecar.exe"
+  Delete "$INSTDIR\\Relay.Launcher.exe"
+  Delete "$INSTDIR\\Relay.Sidecar.dll"
+  Delete "$INSTDIR\\Relay.Launcher.dll"
+  Delete "$INSTDIR\\*.deps.json"
+  Delete "$INSTDIR\\*.runtimeconfig.json"
+  Delete "$INSTDIR\\*.pdb"
   SetOutPath "$INSTDIR"
   File /r "${source}\\*.*"
   CreateDirectory "$SMPROGRAMS\\Relay Agent"
@@ -98,6 +111,31 @@ Section /o "Desktop shortcut" SecDesktop
   SetShellVarContext current
   CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$INSTDIR\\Relay.Launcher.exe" "" "$INSTDIR\\relay-assets\\relay-agent.ico"
 SectionEnd
+
+Function StopRunningRelayAgent
+  DetailPrint "Stopping any running Relay Agent processes from this user install..."
+  ; Check both the canonical install root and the legacy no-space root so
+  ; upgrades from older user-scope installers do not leave Relay.Sidecar.exe
+  ; locked during File /r.
+  nsExec::ExecToStack \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'SilentlyContinue'; $$roots = @('$INSTDIR', '$LOCALAPPDATA\\Programs\\Relay Agent', '$LOCALAPPDATA\\Programs\\RelayAgent') | Where-Object { $$_ }; Get-Process -Name 'Relay.Sidecar','Relay.Launcher' -ErrorAction SilentlyContinue | Where-Object { $$processPath = $$_.Path; $$processPath -and ($$roots | Where-Object { $$processPath.StartsWith($$_, [System.StringComparison]::OrdinalIgnoreCase) }) } | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; exit 0 }"\`
+  Pop $0
+  Pop $1
+  \${If} $0 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "Relay Agent could not prepare the update because a running Relay process could not be stopped.$\\r$\\n$\\r$\\nClose Relay Agent and retry the installer."
+    Abort
+  \${EndIf}
+FunctionEnd
+
+Function VerifyRelayInstallUnlocked
+  DetailPrint "Checking whether Relay Agent files are ready to update..."
+  nsExec::ExecToStack \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'Stop'; $$paths = @('$INSTDIR\\Relay.Sidecar.exe', '$INSTDIR\\Relay.Launcher.exe'); for ($$attempt = 0; $$attempt -lt 10; $$attempt++) { $$locked = @(); foreach ($$path in $$paths) { if (Test-Path -LiteralPath $$path) { try { $$stream = [System.IO.File]::Open($$path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None); $$stream.Close() } catch { $$locked += $$path } } }; if ($$locked.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 500 }; Write-Output ($$locked -join '; '); exit 23 }"\`
+  Pop $0
+  Pop $1
+  \${If} $0 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "Relay Agent is still running and cannot be updated.$\\r$\\n$\\r$\\nClose Relay Agent and retry the installer.$\\r$\\n$\\r$\\nLocked file: $1"
+    Abort
+  \${EndIf}
+FunctionEnd
 
 Section "Uninstall"
   SetShellVarContext current

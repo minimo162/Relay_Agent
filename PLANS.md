@@ -427,6 +427,143 @@ Required release/live checks before publishing a fix release:
   - with no sign-in, the UI shows `Sign in needed`, not raw `Not ready`.
 - Signed-in live Copilot E2E when Edge/CDP is available.
 
+### 2026-05-18 User-Scope Installer Locked-File Remediation Plan
+
+This plan addresses the Windows install error reported after the `0.3.5`
+release:
+
+```text
+error opening file for writing
+C:\Users\m242054\AppData\Local\Programs\RelayAgent\Relay.Sidecar.exe
+```
+
+This is an installer/update regression, not an application runtime design
+change. The active architecture remains the browser Workbench plus .NET
+sidecar, with a user-scope NSIS installer. Do not reintroduce Tauri, AionUi,
+OpenCode/OpenWork, machine-wide install, administrator elevation, or a second
+release track to work around this issue.
+
+#### Current Diagnosis
+
+- The path in the error is the legacy no-space install directory
+  `%LOCALAPPDATA%\Programs\RelayAgent`, while the current packaging policy uses
+  `%LOCALAPPDATA%\Programs\Relay Agent` for new installs.
+- NSIS `InstallDirRegKey` can preserve an existing registry `InstallDir`, so an
+  upgrade may still target the legacy directory even when the current default
+  path has changed.
+- `Relay.Sidecar.exe` is a long-running process. If the installed app is open,
+  if Edge/workbench startup left the sidecar running, or if a previous launcher
+  instance is still alive, NSIS `File /r` cannot overwrite the executable.
+- The current generated NSIS script writes the package files directly into
+  `$INSTDIR` without an update preflight that stops the existing per-user Relay
+  processes, verifies that binaries are unlocked, or emits a friendly recovery
+  message before the raw file-write failure appears.
+
+#### Product Decision
+
+The installer must be robust for in-place user-scope upgrades.
+
+Fresh installs should use the canonical install directory
+`%LOCALAPPDATA%\Programs\Relay Agent`. Upgrades from legacy installs may keep
+using `%LOCALAPPDATA%\Programs\RelayAgent` when that is the registered existing
+install location, but the installer must make that explicit and safe:
+
+- detect both canonical and legacy install roots;
+- stop only the current user's Relay processes whose executable path is under
+  those roots;
+- verify that `Relay.Sidecar.exe` and `Relay.Launcher.exe` are unlocked before
+  copying;
+- fail early with a concise instruction to close Relay Agent and retry if the
+  process cannot be stopped;
+- keep all behavior per-user and avoid UAC/admin prompts.
+
+The user should never have to manually find and kill `Relay.Sidecar.exe` from
+Task Manager for a normal update.
+
+#### Remediation Design
+
+1. **Normalize install-root policy**
+   - Keep `%LOCALAPPDATA%\Programs\Relay Agent` as the fresh-install canonical
+     path in docs and generated NSIS.
+   - Treat `%LOCALAPPDATA%\Programs\RelayAgent` as a supported legacy upgrade
+     path only when it is already registered or exists with a Relay
+     installation.
+   - Update packaging docs and release notes to state that upgrades may remain
+     in the legacy path, but new installs use the canonical spaced path.
+   - Do not put app data, profiles, caches, temp files, or search artifacts in
+     either install root.
+
+2. **Add installer preflight stop logic**
+   - Generate an NSIS preflight before `File /r` that targets:
+     - `$INSTDIR\Relay.Sidecar.exe`;
+     - `$INSTDIR\Relay.Launcher.exe`;
+     - the canonical install root;
+     - the legacy no-space install root.
+   - Prefer a graceful stop when possible; if no app-local shutdown endpoint is
+     available, use a bounded per-user process stop through PowerShell or
+     another Windows built-in mechanism.
+   - Scope process termination by executable path under known Relay install
+     roots so unrelated processes with similar names are not affected.
+   - Avoid administrator rights. Same-user Relay processes should be stoppable
+     without elevation; if not, show a friendly error.
+
+3. **Verify file locks before copying**
+   - After process stop, explicitly check whether `Relay.Sidecar.exe` and
+     `Relay.Launcher.exe` in `$INSTDIR` can be renamed/deleted or opened for
+     write.
+   - Retry briefly with small sleeps to cover slow process shutdown.
+   - If the files remain locked, abort before the bulk `File /r` step with a
+     clear message:
+     `Relay Agent is still running. Close the Relay Agent window and retry the
+     installer.`
+   - Keep raw NSIS file-write errors out of the normal failure path.
+
+4. **Make upgrades atomic enough for app binaries**
+   - After lock verification, remove or replace only the application install
+     files in `$INSTDIR`. Do not delete user data directories.
+   - Ensure stale `Relay.Sidecar.exe`, `Relay.Launcher.exe`, old workbench
+     assets, and old `relay-tools` binaries cannot survive a successful update.
+   - Preserve Start Menu/Desktop shortcuts and registry entries by rewriting
+     them after copy, including icon and canonical display metadata.
+
+5. **Harden installer smoke tests**
+   - Extend release smoke coverage to inspect the generated NSIS script for:
+     - `RequestExecutionLevel user`;
+     - canonical and legacy install-root handling;
+     - preflight stop logic before `File /r`;
+     - lock-check or friendly abort behavior;
+     - no machine-wide registry writes;
+     - icon wiring still present.
+   - Add a lightweight generated-script regression fixture so the lock guard
+     cannot be removed accidentally.
+   - Keep this deterministic on Linux CI/dev environments by testing generated
+     script content rather than requiring a Windows install run.
+
+6. **Add Windows manual acceptance before release**
+   - On a Windows machine with an existing installed Relay instance:
+     1. start Relay Agent so `Relay.Sidecar.exe` is running;
+     2. launch the new installer without administrator elevation;
+     3. confirm the installer stops/replaces the running app or fails with the
+        friendly close-and-retry message;
+     4. confirm the installed app starts, icon remains correct, workspace picker
+        works, and Copilot readiness reaches the expected state.
+   - Record the exact outcome in `docs/IMPLEMENTATION.md` before releasing the
+     fix.
+
+#### Acceptance Criteria
+
+- Installing over a running user-scope Relay install no longer surfaces the raw
+  `error opening file for writing ... Relay.Sidecar.exe` message.
+- Fresh installs use `%LOCALAPPDATA%\Programs\Relay Agent`.
+- Legacy upgrades from `%LOCALAPPDATA%\Programs\RelayAgent` are handled
+  intentionally and do not create a confusing duplicate install unless the user
+  explicitly changes the directory page.
+- The installer still requires no administrator rights, UAC elevation, or
+  personal Windows password.
+- `pnpm check`, `pnpm sidecar:publish:windows`,
+  `pnpm sidecar:installer:windows`, and the installer policy smoke pass.
+- A Windows installed-app upgrade smoke is recorded before the next release.
+
 ### 2026-05-17 Direct Corpus Interaction Plan
 
 The arXiv paper "Beyond Semantic Similarity: Rethinking Retrieval for Agentic

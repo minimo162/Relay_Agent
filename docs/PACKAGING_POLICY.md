@@ -29,6 +29,16 @@ Workbench architecture rather than the removed Tauri shell.
 - The current Windows release track uses a GitHub Release NSIS installer asset
   containing the sidecar Workbench, required runtime tools, and
   release inventory/SBOM-style metadata.
+- Fresh Windows installs use `%LOCALAPPDATA%\Programs\Relay Agent`. Upgrades
+  from older user-scope installs may continue to use the registered legacy
+  `%LOCALAPPDATA%\Programs\RelayAgent` path so the installer updates the
+  existing app instead of silently creating a duplicate install.
+- Before copying package files, the Windows installer must stop same-user
+  `Relay.Sidecar.exe` and `Relay.Launcher.exe` processes whose executable paths
+  are under known Relay install roots, then verify that the installed binaries
+  are unlocked. If they remain locked, the installer must show a concise
+  close-and-retry message instead of falling through to a raw NSIS
+  `error opening file for writing` prompt.
 - The current Linux release track uses a GitHub Release archive plus launcher
   and the same release inventory/SBOM-style metadata.
 - In-app auto-update is out of scope for this phase.

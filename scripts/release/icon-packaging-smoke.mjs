@@ -27,14 +27,29 @@ assert(packageScript.includes("relay-agent.ico"), "package-sidecar must copy rel
 
 const nsisScript = readFileSync(resolve(root, "scripts/release/build-windows-installer.mjs"), "utf8");
 for (const needle of [
+  "RequestExecutionLevel user",
   "Icon \"${icon}\"",
   "UninstallIcon \"${icon}\"",
   "!define MUI_ICON \"${icon}\"",
   "!define MUI_UNICON \"${icon}\"",
   "relay-assets\\\\relay-agent.ico",
+  "StopRunningRelayAgent",
+  "VerifyRelayInstallUnlocked",
+  "$LOCALAPPDATA\\\\Programs\\\\Relay Agent",
+  "$LOCALAPPDATA\\\\Programs\\\\RelayAgent",
+  "Relay Agent is still running and cannot be updated",
 ]) {
   assert(nsisScript.includes(needle), `NSIS generator is missing icon wiring: ${needle}`);
 }
+
+assert(!nsisScript.includes("RequestExecutionLevel admin"), "installer must not request admin execution level");
+assert(!nsisScript.includes("HKLM"), "installer must not write machine-wide HKLM registry keys");
+
+const preflightIndex = nsisScript.indexOf("Call StopRunningRelayAgent");
+const lockCheckIndex = nsisScript.indexOf("Call VerifyRelayInstallUnlocked");
+const fileCopyIndex = nsisScript.indexOf("File /r");
+assert(preflightIndex >= 0 && preflightIndex < fileCopyIndex, "process stop preflight must run before File /r");
+assert(lockCheckIndex >= 0 && lockCheckIndex < fileCopyIndex, "locked-binary check must run before File /r");
 
 for (const packagedAsset of [
   "dist/relay-agent-win-x64/relay-assets/relay-agent.ico",

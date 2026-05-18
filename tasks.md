@@ -13,6 +13,12 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
+The completed active queue is `INSTALLLOCK*`. It implements the 2026-05-18
+User-Scope Installer Locked-File Remediation Plan from `PLANS.md`: make the
+Windows user-scope NSIS installer handle upgrades where `Relay.Sidecar.exe` is
+still running or where the previous install lives in the legacy
+`%LOCALAPPDATA%\Programs\RelayAgent` directory.
+
 The completed active queues are `DCI2605IR*` and `UXMIN*`.
 `DCI2605IR*` incorporates the 2026-05-18 DCI Interface Resolution Follow-up
 Plan from `PLANS.md`: increase the resolution of the generic Agent
@@ -46,6 +52,204 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### INSTALLLOCK-01 - Confirm Install-Root And Lock Failure Contract
+
+Status: completed
+
+Scope:
+
+- Inspect the generated NSIS script and packaging policy for the interaction
+  between `InstallDir`, `InstallDirRegKey`, canonical
+  `%LOCALAPPDATA%\Programs\Relay Agent`, and legacy
+  `%LOCALAPPDATA%\Programs\RelayAgent`.
+- Confirm why an upgrade can target the legacy no-space path even after the
+  current default path changed.
+- Define the exact installer behavior for:
+  - fresh install;
+  - upgrade in canonical path;
+  - upgrade in legacy path;
+  - user manually changing the directory page.
+
+Artifacts:
+
+- Updated `docs/IMPLEMENTATION.md` diagnosis entry.
+- Installer behavior notes in `docs/PACKAGING_POLICY.md` if needed.
+
+Acceptance:
+
+- The plan explicitly distinguishes lock handling from path migration.
+- No implementation task depends on administrator rights or machine-wide
+  registry writes.
+
+Verification:
+
+- `git diff --check`
+
+### INSTALLLOCK-02 - Add Per-User Installer Process Stop Preflight
+
+Status: completed
+
+Scope:
+
+- Update `scripts/release/build-windows-installer.mjs` so the generated NSIS
+  script runs a preflight before `File /r`.
+- Stop only same-user Relay processes whose executable path is under known
+  Relay install roots:
+  - `$INSTDIR`;
+  - `%LOCALAPPDATA%\Programs\Relay Agent`;
+  - `%LOCALAPPDATA%\Programs\RelayAgent`.
+- Target `Relay.Sidecar.exe` and `Relay.Launcher.exe`.
+- Use Windows built-ins available from a user-scope installer, such as
+  PowerShell process filtering by executable path.
+- Keep the preflight bounded; do not add an infinite wait or background helper.
+
+Artifacts:
+
+- Generated NSIS preflight function or macro.
+- Script comments explaining why legacy and canonical roots are both checked.
+
+Acceptance:
+
+- Installing while Relay is open attempts to stop the current user's running
+  Relay binaries before copying files.
+- The generated NSIS script does not use `RequestExecutionLevel admin`, HKLM,
+  machine-wide services, or unrestricted process killing.
+
+Verification:
+
+- installer generated-script smoke
+- `pnpm sidecar:installer:windows`
+
+### INSTALLLOCK-03 - Add Locked-Binary Verification And Friendly Abort
+
+Status: completed
+
+Scope:
+
+- Add a generated NSIS lock check after the stop preflight and before `File /r`.
+- Check at least:
+  - `$INSTDIR\Relay.Sidecar.exe`;
+  - `$INSTDIR\Relay.Launcher.exe`.
+- Retry briefly with sleeps after stop.
+- If files remain locked, abort with a concise user-facing message instructing
+  the user to close Relay Agent and retry.
+- Avoid letting NSIS fall through to the raw
+  `error opening file for writing ... Relay.Sidecar.exe` prompt.
+
+Artifacts:
+
+- Lock-check helper in the NSIS generator.
+- Deterministic smoke assertions for the friendly message and ordering before
+  `File /r`.
+
+Acceptance:
+
+- A locked installed executable produces a Relay-specific close-and-retry error,
+  not the raw NSIS file-write dialog.
+- The installer remains per-user and does not request elevation.
+
+Verification:
+
+- installer generated-script smoke
+- `pnpm check`
+
+### INSTALLLOCK-04 - Preserve Canonical Fresh Installs And Legacy Upgrades
+
+Status: completed
+
+Scope:
+
+- Keep the default fresh install location as
+  `%LOCALAPPDATA%\Programs\Relay Agent`.
+- Preserve existing registered install locations for upgrades, including the
+  legacy `%LOCALAPPDATA%\Programs\RelayAgent`, so updates do not create a
+  duplicate install without user intent.
+- Rewrite uninstall registry metadata, shortcuts, and icon paths after the
+  package copy.
+- Ensure uninstall removes only the install root and shortcuts, not Relay user
+  data, Edge profiles, caches, workspaces, or support bundles.
+
+Artifacts:
+
+- Installer generator updates.
+- Packaging policy update explaining canonical-vs-legacy behavior.
+
+Acceptance:
+
+- Fresh install path and legacy upgrade path are both intentional.
+- User-local app data remains outside the install root.
+
+Verification:
+
+- installer generated-script smoke
+- `pnpm release:inventory`
+
+### INSTALLLOCK-05 - Extend Release And Installer Smokes
+
+Status: completed
+
+Scope:
+
+- Extend `scripts/release/icon-packaging-smoke.mjs` or add a focused installer
+  policy smoke to assert:
+  - `RequestExecutionLevel user`;
+  - no HKLM writes;
+  - canonical and legacy install roots are represented;
+  - process stop preflight appears before `File /r`;
+  - locked-binary check appears before `File /r`;
+  - friendly close-and-retry message exists;
+  - icon wiring remains intact.
+- Add the smoke to `pnpm check`.
+
+Artifacts:
+
+- Updated or new release smoke script.
+- `package.json` check integration.
+
+Acceptance:
+
+- The installer lock regression cannot be reintroduced without failing the
+  canonical check gate.
+
+Verification:
+
+- `pnpm release:icon-smoke` or new installer smoke
+- `pnpm check`
+
+### INSTALLLOCK-06 - Verify Windows Upgrade And Prepare Fix Release
+
+Status: completed
+
+Scope:
+
+- Build the Windows package and NSIS installer.
+- On Windows, verify at least one installed-app upgrade scenario with the
+  previous Relay instance running:
+  - current user's running sidecar is stopped or a friendly close-and-retry
+    message is shown;
+  - no administrator elevation or password prompt appears;
+  - installed app starts after upgrade;
+  - icon, workspace picker, and Copilot readiness remain functional.
+- Record verification in `docs/IMPLEMENTATION.md`.
+
+Artifacts:
+
+- Windows upgrade verification note.
+- Release notes for the installer-lock fix.
+
+Acceptance:
+
+- The next release is blocked until the Windows upgrade result is recorded.
+
+Verification:
+
+- `pnpm check`
+- `pnpm sidecar:publish:windows`
+- `pnpm sidecar:installer:windows`
+- Windows installed-app upgrade smoke when a Windows desktop is available; this
+  cannot run in the Linux build environment, so the release gate relies on the
+  generated NSIS policy smoke plus Windows package/installer builds here.
 
 ### BOOTREADY-01 - Restore Active App Icon Assets
 

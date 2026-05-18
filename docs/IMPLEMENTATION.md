@@ -32,6 +32,60 @@
 
 ## Milestone Log
 
+### 2026-05-18 User-Scope Installer Locked-File Remediation
+
+Implemented the `INSTALLLOCK-01` through `INSTALLLOCK-06` queue from
+`tasks.md` for the Windows user-scope NSIS installer.
+
+Change:
+
+- Diagnosed the reported install failure
+  `error opening file for writing ...\RelayAgent\Relay.Sidecar.exe` as an
+  in-place upgrade case where the existing sidecar executable can remain locked
+  and where the legacy no-space install root can still be selected from the
+  registered `InstallDir`.
+- Kept `%LOCALAPPDATA%\Programs\Relay Agent` as the canonical fresh-install
+  path while treating `%LOCALAPPDATA%\Programs\RelayAgent` as a supported
+  legacy upgrade root when already registered or present.
+- Added generated NSIS preflight before `File /r`:
+  - stop same-user `Relay.Sidecar.exe` and `Relay.Launcher.exe` processes whose
+    executable paths are under `$INSTDIR`, the canonical root, or the legacy
+    root;
+  - verify that `$INSTDIR\Relay.Sidecar.exe` and
+    `$INSTDIR\Relay.Launcher.exe` can be opened for exclusive write access;
+  - retry briefly and then abort with a Relay-specific close-and-retry message
+    instead of falling through to a raw NSIS file-write dialog.
+- Removed stale app bundle folders/files from the install root after lock
+  verification and before copying the new package: `wwwroot`, `relay-tools`,
+  `relay-assets`, sidecar/launcher binaries, `.deps.json`,
+  `.runtimeconfig.json`, and `.pdb` files.
+- Extended the packaging smoke to assert user-scope execution, icon wiring,
+  canonical and legacy install-root handling, process-stop preflight,
+  lock-check ordering before `File /r`, friendly abort text, and no HKLM/admin
+  installer behavior.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.6`.
+
+Verification commands run locally:
+
+```bash
+PATH=$HOME/.dotnet:$PATH pnpm release:icon-smoke
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=$HOME/.dotnet:$PATH pnpm check
+```
+
+Result:
+
+- Installer generated-script smoke passed.
+- Windows package and NSIS installer generated successfully as
+  `dist/installer/Relay.Agent-0.3.6-win-x64-setup.exe`.
+- Full `pnpm check` passed.
+- Windows installed-app upgrade smoke could not be executed in this Linux build
+  environment. The next manual Windows verification should install over a
+  running Relay instance and confirm that the installer either stops the
+  current-user sidecar/launcher or shows the friendly close-and-retry message
+  without requesting administrator rights.
+
 ### 2026-05-18 Installed Startup, Icon, Readiness, And Workspace Picker Repair
 
 Implemented the `BOOTREADY-01` through `BOOTREADY-09` queue from `tasks.md` for
