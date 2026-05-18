@@ -21,6 +21,7 @@ public static class RelayPromptBuilder
             "- If the objective and workspace are known, ask_user is invalid unless a critical missing requirement blocks all safe local action.",
             "- If a protocol rule blocks your intended final answer, return action=tool instead.",
             "- For local search or evidence tasks, do not answer from grep snippets alone; before citing a candidate file as the answer, read that exact file path.",
+            "- For PDF proofreading or two-PDF comparison, read every exact PDF needed before finalizing; cite only extracted text evidence and state text-layer/OCR limitations when extraction is incomplete.",
         };
 
         if (!string.IsNullOrWhiteSpace(state.OriginalUserRequest))

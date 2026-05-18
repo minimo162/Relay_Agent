@@ -82,6 +82,12 @@ Distribution Plan from `PLANS.md`: make installer-free portable packages the
 primary release artifacts while keeping the Windows NSIS installer as an
 optional convenience.
 
+The active queue is `PDFUX*`. It implements the 2026-05-19 Portable PDF Review
+UX Plan from `PLANS.md`: expose local PDF proofreading and two-PDF comparison
+as first-run friendly recipes over the same CopilotKit/AG-UI chat and generic
+OpenCode-compatible `read`/`glob`/`grep` tools, while adding an HTML-first
+portable front door.
+
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
@@ -129,6 +135,119 @@ Acceptance:
   `dist/relay-agent-<version>-win-x64.zip`.
 - `pnpm sidecar:archive:linux` writes
   `dist/relay-agent-<version>-linux-x64.tar.gz`.
+
+### PDFUX-01 - Document Portable PDF Review Plan
+
+Status: completed
+
+Scope:
+
+- Add the portable PDF review UX plan to `PLANS.md`.
+- Add this executable `PDFUX*` queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan keeps PDF review as a generic tool recipe, not a new backend mode.
+- The plan includes HTML-first portable UX, typo review, two-PDF comparison,
+  and text-layer/OCR limitations.
+
+### PDFUX-02 - Add Workbench PDF Starter Chips
+
+Status: completed
+
+Scope:
+
+- Add two compact starter chips to the CopilotKit Workbench after a workspace
+  is selected:
+  - `PDFの誤字を探す`;
+  - `2つのPDFを比較`.
+- Insert starter drafts into the CopilotKit composer when possible, and copy
+  to the clipboard if the composer cannot be found.
+- Keep the UI minimal and avoid a separate PDF mode.
+
+Artifacts:
+
+- Updated `apps/workbench/src/App.tsx`.
+- Updated `apps/workbench/src/styles.css`.
+
+Acceptance:
+
+- Starter drafts instruct Copilot to use exact `read`, evidence-based findings,
+  and OCR/text-layer caveats.
+- The Workbench remains a single chatbot-style surface.
+
+### PDFUX-03 - Add Portable HTML Front Door
+
+Status: completed
+
+Scope:
+
+- Include a self-contained `Relay Agent.html` in portable package roots.
+- Include a Japanese Windows launch helper alongside the existing English
+  helper.
+- Explain startup, workspace selection, PDF proofreading, and PDF comparison
+  without implying standalone HTML can execute local tools.
+
+Artifacts:
+
+- Updated `scripts/release/package-sidecar.mjs`.
+
+Acceptance:
+
+- Windows and Linux package roots contain `Relay Agent.html`.
+- Windows package roots contain both `Start Relay Agent.cmd` and
+  `Relay Agent を起動.cmd`.
+
+### PDFUX-04 - Harden PDF Review Tool Guidance
+
+Status: completed
+
+Scope:
+
+- Add Agent Framework and turn-state prompt guidance for PDF proofreading and
+  comparison.
+- Keep guidance focused on generic `read`/`glob`/`grep` tools and current
+  PDF text extraction limits.
+
+Artifacts:
+
+- Updated `apps/sidecar/AgentRunner.cs`.
+- Updated `apps/sidecar/RelayPromptBuilder.cs`.
+
+Acceptance:
+
+- Prompts require exact PDF reads before final answers.
+- Prompts do not introduce Relay-specific PDF engines or hidden fallback
+  tools.
+
+### PDFUX-05 - Add Smoke Coverage And Release
+
+Status: completed
+
+Scope:
+
+- Add a smoke script for the PDF starter prompts and portable HTML packaging.
+- Add it to `pnpm check`.
+- Build portable packages and optional installer.
+- Publish the release assets.
+
+Artifacts:
+
+- `scripts/pdf-review-ux-smoke.mjs`.
+- Updated `package.json`.
+- Release artifacts for the current version.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Portable package creation and release inventory pass.
+- GitHub release contains portable archives, optional installer, inventory,
+  SBOM, and SHA-256 checksums.
 
 ### PORTABLE-02 - Add Portable Launch Helpers And README
 

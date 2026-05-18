@@ -162,6 +162,92 @@ Implementation plan:
      when generated.
    - `pnpm check` remains green.
 
+### 2026-05-19 Portable PDF Review UX Plan
+
+Users should be able to bring local PDFs into the same generic Relay Workbench
+conversation for proofreading and cross-document consistency checks. This must
+not create a separate document-review mode, a dedicated PDF search engine, or a
+parallel runner. PDF review is a high-frequency recipe over the existing
+OpenCode-compatible tool catalog: Copilot chooses `glob`, `grep`, and exact
+`read`; Relay extracts supported local PDF text and returns AG-UI tool events;
+the Workbench stays a normal CopilotKit chat surface.
+
+Reference sources checked for this plan:
+
+- CopilotKit is the frontend stack for agent chat, generative UI, and
+  human-in-the-loop workflows, and can connect React apps to arbitrary agent
+  frameworks: `https://docs.showcase.copilotkit.ai/`.
+- AG-UI defines streaming lifecycle, message, tool-call, tool-result, state,
+  and error events, so PDF review should remain on the `/agui/relay` event
+  stream: `https://docs.ag-ui.com/sdk/js/core/events`.
+- Microsoft Agent Framework handles the model tool-calling loop and emphasizes
+  clear tool descriptions, function tools, local MCP tools, and human approval
+  for sensitive actions:
+  `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools` and
+  `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`.
+- OpenCode's built-in model-facing tools remain the local tool contract
+  reference: `read`, `grep`, `glob`, `edit`, `write`, `apply_patch`, and
+  bounded `bash`: `https://opencode.ai/docs/tools`.
+- UI direction follows the internal UI/UX search result for a minimal
+  professional document-review workbench: one calm column, restrained
+  monochrome/accent palette, large whitespace, clear primary action, no
+  diagnostic-first clutter, visible focus, and accessible labels.
+
+Implementation plan:
+
+1. **Keep PDF review as promptable generic work**
+   - Add Workbench starter chips for:
+     - `PDFの誤字を探す`;
+     - `2つのPDFを比較`.
+   - The chips insert a concise draft into the CopilotKit composer when
+     possible, or copy the draft to the clipboard as a fallback.
+   - Drafts instruct Copilot to use exact `read` on the user-specified PDFs,
+     cite only extracted text evidence, list suspected typos or inconsistent
+     values, and clearly mark image-only/OCR-required pages as not confirmed.
+   - Do not add drag-and-drop file upload unless it can be represented as
+     workspace-local paths that Relay can validate. The first version remains
+     path-based because Relay cannot safely access browser-only `File` objects
+     from the sidecar tool catalog.
+
+2. **Add an HTML-first portable front door**
+   - Include `Relay Agent.html` at the portable package root. It is a
+     user-facing start page, not the runtime itself.
+   - The HTML explains in a first-run friendly way how to start the local
+     launcher, choose a workspace, and use the two PDF review starters.
+   - Windows portable packages also include a Japanese launch helper,
+     `Relay Agent を起動.cmd`, alongside `Start Relay Agent.cmd`.
+   - The HTML must not imply that a standalone browser page can execute local
+     tools without the sidecar.
+
+3. **Harden tool guidance for PDF review**
+   - Add Agent Framework prompt guidance for local PDF proofreading and
+     two-PDF comparison:
+     - use `read` on every exact PDF before finalizing;
+     - do not treat filenames as content evidence;
+     - mention the current text-layer-only limitation for PDF extraction;
+     - cite snippets/sections from extracted content when making findings.
+   - Add the same rule to `RelayPromptBuilder` so admissible-action turns do
+     not produce premature finals for PDF review tasks.
+
+4. **Keep the GUI minimal**
+   - Keep one Workbench, one workspace picker, one chat, one support disclosure.
+   - Add the PDF starter row as small chips below the workspace, not as a
+     separate mode card.
+   - Keep long instructions out of the main UI; starter prompts carry the
+     procedural detail inside the composer draft.
+
+5. **Acceptance criteria**
+   - Workbench shows the two PDF starter chips after a workspace is selected.
+   - Starter chips insert or copy drafts that explicitly mention `read`, PDF
+     paths, evidence, typo/表記ゆれ review, comparison, and OCR/text-layer
+     limits.
+   - `Relay Agent.html`, `README_PORTABLE.txt`, and platform launch helpers are
+     included in portable package roots.
+   - Agent/turn prompt text contains PDF proofreading and comparison guidance
+     without introducing a PDF-specific backend runner.
+   - `pnpm check`, portable package creation, release inventory, and release
+     artifact generation pass.
+
 ### 2026-05-18 OpenCode-Style Generic Harness Reset Plan
 
 This plan resets the remaining Relay-specific search behavior. Recent manual

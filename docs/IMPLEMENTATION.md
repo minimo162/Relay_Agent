@@ -33,6 +33,71 @@
 
 ## Milestone Log
 
+### 2026-05-19 Portable PDF Review UX
+
+Follow-up to the request for proofreading local PDFs, comparing two local PDFs,
+and making the portable package friendlier for first-time users.
+
+Design decision:
+
+- PDF review stays inside the single CopilotKit/AG-UI Workbench. It is not a
+  separate product mode or a dedicated document-search engine.
+- The implementation follows the current Agent Framework/OpenCode-compatible
+  harness direction: Copilot chooses generic `glob`, `grep`, and exact `read`;
+  Relay validates and executes; AG-UI streams tool events; CopilotKit renders
+  the conversation.
+- The current PDF extractor is text-layer only. Image-only PDFs and OCR-needed
+  pages are treated as limitations, not inferred content.
+
+Change:
+
+- Added two Workbench starter chips:
+  - `PDFの誤字を探す`;
+  - `2つのPDFを比較`.
+- Starter chips insert a concise draft prompt into the CopilotKit composer when
+  available, or copy it to the clipboard as a fallback.
+- Added Agent Framework, turn-state, and Copilot JSON-projection guidance for
+  PDF proofreading and two-PDF comparison:
+  - read every exact PDF before finalizing;
+  - cite only extracted text evidence;
+  - state text-layer/OCR limits when extraction is incomplete.
+- Added a portable package front door, `Relay Agent.html`, plus a Japanese
+  Windows launch helper, `Relay Agent を起動.cmd`.
+- Updated README and planning docs to describe PDF review as a generic local
+  tool recipe over the Workbench.
+- Added `scripts/pdf-review-ux-smoke.mjs` and included it in `pnpm check`.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.16`.
+
+Verification commands run locally:
+
+```bash
+pnpm agent:pdf-review-ux-smoke
+pnpm typecheck
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm check
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.16-win-x64.zip dist/relay-agent-0.3.16-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.16-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.16-sha256.txt
+```
+
+Result:
+
+- PDF review UX static smoke passed.
+- Workbench typecheck passed.
+- Sidecar Release build passed with zero warnings.
+- Full `pnpm check` passed, including the new PDF review UX smoke and the
+  existing Office/PDF read smoke.
+- Windows portable package generated:
+  `dist/relay-agent-0.3.16-win-x64.zip`.
+- Linux portable package generated:
+  `dist/relay-agent-0.3.16-linux-x64.tar.gz`.
+- Optional Windows user-scope installer generated:
+  `dist/installer/Relay.Agent-0.3.16-win-x64-setup.exe`.
+- Release inventory, SBOM, and SHA-256 checksum file generated under
+  `dist/release/`.
+
 ### 2026-05-18 Portable-First Distribution
 
 Follow-up to the distribution discussion: an HTML-only Relay Lite would lose

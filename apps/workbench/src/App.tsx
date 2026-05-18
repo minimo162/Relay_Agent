@@ -6,7 +6,7 @@ import {
   useHumanInTheLoop,
   type CopilotChatLabels,
 } from "@copilotkit/react-core/v2";
-import { Download, ExternalLink, FolderOpen } from "lucide-react";
+import { Download, ExternalLink, FileText, FolderOpen, GitCompareArrows } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { createRelayAgUiAgent, relayAgentId } from "./lib/relay-ag-ui";
@@ -41,7 +41,7 @@ type ApprovalRequestArgs = z.infer<typeof approvalRequestSchema>;
 const chatLabels: Partial<CopilotChatLabels> = {
   chatInputPlaceholder: "依頼内容を入力...",
   chatDisclaimerText: "",
-  welcomeMessageText: "作業フォルダ内の検索、Office編集、コード作成をこのチャットから依頼できます。",
+  welcomeMessageText: "作業フォルダ内の検索、PDF確認、Office編集、コード作成をこのチャットから依頼できます。",
   modalHeaderTitle: "Relay Agent",
   chatInputToolbarToolsButtonLabel: "ツール",
   chatInputToolbarAddButtonLabel: "追加",
@@ -51,6 +51,7 @@ export function App() {
   const [workspace, setWorkspace] = useState(() => localStorage.getItem(workspaceStorageKey) ?? "");
   const [workspaceHistory, setWorkspaceHistory] = useState(loadWorkspaceHistory);
   const [workspaceError, setWorkspaceError] = useState("");
+  const [starterNotice, setStarterNotice] = useState("");
   const [isPickingWorkspace, setIsPickingWorkspace] = useState(false);
   const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
   const [supportBusy, setSupportBusy] = useState(false);
@@ -277,6 +278,22 @@ export function App() {
     }
   }, [api, authHeaders]);
 
+  const insertStarterPrompt = useCallback(async (prompt: string) => {
+    setStarterNotice("");
+    const inserted = insertPromptIntoComposer(prompt);
+    if (inserted) {
+      setStarterNotice("下書きを入力しました。PDFパスを入れて送信してください。");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setStarterNotice("下書きをコピーしました。入力欄に貼り付けてください。");
+    } catch {
+      setWorkspaceError("入力欄が見つからず、クリップボードにもコピーできませんでした。");
+    }
+  }, []);
+
   const agent = useMemo(() =>
     createRelayAgUiAgent({
       url: api("/agui/relay"),
@@ -361,6 +378,7 @@ export function App() {
             </section>
 
             {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
+            {starterNotice ? <p className="starter-notice" aria-live="polite">{starterNotice}</p> : null}
 
             <div id="workspace-history" className="workspace-history" hidden={visibleWorkspaceHistory.length === 0}>
               {visibleWorkspaceHistory.map((item) => (
@@ -383,26 +401,46 @@ export function App() {
                 <p>最初に作業フォルダを選択してください。</p>
               </section>
             ) : (
-              <section className="chat-card" data-ready={chatReady ? "true" : "false"}>
-                <CopilotChat
-                  agentId={relayAgentId}
-                  threadId={threadIdRef.current}
-                  labels={chatLabels}
-                  autoScroll="pin-to-bottom"
-                  throttleMs={120}
-                  input={{ autoFocus: true, showDisclaimer: false, bottomAnchored: true }}
-                  welcomeScreen
-                  onError={(event) => {
-                    const error = "error" in event ? event.error : new Error("Copilot chat error");
-                    setReadiness({
-                      label: "Provider error",
-                      ready: "false",
-                      title: error.message,
-                      raw: error.stack ?? error.message,
-                    });
-                  }}
-                />
-              </section>
+              <>
+                <section className="starter-row" aria-label="よく使う依頼">
+                  <button
+                    type="button"
+                    className="starter-chip"
+                    onClick={() => void insertStarterPrompt(pdfProofreadPrompt)}
+                  >
+                    <FileText size={16} aria-hidden="true" />
+                    PDFの誤字を探す
+                  </button>
+                  <button
+                    type="button"
+                    className="starter-chip"
+                    onClick={() => void insertStarterPrompt(pdfComparePrompt)}
+                  >
+                    <GitCompareArrows size={16} aria-hidden="true" />
+                    2つのPDFを比較
+                  </button>
+                </section>
+                <section className="chat-card" data-ready={chatReady ? "true" : "false"}>
+                  <CopilotChat
+                    agentId={relayAgentId}
+                    threadId={threadIdRef.current}
+                    labels={chatLabels}
+                    autoScroll="pin-to-bottom"
+                    throttleMs={120}
+                    input={{ autoFocus: true, showDisclaimer: false, bottomAnchored: true }}
+                    welcomeScreen
+                    onError={(event) => {
+                      const error = "error" in event ? event.error : new Error("Copilot chat error");
+                      setReadiness({
+                        label: "Provider error",
+                        ready: "false",
+                        title: error.message,
+                        raw: error.stack ?? error.message,
+                      });
+                    }}
+                  />
+                </section>
+              </>
             )}
 
             <details className="details">
@@ -542,6 +580,46 @@ function loadWorkbenchClientId(): string {
 function createId(prefix: string): string {
   const random = Math.random().toString(36).slice(2, 9);
   return `relay-${prefix}-${Date.now().toString(36)}-${random}`;
+}
+
+const pdfProofreadPrompt = `PDFの誤字・表記ゆれを確認してください。
+対象PDF: <ここにPDFパス>
+
+進め方:
+1. 対象PDFを exact path で read してください。候補が曖昧な場合だけ glob でPDF候補を確認してください。
+2. 抽出できた本文だけを根拠に、誤字候補、表記ゆれ、日付・数値・固有名詞の不自然さを一覧化してください。
+3. 各指摘には根拠となる短い引用または周辺テキストを付けてください。
+4. 画像だけのPDF、OCRが必要な箇所、抽出できないページは確認不可と明記してください。`;
+
+const pdfComparePrompt = `2つのPDFを比較し、整合しない可能性がある箇所を探してください。
+PDF A: <ここに1つ目のPDFパス>
+PDF B: <ここに2つ目のPDFパス>
+
+進め方:
+1. PDF A と PDF B の両方を exact path で read してください。候補が曖昧な場合だけ glob でPDF候補を確認してください。
+2. 抽出できた本文だけを根拠に、名称、日付、数値、見出し、注記、表現の差分を整理してください。
+3. 不整合候補ごとに、どちらのPDFのどの周辺テキストと食い違うのかを短く示してください。
+4. 画像だけのPDF、OCRが必要な箇所、抽出できないページは比較不可と明記してください。`;
+
+function insertPromptIntoComposer(prompt: string): boolean {
+  const textarea = document.querySelector<HTMLTextAreaElement>(".chat-card textarea");
+  if (textarea) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(textarea, prompt);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.focus();
+    return true;
+  }
+
+  const editable = document.querySelector<HTMLElement>(".chat-card [contenteditable='true']");
+  if (editable) {
+    editable.focus();
+    editable.textContent = prompt;
+    editable.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: prompt }));
+    return true;
+  }
+
+  return false;
 }
 
 function compactPath(path: string): string {

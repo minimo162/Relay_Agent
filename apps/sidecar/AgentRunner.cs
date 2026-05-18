@@ -29,6 +29,9 @@ public sealed class RelayAgentFrameworkRunner
         Do not treat filename matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
+        For PDF proofreading, typo detection, or notation checks, read the exact PDF first and report only findings grounded in extracted text snippets.
+        For two-PDF comparison, read both exact PDFs before finalizing and compare only extracted text evidence such as headings, dates, numbers, names, notes, and surrounding snippets.
+        PDF read extraction is text-layer only; if the PDF is image-only, requires OCR, or a page cannot be extracted, state that limitation instead of inventing content.
         If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
         apply_patch uses args.patchText with one envelope only: one leading *** Begin Patch, all file hunks, then one final *** End Patch.
         Patch paths are workspace-relative, OpenCode-style paths. Reuse the exact displayPath returned by read/glob/workspace_status for later edits; do not shorten nested paths such as project/src/app.js to src/app.js unless that exact path exists.

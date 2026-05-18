@@ -6,7 +6,7 @@ Relay Agent is a local business-agent workbench:
 
 The active product is a browser-hosted local web workbench served by a
 self-contained .NET sidecar. The user works from one workspace and one normal
-CopilotKit chat. Search, Office editing, and code editing are internal tool
+CopilotKit chat. Search, PDF review, Office editing, and code editing are internal tool
 capabilities rather than separate visible modes.
 
 ## Current Architecture
@@ -38,14 +38,20 @@ The Workbench is intentionally minimal:
 
 - one workspace selected through the OS file explorer;
 - one compact CopilotKit chat transcript as the primary surface;
+- small starter chips for common PDF proofreading and PDF comparison requests;
 - one chat input and send action;
 - concise readiness and run status;
 - inline tool summaries and approvals only when relevant;
 - support diagnostics collapsed by default with explicit export.
 
-The UI does not expose separate search, Office, code, model, provider, or
+The UI does not expose separate search, PDF, Office, code, model, provider, or
 runtime controls. Those are implementation details behind the sidecar and the
 generic local tool catalog.
+
+For local PDFs, use the same chat. Relay can read supported PDF text layers
+through the generic `read` tool, so users can ask for typo checks, notation
+checks, or comparison between two PDFs. Image-only PDFs and pages requiring OCR
+are reported as limitations rather than inferred content.
 
 Normal users do not type workspace paths. Use `変更` / `Change` to choose a
 folder from the OS file explorer. Recent workspaces are stored user-locally and
@@ -151,9 +157,10 @@ The sidecar prints the localhost Workbench URL with the launch token.
 
 The active release workflow publishes the .NET sidecar and static Workbench
 assets. The primary distribution is now a portable package: Windows users can
-download the zip, extract it anywhere they can write, and start
-`Start Relay Agent.cmd` or `Relay.Launcher.exe`; Linux users can extract the
-tarball and run `./start-relay-agent.sh` or `./Relay.Launcher`. The Windows
+download the zip, extract it anywhere they can write, and open
+`Relay Agent.html`, `Relay Agent を起動.cmd`, `Start Relay Agent.cmd`, or
+`Relay.Launcher.exe`; Linux users can extract the tarball, open
+`Relay Agent.html`, and run `./start-relay-agent.sh` or `./Relay.Launcher`. The Windows
 NSIS installer remains available for users who prefer Start Menu shortcuts and
 an uninstall entry, but it is not required to use Relay Agent. Tauri NSIS
 packaging is no longer the supported release path.

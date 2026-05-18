@@ -208,6 +208,12 @@ h1 {
   font-size: 13px;
 }
 
+.starter-notice {
+  margin: 0;
+  color: var(--ra-muted);
+  font-size: 13px;
+}
+
 .workspace-history {
   display: flex;
   flex-wrap: wrap;
@@ -233,7 +239,8 @@ h1 {
 
 .text-button,
 .primary-button,
-.secondary-button {
+.secondary-button,
+.starter-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -274,6 +281,30 @@ h1 {
   color: var(--ra-accent);
   background: transparent;
   font-size: 13px;
+}
+
+.starter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.starter-chip {
+  min-height: 34px;
+  border: 1px solid var(--ra-border-soft);
+  padding: 0 12px;
+  color: var(--ra-text);
+  background: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+}
+
+.starter-chip:hover,
+.starter-chip:focus-visible {
+  border-color: var(--ra-accent);
+  color: var(--ra-accent);
+  background: var(--ra-accent-soft);
+  outline: none;
 }
 
 .empty-chat {
@@ -450,13 +481,15 @@ h1 {
   }
 
   .signin-row,
-  .workspace-bar {
+  .workspace-bar,
+  .starter-row {
     align-items: stretch;
     grid-template-columns: 1fr;
   }
 
   .secondary-button,
-  .primary-button {
+  .primary-button,
+  .starter-chip {
     width: 100%;
   }
 
