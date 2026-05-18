@@ -22,6 +22,13 @@ Workbench UX Plan from `PLANS.md`: maximize whitespace, remove nonessential
 controls, and make the browser Workbench a single calm AG-UI-first agent
 surface instead of a mode picker or diagnostic console.
 
+The completed active queue is `BOOTREADY*`. It implements the 2026-05-18 Installed
+App Startup, Icon, And Readiness Remediation Plan from `PLANS.md`: restore the
+app icon, remove the installed-app dependency on a manually configured
+`RELAY_COPILOT_CDP_PORT`, make Copilot CDP warmup automatic, keep first paint
+fast, replace manual workspace path entry with a native folder picker, and show
+readiness with minimal user-facing UI.
+
 The previous `DCI2605*`, `DCIFS*`, and `POSTLIVE*` queues remain completed
 history below. They should not be extended unless a regression proves those
 acceptance criteria have broken.
@@ -39,6 +46,326 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### BOOTREADY-01 - Restore Active App Icon Assets
+
+Status: completed
+
+Scope:
+
+- Copy the previous Relay icon assets from the historical Tauri path into an
+  active non-Tauri location, for example `assets/app-icon/`.
+- Include at least the source SVG, Windows `.ico`, and PNG sizes needed for
+  packaging/tests.
+- Keep the old `apps/desktop/src-tauri/icons/` path historical only; do not
+  make the release path depend on Tauri directories.
+
+Artifacts:
+
+- Active icon asset directory.
+- Inventory note in `docs/IMPLEMENTATION.md` identifying the source commit and
+  active destination.
+
+Acceptance:
+
+- Icon assets are available to launcher, installer, release inventory, and any
+  future Linux desktop metadata without referencing `apps/desktop`.
+- No active Tauri build/config path is reintroduced.
+
+Verification:
+
+- icon asset smoke
+- `git diff --check`
+
+### BOOTREADY-02 - Wire Icon Through Launcher And NSIS Installer
+
+Status: completed
+
+Scope:
+
+- Add Windows `ApplicationIcon` metadata to `Relay.Launcher.csproj`.
+- Update the Windows package/installer flow so the active `.ico` is available
+  in `dist/relay-agent-win-x64`.
+- Update the generated NSIS script to set installer, uninstaller, Start Menu,
+  optional desktop shortcut, and uninstall entry icons.
+- Keep `RequestExecutionLevel user` and per-user install paths unchanged.
+
+Artifacts:
+
+- Launcher project icon reference.
+- Installer script generator icon support.
+- Packaging smoke that verifies the NSIS script and package inputs.
+
+Acceptance:
+
+- Installed shortcut and uninstall entry no longer show a generic executable
+  icon.
+- The installer still requires no administrator rights or personal Windows
+  password.
+
+Verification:
+
+- packaging/icon smoke
+- `pnpm sidecar:publish:windows`
+- `pnpm sidecar:installer:windows`
+
+### BOOTREADY-03 - Add Sidecar Copilot CDP Manager
+
+Status: completed
+
+Scope:
+
+- Replace the missing-env-only Copilot transport construction with a sidecar
+  CDP manager that can resolve or start Copilot Edge CDP.
+- Resolution order:
+  1. explicit `RELAY_COPILOT_CDP_PORT`;
+  2. Relay profile marker file;
+  3. live `DevToolsActivePort`;
+  4. auto-start Microsoft Edge with the Relay profile.
+- Reuse the older stable CDP behavior from commit
+  `40622c03d049f89e9b2501a39b88eb796c298912` where it still applies:
+  standard Windows Edge locations, dedicated profile, stale-port rejection,
+  Edge `/json/version` validation, and Copilot page/composer validation.
+
+Artifacts:
+
+- `EdgeCdpManager` or equivalent sidecar component.
+- Unit/smoke coverage for explicit port, marker port, stale marker, stale
+  DevToolsActivePort, auto-start command construction, and missing Edge.
+
+Acceptance:
+
+- Installed app startup does not require users to set
+  `RELAY_COPILOT_CDP_PORT`.
+- Explicit env override remains available for development and live E2E.
+- No fallback model or weaker local planner is introduced.
+
+Verification:
+
+- new Copilot CDP manager smoke
+- `pnpm sidecar:build`
+- `pnpm check`
+
+### BOOTREADY-04 - Preserve Legacy Signed-In Edge Profile Continuity
+
+Status: completed
+
+Scope:
+
+- Detect and reuse the legacy Relay Edge profile location used by the older
+  stable desktop line when it exists and has a live or reusable CDP profile.
+- Prefer a user-local app-data Relay profile for new installs.
+- Respect `RELAY_EDGE_PROFILE` for advanced troubleshooting and live E2E.
+- Store any new marker file under user-local Relay data, never in shared
+  workspaces.
+
+Artifacts:
+
+- Profile resolution helper.
+- Smoke tests for legacy profile preference, new profile fallback, and env
+  override.
+
+Acceptance:
+
+- Users who were already signed in through the previous Relay Edge profile have
+  the best chance of staying signed in after the architecture cutover.
+- New users get a user-local Relay-owned profile.
+- No searched/shared folder receives profile, cache, or temp artifacts.
+
+Verification:
+
+- profile resolution smoke
+- `pnpm sidecar:security-smoke`
+
+### BOOTREADY-05 - Make First Paint Fast And Warm Copilot In Background
+
+Status: completed
+
+Scope:
+
+- Keep launcher behavior focused on starting the sidecar and opening the local
+  Workbench quickly.
+- Move Edge/Copilot startup or attach work into background sidecar warmup.
+- Add readiness caching/TTL so `/api/status` is quick and does not rerun slow
+  OfficeCLI smoke on every UI poll.
+- Keep OfficeCLI optional readiness deferred enough that it cannot make the
+  first viewport feel stuck.
+
+Artifacts:
+
+- Background Copilot warmup path.
+- Cached readiness result model.
+- Startup timing smoke.
+
+Acceptance:
+
+- Workbench appears quickly even when Copilot warmup is still in progress.
+- The UI can show `Connecting to Copilot` without blocking the page.
+- Required local tool failures still fail clearly.
+
+Verification:
+
+- startup timing smoke
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### BOOTREADY-06 - Replace Raw Not Ready With Minimal Readiness States
+
+Status: completed
+
+Scope:
+
+- Extend status projection so the Workbench can distinguish:
+  `Ready`, `Connecting`, `Sign in needed`, `Local tools issue`,
+  and `Provider error`.
+- Hide developer-only messages such as
+  `Set RELAY_COPILOT_CDP_PORT...` from the primary UI.
+- Keep raw details available only in collapsed Support/export.
+- Add a sparse sign-in recovery row with `Open Copilot` and `Retry` when the
+  Copilot page is reachable but the composer is not usable.
+
+Artifacts:
+
+- Status response projection update.
+- Workbench readiness UI update.
+- UX E2E fixtures for connecting, sign-in-needed, local-tools issue, and ready
+  states.
+
+Acceptance:
+
+- Normal installed launch never presents the missing-env message as the primary
+  experience.
+- Sign-in-required is understandable without a diagnostic console.
+- The first viewport remains minimal with generous whitespace.
+
+Verification:
+
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### BOOTREADY-07 - Add Native Workspace Picker And Minimal Workspace Chrome
+
+Status: completed
+
+Scope:
+
+- Replace the default manual workspace path text field with a sidecar-owned
+  native folder picker surfaced as a compact `Change` action in the Workbench.
+- Use the old stable `apps/desktop/src/lib/workspace-picker.ts` behavior only
+  as interaction reference: directory-only, single selection, current workspace
+  as default path, cancel leaves the current workspace unchanged.
+- Add a narrow sidecar API such as `/api/workspace/pick` that returns an
+  absolute path selected through the OS file explorer.
+- Implement platform adapters behind one interface:
+  - Windows: real File Explorer folder dialog suitable for installed users;
+  - Linux: desktop portal/dialog command when available, with a clear app error
+    if no graphical picker can be shown.
+- Keep workspace history user-local. Do not write picker state, caches, indexes,
+  or temp files into selected/shared workspaces.
+- Update the Workbench layout so the first viewport shows only:
+  Relay identity, compact readiness, selected workspace chip, `Change`, task
+  composer, send/stop, answer/approval area, and collapsed Support.
+- Apply the minimal professional design direction: generous whitespace, Inter,
+  neutral surfaces, one quiet accent, visible focus states, no decorative
+  gradients/orbs, no diagnostic-first chrome.
+
+Artifacts:
+
+- Sidecar workspace picker endpoint and platform adapter tests.
+- Workbench workspace selector component with folder icon action and compact
+  recent-workspace chips.
+- UX E2E fixtures for picker success, picker cancel, picker failure, and recent
+  workspace display.
+- Implementation log entry referencing the old stable picker commit and the
+  active non-Tauri replacement.
+
+Acceptance:
+
+- A normal user can set or change the workspace without typing a path.
+- Cancelling the picker leaves the previous workspace untouched.
+- The selected path is visible enough to verify, but does not dominate the
+  composer.
+- Direct path entry is not part of the default UI; any developer override is
+  hidden under Support/advanced diagnostics.
+- No Tauri runtime, Tauri IPC, or AionUi/OpenCode/OpenWork path is revived.
+
+Verification:
+
+- workspace picker unit/smoke tests
+- `pnpm workbench:ux-e2e`
+- `pnpm check`
+
+### BOOTREADY-08 - Add Installed-App Startup And Icon E2E Gates
+
+Status: completed
+
+Scope:
+
+- Add deterministic launcher/package startup smokes that run without
+  `RELAY_COPILOT_CDP_PORT`.
+- Add a Windows packaging/install smoke where available:
+  Start Menu shortcut icon, user-scope install path, Workbench first paint, and
+  Copilot readiness transition.
+- Add a Linux packaged-run smoke for the archive path.
+- Keep signed-in live Copilot E2E optional when the environment is not
+  available, but required before publishing a release that changes CDP
+  selectors or startup behavior.
+
+Artifacts:
+
+- Startup E2E scripts.
+- Icon/package assertions.
+- Implementation log entries with timings and screenshots.
+
+Acceptance:
+
+- The regression is caught before release: no icon loss, no developer-env-only
+  Copilot readiness, no raw Not ready on normal installed start.
+- The default Workbench path uses native picker selection, not required manual
+  path typing.
+- Live failures are classified as environment/sign-in/provider issues, not
+  generic app failure.
+
+Verification:
+
+- startup/icon/workspace-picker E2E smoke
+- `pnpm workbench:live-copilot-e2e` when signed-in Edge CDP is available
+- `pnpm check`
+
+### BOOTREADY-09 - Rebuild Release Notes And Documentation
+
+Status: completed
+
+Scope:
+
+- Update `README.md`, `docs/IMPLEMENTATION.md`,
+  `docs/PACKAGING_POLICY.md`, `PLANS.md`, and `tasks.md` after implementation.
+- Document the installed-app behavior:
+  Relay starts/attaches Copilot Edge CDP automatically, uses user-local profile
+  storage, and does not require manual `RELAY_COPILOT_CDP_PORT`.
+- Document the remaining developer override and support bundle diagnostics.
+- Prepare release notes that call out icon restoration and startup/readiness
+  repair.
+- Document that normal users choose a workspace through the file explorer, with
+  direct path entry only as hidden troubleshooting/developer behavior if it is
+  retained at all.
+
+Artifacts:
+
+- Updated docs and implementation log.
+- Release-note checklist for the fix release.
+
+Acceptance:
+
+- Docs no longer imply normal installed users must configure a CDP port.
+- Packaging docs mention icon wiring and user-local Edge profile behavior.
+- User docs no longer tell users to type workspace paths as the primary flow.
+- Historical desktop/Tauri notes remain archived context only.
+
+Verification:
+
+- `git diff --check`
+- `pnpm check`
 
 ### UXMIN-01 - Inventory And Remove Visual Noise
 

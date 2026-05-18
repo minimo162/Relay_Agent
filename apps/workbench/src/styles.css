@@ -132,6 +132,15 @@ h2 {
   gap: 28px;
 }
 
+.signin-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--ra-muted);
+  font-size: 13px;
+}
+
 .ra-card,
 .composer-panel,
 .summary-panel,
@@ -192,7 +201,6 @@ h2 {
   white-space: nowrap;
 }
 
-.workspace-input,
 .task-input {
   width: 100%;
   border: 1px solid var(--ra-border);
@@ -203,11 +211,6 @@ h2 {
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
-.workspace-input {
-  height: 46px;
-  padding: 0 14px;
-}
-
 .task-input {
   resize: none;
   min-height: 148px;
@@ -215,10 +218,41 @@ h2 {
   line-height: 1.65;
 }
 
-.workspace-input:focus,
 .task-input:focus {
   border-color: var(--ra-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ra-accent) 15%, transparent);
+}
+
+.workspace-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.workspace-chip {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--ra-border);
+  border-radius: 8px;
+  padding: 0 14px;
+  color: var(--ra-text);
+  background: var(--ra-surface-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-chip[data-empty="true"] {
+  color: var(--ra-muted-soft);
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.workspace-error {
+  margin: 0;
+  color: var(--ra-danger);
+  font-size: 13px;
 }
 
 .workspace-history {
@@ -564,6 +598,11 @@ h2 {
     margin-bottom: 34px;
   }
 
+  .signin-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   h1 {
     font-size: 31px;
   }
@@ -589,6 +628,10 @@ h2 {
   .primary-button,
   .secondary-button {
     width: 100%;
+  }
+
+  .workspace-picker {
+    grid-template-columns: 1fr;
   }
 
   .field-row,

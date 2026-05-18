@@ -15,7 +15,7 @@ builder.Services.AddAGUI();
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.3";
 var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
-var copilot = CopilotTransportFactory.FromEnvironment();
+var copilot = CopilotTransportFactory.FromEnvironment(options.DataDirectory);
 var copilotChatClient = new RelayCopilotChatClient(copilot);
 var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
@@ -96,6 +96,18 @@ app.MapPost("/api/workspace", (WorkspaceRequest request) =>
         Path: fullPath,
         Exists: Directory.Exists(fullPath),
         DisplayPath: fullPath));
+});
+
+app.MapPost("/api/workspace/pick", async (WorkspacePickRequest request, CancellationToken cancellationToken) =>
+{
+    var result = await WorkspacePicker.PickAsync(request.CurrentPath, cancellationToken);
+    return Results.Json(result, JsonOptions.Default);
+});
+
+app.MapPost("/api/copilot/open", async (CancellationToken cancellationToken) =>
+{
+    var result = await new EdgeCdpManager(options.DataDirectory).ResolveAsync(startIfMissing: true, cancellationToken);
+    return Results.Json(new CopilotOpenResponse(result.Ready, result.Detail, result.State), JsonOptions.Default);
 });
 
 app.MapAGUI("/agui/relay", agUiHostedAgent);
@@ -261,15 +273,30 @@ public sealed record RelayOptions(
 
 public sealed class ToolReadiness(ICopilotTransport copilot, ToolResolver resolver, string dataDirectory)
 {
+    private ReadinessCheck? _officeCache;
+    private DateTimeOffset _officeCacheAt;
+
     public async Task<IReadOnlyList<ReadinessCheck>> CheckAllAsync(CancellationToken cancellationToken)
     {
         var checks = new List<ReadinessCheck>
         {
             await ToolReadinessChecks.CheckExecutableAsync(resolver.ResolveRipgrep(), ["--version"], AppContext.BaseDirectory, cancellationToken),
-            await ToolReadinessChecks.CheckOfficeCliAsync(resolver.ResolveOfficeCli(), dataDirectory, cancellationToken),
+            await CheckOfficeCliCachedAsync(cancellationToken),
             await copilot.CheckAsync(cancellationToken),
         };
         return checks;
+    }
+
+    private async Task<ReadinessCheck> CheckOfficeCliCachedAsync(CancellationToken cancellationToken)
+    {
+        if (_officeCache is not null && DateTimeOffset.UtcNow - _officeCacheAt < TimeSpan.FromMinutes(3))
+        {
+            return _officeCache;
+        }
+
+        _officeCache = await ToolReadinessChecks.CheckOfficeCliAsync(resolver.ResolveOfficeCli(), dataDirectory, cancellationToken);
+        _officeCacheAt = DateTimeOffset.UtcNow;
+        return _officeCache;
     }
 }
 
@@ -277,9 +304,15 @@ public sealed record WorkspaceRequest(string Path);
 
 public sealed record WorkspaceResponse(string Path, bool Exists, string DisplayPath);
 
+public sealed record WorkspacePickRequest(string? CurrentPath);
+
+public sealed record WorkspacePickResponse(bool Cancelled, string? Path, bool Exists, string? DisplayPath, string? Error = null);
+
+public sealed record CopilotOpenResponse(bool Ready, string Detail, string State);
+
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
 
-public sealed record ReadinessCheck(string Name, bool Ready, string Detail, bool Required = true);
+public sealed record ReadinessCheck(string Name, bool Ready, string Detail, bool Required = true, string? State = null);
 
 public sealed record ErrorResponse(string Error);
 

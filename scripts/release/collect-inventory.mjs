@@ -12,6 +12,7 @@ const inputs = [
   "apps/launcher/Relay.Launcher.csproj",
   "apps/workbench/package.json",
   "apps/workbench/dist",
+  "assets/app-icon",
   "tools/ripgrep",
   "tools/officecli",
   "dist/relay-agent-win-x64/relay-tools",

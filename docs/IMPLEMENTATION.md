@@ -32,6 +32,69 @@
 
 ## Milestone Log
 
+### 2026-05-18 Installed Startup, Icon, Readiness, And Workspace Picker Repair
+
+Implemented the `BOOTREADY-01` through `BOOTREADY-09` queue from `tasks.md` for
+the browser Workbench + .NET sidecar architecture.
+
+Changes:
+
+- Restored active Relay icon assets from stable commit
+  `40622c03d049f89e9b2501a39b88eb796c298912` into `assets/app-icon/` without
+  making the release path depend on the historical Tauri directory.
+- Wired the active `.ico` through `Relay.Launcher.csproj`, sidecar package
+  output, release inventory, and the NSIS installer generator. Start Menu,
+  optional desktop shortcut, uninstaller, and uninstall registry icon entries
+  now point at the bundled Relay icon while keeping `RequestExecutionLevel user`.
+- Replaced the installed-app dependency on a manually configured
+  `RELAY_COPILOT_CDP_PORT` with a sidecar-managed Edge CDP resolver. It checks
+  explicit developer ports, a Relay profile marker, `DevToolsActivePort`, and
+  then auto-starts Microsoft Edge with a user-local Relay profile. Legacy
+  `~/RelayAgentEdgeProfile` remains preferred when present to preserve sign-in
+  continuity.
+- Kept Copilot fail-fast for actual runs. The new readiness path removes the
+  developer-only missing-env message from the installed primary UI, but it does
+  not introduce a fallback model or weaker planner.
+- Added `/api/copilot/open` for sparse sign-in recovery and `/api/workspace/pick`
+  for native workspace folder selection.
+- Replaced the default Workbench workspace path text field with a compact
+  workspace chip plus `変更` action. The sidecar owns the picker: Windows uses
+  a real folder dialog through PowerShell/WinForms, Linux uses `zenity` or
+  `kdialog` when present, and tests use an explicit mock picker path. Picker
+  state remains user-local; selected/shared folders receive no Relay caches or
+  temp files.
+- Retuned readiness labels to `Ready`, `Connecting`, `Sign in needed`,
+  `Local issue`, and `Provider error`, with detailed ports/paths kept in
+  collapsed Support diagnostics.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.5`.
+
+Verification completed during implementation:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+PATH=$HOME/.dotnet:$PATH dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+PATH=$HOME/.dotnet:$PATH dotnet build apps/launcher/Relay.Launcher.csproj --configuration Release
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:smoke
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:copilot-cdp-smoke
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:workspace-picker-smoke
+node scripts/release/icon-packaging-smoke.mjs
+PATH=$HOME/.dotnet:$PATH pnpm workbench:ux-e2e
+PATH=$HOME/.dotnet:$PATH pnpm workbench:live-copilot-e2e
+PATH=$HOME/.dotnet:$PATH pnpm check
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:linux
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:publish:windows
+PATH=$HOME/.dotnet:$PATH pnpm sidecar:installer:windows
+PATH=$HOME/.dotnet:$PATH pnpm release:inventory
+```
+
+Result: passed. The live Copilot E2E completed against Edge CDP port `9360`
+with readiness `Ready` and elapsed time around `23.7s`. The UX E2E produced
+updated screenshots under `dist/e2e/` for empty, completed, approval, and mobile
+Workbench states. Release artifacts for version `0.3.5` were generated under
+`dist/installer/`, `dist/`, and `dist/release/`, including the user-scope
+Windows NSIS installer, Windows zip package, Linux tar archive, SBOM, inventory,
+and SHA256 manifest.
+
 ### 2026-05-18 Minimal Professional Workbench UX Completion
 
 Implemented the `UXMIN-01` through `UXMIN-08` queue from `tasks.md`, keeping

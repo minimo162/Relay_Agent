@@ -59,6 +59,9 @@ run("dotnet", [
 ]);
 
 copyIfExists("LICENSE", join(output, "LICENSE"));
+copyIfExists("assets/app-icon/relay-agent.ico", join(output, "relay-assets", "relay-agent.ico"));
+copyIfExists("assets/app-icon/relay-agent.svg", join(output, "relay-assets", "relay-agent.svg"));
+copyIfExists("assets/app-icon/relay-agent.png", join(output, "relay-assets", "relay-agent.png"));
 writeFileSync(
   join(output, "relay-default-config.json"),
   JSON.stringify({
@@ -74,6 +77,9 @@ writeFileSync(
     tools: {
       ripgrep: "relay-tools/ripgrep",
       officecli: rid === "win-x64" ? "relay-tools/officecli" : "optional",
+    },
+    assets: {
+      appIcon: "relay-assets/relay-agent.ico",
     },
   }, null, 2),
 );
@@ -94,6 +100,7 @@ writeFileSync(
     "- Relay.Sidecar",
     "- Relay.Launcher",
     "- Workbench static assets",
+    "- Relay app icon under relay-assets",
     "- ripgrep under relay-tools/ripgrep",
     rid === "win-x64" ? "- OfficeCLI under relay-tools/officecli" : "- OfficeCLI is optional on this platform",
     "",

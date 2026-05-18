@@ -39,6 +39,7 @@ const sidecar = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar
     RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
     RELAY_ALLOW_MOCK_COPILOT: "1",
     RELAY_COPILOT_MOCK_RESPONSES_JSON: JSON.stringify(responses),
+    RELAY_WORKSPACE_PICKER_MOCK_PATH: workspace,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -214,7 +215,7 @@ async function runBrowserFlow() {
   await cdpSend("Page.navigate", { url: `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}` });
 
   await waitForExpression("document.readyState === 'complete'", 5000, "page load");
-  await waitForExpression("['Ready','Limited','Not ready'].includes(document.querySelector('#readiness')?.textContent)", 5000, "readiness status");
+  await waitForExpression("['Ready','Connecting','Sign in needed','Local issue','Provider error'].includes(document.querySelector('#readiness')?.textContent)", 5000, "readiness status");
 
   const initialUx = await evaluate(`(() => ({
     title: document.querySelector('h1')?.textContent,
@@ -226,6 +227,9 @@ async function runBrowserFlow() {
     shellWidth: Math.round(document.querySelector('.shell')?.getBoundingClientRect().width ?? 0),
     runState: document.querySelector('#run-state')?.textContent,
     visibleRaw: Array.from(document.querySelectorAll('summary')).filter((el) => el.offsetParent !== null).map((el) => el.textContent),
+    workspaceChange: document.querySelector('#workspace-change')?.textContent,
+    workspaceText: document.querySelector('#workspace')?.textContent,
+    visibleWorkspaceInput: Boolean(document.querySelector('input.workspace-input')?.offsetParent),
     bodyWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   }))()`);
@@ -233,15 +237,19 @@ async function runBrowserFlow() {
   if (initialUx.detailsOpen !== false) throw new Error(`details should be collapsed by default: ${JSON.stringify(initialUx)}`);
   if (initialUx.hasLegacyModes) throw new Error(`legacy mode labels should not be visible: ${JSON.stringify(initialUx)}`);
   if (initialUx.hasRefreshButton) throw new Error(`redundant refresh button should not be visible: ${JSON.stringify(initialUx)}`);
-  if (!["Ready", "Limited"].includes(initialUx.readiness)) throw new Error(`Copilot-backed UX should be ready or limited: ${JSON.stringify(initialUx)}`);
+  if (!["Ready", "Connecting"].includes(initialUx.readiness)) throw new Error(`Copilot-backed UX should be ready or connecting: ${JSON.stringify(initialUx)}`);
   if (initialUx.sendText !== "送信") throw new Error(`unexpected send label: ${JSON.stringify(initialUx)}`);
   if (initialUx.runState !== "Idle") throw new Error(`unexpected initial run state: ${JSON.stringify(initialUx)}`);
+  if (!initialUx.workspaceChange?.includes("変更")) throw new Error(`workspace picker action is missing: ${JSON.stringify(initialUx)}`);
+  if (initialUx.workspaceText !== "未選択") throw new Error(`workspace should start as a compact unselected chip: ${JSON.stringify(initialUx)}`);
+  if (initialUx.visibleWorkspaceInput) throw new Error(`manual workspace path input should not be visible: ${JSON.stringify(initialUx)}`);
   if (initialUx.shellWidth > 1100) throw new Error(`shell is too wide for focused workbench UX: ${JSON.stringify(initialUx)}`);
   if (initialUx.bodyWidth > initialUx.viewportWidth) throw new Error(`initial UI has horizontal overflow: ${JSON.stringify(initialUx)}`);
 
   await captureScreenshot("workbench-empty.png");
 
-  await setValue("#workspace", workspace);
+  await click("#workspace-change");
+  await waitForExpression(`document.querySelector('#workspace-path')?.value === ${JSON.stringify(workspace)}`, 4000, "workspace picker selection");
   await setValue("#instruction", "seed を探して");
   const searchStarted = Date.now();
   await click("#send");

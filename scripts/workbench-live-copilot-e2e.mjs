@@ -4,11 +4,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
+import { ensureCopilotCdp } from "./lib/copilot-cdp.mjs";
 
 const token = "relay-live-copilot-e2e-token";
 const port = 17895;
 const workbenchDebugPort = 17995;
-const copilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?? process.env.RELAY_COPILOT_CDP_PORT ?? "9360");
+let copilotCdpPort = Number(process.env.RELAY_LIVE_COPILOT_CDP_PORT ?? process.env.RELAY_COPILOT_CDP_PORT ?? "9360");
 const edgePath = process.env.RELAY_E2E_EDGE ?? "/usr/bin/microsoft-edge";
 const dataDir = mkdtempSync(join(tmpdir(), "relay-live-copilot-e2e-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-live-copilot-e2e-workspace-"));
@@ -41,7 +42,7 @@ const sidecar = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar
     RELAY_LAUNCH_TOKEN: token,
     RELAY_DATA_DIR: dataDir,
     RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
-    RELAY_COPILOT_CDP_PORT: String(copilotCdpPort),
+    RELAY_WORKSPACE_PICKER_MOCK_PATH: workspace,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -245,10 +246,11 @@ async function runBrowserFlow() {
   await cdpSend("Page.navigate", { url: `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}` });
 
   await waitForExpression("document.readyState === 'complete'", 5000, "page load");
-  await waitForExpression("['Ready','Limited'].includes(document.querySelector('#readiness')?.textContent)", 10000, "live Copilot readiness");
+  await waitForExpression("['Ready','Connecting'].includes(document.querySelector('#readiness')?.textContent)", 10000, "live Copilot readiness");
 
   const instruction = `Live E2E test. Do not use local tools. Return exactly this JSON object and nothing else: {"action":"final","answer":"${expected}"}`;
-  await setValue("#workspace", workspace);
+  await click("#workspace-change");
+  await waitForExpression(`document.querySelector('#workspace-path')?.value === ${JSON.stringify(workspace)}`, 5000, "workspace picker selection");
   await setValue("#instruction", instruction);
 
   const started = Date.now();
@@ -270,7 +272,9 @@ async function runBrowserFlow() {
 }
 
 try {
-  await assertCopilotCdpAvailable();
+  const cdpLease = await ensureCopilotCdp({ preferredPort: copilotCdpPort, artifactDir });
+  copilotCdpPort = cdpLease.port;
+  globalThis.__relayLiveCopilotCdpLease = cdpLease;
   await waitForStatus();
   const result = await runBrowserFlow();
   console.log(`[workbench-live-copilot-e2e] ok elapsed=${result.elapsedMs}ms readiness=${result.readiness} cdp=${copilotCdpPort}`);
@@ -282,4 +286,5 @@ try {
   if (cdp) cdp.close();
   if (edge) edge.kill("SIGTERM");
   sidecar.kill("SIGTERM");
+  globalThis.__relayLiveCopilotCdpLease?.cleanup?.();
 }

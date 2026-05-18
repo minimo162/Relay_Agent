@@ -66,14 +66,24 @@ Workbench architecture rather than the removed Tauri shell.
   `apps/desktop/src-tauri`.
 - The Windows installer bundle must include, where licensing and platform
   support allow, `Relay.Sidecar.exe`, Workbench static assets, `rg.exe`,
-  `officecli.exe`, launcher files, default config, license/notice files,
-  release inventory, and SBOM-style metadata.
+  `officecli.exe`, launcher files, active Relay app icons under
+  `relay-assets/`, default config, license/notice files, release inventory, and
+  SBOM-style metadata.
 - The installer must create Start Menu shortcuts, optional desktop shortcuts,
-  an uninstall entry, and per-user registry/app metadata only. It must not
-  write machine-wide registry keys or require Program Files installation.
+  an uninstall entry with Relay icons, and per-user registry/app metadata only.
+  It must not write machine-wide registry keys or require Program Files
+  installation.
 - Release inventory must list bundled files, hashes, versions, source/license
   notes, intentionally excluded legacy runtimes, and installer configuration
   proving user-scope installation.
+- The installed app must not require normal users to set
+  `RELAY_COPILOT_CDP_PORT`; Edge CDP attachment/startup and profile storage are
+  app-managed under user-local Relay data. Diagnostic overrides may remain
+  available for development and live E2E.
+- Workspace selection is part of the active app UX. Normal users choose a
+  workspace through the OS file explorer. Direct path entry is not the primary
+  installed flow, and no picker state may be written into the selected/shared
+  workspace.
 
 ## Deferred
 

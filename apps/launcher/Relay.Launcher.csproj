@@ -6,7 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Relay.Launcher</AssemblyName>
     <RootNamespace>Relay.Launcher</RootNamespace>
-    <Version>0.3.4</Version>
+    <Version>0.3.5</Version>
+    <ApplicationIcon>..\..\assets\app-icon\relay-agent.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>

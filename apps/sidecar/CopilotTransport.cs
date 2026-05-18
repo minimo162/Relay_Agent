@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
@@ -16,7 +17,7 @@ public interface ICopilotTransport
 
 public static class CopilotTransportFactory
 {
-    public static ICopilotTransport FromEnvironment()
+    public static ICopilotTransport FromEnvironment(string dataDirectory)
     {
         var mock = Environment.GetEnvironmentVariable("RELAY_COPILOT_MOCK_RESPONSE");
         var mockResponses = Environment.GetEnvironmentVariable("RELAY_COPILOT_MOCK_RESPONSES_JSON");
@@ -32,9 +33,12 @@ public static class CopilotTransportFactory
         }
 
         var portText = Environment.GetEnvironmentVariable("RELAY_COPILOT_CDP_PORT");
-        return int.TryParse(portText, out var port)
-            ? new EdgeCdpCopilotTransport(port)
-            : new MissingCopilotTransport("Set RELAY_COPILOT_CDP_PORT to a signed-in Edge CDP port.");
+        if (int.TryParse(portText, out var port))
+        {
+            return new EdgeCdpCopilotTransport(port);
+        }
+
+        return new ManagedEdgeCdpCopilotTransport(new EdgeCdpManager(dataDirectory));
     }
 }
 
@@ -45,6 +49,295 @@ public sealed class MissingCopilotTransport(string reason) : ICopilotTransport
 
     public Task<string> SendAsync(string prompt, CancellationToken cancellationToken) =>
         throw new InvalidOperationException(reason);
+}
+
+public sealed class ManagedEdgeCdpCopilotTransport(EdgeCdpManager manager) : ICopilotTransport
+{
+    public async Task<ReadinessCheck> CheckAsync(CancellationToken cancellationToken)
+    {
+        var resolution = await manager.ResolveAsync(startIfMissing: true, cancellationToken);
+        if (!resolution.Ready || resolution.Port is null)
+        {
+            return new ReadinessCheck("copilot-cdp", false, resolution.Detail, Required: true, State: resolution.State);
+        }
+
+        return await new EdgeCdpCopilotTransport(resolution.Port.Value).CheckAsync(cancellationToken);
+    }
+
+    public async Task<string> SendAsync(string prompt, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(45));
+        var resolution = await manager.ResolveAsync(startIfMissing: true, timeout.Token);
+        if (!resolution.Ready || resolution.Port is null)
+        {
+            throw new InvalidOperationException($"copilot_cdp_unavailable: {resolution.Detail}");
+        }
+
+        return await new EdgeCdpCopilotTransport(resolution.Port.Value).SendAsync(prompt, cancellationToken);
+    }
+}
+
+public sealed record EdgeCdpResolution(bool Ready, int? Port, string Detail, string State);
+
+public sealed class EdgeCdpManager(string dataDirectory)
+{
+    private const int PreferredPort = 9360;
+    private const string MarkerFileName = ".relay-agent-cdp-port";
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+    private readonly object _gate = new();
+    private Task<EdgeCdpResolution>? _warmupTask;
+    private EdgeCdpResolution? _lastResolution;
+    private DateTimeOffset _lastResolutionAt;
+
+    public Task<EdgeCdpResolution> ResolveAsync(bool startIfMissing, CancellationToken cancellationToken)
+    {
+        if (_lastResolution is { Ready: true } cached &&
+            DateTimeOffset.UtcNow - _lastResolutionAt < TimeSpan.FromSeconds(30))
+        {
+            return Task.FromResult(cached);
+        }
+
+        lock (_gate)
+        {
+            if (_warmupTask is null || _warmupTask.IsCompleted || _warmupTask.IsFaulted || _warmupTask.IsCanceled)
+            {
+                _warmupTask = ResolveCoreAsync(startIfMissing, CancellationToken.None);
+            }
+            return ObserveAsync(_warmupTask, cancellationToken);
+        }
+    }
+
+    private async Task<EdgeCdpResolution> ObserveAsync(Task<EdgeCdpResolution> task, CancellationToken cancellationToken)
+    {
+        var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromMilliseconds(900), cancellationToken));
+        if (completed != task)
+        {
+            return new EdgeCdpResolution(false, null, "Relay is launching or attaching Microsoft Edge for Copilot.", "connecting");
+        }
+
+        try
+        {
+            var resolution = await task;
+            _lastResolution = resolution;
+            _lastResolutionAt = DateTimeOffset.UtcNow;
+            return resolution;
+        }
+        catch (Exception ex)
+        {
+            var resolution = new EdgeCdpResolution(false, null, ex.Message, "provider_error");
+            _lastResolution = resolution;
+            _lastResolutionAt = DateTimeOffset.UtcNow;
+            return resolution;
+        }
+    }
+
+    private async Task<EdgeCdpResolution> ResolveCoreAsync(bool startIfMissing, CancellationToken cancellationToken)
+    {
+        if (int.TryParse(Environment.GetEnvironmentVariable("RELAY_COPILOT_CDP_PORT"), out var explicitPort))
+        {
+            return await ProbePortAsync(explicitPort, "explicit RELAY_COPILOT_CDP_PORT", cancellationToken);
+        }
+
+        var profile = ResolveProfileDirectory();
+        Directory.CreateDirectory(profile);
+
+        foreach (var (candidate, source) in CandidatePorts(profile))
+        {
+            var resolution = await ProbePortAsync(candidate, source, cancellationToken);
+            if (resolution.Ready)
+            {
+                WriteMarker(profile, candidate);
+                return resolution;
+            }
+        }
+
+        if (!startIfMissing || Environment.GetEnvironmentVariable("RELAY_DISABLE_COPILOT_AUTO_START") == "1")
+        {
+            return new EdgeCdpResolution(false, null, "Copilot Edge CDP is not running yet.", "connecting");
+        }
+
+        var edge = ResolveEdgeExecutable();
+        if (edge is null)
+        {
+            return new EdgeCdpResolution(false, null, "Microsoft Edge was not found. Install Edge or set RELAY_EDGE_PATH.", "provider_error");
+        }
+
+        var port = FindAvailablePort(PreferredPort);
+        StartEdge(edge, profile, port);
+        WriteMarker(profile, port);
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(12);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var resolution = await ProbePortAsync(port, "auto-started Relay Edge profile", cancellationToken);
+            if (resolution.Ready) return resolution;
+            await Task.Delay(350, cancellationToken);
+        }
+
+        return new EdgeCdpResolution(false, port, "Microsoft Edge was started, but CDP did not become ready in time.", "connecting");
+    }
+
+    private static IEnumerable<(int Port, string Source)> CandidatePorts(string profile)
+    {
+        var markerPath = Path.Combine(profile, MarkerFileName);
+        if (TryReadPort(markerPath) is { } markerPort) yield return (markerPort, "Relay profile marker");
+        var devToolsPath = Path.Combine(profile, "DevToolsActivePort");
+        if (TryReadPort(devToolsPath) is { } devToolsPort) yield return (devToolsPort, "Relay profile DevToolsActivePort");
+        yield return (PreferredPort, "default Relay Copilot CDP port");
+    }
+
+    private string ResolveProfileDirectory()
+    {
+        var overridePath = Environment.GetEnvironmentVariable("RELAY_EDGE_PROFILE");
+        if (!string.IsNullOrWhiteSpace(overridePath))
+        {
+            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(overridePath));
+        }
+
+        var legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "RelayAgentEdgeProfile");
+        if (Directory.Exists(legacy)) return legacy;
+
+        return Path.Combine(dataDirectory, "edge-profile");
+    }
+
+    private static string? ResolveEdgeExecutable()
+    {
+        var overridePath = Environment.GetEnvironmentVariable("RELAY_EDGE_PATH");
+        if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(Environment.ExpandEnvironmentVariables(overridePath)))
+        {
+            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(overridePath));
+        }
+
+        var candidates = OperatingSystem.IsWindows()
+            ? new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "Edge", "Application", "msedge.exe"),
+            }
+            : OperatingSystem.IsMacOS()
+                ? ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+                : ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable", "/opt/microsoft/msedge/msedge", "/usr/bin/msedge"];
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return FindOnPath(OperatingSystem.IsWindows() ? "msedge.exe" : "microsoft-edge")
+            ?? FindOnPath("microsoft-edge-stable")
+            ?? FindOnPath("msedge");
+    }
+
+    private static void StartEdge(string edgePath, string profile, int port)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = edgePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in new[]
+        {
+            $"--remote-debugging-port={port}",
+            $"--user-data-dir={profile}",
+            "--remote-allow-origins=*",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "https://m365.cloud.microsoft/chat",
+        })
+        {
+            info.ArgumentList.Add(arg);
+        }
+        Process.Start(info);
+    }
+
+    private static async Task<EdgeCdpResolution> ProbePortAsync(int port, string source, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ProbeTimeout);
+        try
+        {
+            using var client = new HttpClient { Timeout = ProbeTimeout };
+            var text = await client.GetStringAsync($"http://127.0.0.1:{port}/json/version", timeout.Token);
+            using var doc = JsonDocument.Parse(text);
+            var browser = doc.RootElement.TryGetProperty("Browser", out var value) ? value.GetString() ?? "" : "";
+            if (!browser.Contains("Edg", StringComparison.OrdinalIgnoreCase) &&
+                !browser.Contains("Edge", StringComparison.OrdinalIgnoreCase))
+            {
+                return new EdgeCdpResolution(false, port, $"{source} responded but is not Microsoft Edge: {browser}", "provider_error");
+            }
+            return new EdgeCdpResolution(true, port, $"{source} ready on port {port} ({browser}).", "ready");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+        {
+            return new EdgeCdpResolution(false, port, $"{source} is not reachable on port {port}.", "connecting");
+        }
+    }
+
+    private static int FindAvailablePort(int preferred)
+    {
+        if (CanBind(preferred)) return preferred;
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
+    private static bool CanBind(int port)
+    {
+        try
+        {
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int? TryReadPort(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var line = File.ReadLines(path).FirstOrDefault();
+            return int.TryParse(line, out var port) ? port : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteMarker(string profile, int port)
+    {
+        try
+        {
+            File.WriteAllText(Path.Combine(profile, MarkerFileName), port.ToString(CultureInfo.InvariantCulture));
+        }
+        catch
+        {
+            // Marker write is a startup optimization, not a correctness gate.
+        }
+    }
+
+    private static string? FindOnPath(string commandName)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var candidate = Path.Combine(directory, commandName);
+            if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+        }
+        return null;
+    }
 }
 
 public sealed class MockCopilotTransport(IReadOnlyList<string> responses) : ICopilotTransport

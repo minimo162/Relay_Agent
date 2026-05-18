@@ -211,6 +211,222 @@ Goal:
 - `pnpm workbench:ux-e2e` verifies the visible user flows.
 - `pnpm check` remains the milestone acceptance gate.
 
+### 2026-05-18 Installed App Startup, Icon, And Readiness Remediation Plan
+
+This plan addresses the installed `0.3.4` regression reported from Windows:
+
+- the previous app icon disappeared;
+- the app takes too long to feel ready after launch;
+- the Workbench opens with `Not ready`;
+- Support shows `copilot-cdp` as required and missing with
+  `Set RELAY_COPILOT_CDP_PORT to a signed-in Edge CDP port.`
+
+This is a product-startup regression, not a reason to revive Tauri, AionUi,
+OpenCode/OpenWork, or feature-mode UI. The fix is to port the stable parts of
+the old desktop Copilot/packaging behavior into the current .NET sidecar and
+browser Workbench architecture.
+
+#### Stable Implementation References
+
+Reference points from the older stable line:
+
+- Commit `40622c03d049f89e9b2501a39b88eb796c298912` kept the robust Copilot
+  CDP bridge in the old desktop path. It had:
+  - dedicated Edge profile management;
+  - standard Windows Edge path resolution;
+  - CDP port attachment and launch behavior;
+  - prompt/composer readiness checks;
+  - retry/diagnostic classifications around Copilot UI failures.
+- The old Tauri bundle declared app icons in
+  `apps/desktop/src-tauri/tauri.conf.json` and shipped icon assets under
+  `apps/desktop/src-tauri/icons/`, including `icon.ico` and the source SVG.
+- The old stable workspace selector used
+  `apps/desktop/src/lib/workspace-picker.ts`, which delegated folder selection
+  to the native desktop dialog with `directory: true` and `multiple: false`.
+  The useful behavior is the native folder-picking interaction, not the Tauri
+  runtime.
+- Historical implementation notes around 2026-05-15/2026-05-16 document fixes
+  that still matter:
+  - reject stale `DevToolsActivePort` files unless `/json/version` responds as
+    Microsoft Edge;
+  - prefer `https://m365.cloud.microsoft/chat` over DNS-fragile entry points;
+  - reject DNS/error pages and upsell/sign-in pages as not usable Copilot;
+  - use a dedicated Relay Edge profile and preserve sign-in across launches;
+  - avoid opening Edge before the Workbench becomes visible.
+
+Current regression cause:
+
+- `apps/launcher/Relay.Launcher.csproj` has no `ApplicationIcon`, and the NSIS
+  script does not set `Icon`, `MUI_ICON`, `MUI_UNICON`, or shortcut icon
+  parameters. The launcher therefore shows a generic executable icon.
+- `apps/launcher/Program.cs` starts only the sidecar and opens the Workbench.
+  It does not start or attach to the Copilot Edge CDP session.
+- `CopilotTransportFactory.FromEnvironment()` returns `MissingCopilotTransport`
+  unless `RELAY_COPILOT_CDP_PORT` is already set. That is acceptable for
+  developer scripts, but not for an installed end-user app.
+- `/api/status` exposes this missing developer environment variable directly,
+  which makes a normal installed launch look broken.
+- `apps/workbench/src/App.tsx` currently asks the user to type the workspace
+  path manually. That is fragile on Windows network/share paths and makes the
+  first-run experience feel like a developer tool instead of a polished local
+  workbench.
+
+#### Product Decision
+
+The installed app must manage Copilot CDP readiness itself.
+
+Relay should not require normal Windows users to set `RELAY_COPILOT_CDP_PORT`.
+The launcher/sidecar should auto-attach to a live Relay Edge CDP profile or
+start one in the background. The Workbench should paint quickly and show a calm
+`Connecting to Copilot` or `Sign in needed` state while warmup proceeds.
+`Not ready` should be reserved for hard local execution blockers that the app
+cannot resolve or for explicit fail-fast provider errors during a run.
+
+Workspace selection should also be app-managed. Normal users should choose a
+folder through the OS file explorer, not type or paste a path. Because the
+active shell is a browser Workbench rather than Tauri, the folder picker must be
+provided by the .NET sidecar through a narrow local API. The Workbench should
+show the selected workspace as a compact path chip with a `Change` action and a
+short recent-workspaces list, keeping direct path entry out of the default UI.
+
+#### Remediation Design
+
+1. **Restore app icon without restoring Tauri**
+   - Move the old Relay icon assets into an active location such as
+     `assets/app-icon/`.
+   - Configure `Relay.Launcher.csproj` with `ApplicationIcon` for Windows.
+   - Bundle the same `.ico` in the Windows package.
+   - Update NSIS to use:
+     - `Icon`;
+     - `UninstallIcon`;
+     - `!define MUI_ICON`;
+     - `!define MUI_UNICON`;
+     - explicit shortcut icon path for Start Menu and optional Desktop
+       shortcuts;
+     - uninstall `DisplayIcon` pointing at the launcher or bundled icon.
+   - Add a packaging smoke that fails if the icon asset is missing from the
+     installer inputs.
+
+2. **Add a sidecar-owned Copilot CDP manager**
+   - Introduce a narrow .NET Copilot CDP manager used by
+     `CopilotTransportFactory`.
+   - Resolution order:
+     1. explicit `RELAY_COPILOT_CDP_PORT`, for developer/live E2E override;
+     2. live marker file in the Relay Edge profile;
+     3. live `DevToolsActivePort` in the Relay Edge profile;
+     4. auto-start Microsoft Edge with a Relay-owned profile and remote
+        debugging enabled.
+   - Use a user-local persistent profile, with compatibility for the legacy
+     `RelayAgentEdgeProfile` path so already-signed-in users do not need to
+     sign in again unnecessarily.
+   - Verify `/json/version` is Microsoft Edge before accepting the port.
+   - Reject stale ports and browser error pages.
+   - Keep the M365 Copilot provider fail-fast during actual runs: if Copilot is
+     unavailable after warmup/sign-in, emit an AG-UI error with diagnostics
+     instead of falling back to a weaker planner.
+
+3. **Split first paint from Copilot warmup**
+   - The launcher should start the sidecar and open the local Workbench as soon
+     as the sidecar URL is ready.
+   - Copilot Edge startup/attachment should run in the background.
+   - `/api/status` should be quick and cache recent tool readiness results.
+   - Optional OfficeCLI smoke should not delay the first visual Workbench paint.
+   - Target: Workbench visible within a few seconds on a warm install; Copilot
+     readiness may continue asynchronously.
+
+4. **Improve readiness semantics**
+   - Replace the single `Ready`/`Limited`/`Not ready` interpretation with
+     user-meaningful states while preserving API compatibility:
+     - `Ready`: required local tools and usable Copilot are available;
+     - `Connecting`: Relay is launching/attaching Edge or checking Copilot;
+     - `Sign in needed`: Edge is available but Copilot composer is not usable;
+     - `Local tools issue`: ripgrep or another required local executor is
+       unavailable;
+     - `Provider error`: Copilot failed during an actual run.
+   - Do not show developer instructions such as
+     `Set RELAY_COPILOT_CDP_PORT...` in the primary Workbench UI.
+   - Keep detailed diagnostics in collapsed Support export only.
+
+5. **Keep the UI more minimal, not more explanatory**
+   - First viewport: app identity, workspace, composer, send/stop, and a small
+     readiness pill only.
+   - When Copilot is starting, show one quiet line such as
+     `Connecting to Copilot` with no JSON or troubleshooting text.
+   - If sign-in is needed, show one sparse action row: `Open Copilot` and
+     `Retry`.
+   - Move all detailed checks, ports, paths, and raw JSON under Support.
+   - Use even more whitespace around the composer and status surfaces; avoid
+     adding setup wizards, banners, mode cards, or persistent diagnostics.
+   - Apply the design-system direction from the 2026-05-18 UI/UX review:
+     Inter typography, restrained neutral surfaces, high contrast, one quiet
+     accent, visible focus states, no decorative gradients/orbs, no playful
+     chrome, and enough vertical rhythm that the composer feels intentional
+     instead of cramped.
+
+6. **Preserve current architecture boundaries**
+   - Do not reintroduce the Tauri desktop shell.
+   - Do not reintroduce old AionUi/OpenCode/OpenWork fallback paths.
+   - Do not make Copilot optional for agent runs that need reasoning.
+   - Do not add a local fallback model.
+   - Do not require administrator rights or machine-wide install changes.
+
+7. **Replace manual workspace path entry with a native picker**
+   - Add a sidecar-owned `/api/workspace/pick` or equivalent endpoint that opens
+     a native folder picker and returns an absolute local path.
+   - Use the older stable Tauri picker only as interaction reference:
+     directory-only, single selection, current workspace as the default path,
+     cancel returns no change.
+   - Implement platform-specific picker adapters behind one sidecar interface:
+     Windows must use a real File Explorer folder dialog; Linux should use an
+     available desktop portal/dialog implementation when present and fail with a
+     clear app error when the environment cannot show a picker.
+   - Keep any recent-workspace history in user-local Relay storage or browser
+     local storage. Never write picker state, caches, or indexes into the
+     selected workspace.
+   - Workbench default surface should show:
+     - a single-line workspace chip with the basename and truncated full path;
+     - a compact `Change` button with a folder icon;
+     - optional recent workspace chips below only when history exists;
+     - no permanent raw path text field.
+   - Direct path entry, if retained for developer troubleshooting, must live in
+     Support/advanced UI and must not be the normal first-run interaction.
+
+#### Verification
+
+Required deterministic checks:
+
+- packaging/icon smoke: active icon files exist, launcher project references
+  the icon, NSIS script uses the icon, and release inventory records it;
+- sidecar startup smoke with no `RELAY_COPILOT_CDP_PORT`: status should not
+  immediately hard-fail with the developer-only missing-env message;
+- Copilot CDP manager unit/smoke cases:
+  - explicit port;
+  - live marker port;
+  - stale marker rejection;
+  - stale `DevToolsActivePort` rejection;
+  - Edge auto-start command construction;
+  - no Edge installed;
+  - sign-in/composer missing state;
+- Workbench UX E2E:
+  - first viewport remains minimal;
+  - readiness shows connecting/sign-in states cleanly;
+  - workspace selection is driven by the picker action, not a required path
+    text field;
+  - recent workspace chips are compact and do not dominate the composer;
+  - Support diagnostics remain collapsed;
+  - no old mode labels or diagnostic-first UI returns.
+
+Required release/live checks before publishing a fix release:
+
+- Windows installer build confirms user-scope install and icon wiring.
+- Installed-app or packaged-run smoke on Windows:
+  - Start Menu shortcut shows the Relay icon;
+  - launcher opens the Workbench quickly;
+  - with a signed-in Relay Edge profile, readiness becomes `Ready` without
+    setting `RELAY_COPILOT_CDP_PORT`;
+  - with no sign-in, the UI shows `Sign in needed`, not raw `Not ready`.
+- Signed-in live Copilot E2E when Edge/CDP is available.
+
 ### 2026-05-17 Direct Corpus Interaction Plan
 
 The arXiv paper "Beyond Semantic Similarity: Rethinking Retrieval for Agentic

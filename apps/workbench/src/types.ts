@@ -7,7 +7,16 @@ export type StatusResponse = {
     ready: boolean;
     detail: string;
     required?: boolean;
+    state?: string | null;
   }>;
+};
+
+export type WorkspacePickResponse = {
+  cancelled: boolean;
+  path?: string | null;
+  exists: boolean;
+  displayPath?: string | null;
+  error?: string | null;
 };
 
 export type RunEvent = {

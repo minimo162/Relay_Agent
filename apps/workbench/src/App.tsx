@@ -1,10 +1,9 @@
-import { Activity, Check, Download, Send, Square, X } from "lucide-react";
+import { Activity, Check, Download, FolderOpen, Send, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Subscription } from "rxjs";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
-import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import {
@@ -19,7 +18,7 @@ import {
   type RelayAgUiEvent,
   type RelayAgUiToolCallDraft,
 } from "./lib/relay-ag-ui";
-import type { ApprovalState, RunEvent, RunStatus, StatusResponse } from "./types";
+import type { ApprovalState, RunEvent, RunStatus, StatusResponse, WorkspacePickResponse } from "./types";
 
 const workspaceStorageKey = "relay.workbench.workspace";
 const workspaceHistoryKey = "relay.workbench.workspaceHistory";
@@ -27,8 +26,8 @@ const threadStorageKey = "relay.workbench.threadId";
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
 
 type ReadinessState = {
-  label: "Checking" | "Ready" | "Limited" | "Not ready";
-  ready: "true" | "partial" | "false" | undefined;
+  label: "Checking" | "Ready" | "Connecting" | "Sign in needed" | "Local issue" | "Provider error";
+  ready: "true" | "partial" | "false" | "pending" | undefined;
   title: string;
 };
 
@@ -50,6 +49,8 @@ export function App() {
   const [currentStatus, setCurrentStatus] = useState<RunStatus | "idle">("idle");
   const [currentApproval, setCurrentApproval] = useState<ApprovalState | null>(null);
   const [sendDisabled, setSendDisabled] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [isPickingWorkspace, setIsPickingWorkspace] = useState(false);
 
   const eventKeysRef = useRef(new Set<string>());
   const eventSequenceRef = useRef(0);
@@ -243,8 +244,9 @@ export function App() {
     });
     if (!response.ok) throw new Error(`Status failed: ${response.status}`);
     const status = (await response.json()) as StatusResponse;
-    const copilotReady = status.checks.some((check) => check.name === "copilot-cdp" && check.ready);
+    const copilot = status.checks.find((check) => check.name === "copilot-cdp");
     const optionalFailures = status.checks.filter((check) => check.required === false && !check.ready);
+    const requiredLocalFailure = status.checks.find((check) => check.required !== false && check.name !== "copilot-cdp" && !check.ready);
     if (status.ready) {
       setReadiness({
         label: "Ready",
@@ -253,17 +255,29 @@ export function App() {
           ? `Optional capability unavailable: ${optionalFailures.map((check) => check.name).join(", ")}`
           : "",
       });
-    } else if (copilotReady) {
+    } else if (requiredLocalFailure) {
       setReadiness({
-        label: "Limited",
+        label: "Local issue",
+        ready: "false",
+        title: requiredLocalFailure.detail,
+      });
+    } else if (copilot?.state === "sign_in_required") {
+      setReadiness({
+        label: "Sign in needed",
         ready: "partial",
-        title: "Some required local execution capability is unavailable.",
+        title: "Open Copilot in Edge and sign in, then retry.",
+      });
+    } else if (copilot?.state === "provider_error") {
+      setReadiness({
+        label: "Provider error",
+        ready: "false",
+        title: copilot.detail,
       });
     } else {
       setReadiness({
-        label: "Not ready",
-        ready: "false",
-        title: "Copilot transport is not available.",
+        label: "Connecting",
+        ready: "pending",
+        title: copilot?.detail ?? "Relay is connecting to Copilot.",
       });
     }
     setRaw(JSON.stringify(status, null, 2));
@@ -272,13 +286,53 @@ export function App() {
   const handleRefresh = useCallback(() => {
     void refreshStatus().catch((error) => {
       setReadiness({
-        label: "Not ready",
+        label: "Provider error",
         ready: "false",
         title: error instanceof Error ? error.message : String(error),
       });
       setRaw(error instanceof Error ? error.message : String(error));
     });
   }, [refreshStatus]);
+
+  const chooseWorkspace = useCallback(async () => {
+    setIsPickingWorkspace(true);
+    setWorkspaceError("");
+    try {
+      const response = await fetch(api("/api/workspace/pick"), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ currentPath: workspace }),
+      });
+      if (!response.ok) throw new Error(`Workspace picker failed: ${response.status}`);
+      const result = (await response.json()) as WorkspacePickResponse;
+      if (result.cancelled) return;
+      if (result.error) {
+        setWorkspaceError(result.error);
+        return;
+      }
+      if (!result.path) {
+        setWorkspaceError("Workspace picker did not return a folder.");
+        return;
+      }
+      setWorkspace(result.path);
+      saveWorkspace(result.path, setWorkspaceHistory);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsPickingWorkspace(false);
+    }
+  }, [api, authHeaders, workspace]);
+
+  const openCopilot = useCallback(async () => {
+    try {
+      await fetch(api("/api/copilot/open"), {
+        method: "POST",
+        headers: authHeaders(),
+      });
+    } catch {
+      window.open("https://m365.cloud.microsoft/chat", "_blank", "noopener,noreferrer");
+    }
+  }, [api, authHeaders]);
 
   const downloadSupportBundle = useCallback(() => {
     const payload = {
@@ -332,6 +386,10 @@ export function App() {
     const userText = instruction.trim();
     if (!userText) return;
 
+    if (!workspace.trim()) {
+      setWorkspaceError("ワークスペースを選択してください。");
+      return;
+    }
     saveWorkspace(workspace, setWorkspaceHistory);
     setCurrentApproval(null);
     lastInstructionRef.current = userText;
@@ -407,7 +465,7 @@ export function App() {
     return finalEvent ?? (currentStatus === "failed" ? errorEvent : undefined);
   }, [assistantText, currentStatus, events]);
 
-  const compactWorkspace = workspace ? compactPath(workspace) : "";
+  const compactWorkspace = workspace ? compactPath(workspace) : "未選択";
   const running = currentStatus === "running";
 
   return (
@@ -437,19 +495,50 @@ export function App() {
         </header>
 
         <main className="workspace-layout">
+          {readiness.label === "Sign in needed" ? (
+            <div className="signin-row" role="status">
+              <span>Copilot にサインインしてください。</span>
+              <Button variant="secondary" type="button" onClick={() => void openCopilot()}>
+                Open Copilot
+              </Button>
+              <Button variant="ghost" type="button" onClick={handleRefresh}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
+
           <Card className="composer-panel" aria-label="Task composer">
             <div className="field-group">
               <div className="field-row">
-                <label className="field-label" htmlFor="workspace">Workspace</label>
-                <span id="workspace-state" className="field-state">{compactWorkspace}</span>
+                <span className="field-label" id="workspace-label">Workspace</span>
+                <span id="workspace-state" className="field-state">{workspace ? "Selected" : "Required"}</span>
               </div>
-              <Input
-                id="workspace"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="/path/to/workspace"
+              <div className="workspace-picker" aria-labelledby="workspace-label">
+                <div
+                  id="workspace"
+                  className="workspace-chip"
+                  title={workspace || "Workspace not selected"}
+                  data-empty={workspace ? "false" : "true"}
+                >
+                  {compactWorkspace}
+                </div>
+                <Button
+                  id="workspace-change"
+                  variant="secondary"
+                  type="button"
+                  disabled={isPickingWorkspace}
+                  onClick={() => void chooseWorkspace()}
+                >
+                  <FolderOpen size={15} aria-hidden="true" />
+                  変更
+                </Button>
+              </div>
+              {workspaceError ? <p id="workspace-error" className="workspace-error">{workspaceError}</p> : null}
+              <input
+                id="workspace-path"
+                type="hidden"
                 value={workspace}
-                onChange={(event) => setWorkspace(event.currentTarget.value)}
+                readOnly
               />
               <div id="workspace-history" className="workspace-history" hidden={workspaceHistory.length === 0}>
                 {workspaceHistory.map((item) => (
@@ -491,7 +580,7 @@ export function App() {
                 id="send"
                 type="button"
                 data-running={running ? "true" : "false"}
-                disabled={sendDisabled}
+                disabled={sendDisabled || (!running && !workspace.trim())}
                 aria-label={running ? "Stop run" : "Send task"}
                 onClick={() => void runTask()}
               >

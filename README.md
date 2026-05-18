@@ -13,7 +13,8 @@ capabilities rather than separate visible modes.
 
 ```text
 Browser Workbench
-  one composer, workspace field, concise run status, result and approval cards
+  one composer, file-explorer workspace picker, concise run status, result and
+  approval cards
 
 .NET Relay Sidecar
   serves the Workbench, exposes the official AG-UI run endpoint,
@@ -35,7 +36,7 @@ fallback paths.
 
 The Workbench is intentionally minimal:
 
-- one workspace;
+- one workspace selected through the OS file explorer;
 - one task input;
 - one send action;
 - concise readiness and run status;
@@ -45,6 +46,11 @@ The Workbench is intentionally minimal:
 The UI does not expose separate search, Office, code, model, provider, or
 runtime controls. Those are implementation details behind the sidecar and the
 generic local tool catalog.
+
+Normal users do not type workspace paths. Use `変更` / `Change` to choose a
+folder from the OS file explorer. Recent workspaces are stored user-locally and
+Relay does not write caches, indexes, or picker state into selected/shared
+folders.
 
 ## Sidecar
 
@@ -64,12 +70,11 @@ Readiness checks currently cover:
 If a required capability is missing, Relay stops visibly. It does not silently
 fall back to a weaker search/edit path.
 
-For live Copilot use, start or attach to a signed-in Edge remote-debugging
-session and set:
-
-```bash
-export RELAY_COPILOT_CDP_PORT=9360
-```
+For installed/live Copilot use, Relay starts or attaches to a user-local
+Microsoft Edge profile with remote debugging enabled. Signed-in users should not
+need to set `RELAY_COPILOT_CDP_PORT`. Developers may still set
+`RELAY_COPILOT_CDP_PORT`, `RELAY_EDGE_PROFILE`, or `RELAY_EDGE_PATH` as explicit
+diagnostic overrides.
 
 Tests may use the explicit mock transport only when
 `RELAY_ALLOW_MOCK_COPILOT=1` and `RELAY_COPILOT_MOCK_RESPONSE` are set.

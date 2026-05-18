@@ -16,9 +16,13 @@ const version = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.js
 const installerDir = resolve(root, "dist", "installer");
 const installerPath = resolve(installerDir, `Relay.Agent-${version}-win-x64-setup.exe`);
 const scriptPath = resolve(installerDir, "relay-agent-win-x64.nsi");
+const iconPath = resolve(packageDir, "relay-assets", "relay-agent.ico");
+if (!existsSync(iconPath)) {
+  throw new Error(`installer icon is missing from package. Run pnpm sidecar:publish:windows first: ${iconPath}`);
+}
 mkdirSync(installerDir, { recursive: true });
 
-writeFileSync(scriptPath, buildNsisScript({ version, packageDir, installerPath }));
+writeFileSync(scriptPath, buildNsisScript({ version, packageDir, installerPath, iconPath }));
 
 const makensis = resolveMakensis();
 const result = spawnSync(makensis, [scriptPath], { cwd: root, stdio: "inherit" });
@@ -34,19 +38,24 @@ function readArg(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-function buildNsisScript({ version, packageDir, installerPath }) {
+function buildNsisScript({ version, packageDir, installerPath, iconPath }) {
   const source = nsisPath(packageDir);
   const outFile = nsisPath(installerPath);
+  const icon = nsisPath(iconPath);
   return `
 Unicode true
 RequestExecutionLevel user
 Name "Relay Agent"
 OutFile "${outFile}"
+Icon "${icon}"
+UninstallIcon "${icon}"
 InstallDir "$LOCALAPPDATA\\Programs\\Relay Agent"
 InstallDirRegKey HKCU "Software\\Relay Agent" "InstallDir"
 
 !include "MUI2.nsh"
 !define MUI_ABORTWARNING
+!define MUI_ICON "${icon}"
+!define MUI_UNICON "${icon}"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
@@ -72,14 +81,14 @@ Section "Relay Agent" SecMain
   SetOutPath "$INSTDIR"
   File /r "${source}\\*.*"
   CreateDirectory "$SMPROGRAMS\\Relay Agent"
-  CreateShortcut "$SMPROGRAMS\\Relay Agent\\Relay Agent.lnk" "$INSTDIR\\Relay.Launcher.exe"
+  CreateShortcut "$SMPROGRAMS\\Relay Agent\\Relay Agent.lnk" "$INSTDIR\\Relay.Launcher.exe" "" "$INSTDIR\\relay-assets\\relay-agent.ico"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
   WriteRegStr HKCU "Software\\Relay Agent" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayName" "Relay Agent"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayVersion" "${version}"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "Publisher" "Relay"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayIcon" "$INSTDIR\\Relay.Launcher.exe"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayIcon" "$INSTDIR\\relay-assets\\relay-agent.ico"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "UninstallString" "$INSTDIR\\Uninstall.exe"
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "NoModify" 1
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "NoRepair" 1
@@ -87,7 +96,7 @@ SectionEnd
 
 Section /o "Desktop shortcut" SecDesktop
   SetShellVarContext current
-  CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$INSTDIR\\Relay.Launcher.exe"
+  CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$INSTDIR\\Relay.Launcher.exe" "" "$INSTDIR\\relay-assets\\relay-agent.ico"
 SectionEnd
 
 Section "Uninstall"
