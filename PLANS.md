@@ -202,6 +202,102 @@ Acceptance:
 - A Windows user-scope installer and archives are produced for the next
   release.
 
+### 2026-05-18 OpenCode Loop Continuation And Office Integrity Plan
+
+This plan addresses the latest live Workbench failures while continuing the
+OpenCode-compatible direction instead of reviving a document-search engine or a
+Relay-owned Office planner.
+
+Observed failures:
+
+- A search for `繰延ヘッジ損益に関するファイルはある？` ran one `glob`, found
+  zero filename candidates, then finalized with a suggestion to run `grep`
+  later. In an OpenCode-style harness, a visible tool loop should continue from
+  the empty observation and try content search or another visible generic tool
+  before terminal output.
+- An Office request, `Book2.xlsx のA1セルを赤くして`, reported
+  `officecli_mutate` success, but Excel later rejected the workbook as an
+  invalid file format. A mutation success must mean the real Office package can
+  still be opened, not only that the OfficeCLI process exited successfully.
+
+Reference sources checked for this plan:
+
+- OpenCode exposes `glob`, `grep`, `read`, `edit`, `write`, `apply_patch`,
+  `bash`, and `question` as the model-facing local tools, with permissions
+  wrapped around the tools rather than separate domain-specific runtimes:
+  `https://opencode.ai/docs/tools/`.
+- OpenCode agents specialize behavior through prompts, permissions, and tool
+  access, while the underlying tool loop stays common:
+  `https://opencode.ai/docs/agents/`.
+- AG-UI models tool calls as streamed lifecycle events (`ToolCallStart`,
+  argument chunks, and `ToolCallEnd`) and lifecycle completion/error events, so
+  continuation and failure should be visible in the same run stream:
+  `https://docs.ag-ui.com/concepts/events`.
+- Microsoft Agent Framework supports human-in-the-loop approval for function
+  tools, which matches Relay's approval-gated mutation path:
+  `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`.
+
+Goal:
+
+> Keep one generic OpenCode-style agent loop: Copilot chooses visible tools,
+> Relay executes them, tool observations update terminal eligibility, and final
+> answers are allowed only when the generic loop has enough evidence or has
+> actually exhausted the relevant visible tool family.
+
+Harness changes:
+
+1. **Empty-discovery continuation gate**
+   - Track successful but empty `glob` and `grep` observations in the generic
+     turn ledger.
+   - If a local file-search turn has only an empty filename `glob` and no
+     content search or `read` attempt, keep the admissible action envelope in
+     `NeedsObservation` and keep `final` forbidden.
+   - Do not inject a hidden business search. Copilot must choose a visible
+     generic next tool (`grep`, broader `glob`, or exact `read`) from the
+     normal AG-UI/Agent Framework loop.
+   - Permit final output only after at least one follow-up visible search/read
+     observation exists, even if that observation is also empty.
+
+2. **Prompt alignment**
+   - Strengthen Agent Framework and Copilot projection instructions so
+     `glob -> final` after zero candidates is invalid for local file-search
+     requests.
+   - Keep the instruction generic: no `繰延ヘッジ`, CFS, DCI, or department
+     exception tables.
+   - Keep `ask_user` forbidden when the objective and workspace are already
+     known.
+
+3. **Office package integrity gate**
+   - After every approved Office mutation, verify both OfficeCLI `view outline`
+     and the actual OpenXML ZIP package structure for `.xlsx`, `.xlsm`,
+     `.docx`, and `.pptx`.
+   - For Excel packages, require `[Content_Types].xml`, `_rels/.rels`,
+     `xl/workbook.xml`, and at least one `xl/worksheets/*.xml` entry.
+   - If package verification fails after a mutation, restore the backup before
+     returning the tool result and report a failed `officecli_mutate`
+     observation. Do not let a corrupt workbook be reported as success.
+   - Include the verification result in the tool observation so Copilot can
+     explain whether the mutation was applied or rolled back.
+
+4. **Regression coverage**
+   - Extend protocol-state smokes so a premature final after an empty filename
+     `glob` is rejected by the admissible action envelope.
+   - Add Office integrity verification coverage for the package validator path.
+   - Keep `pnpm check` as the canonical gate before release.
+
+Acceptance:
+
+- A single zero-candidate `glob` no longer makes `final` admissible for
+  file-search turns.
+- The prompt projection tells Copilot to continue with visible generic tools
+  after empty filename search instead of suggesting that the user ask for
+  `grep`.
+- Office mutation success requires process success, OfficeCLI outline
+  verification, and OpenXML package integrity verification.
+- If Office package integrity fails, the original file is restored from backup
+  and the AG-UI run receives a failed tool observation.
+- `pnpm check` passes and release artifacts are produced for the next version.
+
 ### 2026-05-18 CopilotKit Chat Layout Density Plan
 
 This plan refines the CopilotKit chatbot reset after reviewing CopilotKit usage

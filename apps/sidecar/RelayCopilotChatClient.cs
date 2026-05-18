@@ -536,6 +536,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             "For local document/data review, use OpenCode-style generic tools and reason from observations. Do not use bash for ordinary file reading or light CSV arithmetic.",
             "For file search, use only visible generic tools: glob for candidate filenames/paths, grep for plaintext/code content, and read for exact candidates including supported Office/PDF/document files.",
             "If the first search is weak or empty, try another visible generic tool, path, file type, or term that follows from the user's request or observed results before finalizing.",
+            "If a file-search glob returns zero candidates, do not finalize and do not tell the user to request grep later; choose grep, broader glob, or exact read yourself as the next visible tool when allowed.",
             "If glob finds Office/PDF/document candidates, read exact candidates before saying no relevant local file was found. Do not read README.md as a generic fallback unless the user asked for project instructions or README content.",
             "For read, use exact displayPath/path values returned by glob/grep/read observations or explicit user paths. Never invent plausible filenames.",
             "If RELAY_TURN_STATE or terminalCriteria requires evidence_read_result, call read on the best candidate file before final, even if grep already found matching lines.",
@@ -823,7 +824,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
         }
 
         var status = detail[(last + 1)..];
-        return status is "success" or "failed" or "approved" or "rejected"
+        return status is "success" or "failed" or "empty" or "approved" or "rejected"
             ? status
             : null;
     }
@@ -923,7 +924,9 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                         continue;
                     }
 
-                    var status = resultInfo.Status ?? (resultInfo.Success == false ? "failed" : "success");
+                    var status = resultInfo.Status == "success" || string.IsNullOrWhiteSpace(resultInfo.Status)
+                        ? InferToolResultStatus(toolName, resultInfo)
+                        : resultInfo.Status;
                     if (toolName == "grep" && !string.IsNullOrWhiteSpace(resultInfo.Target))
                     {
                         yield return $"{FormatToolCallDetail(toolName, new Dictionary<string, object?>
@@ -1033,18 +1036,18 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             ? value.ToString()
             : null;
 
-    private sealed record RelayToolResultInfo(string? Tool, bool? Success, string? Target, string? Status, string[] Artifacts);
+    private sealed record RelayToolResultInfo(string? Tool, bool? Success, string? Target, string? Status, string? Summary, string[] Artifacts);
 
     private static RelayToolResultInfo ReadToolResultInfo(object? result)
     {
-        if (result is null) return new RelayToolResultInfo(null, null, null, null, []);
+        if (result is null) return new RelayToolResultInfo(null, null, null, null, null, []);
         if (result is string text && text.Contains("Tool call invocation rejected", StringComparison.OrdinalIgnoreCase))
         {
-            return new RelayToolResultInfo(null, false, null, "rejected", []);
+            return new RelayToolResultInfo(null, false, null, "rejected", null, []);
         }
         if (result is string errorText && errorText.TrimStart().StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
         {
-            return new RelayToolResultInfo(null, false, null, "failed", []);
+            return new RelayToolResultInfo(null, false, null, "failed", null, []);
         }
 
         try
@@ -1054,7 +1057,7 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                return new RelayToolResultInfo(null, null, null, null, []);
+                return new RelayToolResultInfo(null, null, null, null, null, []);
             }
 
             var tool = root.TryGetProperty("tool", out var toolProperty) &&
@@ -1087,6 +1090,10 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                 statusProperty.ValueKind == JsonValueKind.String
                     ? statusProperty.GetString()
                     : null;
+            var summary = root.TryGetProperty("summary", out var summaryProperty) &&
+                summaryProperty.ValueKind == JsonValueKind.String
+                    ? summaryProperty.GetString()
+                    : null;
             var artifacts = root.TryGetProperty("artifactIds", out var artifactsProperty) &&
                 artifactsProperty.ValueKind == JsonValueKind.Array
                     ? artifactsProperty.EnumerateArray()
@@ -1095,12 +1102,39 @@ public sealed class RelayCopilotChatClient(ICopilotTransport transport) : IChatC
                         .Cast<string>()
                         .ToArray()
                     : [];
-            return new RelayToolResultInfo(tool, success, target, status, artifacts);
+            return new RelayToolResultInfo(tool, success, target, status, summary, artifacts);
         }
         catch
         {
-            return new RelayToolResultInfo(null, null, null, null, []);
+            return new RelayToolResultInfo(null, null, null, null, null, []);
         }
+    }
+
+    private static string InferToolResultStatus(string? toolName, RelayToolResultInfo resultInfo)
+    {
+        if (resultInfo.Success == false)
+        {
+            return "failed";
+        }
+
+        if (resultInfo.Success == true &&
+            (toolName == "glob" || toolName == "grep") &&
+            resultInfo.Artifacts.Length == 0 &&
+            IsEmptySearchSummary(resultInfo.Summary))
+        {
+            return "empty";
+        }
+
+        return "success";
+    }
+
+    private static bool IsEmptySearchSummary(string? summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary)) return false;
+        return Regex.IsMatch(
+            summary,
+            @"^\s*0\s+(?:file\s+candidates|content\s+matches)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private static string GetInitialRequestText(IReadOnlyList<ChatMessage> messages)

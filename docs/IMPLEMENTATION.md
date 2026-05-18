@@ -20208,3 +20208,68 @@ Result:
   `relay-agent-0.3.14-win-x64.zip`,
   `relay-agent-0.3.14-linux-x64.tar.gz`, release inventory, SBOM, and
   `relay-agent-0.3.14-sha256.txt`.
+
+## 2026-05-18: OpenCode Loop Continuation And Office Integrity
+
+Change:
+
+- Added the OpenCode loop-continuation and Office integrity plan to
+  `PLANS.md` and the executable `OCLOOP*` queue to `tasks.md`.
+- Added generic empty-search observation tracking. Successful-but-empty
+  `glob`/`grep` results are now recorded as `empty` in the turn ledger and
+  shown in `RELAY_TURN_STATE` diagnostics.
+- Kept file search inside the generic OpenCode-style `glob` / `grep` /
+  `read` loop, but prevented terminal output after a single zero-candidate
+  filename `glob`. The admissible action envelope remains `NeedsObservation`
+  until a visible generic follow-up search/read observation exists.
+- Strengthened Agent Framework and Copilot projection prompts so Copilot
+  continues with visible generic tools after empty filename discovery instead
+  of asking the user to request `grep` later.
+- Added Office mutation package-integrity verification. After approved
+  OfficeCLI mutations, Relay now verifies OfficeCLI `view outline` and the
+  OpenXML ZIP structure for `.xlsx`, `.xlsm`, `.docx`, and `.pptx`.
+- Added rollback behavior for corrupt Office mutation results. If OpenXML
+  verification fails after OfficeCLI reports success, Relay restores the
+  backup and returns a failed `officecli_mutate` observation instead of
+  reporting success.
+- Bumped Relay Agent to `0.3.15`.
+
+References checked:
+
+- `https://opencode.ai/docs/tools/`
+- `https://opencode.ai/docs/agents/`
+- `https://docs.ag-ui.com/concepts/events`
+- `https://learn.microsoft.com/en-us/agent-framework/agents/tools/tool-approval`
+
+Verification commands run locally:
+
+```bash
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm agent:protocol-state-smoke
+pnpm agent:officecli-registry-smoke
+pnpm agent:choice-error-reduction-smoke
+pnpm agent:office-pdf-read-smoke
+pnpm check
+pnpm sidecar:publish:windows
+pnpm sidecar:publish:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/installer/Relay.Agent-0.3.15-win-x64-setup.exe dist/relay-agent-0.3.15-win-x64.zip dist/relay-agent-0.3.15-linux-x64.tar.gz dist/release/relay-release-inventory.json dist/release/relay-sbom.json
+```
+
+Result:
+
+- Targeted sidecar build and harness smokes passed.
+- Full `pnpm check` passed, including hard-cut guard, Workbench build,
+  sidecar build/smokes, Copilot CDP manager smoke, workspace picker smoke,
+  AG-UI client-tool/replay smokes, DCI smokes, Office/PDF read smoke,
+  OfficeCLI registry smoke, sidecar security smoke, and release inventory/SBOM
+  generation.
+- Linux publish initially failed when run concurrently with Windows publish
+  because `project.assets.json` was restored for a different RID. Re-running
+  Linux publish alone succeeded.
+- Release packaging for `0.3.15` completed. Generated assets include
+  `Relay.Agent-0.3.15-win-x64-setup.exe`,
+  `relay-agent-0.3.15-win-x64.zip`,
+  `relay-agent-0.3.15-linux-x64.tar.gz`, release inventory, SBOM, and
+  `relay-agent-0.3.15-sha256.txt`.

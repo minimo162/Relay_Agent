@@ -127,6 +127,11 @@ public static class RelayAdmissibleActionEnvelopeBuilder
             return RelayActionPhase.NeedsObservation;
         }
 
+        if (state.RequiresContinuationAfterEmptyFilenameDiscovery)
+        {
+            return RelayActionPhase.NeedsObservation;
+        }
+
         if (state.RequiresReadEvidenceBeforeFinal && registeredTools.Contains("read"))
         {
             return RelayActionPhase.NeedsExactRead;
@@ -236,6 +241,10 @@ public static class RelayAdmissibleActionEnvelopeBuilder
         if (state.RequiresEvidenceObservationBeforeFinal)
         {
             criteria.Add("grep_or_read_evidence_result");
+        }
+        if (state.RequiresContinuationAfterEmptyFilenameDiscovery)
+        {
+            criteria.Add("follow_up_visible_search_or_read_after_empty_filename_glob");
         }
         if (state.RequiresMutationBeforeFinal || phase == RelayActionPhase.NeedsMutation)
         {

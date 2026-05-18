@@ -1,6 +1,6 @@
 {
   "name": "@relay-agent/workbench",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "private": true,
   "type": "module",
   "scripts": {

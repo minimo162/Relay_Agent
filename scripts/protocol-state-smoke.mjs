@@ -10,6 +10,8 @@ const port = 17908;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-protocol-state-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-protocol-state-workspace-"));
 const responses = [
+  JSON.stringify({ action: "tool", tool: "glob", args: { pattern: "**/*繰延ヘッジ損益*" } }),
+  JSON.stringify({ action: "final", answer: "ファイル名候補はありません。必要ならgrepします。" }),
   JSON.stringify({ action: "final", answer: "ローカルツールは利用できません。" }),
   JSON.stringify({ action: "tool", tool: "ask_user", args: { question: "何を探しますか？" } }),
   JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["cat", "seed.txt"] } }),
@@ -81,6 +83,15 @@ function assertRunError(events, expectedText) {
 
 try {
   await waitForStatus();
+
+  const finalAfterEmptyGlob = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "protocol-empty-glob-final-rejected",
+    instruction: "繰延ヘッジ損益に関するファイルはある？",
+  });
+  assertRunError(finalAfterEmptyGlob.events, "zero-candidate filename glob");
 
   const finalBeforeSearch = await postAgUi({
     port,

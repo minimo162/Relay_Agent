@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -22,6 +23,7 @@ public sealed class RelayAgentFrameworkRunner
         Use only the visible Relay tools for local work. Do not recommend hidden retrievers, vector search, plugins, or local tools that are not in the function catalog.
         Use glob to discover candidate file paths by name, grep to search plaintext/code content, and read to inspect exact candidates before drawing conclusions about file contents.
         Iterate from tool observations: if a search is weak or empty, try another visible generic tool, path, file type, or term that follows from the user's request or observed results.
+        If a file-search glob returns zero candidates, do not finalize or ask the user to request grep; continue yourself with a visible generic follow-up such as grep, broader glob, or exact read when a candidate exists.
         Do not read README.md as a generic fallback unless the user asked for project instructions or README content.
         For read, use exact displayPath/path values returned by glob/grep/read observations or explicit user paths. Never invent plausible filenames.
         Do not treat filename matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
@@ -1665,6 +1667,7 @@ public sealed class RelayToolExecutor
         }
 
         ProcessResult? verification = null;
+        OfficePackageVerification? packageVerification = null;
         if (plan.VerifyAfter && plan.FilePath is not null && File.Exists(plan.FilePath))
         {
             verification = await RelayProcess.RunAsync(
@@ -1677,6 +1680,27 @@ public sealed class RelayToolExecutor
             {
                 return ToolObservation.Fail(call.Id, call.Tool, $"OfficeCLI operation succeeded but verification failed: {verification.Output}");
             }
+
+            packageVerification = VerifyOfficePackageIntegrity(plan.FilePath);
+            if (!packageVerification.Ok)
+            {
+                var restore = await TryRestoreBackupAsync(plan.FilePath, backupPath, cancellationToken);
+                return ToolObservation.Fail(
+                    call.Id,
+                    call.Tool,
+                    $"OfficeCLI operation succeeded but OpenXML package verification failed: {packageVerification.Detail}; {restore.Detail}",
+                    new
+                    {
+                        operation = plan.Operation,
+                        argv = plan.Argv,
+                        output = Truncate(result.Output, 12000),
+                        backupPath,
+                        verification = Truncate(verification.Output, 12000),
+                        packageVerification,
+                        restored = restore.Restored,
+                        restoreDetail = restore.Detail,
+                    });
+            }
         }
 
         var data = new
@@ -1686,12 +1710,88 @@ public sealed class RelayToolExecutor
             output = Truncate(result.Output, 12000),
             backupPath,
             verification = verification is null ? null : Truncate(verification.Output, 12000),
+            packageVerification,
         };
         return ToolObservation.Ok(
             call.Id,
             call.Tool,
             backupPath is null ? plan.Summary : $"{plan.Summary}; backup={backupPath}",
             data);
+    }
+
+    private static OfficePackageVerification VerifyOfficePackageIntegrity(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if (extension is not (".xlsx" or ".xlsm" or ".docx" or ".pptx"))
+        {
+            return new(true, "not_applicable", []);
+        }
+
+        try
+        {
+            using var archive = ZipFile.OpenRead(path);
+            var entries = archive.Entries
+                .Select(entry => entry.FullName.Replace('\\', '/'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!entries.Contains("[Content_Types].xml"))
+            {
+                return new(false, "missing [Content_Types].xml", entries.Take(20).ToArray());
+            }
+            if (!entries.Contains("_rels/.rels"))
+            {
+                return new(false, "missing _rels/.rels", entries.Take(20).ToArray());
+            }
+
+            return extension switch
+            {
+                ".xlsx" or ".xlsm" => VerifyExcelPackageEntries(entries),
+                ".docx" => entries.Contains("word/document.xml")
+                    ? new(true, "docx package structure verified", [])
+                    : new(false, "missing word/document.xml", entries.Take(20).ToArray()),
+                ".pptx" => entries.Contains("ppt/presentation.xml")
+                    ? new(true, "pptx package structure verified", [])
+                    : new(false, "missing ppt/presentation.xml", entries.Take(20).ToArray()),
+                _ => new(true, "not_applicable", []),
+            };
+        }
+        catch (Exception ex)
+        {
+            return new(false, $"invalid zip package: {ex.Message}", []);
+        }
+    }
+
+    private static OfficePackageVerification VerifyExcelPackageEntries(ISet<string> entries)
+    {
+        if (!entries.Contains("xl/workbook.xml"))
+        {
+            return new(false, "missing xl/workbook.xml", entries.Take(20).ToArray());
+        }
+        if (!entries.Any(entry => entry.StartsWith("xl/worksheets/", StringComparison.OrdinalIgnoreCase) &&
+                                  entry.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new(false, "missing xl/worksheets/*.xml", entries.Take(20).ToArray());
+        }
+        return new(true, "xlsx package structure verified", []);
+    }
+
+    private static async Task<OfficeRestoreResult> TryRestoreBackupAsync(string targetPath, string? backupPath, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(backupPath) || !File.Exists(backupPath))
+        {
+            return new(false, "backup restore skipped because no backup was available");
+        }
+
+        try
+        {
+            await using var source = File.OpenRead(backupPath);
+            await using var destination = File.Create(targetPath);
+            await source.CopyToAsync(destination, cancellationToken);
+            return new(true, $"backup restored from {backupPath}");
+        }
+        catch (Exception ex)
+        {
+            return new(false, $"backup restore failed: {ex.Message}");
+        }
     }
 
     private async Task<ToolObservation> EditAsync(string workspace, RelayToolCall call, CancellationToken cancellationToken)
@@ -3881,6 +3981,10 @@ public sealed record ToolValidation(bool Ok, string? Error)
 public sealed record ProcessResult(bool Success, string Output);
 
 public sealed record LineProcessResult(bool Success, IReadOnlyList<string> Lines, string Output, bool Truncated);
+
+public sealed record OfficePackageVerification(bool Ok, string Detail, string[] SampleEntries);
+
+public sealed record OfficeRestoreResult(bool Restored, string Detail);
 
 public sealed record RelayAgentPlan(string Action, string? Tool, JsonObject? Args, string? Answer)
 {

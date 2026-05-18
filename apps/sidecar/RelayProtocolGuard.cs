@@ -66,6 +66,12 @@ public static class RelayProtocolGuard
                 "Copilot final answer recommended a local tool or retriever that is not in the visible Relay tool catalog.");
         }
 
+        if (state.RequiresContinuationAfterEmptyFilenameDiscovery)
+        {
+            return RelayProtocolDecision.Reject(
+                "Copilot returned action=final after a zero-candidate filename glob. Continue with a visible generic follow-up tool such as grep, broader glob, or read before finalizing.");
+        }
+
         if (state.RequiresLocalToolBeforeFinal || !envelope.CanFinalize)
         {
             return RelayProtocolDecision.Reject(

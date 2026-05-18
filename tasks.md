@@ -71,6 +71,12 @@ Relay-owned search heuristics, simplify Copilot projection to OpenCode-style
 generic tool loops, keep Office/code as recipes over the same catalog, and
 make the Workbench read as a normal CopilotKit/AG-UI chatbot.
 
+The active queue is `OCLOOP*`. It implements the 2026-05-18 OpenCode Loop
+Continuation And Office Integrity Plan from `PLANS.md`: keep the generic
+OpenCode-style tool loop alive after empty filename discovery, and require
+Office package integrity before an approved Office mutation can be reported as
+successful.
+
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
@@ -95,6 +101,151 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### OCLOOP-01 - Document OpenCode Loop Continuation Plan
+
+Status: completed
+
+Scope:
+
+- Add the OpenCode loop-continuation and Office integrity plan to `PLANS.md`.
+- Add this executable task queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan explicitly keeps one generic tool loop rather than reintroducing a
+  dedicated document-search engine.
+- The plan treats empty filename search continuation as generic harness
+  terminal eligibility, not a domain-specific search heuristic.
+- The plan requires real Office package integrity after Office mutation.
+
+Verification:
+
+- `git diff --check -- . ':(exclude)apps/sidecar/wwwroot/assets/*'`
+
+### OCLOOP-02 - Track Empty Search Observations
+
+Status: completed
+
+Scope:
+
+- Record successful-but-empty `glob` and `grep` observations in the generic
+  completed-tool ledger.
+- Add turn-state flags for empty filename discovery and follow-up search/read
+  attempts.
+
+Artifacts:
+
+- Updated `apps/sidecar/RelayCopilotChatClient.cs`.
+- Updated `apps/sidecar/RelayProtocolState.cs`.
+
+Acceptance:
+
+- A zero-candidate `glob` is visible in `RELAY_TURN_STATE` diagnostics.
+- A later `grep`, broader `glob`, or `read` attempt is visible as the generic
+  follow-up observation.
+
+Verification:
+
+- `pnpm agent:protocol-state-smoke`
+
+### OCLOOP-03 - Forbid Final After Single Empty Glob
+
+Status: completed
+
+Scope:
+
+- Keep the admissible action envelope in `NeedsObservation` when a file-search
+  turn has only an empty filename `glob` and no content search or read attempt.
+- Strengthen Agent Framework and Copilot projection prompts to continue with
+  visible generic tools after empty filename discovery.
+
+Artifacts:
+
+- Updated `apps/sidecar/RelayAdmissibleActionEnvelope.cs`.
+- Updated `apps/sidecar/RelayProtocolGuard.cs`.
+- Updated `apps/sidecar/AgentRunner.cs`.
+- Updated `apps/sidecar/RelayCopilotChatClient.cs`.
+- Updated protocol-state smoke coverage.
+
+Acceptance:
+
+- A premature `final` after a single zero-candidate `glob` is rejected by the
+  admissible action envelope.
+- The harness does not inject hidden domain-specific search; Copilot must
+  choose a visible generic continuation tool.
+
+Verification:
+
+- `pnpm agent:protocol-state-smoke`
+- `pnpm agent:choice-error-reduction-smoke`
+
+### OCLOOP-04 - Verify Office Package Integrity After Mutation
+
+Status: completed
+
+Scope:
+
+- Add an OpenXML package verifier for `.xlsx`, `.xlsm`, `.docx`, and `.pptx`.
+- Run package verification after approved Office mutations, after OfficeCLI
+  outline verification.
+- Restore the backup and return a failed tool observation if the package is
+  invalid after mutation.
+
+Artifacts:
+
+- Updated `apps/sidecar/AgentRunner.cs`.
+- Added or updated Office integrity smoke coverage.
+
+Acceptance:
+
+- `officecli_mutate` success requires process success, OfficeCLI outline
+  verification, and OpenXML package integrity verification.
+- Corrupt post-mutation Office packages are rolled back before Relay returns
+  the tool result.
+
+Verification:
+
+- `pnpm agent:officecli-registry-smoke`
+- `pnpm agent:office-pdf-read-smoke`
+
+### OCLOOP-05 - Version, Verify, Commit, Release
+
+Status: completed
+
+Scope:
+
+- Bump Relay Agent to the next patch version.
+- Record implementation notes and verification commands.
+- Run the canonical verification gate.
+- Commit, push `main`, and publish a GitHub Release with the Windows
+  user-scope installer and archives.
+
+Artifacts:
+
+- Updated version files.
+- Updated `docs/IMPLEMENTATION.md`.
+- Git commit on `main`.
+- GitHub Release assets.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Release artifacts include the Windows installer, Windows archive, Linux
+  archive, release inventory/SBOM, and SHA256 file.
+
+Verification:
+
+- `pnpm check`
+- `pnpm sidecar:publish:linux`
+- `pnpm sidecar:publish:windows`
+- `pnpm sidecar:installer:windows`
+- `pnpm release:inventory`
 
 ### GENHARNESS-01 - Document Generic Harness Reset
 

@@ -48,6 +48,26 @@ public sealed record RelayTurnState(
 
     public bool HasGrepToolResult => CompletedTools.Contains("grep", StringComparer.Ordinal);
 
+    public bool HasEmptyGlobResult => HasToolDetailStatus("glob", "empty");
+
+    public bool HasEmptyGrepResult => HasToolDetailStatus("grep", "empty");
+
+    public bool HasGrepAttempt => HasAnyToolDetail("grep");
+
+    public bool HasReadAttempt => HasAnyToolDetail("read");
+
+    public int GlobAttemptCount => CountToolDetails("glob");
+
+    public bool HasFollowUpAfterEmptyFilenameDiscovery =>
+        HasGrepAttempt ||
+        HasReadAttempt ||
+        GlobAttemptCount > 1;
+
+    public bool RequiresContinuationAfterEmptyFilenameDiscovery =>
+        Intent is RelayLocalIntent.FileSearch or RelayLocalIntent.FileRead &&
+        HasEmptyGlobResult &&
+        !HasFollowUpAfterEmptyFilenameDiscovery;
+
     public bool RequiresEvidenceObservationBeforeFinal =>
         RequiresLocalEvidenceReadRequest &&
         HasAnyToolResult &&
@@ -110,6 +130,26 @@ public sealed record RelayTurnState(
             .TrimStart('/')
             .TrimEnd('/');
 
+    private bool HasAnyToolDetail(string tool) =>
+        CompletedToolDetails.Any(detail =>
+            detail.StartsWith(tool + ":", StringComparison.Ordinal) ||
+            string.Equals(detail, tool + ":success", StringComparison.Ordinal) ||
+            string.Equals(detail, tool + ":empty", StringComparison.Ordinal) ||
+            string.Equals(detail, tool + ":failed", StringComparison.Ordinal));
+
+    private bool HasToolDetailStatus(string tool, string status) =>
+        CompletedToolDetails.Any(detail =>
+            (detail.StartsWith(tool + ":", StringComparison.Ordinal) ||
+             string.Equals(detail, tool, StringComparison.Ordinal)) &&
+            detail.EndsWith(":" + status, StringComparison.Ordinal));
+
+    private int CountToolDetails(string tool) =>
+        CompletedToolDetails.Count(detail =>
+            detail.StartsWith(tool + ":", StringComparison.Ordinal) ||
+            string.Equals(detail, tool + ":success", StringComparison.Ordinal) ||
+            string.Equals(detail, tool + ":empty", StringComparison.Ordinal) ||
+            string.Equals(detail, tool + ":failed", StringComparison.Ordinal));
+
     public JsonObject ToDiagnosticJson()
     {
         var node = new JsonObject
@@ -126,6 +166,11 @@ public sealed record RelayTurnState(
             ["requiresMutationBeforeFinal"] = RequiresMutationBeforeFinal,
             ["requiresEvidenceObservationBeforeFinal"] = RequiresEvidenceObservationBeforeFinal,
             ["requiresReadEvidenceBeforeFinal"] = RequiresReadEvidenceBeforeFinal,
+            ["requiresContinuationAfterEmptyFilenameDiscovery"] = RequiresContinuationAfterEmptyFilenameDiscovery,
+            ["hasEmptyGlobResult"] = HasEmptyGlobResult,
+            ["hasEmptyGrepResult"] = HasEmptyGrepResult,
+            ["hasFollowUpAfterEmptyFilenameDiscovery"] = HasFollowUpAfterEmptyFilenameDiscovery,
+            ["globAttemptCount"] = GlobAttemptCount,
             ["pendingOutputFile"] = PendingOutputFile,
             ["requestedOutputFileCount"] = RequestedOutputFileCount,
             ["exactFilePath"] = ExactFilePath,

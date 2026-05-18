@@ -1,17 +1,32 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectToolCall, postAgUi, readApprovalRequest } from "./lib/agui-smoke.mjs";
+import { approvalMessages, collectToolCall, postAgUi, readApprovalRequest } from "./lib/agui-smoke.mjs";
 
 const token = "relay-officecli-registry-token";
 const port = 17897;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-officecli-registry-data-"));
 const promptDumpDir = mkdtempSync(join(tmpdir(), "relay-officecli-registry-prompts-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-officecli-registry-workspace-"));
+const mockOfficeCli = join(dataDir, "mock-officecli.sh");
 
 writeFileSync(join(workspace, "Book2.xlsx"), "placeholder workbook");
+writeFileSync(mockOfficeCli, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "view" ]]; then
+  printf '{"success":true,"data":{"outline":"ok"}}\\n'
+  exit 0
+fi
+if [[ "\${1:-}" == "set" ]]; then
+  printf 'corrupted workbook after mutation' > "$2"
+  printf '{"success":true,"data":{"changed":true}}\\n'
+  exit 0
+fi
+printf '{"success":true,"data":{}}\\n'
+`, "utf8");
+chmodSync(mockOfficeCli, 0o755);
 
 const responses = [
   JSON.stringify({
@@ -33,6 +48,40 @@ const responses = [
       argv: ["set", "Book2.xlsx", "/Sheet1/A1", "--prop", "fill=FF0000"],
     },
   }),
+  JSON.stringify({
+    action: "tool",
+    tool: "officecli_mutate",
+    args: {
+      filePath: "Book2.xlsx",
+      operation: "set_cell_fill",
+      sheet: "Sheet1",
+      cell: "A1",
+      fill: "FF0000",
+    },
+  }),
+  JSON.stringify({
+    action: "tool",
+    tool: "officecli_mutate",
+    args: {
+      filePath: "Book2.xlsx",
+      operation: "set_cell_fill",
+      sheet: "Sheet1",
+      cell: "A1",
+      fill: "FF0000",
+    },
+  }),
+  JSON.stringify({
+    action: "tool",
+    tool: "officecli_mutate",
+    args: {
+      filePath: "Book2.xlsx",
+      operation: "set_cell_fill",
+      sheet: "Sheet1",
+      cell: "A1",
+      fill: "FF0000",
+    },
+  }),
+  JSON.stringify({ action: "final", answer: "Office mutation failed and was restored." }),
 ];
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -46,6 +95,7 @@ const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.c
     RELAY_ALLOW_MOCK_COPILOT: "1",
     RELAY_COPILOT_MOCK_RESPONSES_JSON: JSON.stringify(responses),
     RELAY_COPILOT_PROMPT_DUMP_DIR: promptDumpDir,
+    RELAY_OFFICECLI_PATH: mockOfficeCli,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -97,8 +147,35 @@ try {
   if (!rawRun.events.some((event) => event.type === "RUN_ERROR")) {
     throw new Error(`raw OfficeCLI argv was not rejected: ${JSON.stringify(rawRun.events)}`);
   }
-  if (!JSON.stringify(rawRun.events).includes("raw argv is not allowed")) {
+  const rawRunEvents = JSON.stringify(rawRun.events);
+  if (!rawRunEvents.includes("raw argv is not allowed") &&
+      !rawRunEvents.includes("outside the admissible action envelope")) {
     throw new Error(`raw OfficeCLI argv failure did not explain the policy: ${JSON.stringify(rawRun.events)}`);
+  }
+
+  const corruptPrompt = "Book2.xlsx のA1セルを赤くして";
+  const corruptStart = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "officecli-corrupt-package-start",
+    instruction: corruptPrompt,
+  });
+  const corruptApprovalCall = collectToolCall(corruptStart.events, "request_approval");
+  const corruptResume = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "officecli-corrupt-package-resume",
+    instruction: corruptPrompt,
+    messages: approvalMessages("officecli-corrupt-package-resume", corruptPrompt, corruptApprovalCall, true),
+  });
+  const corruptEvents = JSON.stringify(corruptResume.events);
+  if (!corruptEvents.includes("OpenXML package verification failed")) {
+    throw new Error(`corrupt package was not rejected after mutation: ${corruptEvents}`);
+  }
+  if (readFileSync(join(workspace, "Book2.xlsx"), "utf8") !== "placeholder workbook") {
+    throw new Error("corrupt Office mutation did not restore the backup");
   }
 
   console.log("[officecli-registry-smoke] ok");
