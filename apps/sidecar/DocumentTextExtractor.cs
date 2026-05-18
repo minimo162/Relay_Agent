@@ -3,12 +3,23 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using UglyToad.PdfPig;
 
 public sealed record ExtractedDocumentText(
     string Kind,
     string Text,
     bool Truncated,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int? PageCount = null,
+    int? PageStart = null,
+    int? PageEnd = null,
+    string Mode = "content",
+    IReadOnlyList<ExtractedDocumentPage>? Pages = null);
+
+public sealed record ExtractedDocumentPage(
+    int Number,
+    int CharCount,
+    string Preview);
 
 public static partial class DocumentTextExtractor
 {
@@ -23,7 +34,10 @@ public static partial class DocumentTextExtractor
     public static async Task<ExtractedDocumentText> ExtractAsync(
         string path,
         int maxChars,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? pageStart = null,
+        int? pageEnd = null,
+        string? mode = null)
     {
         var info = new FileInfo(path);
         if (info.Length > MaxContainerBytes)
@@ -37,7 +51,7 @@ public static partial class DocumentTextExtractor
             ".docx" => ExtractDocx(path, maxChars, cancellationToken),
             ".pptx" => ExtractPptx(path, maxChars, cancellationToken),
             ".xlsx" or ".xlsm" => ExtractWorkbook(path, maxChars, cancellationToken),
-            ".pdf" => await ExtractPdfAsync(path, maxChars, cancellationToken),
+            ".pdf" => await ExtractPdfAsync(path, maxChars, cancellationToken, pageStart, pageEnd, mode),
             _ => throw new InvalidOperationException($"Unsupported document extension: {extension}"),
         };
     }
@@ -111,12 +125,74 @@ public static partial class DocumentTextExtractor
     private static async Task<ExtractedDocumentText> ExtractPdfAsync(
         string path,
         int maxChars,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? pageStart,
+        int? pageEnd,
+        string? mode)
+    {
+        var normalizedMode = string.Equals(mode, "map", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mode, "outline", StringComparison.OrdinalIgnoreCase)
+            ? "map"
+            : "content";
+        var builder = new StringBuilder();
+        var warnings = new List<string>();
+        var pages = new List<ExtractedDocumentPage>();
+
+        try
+        {
+            using var document = PdfDocument.Open(path);
+            var pageCount = document.NumberOfPages;
+            var safeStart = Math.Clamp(pageStart ?? 1, 1, Math.Max(pageCount, 1));
+            var safeEnd = Math.Clamp(pageEnd ?? pageCount, safeStart, Math.Max(pageCount, safeStart));
+
+            foreach (var page in document.GetPages().Where(page => page.Number >= safeStart && page.Number <= safeEnd))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var pageText = NormalizeText(page.Text ?? "");
+                if (string.IsNullOrWhiteSpace(pageText))
+                {
+                    AddDistinctWarning(warnings, $"Page {page.Number} has no extractable text.");
+                    pages.Add(new ExtractedDocumentPage(page.Number, 0, ""));
+                    if (normalizedMode == "map")
+                    {
+                        AppendLine(builder, $"Page {page.Number} | chars=0 | preview=<no extractable text>", maxChars);
+                    }
+                    continue;
+                }
+
+                pages.Add(new ExtractedDocumentPage(page.Number, pageText.Length, Preview(pageText, 180)));
+                if (normalizedMode == "map")
+                {
+                    AppendLine(builder, $"Page {page.Number} | chars={pageText.Length} | preview={Preview(pageText, 220)}", maxChars);
+                }
+                else
+                {
+                    AppendLine(builder, $"--- Page {page.Number} ---", maxChars);
+                    AppendLine(builder, pageText, maxChars);
+                }
+                if (builder.Length >= maxChars) break;
+            }
+
+            if (builder.Length == 0) warnings.Add("No PDF text layer was extracted. OCR and image-only PDFs are not supported.");
+            return Complete("pdf", builder, maxChars, warnings, pageCount, safeStart, safeEnd, normalizedMode, pages);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            AddDistinctWarning(warnings, $"PdfPig extraction failed: {ex.Message}");
+            return await ExtractPdfFallbackAsync(path, maxChars, cancellationToken, warnings, normalizedMode);
+        }
+    }
+
+    private static async Task<ExtractedDocumentText> ExtractPdfFallbackAsync(
+        string path,
+        int maxChars,
+        CancellationToken cancellationToken,
+        List<string> warnings,
+        string mode)
     {
         var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
         var source = Encoding.Latin1.GetString(bytes);
         var builder = new StringBuilder();
-        var warnings = new List<string>();
 
         var streamSources = ExtractPdfStreamSources(source, warnings);
         var textSources = streamSources.Count > 0 ? streamSources : [source];
@@ -131,8 +207,8 @@ public static partial class DocumentTextExtractor
             AppendPdfTextOperators(source, builder, maxChars, cancellationToken);
         }
 
-        if (builder.Length == 0) warnings.Add("No PDF text-layer operators were found. OCR and image-only PDFs are not supported.");
-        return Complete("pdf", builder, maxChars, warnings);
+        if (builder.Length == 0) AddDistinctWarning(warnings, "No PDF text-layer operators were found. OCR and image-only PDFs are not supported.");
+        return Complete("pdf", builder, maxChars, warnings, null, null, null, mode, []);
     }
 
     private static List<string> ExtractPdfStreamSources(string source, List<string> warnings)
@@ -286,12 +362,17 @@ public static partial class DocumentTextExtractor
         string kind,
         StringBuilder builder,
         int maxChars,
-        List<string> warnings)
+        List<string> warnings,
+        int? pageCount = null,
+        int? pageStart = null,
+        int? pageEnd = null,
+        string mode = "content",
+        IReadOnlyList<ExtractedDocumentPage>? pages = null)
     {
         var text = builder.ToString().Trim();
         var truncated = builder.Length >= maxChars || text.Length > maxChars;
         if (text.Length > maxChars) text = text[..maxChars];
-        return new ExtractedDocumentText(kind, text, truncated, warnings);
+        return new ExtractedDocumentText(kind, text, truncated, warnings, pageCount, pageStart, pageEnd, mode, pages);
     }
 
     private static void AppendLine(StringBuilder builder, string value, int maxChars)
@@ -304,6 +385,13 @@ public static partial class DocumentTextExtractor
     }
 
     private static string NormalizeText(string text) => WhitespaceRegex().Replace(text, " ").Trim();
+
+    private static string Preview(string text, int maxChars)
+    {
+        var normalized = NormalizeText(text);
+        if (normalized.Length <= maxChars) return normalized;
+        return $"{normalized[..Math.Max(0, maxChars - 1)]}…";
+    }
 
     private static string DecodePdfLiteral(string text)
     {

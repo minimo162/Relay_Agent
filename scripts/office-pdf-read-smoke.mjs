@@ -31,59 +31,12 @@ writeZip(join(workspace, "sample.xlsx"), {
   "xl/sharedStrings.xml": `<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>XLSX 部品売上 fixture</t></si></sst>`,
   "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>`,
 });
-writeFileSync(join(workspace, "sample.pdf"), `%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Kids [3 0 R] /Count 1 >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>
-endobj
-4 0 obj
-<< /Length 52 >>
-stream
-BT /F1 12 Tf 72 720 Td (PDF parts sales fixture) Tj ET
-endstream
-endobj
-xref
-0 5
-0000000000 65535 f
-trailer
-<< /Root 1 0 R >>
-%%EOF
-`, "latin1");
-
-const filteredPdfText = "BT /F1 12 Tf 72 720 Td (Filtered PDF parts sales fixture) Tj ET";
-const filteredPdfStream = deflateSync(Buffer.from(filteredPdfText, "latin1"));
-writeFileSync(join(workspace, "filtered.pdf"), Buffer.concat([
-  Buffer.from(`%PDF-1.4
-1 0 obj
-<< /Type /Catalog /Pages 2 0 R >>
-endobj
-2 0 obj
-<< /Type /Pages /Kids [3 0 R] /Count 1 >>
-endobj
-3 0 obj
-<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>
-endobj
-4 0 obj
-<< /Length ${filteredPdfStream.length} /Filter /FlateDecode >>
-stream
-`, "latin1"),
-  filteredPdfStream,
-  Buffer.from(`
-endstream
-endobj
-xref
-0 5
-0000000000 65535 f
-trailer
-<< /Root 1 0 R >>
-%%EOF
-`, "latin1"),
-]));
+writeSimplePdf(join(workspace, "sample.pdf"), ["PDF parts sales fixture"]);
+writeSimplePdf(join(workspace, "filtered.pdf"), ["Filtered PDF parts sales fixture"], { filtered: true });
+writeSimplePdf(join(workspace, "long.pdf"), Array.from(
+  { length: 12 },
+  (_, index) => `Long PDF page ${index + 1} section ${index < 6 ? "A" : "B"} parts sales consistency fixture ${index + 1}`,
+));
 
 const cases = [
   ["sample.docx", "docx"],
@@ -92,10 +45,16 @@ const cases = [
   ["sample.pdf", "pdf"],
   ["filtered.pdf", "pdf"],
 ];
-const responses = cases.flatMap(([path]) => [
+const responses = [
+  ...cases.flatMap(([path]) => [
   JSON.stringify({ action: "tool", tool: "read", args: { file_path: path } }),
   JSON.stringify({ action: "final", answer: `${path} read` }),
-]);
+  ]),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "long.pdf", mode: "map" } }),
+  JSON.stringify({ action: "final", answer: "long map read" }),
+  JSON.stringify({ action: "tool", tool: "read", args: { file_path: "long.pdf", pageStart: 4, pageEnd: 6 } }),
+  JSON.stringify({ action: "final", answer: "long page range read" }),
+];
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
   cwd: process.cwd(),
@@ -154,6 +113,55 @@ try {
     }
   }
 
+  const mapRun = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "office-pdf-read-long-map",
+    instruction: "read long.pdf as map",
+  });
+  if (!hasRunFinished(mapRun.events)) {
+    throw new Error(`long map run did not complete: ${JSON.stringify(mapRun.events)}`);
+  }
+  const mapDetail = collectToolCall(mapRun.events, "read").results.join("\n");
+  for (const needle of [
+    "RelayPdfReadProjection.v1",
+    "\"mode\": \"map\"",
+    "\"pageCount\": 12",
+    "\"suggestedPageWindow\"",
+    "\"chunks\"",
+    "\"file_path\": \"long.pdf\"",
+    "\"alignmentGuidance\"",
+    "Long PDF page 4",
+  ]) {
+    if (!mapDetail.includes(needle)) {
+      throw new Error(`long PDF map read is missing ${needle}: ${mapDetail}`);
+    }
+  }
+
+  const rangeRun = await postAgUi({
+    port,
+    token,
+    workspace,
+    runId: "office-pdf-read-long-range",
+    instruction: "read long.pdf pages 4 to 6",
+  });
+  if (!hasRunFinished(rangeRun.events)) {
+    throw new Error(`long page range run did not complete: ${JSON.stringify(rangeRun.events)}`);
+  }
+  const rangeDetail = collectToolCall(rangeRun.events, "read").results.join("\n");
+  for (const needle of [
+    "RelayPdfReadProjection.v1",
+    "\"returnedPageStart\": 4",
+    "\"returnedPageEnd\": 6",
+    "--- Page 4 ---",
+    "Long PDF page 6",
+  ]) {
+    if (!rangeDetail.includes(needle)) {
+      throw new Error(`long PDF page range read is missing ${needle}: ${rangeDetail}`);
+    }
+  }
+
   console.log("[office-pdf-read-smoke] ok");
 } finally {
   child.kill("SIGTERM");
@@ -176,6 +184,52 @@ async function waitForStatus() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeSimplePdf(path, pages, options = {}) {
+  const pageObjectStart = 4;
+  const contentObjectStart = pageObjectStart + pages.length;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${pageObjectStart + index} 0 R`).join(" ")}] /Count ${pages.length} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  for (let index = 0; index < pages.length; index += 1) {
+    objects.push(`<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 3 0 R >> >> /MediaBox [0 0 612 792] /Contents ${contentObjectStart + index} 0 R >>`);
+  }
+  for (const page of pages) {
+    const contentText = `BT /F1 12 Tf 72 720 Td (${escapePdfLiteral(page)}) Tj ET`;
+    if (options.filtered) {
+      const stream = deflateSync(Buffer.from(contentText, "latin1"));
+      objects.push(Buffer.concat([
+        Buffer.from(`<< /Length ${stream.length} /Filter /FlateDecode >>\nstream\n`, "latin1"),
+        stream,
+        Buffer.from("\nendstream", "latin1"),
+      ]));
+    } else {
+      objects.push(`<< /Length ${Buffer.byteLength(contentText, "latin1")} >>\nstream\n${contentText}\nendstream`);
+    }
+  }
+
+  const chunks = [Buffer.from("%PDF-1.4\n", "latin1")];
+  const offsets = [0];
+  for (let index = 0; index < objects.length; index += 1) {
+    offsets.push(Buffer.concat(chunks).length);
+    chunks.push(Buffer.from(`${index + 1} 0 obj\n`, "latin1"));
+    chunks.push(Buffer.isBuffer(objects[index]) ? objects[index] : Buffer.from(objects[index], "latin1"));
+    chunks.push(Buffer.from("\nendobj\n", "latin1"));
+  }
+  const xrefOffset = Buffer.concat(chunks).length;
+  chunks.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, "latin1"));
+  for (const offset of offsets.slice(1)) {
+    chunks.push(Buffer.from(`${String(offset).padStart(10, "0")} 00000 n \n`, "latin1"));
+  }
+  chunks.push(Buffer.from(`trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`, "latin1"));
+  writeFileSync(path, Buffer.concat(chunks));
+}
+
+function escapePdfLiteral(value) {
+  return value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
 }
 
 function writeZip(path, files) {

@@ -33,6 +33,63 @@
 
 ## Milestone Log
 
+### 2026-05-19 Page-Aware Long PDF Review
+
+Follow-up to the PDF attachment release: long PDFs can exceed the useful
+Copilot context, and two-PDF consistency review loses meaning if both documents
+are split into unrelated fixed-size chunks. This slice keeps PDF review on the
+generic OpenCode-compatible `read` tool, but makes `read` page-aware for PDFs.
+
+Change:
+
+- Added PdfPig as the primary PDF extractor in the .NET sidecar.
+- Extended the Agent Framework-visible `read` tool with optional PDF arguments:
+  - `mode=map` returns a compact page map with page number, extractable
+    character count, and preview;
+  - `pageStart` / `pageEnd` reads a targeted page range with page markers.
+- Added `RelayPdfReadProjection.v1` to PDF `read` observations with page count,
+  returned page range, suggested page window, chunk-plan suggestions, next page
+  range, extraction limitations, and two-PDF alignment guidance.
+- Updated Agent Framework, Copilot projection, and Workbench PDF starter
+  prompts so long single-PDF review maps the document first, and two-PDF
+  comparison maps both documents before reading matching page ranges.
+- Kept the existing lightweight PDF operator extractor as an explicit warning
+  fallback when PdfPig cannot open a PDF.
+- Updated `PLANS.md`, `tasks.md`, README, portable front-door text, the tool
+  catalog snapshot, and smoke coverage.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.18`.
+
+Verification commands run locally:
+
+```bash
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm agent:pdf-review-ux-smoke
+pnpm agent:office-pdf-read-smoke
+pnpm check
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.18-win-x64.zip dist/relay-agent-0.3.18-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.18-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.18-sha256.txt
+```
+
+Result:
+
+- Sidecar Release build passed with zero warnings.
+- PDF review UX smoke passed, including page-aware prompt/projection guards.
+- Office/PDF read smoke passed, including generated multi-page PDF map reads
+  and targeted page-range reads.
+- Full `pnpm check` passed after intentionally updating the model-facing tool
+  catalog snapshot for the new `read` arguments.
+- Windows portable package generated:
+  `dist/relay-agent-0.3.18-win-x64.zip`.
+- Linux portable package generated:
+  `dist/relay-agent-0.3.18-linux-x64.tar.gz`.
+- Optional Windows user-scope installer generated:
+  `dist/installer/Relay.Agent-0.3.18-win-x64-setup.exe`.
+- Release inventory, SBOM, and SHA-256 checksum file generated under
+  `dist/release/`.
+
 ### 2026-05-19 Native PDF Attachment Follow-up
 
 Follow-up to the PDF review UX release: the first cut made PDF review easy to

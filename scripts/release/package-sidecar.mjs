@@ -364,6 +364,7 @@ function portableFrontDoorHtml(rid, version) {
           <p>「2つのPDFを選んで比較」からPDF A / PDF B を順に選択します。</p>
         </section>
       </div>
+      <p>ページ数が多いPDFは、ページ構成を先に確認して必要な範囲だけを読みます。2つのPDF比較では、両方のページ構成をそろえてから対応範囲を比較します。</p>
       <p>PDFはローカルのtext layerを読み取ります。画像だけのPDFやOCRが必要なページは、確認不可として扱われます。</p>
     </section>
     <p style="margin-top: 22px;">Version ${escapeHtml(version)} / ${escapeHtml(rid)}</p>

@@ -29,8 +29,8 @@ public sealed class RelayAgentFrameworkRunner
         Do not treat filename matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
-        For PDF proofreading, typo detection, or notation checks, read the exact PDF first and report only findings grounded in extracted text snippets.
-        For two-PDF comparison, read both exact PDFs before finalizing and compare only extracted text evidence such as headings, dates, numbers, names, notes, and surrounding snippets.
+        For PDF proofreading, typo detection, or notation checks, read the exact PDF first and report only findings grounded in extracted text snippets. If the PDF is long or the read result has a PDF chunk plan, use read mode=map and then read specific pageStart/pageEnd ranges before finalizing.
+        For two-PDF comparison, read both exact PDFs before finalizing and compare only extracted text evidence such as headings, dates, numbers, names, notes, and surrounding snippets. For long PDFs, read each PDF with mode=map first, align by page previews/headings/section names, then read corresponding pageStart/pageEnd ranges from both PDFs so cross-document correspondence is preserved.
         PDF read extraction is text-layer only; if the PDF is image-only, requires OCR, or a page cannot be extracted, state that limitation instead of inventing content.
         If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
         apply_patch uses args.patchText with one envelope only: one leading *** Begin Patch, all file hunks, then one final *** End Patch.
@@ -341,8 +341,17 @@ public sealed class RelayAgentFunctionSet(
         string file_path,
         int? offset = null,
         int? limit = null,
+        int? pageStart = null,
+        int? pageEnd = null,
+        string? mode = null,
         CancellationToken cancellationToken = default) =>
-        InvokeAsync("read", Args(("file_path", file_path), ("offset", offset), ("limit", limit)), cancellationToken);
+        InvokeAsync("read", Args(
+            ("file_path", file_path),
+            ("offset", offset),
+            ("limit", limit),
+            ("pageStart", pageStart),
+            ("pageEnd", pageEnd),
+            ("mode", mode)), cancellationToken);
 
     public Task<ToolObservation> OfficeCliAsync(
         string filePath,
@@ -624,7 +633,7 @@ public static class RelayAgentToolCatalog
         Tool(
             nameof(RelayAgentFunctionSet.ReadAsync),
             "read",
-            "Read an exact workspace file. Office/PDF text is extracted when supported.",
+            "Read an exact workspace file. Office/PDF text is extracted when supported. PDF reads support mode=map plus pageStart/pageEnd for long-document and two-PDF aligned review.",
             "read",
             RelayAgentToolSafety.ReadOnly,
             "workspace.read",
@@ -1392,10 +1401,15 @@ public sealed class RelayToolExecutor
         var path = ResolveExistingWorkspaceFilePath(workspace, GetPathArg(call.Args, "file_path", "path") ?? "");
         var offset = Math.Max(GetInt(call.Args, "offset") ?? 0, 0);
         var limit = Math.Clamp(GetInt(call.Args, "limit") ?? 8000, 1, 12000);
+        var mode = NormalizeReadMode(GetString(call.Args, "mode"));
+        var pageStart = GetInt(call.Args, "pageStart") ?? GetInt(call.Args, "page_start") ?? GetInt(call.Args, "fromPage");
+        var pageEnd = GetInt(call.Args, "pageEnd") ?? GetInt(call.Args, "page_end") ?? GetInt(call.Args, "toPage");
+        if (pageStart is not null) pageStart = Math.Max(1, pageStart.Value);
+        if (pageEnd is not null) pageEnd = Math.Max(1, pageEnd.Value);
         var info = new FileInfo(path);
         if (DocumentTextExtractor.IsSupported(path))
         {
-            var document = await DocumentTextExtractor.ExtractAsync(path, maxChars: 12000, cancellationToken);
+            var document = await DocumentTextExtractor.ExtractAsync(path, maxChars: 12000, cancellationToken, pageStart, pageEnd, mode);
             var documentText = SliceText(document.Text, offset, limit);
             var suffix = document.Truncated ? " (truncated)" : "";
             var warningSuffix = document.Warnings.Count > 0 ? $"; warnings={document.Warnings.Count}" : "";
@@ -1414,7 +1428,8 @@ public sealed class RelayToolExecutor
                     info.Exists ? info.Length : 0,
                     document.Text.Length,
                     document.Truncated,
-                    document.Warnings));
+                    document.Warnings,
+                    document));
         }
 
         if (info.Length > 512_000)
@@ -1443,7 +1458,8 @@ public sealed class RelayToolExecutor
                 bytes.Length,
                 text.Length,
                 false,
-                []));
+                [],
+                null));
     }
 
     private static object BuildReadObservationData(
@@ -1457,7 +1473,8 @@ public sealed class RelayToolExecutor
         long sizeBytes,
         int knownTotalChars,
         bool sourceTruncated,
-        IReadOnlyList<string> warnings)
+        IReadOnlyList<string> warnings,
+        ExtractedDocumentText? document)
     {
         var nextOffset = offset + text.Length;
         var hasMore = sourceTruncated || nextOffset < knownTotalChars;
@@ -1498,6 +1515,7 @@ public sealed class RelayToolExecutor
             },
             extractionLimitations = BuildReadLimitations(kind, warnings, sourceTruncated),
             warnings,
+            pdf = BuildPdfReadProjection(kind, displayPath, document, warnings, sourceTruncated),
             continuation = hasMore
                 ? new
                 {
@@ -1512,6 +1530,97 @@ public sealed class RelayToolExecutor
                 : null,
         };
     }
+
+    private static object? BuildPdfReadProjection(
+        string kind,
+        string displayPath,
+        ExtractedDocumentText? document,
+        IReadOnlyList<string> warnings,
+        bool sourceTruncated)
+    {
+        if (!kind.Contains("pdf", StringComparison.OrdinalIgnoreCase) || document?.PageCount is not > 0)
+        {
+            return null;
+        }
+
+        var pageCount = document.PageCount.Value;
+        var pageStart = document.PageStart ?? 1;
+        var pageEnd = document.PageEnd ?? pageStart;
+        var suggestedWindow = SuggestedPdfPageWindow(pageCount);
+        var chunks = BuildPdfChunkPlan(displayPath, pageCount, suggestedWindow);
+        var nextPageStart = pageEnd < pageCount ? pageEnd + 1 : (int?)null;
+        var nextPageEnd = nextPageStart is null ? (int?)null : Math.Min(pageCount, nextPageStart.Value + suggestedWindow - 1);
+        return new
+        {
+            schemaVersion = "RelayPdfReadProjection.v1",
+            mode = document.Mode,
+            pageCount,
+            returnedPageStart = pageStart,
+            returnedPageEnd = pageEnd,
+            suggestedPageWindow = suggestedWindow,
+            pages = (document.Pages ?? []).Select(page => new
+            {
+                page = page.Number,
+                chars = page.CharCount,
+                preview = page.Preview,
+            }).ToArray(),
+            chunks,
+            nextPageRange = nextPageStart is null ? null : new
+            {
+                tool = "read",
+                args = new
+                {
+                    mode = "content",
+                    file_path = displayPath,
+                    pageStart = nextPageStart.Value,
+                    pageEnd = nextPageEnd,
+                },
+            },
+            alignmentGuidance = new[]
+            {
+                "For a long single-PDF review, call read with mode=map first, then inspect only relevant pageStart/pageEnd ranges.",
+                "For two-PDF comparison, call read mode=map on both PDFs, align page ranges by headings/page previews/section terms, then read matching ranges from both PDFs before reporting inconsistencies.",
+                "Do not compare arbitrary chunks by order alone when headings or page previews show different structures.",
+            },
+            limitations = BuildReadLimitations(kind, warnings, sourceTruncated),
+        };
+    }
+
+    private static object[] BuildPdfChunkPlan(string displayPath, int pageCount, int window)
+    {
+        var chunks = new List<object>();
+        for (var start = 1; start <= pageCount && chunks.Count < 40; start += window)
+        {
+            var end = Math.Min(pageCount, start + window - 1);
+            chunks.Add(new
+            {
+                tool = "read",
+                args = new
+                {
+                    mode = "content",
+                    file_path = displayPath,
+                    pageStart = start,
+                    pageEnd = end,
+                },
+            });
+        }
+        return chunks.ToArray();
+    }
+
+    private static int SuggestedPdfPageWindow(int pageCount) =>
+        pageCount switch
+        {
+            <= 8 => pageCount,
+            <= 30 => 5,
+            <= 80 => 8,
+            _ => 10,
+        };
+
+    private static string NormalizeReadMode(string? mode) =>
+        string.Equals(mode, "map", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(mode, "outline", StringComparison.OrdinalIgnoreCase)
+            ? "map"
+            : "content";
 
     private static (int StartLine, int EndLine) ComputeLineRange(string sourceText, int offset, int returnedChars)
     {

@@ -15,6 +15,8 @@ for (const needle of [
   "buildPdfProofreadPrompt",
   "buildPdfComparePrompt",
   "exact path で read",
+  "read mode=map",
+  "pageStart/pageEnd",
   "OCRが必要",
 ]) {
   assert(app.includes(needle), `Workbench PDF starter is missing: ${needle}`);
@@ -53,8 +55,28 @@ for (const needle of [
   "text-layer",
   "OCR",
   "read every exact PDF",
+  "RelayPdfReadProjection",
+  "pageStart/pageEnd",
+  "cross-document correspondence",
 ]) {
   assert(sidecarPrompt.includes(needle), `PDF prompt guidance is missing: ${needle}`);
+}
+
+const readToolSource = read("apps/sidecar/AgentRunner.cs");
+for (const needle of [
+  "RelayPdfReadProjection.v1",
+  "SuggestedPdfPageWindow",
+  "BuildPdfChunkPlan",
+  "pageStart",
+  "pageEnd",
+  "mode=map",
+]) {
+  assert(readToolSource.includes(needle), `PDF read projection is missing: ${needle}`);
+}
+
+const extractorSource = read("apps/sidecar/DocumentTextExtractor.cs");
+for (const needle of ["PdfDocument.Open", "ExtractedDocumentPage", "PageCount", "Preview("]) {
+  assert(extractorSource.includes(needle), `PDF page-aware extractor is missing: ${needle}`);
 }
 
 const packageScript = read("scripts/release/package-sidecar.mjs");

@@ -21,7 +21,9 @@ public static class RelayPromptBuilder
             "- If the objective and workspace are known, ask_user is invalid unless a critical missing requirement blocks all safe local action.",
             "- If a protocol rule blocks your intended final answer, return action=tool instead.",
             "- For local search or evidence tasks, do not answer from grep snippets alone; before citing a candidate file as the answer, read that exact file path.",
-            "- For PDF proofreading or two-PDF comparison, read every exact PDF needed before finalizing; cite only extracted text evidence and state text-layer/OCR limitations when extraction is incomplete.",
+            "- For PDF proofreading or two-PDF comparison, read every exact PDF needed before finalizing; if a PDF is long or read returns RelayPdfReadProjection, use read mode=map and pageStart/pageEnd ranges to inspect manageable slices.",
+            "- For two-PDF comparison, preserve cross-document correspondence by reading mode=map for both PDFs, aligning sections/pages by headings/previews/names/dates/numbers, then reading matching pageStart/pageEnd ranges from both files.",
+            "- Cite only extracted PDF text evidence and state text-layer/OCR limitations when extraction is incomplete.",
         };
 
         if (!string.IsNullOrWhiteSpace(state.OriginalUserRequest))

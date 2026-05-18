@@ -54,6 +54,11 @@ picker, place the selected PDF paths into a draft prompt, and then Relay reads
 the exact files through the generic `read` tool. Users can ask for typo checks,
 notation checks, or comparison between two PDFs. Image-only PDFs and pages
 requiring OCR are reported as limitations rather than inferred content.
+For long PDFs, Relay can ask `read` for a page map first, then inspect only
+selected `pageStart`/`pageEnd` ranges. For two-PDF comparisons, the prompts and
+tool result projection preserve correspondence by mapping both PDFs before
+reading matching page ranges, so the comparison does not rely on arbitrary
+chunk order.
 
 Normal users do not type workspace paths. Use `変更` / `Change` to choose a
 folder from the OS file explorer. Recent workspaces are stored user-locally and

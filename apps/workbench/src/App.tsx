@@ -679,9 +679,9 @@ function buildPdfProofreadPrompt(pdfPath: string): string {
 対象PDF: ${formatPathForPrompt(pdfPath)}
 
 進め方:
-1. 対象PDFを exact path で read してください。候補が曖昧な場合だけ glob でPDF候補を確認してください。
+1. 対象PDFを exact path で read してください。長いPDFや途中で切れる場合は、read mode=map でページ構成を確認してから pageStart/pageEnd で必要範囲を読んでください。
 2. 抽出できた本文だけを根拠に、誤字候補、表記ゆれ、日付・数値・固有名詞の不自然さを一覧化してください。
-3. 各指摘には根拠となる短い引用または周辺テキストを付けてください。
+3. 各指摘には根拠となる短い引用または周辺テキストとページ範囲を付けてください。
 4. 画像だけのPDF、OCRが必要な箇所、抽出できないページは確認不可と明記してください。`;
 }
 
@@ -691,9 +691,9 @@ PDF A: ${formatPathForPrompt(firstPdfPath)}
 PDF B: ${formatPathForPrompt(secondPdfPath)}
 
 進め方:
-1. PDF A と PDF B の両方を exact path で read してください。候補が曖昧な場合だけ glob でPDF候補を確認してください。
-2. 抽出できた本文だけを根拠に、名称、日付、数値、見出し、注記、表現の差分を整理してください。
-3. 不整合候補ごとに、どちらのPDFのどの周辺テキストと食い違うのかを短く示してください。
+1. PDF A と PDF B の両方を exact path で read してください。長い場合は両方を read mode=map で読み、見出し・ページプレビュー・日付・数値で対応するページ範囲を先に揃えてください。
+2. 対応が取れた pageStart/pageEnd の範囲を両方のPDFで read してから、名称、日付、数値、見出し、注記、表現の差分を整理してください。
+3. 不整合候補ごとに、どちらのPDFのどのページ範囲・周辺テキストと食い違うのかを短く示してください。
 4. 画像だけのPDF、OCRが必要な箇所、抽出できないページは比較不可と明記してください。`;
 }
 

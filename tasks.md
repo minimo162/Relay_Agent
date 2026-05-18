@@ -88,6 +88,12 @@ as first-run friendly recipes over the same CopilotKit/AG-UI chat and generic
 OpenCode-compatible `read`/`glob`/`grep` tools, while adding an HTML-first
 portable front door and a native PDF attachment picker.
 
+The active queue is `PDFCHUNK*`. It implements the 2026-05-19 Page-Aware Long
+PDF Review Plan from `PLANS.md`: make long PDF proofreading and two-PDF
+comparison reliable by extending the generic `read` tool with page maps and
+page ranges, while preserving document-to-document correspondence and avoiding
+a dedicated PDF runner.
+
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
@@ -280,6 +286,99 @@ Acceptance:
   proofreading and comparison.
 - `pnpm check`, portable package creation, installer creation, release
   inventory, commit, push, and GitHub release complete.
+
+### PDFCHUNK-01 - Document Page-Aware Long PDF Review Plan
+
+Status: completed
+
+Scope:
+
+- Add the long-PDF page-aware review plan to `PLANS.md`.
+- Add this executable `PDFCHUNK*` queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan explains why arbitrary PDF chunking is unsafe for two-document
+  consistency review.
+- The plan keeps PDF review on the generic `read` tool rather than a dedicated
+  PDF backend mode.
+
+### PDFCHUNK-02 - Add Page-Aware PDF Read Extraction
+
+Status: completed
+
+Scope:
+
+- Add PdfPig-backed page extraction to the sidecar.
+- Extend `read` with optional `mode`, `pageStart`, and `pageEnd` arguments.
+- Preserve existing plaintext, Office, and code read behavior.
+
+Artifacts:
+
+- Updated `apps/sidecar/Relay.Sidecar.csproj`.
+- Updated `apps/sidecar/DocumentTextExtractor.cs`.
+- Updated `apps/sidecar/AgentRunner.cs`.
+
+Acceptance:
+
+- `read` with `mode=map` on a PDF returns a compact page map.
+- `read` with `pageStart`/`pageEnd` returns only the selected PDF pages.
+- Image-only/OCR-needed pages are reported as limitations.
+
+### PDFCHUNK-03 - Add PDF Correspondence Projection And Prompts
+
+Status: completed
+
+Scope:
+
+- Add `RelayPdfReadProjection.v1` to PDF `read` observations.
+- Include suggested page windows, chunk-plan suggestions, next page range, and
+  two-PDF alignment guidance.
+- Update Copilot, Agent Framework, and Workbench starter prompts to map both
+  PDFs before comparing long documents.
+
+Artifacts:
+
+- Updated `apps/sidecar/AgentRunner.cs`.
+- Updated `apps/sidecar/RelayCopilotChatClient.cs`.
+- Updated `apps/sidecar/RelayPromptBuilder.cs`.
+- Updated `apps/workbench/src/App.tsx`.
+
+Acceptance:
+
+- Two-PDF prompts instruct Copilot to preserve cross-document correspondence by
+  mapping both PDFs and then reading matching page ranges.
+- Final-answer guidance stays evidence-based and does not infer OCR content.
+
+### PDFCHUNK-04 - Add Verification, Docs, And Release Assets
+
+Status: completed
+
+Scope:
+
+- Extend smoke tests for long PDF maps and targeted page-range reads.
+- Update README, portable front door, implementation log, version numbers,
+  release inventory, checksums, and GitHub release assets.
+
+Artifacts:
+
+- Updated `scripts/office-pdf-read-smoke.mjs`.
+- Updated `scripts/pdf-review-ux-smoke.mjs`.
+- Updated `README.md`.
+- Updated `scripts/release/package-sidecar.mjs`.
+- Updated `docs/IMPLEMENTATION.md`.
+- Release artifacts for the current version.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Portable package creation, optional installer creation, release inventory,
+  commit, push, and GitHub release complete.
 
 ### PORTABLE-02 - Add Portable Launch Helpers And README
 

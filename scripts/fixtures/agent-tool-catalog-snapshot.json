@@ -29,7 +29,7 @@
     },
     {
       "name": "read",
-      "description": "Read an exact workspace file. Office/PDF text is extracted when supported.",
+      "description": "Read an exact workspace file. Office/PDF text is extracted when supported. PDF reads support mode=map plus pageStart/pageEnd for long-document and two-PDF aligned review.",
       "executorTool": "read",
       "safety": "ReadOnly",
       "frameworkToolType": "Function",

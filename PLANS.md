@@ -255,6 +255,92 @@ Implementation plan:
    - `pnpm check`, portable package creation, release inventory, and release
      artifact generation pass.
 
+### 2026-05-19 Page-Aware Long PDF Review Plan
+
+Large PDFs can exceed what Copilot can usefully process in one turn. Splitting
+them into arbitrary fixed-size chunks would make single-document proofreading
+manageable, but it would break two-PDF comparison because page and section
+correspondence can drift between the documents. Relay should therefore add
+page-aware PDF reads to the existing generic `read` tool instead of creating a
+dedicated PDF-review engine.
+
+Reference sources checked for this plan:
+
+- PdfPig is a .NET PDF text extraction library that can open existing PDFs,
+  inspect pages, and expose page-level text without native dependencies:
+  `https://products.documentprocessing.com/parser/net/pdfpig/`.
+- RAPTOR shows why long-document retrieval benefits from hierarchical document
+  structure rather than only short contiguous chunks:
+  `https://huggingface.co/papers/2401.18059`.
+- Late chunking research highlights that chunks lose useful context when they
+  are produced before document-level context is considered:
+  `https://arxiv.org/abs/2409.04701`.
+- AG-UI provides the existing stream of lifecycle, tool-call, tool-result, and
+  state events; page-aware PDF reading should stay on the same `/agui/relay`
+  stream: `https://docs.ag-ui.com/sdk/js/core/events`.
+- Microsoft Agent Framework tool descriptions should expose the new optional
+  `read` arguments clearly while keeping the model loop generic:
+  `https://learn.microsoft.com/en-us/agent-framework/journey/adding-tools`.
+- OpenCode remains the model-facing tool-contract reference, so this work
+  extends `read` rather than adding a Relay-specific `pdf_review` tool:
+  `https://opencode.ai/docs/tools/`.
+
+Implementation plan:
+
+1. **Extend `read` with page-aware PDF options**
+   - Add optional `mode`, `pageStart`, and `pageEnd` arguments to `read`.
+   - For PDF files, `mode=map` returns a compact page map: page number,
+     extractable character count, and a short preview.
+   - Normal `read` with `pageStart`/`pageEnd` returns only that page range,
+     with page markers preserved.
+   - Keep plaintext, Office, and code reads unchanged.
+
+2. **Use PdfPig for primary PDF extraction**
+   - Use PdfPig for page count and page text extraction in the .NET sidecar.
+   - Keep the existing lightweight PDF operator parser as a fallback only when
+     PdfPig cannot open a PDF; report the warning explicitly.
+   - Preserve the current text-layer-only boundary. Image-only/OCR-needed pages
+     remain limitations, not inferred content.
+
+3. **Return a correspondence-preserving PDF projection**
+   - Add `RelayPdfReadProjection.v1` inside the existing `read` observation.
+   - Include page count, returned page range, suggested page window, page
+     previews, chunk-plan suggestions, next-page range, limitations, and
+     guidance for two-PDF alignment.
+   - For two-PDF comparison, Copilot must read `mode=map` for both PDFs, align
+     sections/pages using headings, previews, names, dates, and numbers, then
+     read matching `pageStart`/`pageEnd` ranges from both files before reporting
+     inconsistencies.
+   - Do not compare arbitrary chunk N in file A to arbitrary chunk N in file B
+     when maps show different structures.
+
+4. **Update prompts and Workbench PDF drafts**
+   - Agent Framework, Copilot projection, and Workbench starter drafts should
+     tell Copilot how to use page maps and page ranges.
+   - Keep final answers grounded in extracted snippets and page ranges.
+   - Fail visibly on missing text extraction instead of inventing OCR results.
+
+5. **Add verification and release coverage**
+   - Extend the Office/PDF read smoke with a generated multi-page PDF, `mode=map`
+     read, and targeted page-range read.
+   - Extend the PDF UX smoke so it guards against losing the page-aware prompt,
+     extraction, and observation projection.
+   - Update README, portable front-door text, implementation log, package
+     version, release inventory, checksums, and GitHub release assets.
+
+Acceptance criteria:
+
+- `read` on a long PDF can return a page map without reading the whole file into
+  Copilot context.
+- `read` on a PDF can return a selected page range with page markers.
+- `read` observations include `RelayPdfReadProjection.v1` for PDFs with page
+  count, suggested windows, and alignment guidance.
+- Two-PDF comparison prompts preserve document-to-document correspondence by
+  mapping both PDFs first and then reading matching ranges.
+- No new PDF-specific backend mode, runner, or model-visible tool is added.
+- `pnpm check`, portable package creation, optional installer creation,
+  release inventory, and GitHub release generation pass.
+
 ### 2026-05-18 OpenCode-Style Generic Harness Reset Plan
 
 This plan resets the remaining Relay-specific search behavior. Recent manual
