@@ -98,6 +98,110 @@ Reference sources checked for this plan:
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
 
+### 2026-05-18 OpenCode-Style Generic Harness Reset Plan
+
+This plan resets the remaining Relay-specific search behavior. Recent manual
+tests showed that files that were previously easy to find can be missed because
+Relay still forces a narrow first `glob` pattern and still contains
+DCI/search-specific recovery paths. That is the wrong direction for the current
+product. Search, Office editing, and coding must be common recipes over the
+same generic tool catalog, not separate Relay-owned engines.
+
+Reference sources checked for this plan:
+
+- OpenCode documents a simple built-in tool surface for workspace agents:
+  `bash`, `edit`, `write`, `read`, `grep`, `glob`, `apply_patch`, and
+  `question`, with permissions layered around those tools rather than a
+  separate search runtime: `https://opencode.ai/docs/tools/`.
+- OpenCode agents are specialized by prompt, permissions, and tool access, not
+  by changing the model-visible local tool substrate:
+  `https://opencode.ai/docs/agents/`.
+- AG-UI is an event-based agent/frontend protocol for messages, state, tool
+  calls, and user interaction, so the Workbench should keep one AG-UI stream
+  rather than separate Relay run modes:
+  `https://docs.ag-ui.com/introduction` and
+  `https://docs.ag-ui.com/concepts/events`.
+- CopilotKit's `CopilotChat` examples use a bounded chat container with the
+  prebuilt chat surface as the primary UI object:
+  `https://docs.showcase.copilotkit.ai/pydantic-ai/prebuilt-components/chat`.
+- CopilotKit's AG-UI backend docs confirm that messages, state updates, tool
+  calls, and lifecycle events flow through AG-UI events:
+  `https://docs.showcase.copilotkit.ai/mastra/backend/ag-ui`.
+
+Goal:
+
+> Make Relay feel like a normal OpenCode-style local agent harness controlled
+> by M365 Copilot: Copilot chooses generic tools, Relay validates and executes
+> them, and the Workbench renders the AG-UI conversation as a normal chatbot.
+
+Non-goals:
+
+- Do not reintroduce OpenCode/OpenWork as the runtime.
+- Do not revive `RelayDocumentSearch*`, SQLite/FTS, vector search, or
+  document-search-specific planners.
+- Do not add more domain-specific query expansion, DCI recovery, or
+  business-term exception tables to fix individual examples.
+- Do not make search, Office editing, or coding separate UI modes.
+
+Harness changes:
+
+1. **Remove forced narrow first search**
+   - Stop converting a file-search request into an automatic
+     `glob **/*{firstToken}*` before Copilot has chosen a tool.
+   - Keep automatic first tools only where they are exact, low-risk
+     inspection steps: exact file `read`, Office outline/capability
+     inspection, and `workspace_status` for code/verification.
+   - If Copilot tries to answer before any required local observation, fail
+     through the normal Agent Framework/AG-UI error path instead of silently
+     injecting a Relay search heuristic.
+
+2. **Simplify model guidance to OpenCode-style loops**
+   - Tell Copilot to use `glob` for filename/path discovery, `grep` for
+     text search, `read` for exact candidates, `officecli`/`officecli_mutate`
+     for Office files, `edit`/`write`/`apply_patch` for file mutation, and
+     bounded `bash` only for verification.
+   - Remove hidden-retriever, business-concept, guide/glossary, and decoy
+     instructions from the primary prompt projection. Copilot should iterate
+     from observations, not follow a Relay-owned search recipe.
+   - Keep only cross-cutting safety rules: visible tools only, exact paths
+     from observations, no invented execution, mutations require tool results
+     and approval.
+
+3. **Remove hidden search recovery**
+   - Disable protocol-guard repairs that replace premature finals or
+     invented reads with DCI-specific `grep` calls.
+   - Let invalid finals fail fast when the admissible action envelope does
+     not allow final answers.
+   - Let malformed or non-existent `read` targets flow through tool validation
+     and tool observations where safe, so Copilot can recover using the same
+     generic tools instead of Relay choosing a recovery search.
+
+4. **Keep Office and code generic**
+   - Office edits remain semantic Relay-owned operations compiled to
+     OfficeCLI argv by Relay, because raw argv from Copilot is unsafe.
+   - Coding remains OpenCode-style workspace mutation with `read` before
+     edit, exact path preservation, approval-gated mutation, and verification
+     through generic tools.
+
+5. **Make the UI a conventional AG-UI/CopilotKit chatbot**
+   - Keep `CopilotChat` as the dominant surface.
+   - Reduce Relay-specific framing around the chat to a compact header,
+     status pill, workspace picker, inline approvals, and collapsed support.
+   - Use neutral colors, generous but not scattered whitespace, and avoid
+     dashboard-like Activity/Result panels or separate modes.
+
+Acceptance:
+
+- No code path forces `bounded_file_discovery_before_final` or
+  `fallback_bounded_discovery_before_final`.
+- Prompt projection no longer contains `biling_retriever`, vector search
+  suggestions, or DCI/domain-specific search examples.
+- File search, Office editing, and coding use the same model-visible generic
+  catalog through Agent Framework and AG-UI.
+- `pnpm check` passes.
+- A Windows user-scope installer and archives are produced for the next
+  release.
+
 ### 2026-05-18 CopilotKit Chat Layout Density Plan
 
 This plan refines the CopilotKit chatbot reset after reviewing CopilotKit usage

@@ -62,13 +62,8 @@ try {
   const grepCall = calls.find((call) => call.name === "grep");
   if (!grepCall) throw new Error(`grep call missing: ${JSON.stringify(calls)}`);
   const grepArgs = JSON.parse(grepCall.args);
-  if ("path" in grepArgs) {
-    throw new Error(`guide-scoped grep was not widened to workspace scope: ${JSON.stringify(grepArgs)}`);
-  }
-  const observation = JSON.parse(grepCall.results.join("\n"));
-  const paths = observation.data.matches.map((match) => match.displayPath);
-  if (!paths.includes(corpus.files.gold)) {
-    throw new Error(`widened grep did not surface gold evidence: ${JSON.stringify(paths)}`);
+  if (grepArgs.path !== "notes") {
+    throw new Error(`generic harness should not rewrite scoped grep args: ${JSON.stringify(grepArgs)}`);
   }
   console.log("[dci-guide-scoped-grep-smoke] ok");
 } finally {

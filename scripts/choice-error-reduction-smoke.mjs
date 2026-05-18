@@ -118,7 +118,7 @@ function assertPromptProjection() {
   for (const required of [
     "The JSON must be selectable text, not an image",
     "Do not use, mention, or recommend hidden tools",
-    "Do not suggest external retrievers",
+    "use only visible generic tools",
   ]) {
     if (!prompts.some(({ text }) => text.includes(required))) {
       throw new Error(`expected prompt projection rule: ${required}`);

@@ -51,8 +51,8 @@ try {
   }
   const calls = [...collectToolCalls(run.events).values()];
   const names = calls.map((call) => call.name);
-  if (!names.includes("read") || !names.includes("grep")) {
-    throw new Error(`final guard did not force grep refinement after guide read: ${names.join(",")}`);
+  if (names.join(",") !== "read") {
+    throw new Error(`generic harness should not inject hidden grep refinement: ${names.join(",")}`);
   }
   console.log("[dci-final-refinement-smoke] ok");
 } finally {

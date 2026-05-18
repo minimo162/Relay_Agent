@@ -11,9 +11,7 @@ const dataDir = mkdtempSync(join(tmpdir(), "relay-protocol-state-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-protocol-state-workspace-"));
 const responses = [
   JSON.stringify({ action: "final", answer: "ローカルツールは利用できません。" }),
-  JSON.stringify({ action: "final", answer: "検索を完了しました。" }),
   JSON.stringify({ action: "tool", tool: "ask_user", args: { question: "何を探しますか？" } }),
-  JSON.stringify({ action: "final", answer: "確認しました。" }),
   JSON.stringify({ action: "tool", tool: "bash", args: { argv: ["cat", "seed.txt"] } }),
   JSON.stringify({ action: "final", answer: "読み取りました。" }),
   JSON.stringify({ action: "final", answer: "作成しました。" }),
@@ -91,11 +89,7 @@ try {
     runId: "protocol-final-before-search",
     instruction: "seed に関するファイルを探して",
   });
-  const searchCall = collectToolCall(finalBeforeSearch.events, "glob");
-  if (!searchCall.args.includes("seed")) {
-    throw new Error(`initial search policy did not keep the search keyword: ${searchCall.args}`);
-  }
-  assertFinal(finalBeforeSearch.events, "検索を完了しました。");
+  assertRunError(finalBeforeSearch.events, "before required local tool execution");
 
   const askBeforeSearch = await postAgUi({
     port,
@@ -104,11 +98,10 @@ try {
     runId: "protocol-ask-before-search",
     instruction: "seed に関するファイルを探して",
   });
-  collectToolCall(askBeforeSearch.events, "glob");
   if (askBeforeSearch.events.some((event) => event.type === "TOOL_CALL_START" && event.toolCallName === "ask_user")) {
     throw new Error(`ask_user reached the tool layer even though search could proceed: ${JSON.stringify(askBeforeSearch.events)}`);
   }
-  assertFinal(askBeforeSearch.events, "確認しました。");
+  assertRunError(askBeforeSearch.events, "outside the admissible action envelope");
 
   const bashCat = await postAgUi({
     port,

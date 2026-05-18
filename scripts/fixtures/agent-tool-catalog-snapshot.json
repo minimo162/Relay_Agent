@@ -16,7 +16,7 @@
     },
     {
       "name": "grep",
-      "description": "Search plaintext/code content with ripgrep. Supports pattern plus DCI filters such as allTerms, anyTerms, excludeTerms, includeGlobs, excludeGlobs, contextLines, and maxMatchesPerFile. Do not use for Office/PDF containers; use glob then exact read.",
+      "description": "Search plaintext/code content with ripgrep. Supports pattern plus optional allTerms, anyTerms, excludeTerms, includeGlobs, excludeGlobs, contextLines, and maxMatchesPerFile filters. Do not use for Office/PDF containers; use glob then exact read.",
       "executorTool": "grep",
       "safety": "ReadOnly",
       "frameworkToolType": "Function",

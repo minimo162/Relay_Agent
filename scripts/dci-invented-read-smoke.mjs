@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assistantText, collectToolCalls, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
-import { computeDciMetrics } from "./lib/dci-metrics.mjs";
 
 const token = "relay-dci-invented-read-token";
 const port = 17905;
@@ -61,33 +60,17 @@ try {
   }
   const calls = [...collectToolCalls(run.events).values()];
   const names = calls.map((call) => call.name);
-  if (names[0] !== "grep") {
-    throw new Error(`invented read was not repaired to grep first: ${names.join(", ")}`);
+  if (names.join(",") !== "read,read") {
+    throw new Error(`generic harness should surface failed read and let the model recover: ${names.join(", ")}`);
   }
-  if (names.includes("read") && JSON.stringify(calls.find((call) => call.name === "read")?.args ?? "").includes("aftermarket-sales-source.md")) {
-    throw new Error(`invented read target reached execution: ${JSON.stringify(calls, null, 2)}`);
+  if (!calls[0].results.join("\n").includes("file_path does not exist")) {
+    throw new Error(`invented read failure was not returned as a tool observation: ${JSON.stringify(calls[0], null, 2)}`);
   }
-
-  const recoveryArgs = JSON.parse(calls[0].args || "{}");
-  const recoveryText = JSON.stringify(recoveryArgs);
-  for (const required of ["4Q", "aftermarket", "sales", "source"]) {
-    if (!recoveryText.toLowerCase().includes(required.toLowerCase())) {
-      throw new Error(`generic recovery grep missed ${required}: ${recoveryText}`);
-    }
+  if (!calls[1].args.includes(goldPath)) {
+    throw new Error(`model recovery did not read the observed exact file: ${JSON.stringify(calls, null, 2)}`);
   }
-  for (const injected of ["部品", "補修", "サービス", "パーツ"]) {
-    if (recoveryText.includes(injected)) {
-      throw new Error(`generic recovery grep injected unrelated Japanese business term ${injected}: ${recoveryText}`);
-    }
-  }
-
-  const metrics = computeDciMetrics(calls, assistantText(run.events), {
-    goldPath,
-    evidencePattern: /aftermarket sales source/,
-    domainTerms: ["aftermarket", "sales"],
-  });
-  if (!metrics.noFailedTools || !metrics.noInventedReadTargets || !metrics.localizationExactRead) {
-    throw new Error(`invented-read metrics did not pass after recovery: ${JSON.stringify(metrics, null, 2)}`);
+  if (!assistantText(run.events).includes(goldPath)) {
+    throw new Error(`final answer did not cite recovered file: ${assistantText(run.events)}`);
   }
 
   console.log("[dci-invented-read-smoke] ok");

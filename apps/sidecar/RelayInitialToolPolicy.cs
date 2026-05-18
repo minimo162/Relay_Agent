@@ -65,20 +65,6 @@ public static class RelayInitialToolPolicy
                     ["limit"] = 5000,
                 }, "workspace_status_before_verification", out directive),
 
-            RelayLocalIntent.FileSearch or RelayLocalIntent.UnknownLocalWork when CanUse("glob", availableTools) =>
-                Return("glob", new JsonObject
-                {
-                    ["pattern"] = BuildSearchPattern(state.OriginalUserRequest),
-                    ["limit"] = 200,
-                }, "bounded_file_discovery_before_final", out directive),
-
-            _ when CanUse("glob", availableTools) =>
-                Return("glob", new JsonObject
-                {
-                    ["pattern"] = "**/*",
-                    ["limit"] = 200,
-                }, "fallback_bounded_discovery_before_final", out directive),
-
             _ => false,
         };
     }
@@ -90,29 +76,5 @@ public static class RelayInitialToolPolicy
     {
         directive = new RelayToolDirective(tool, args, reason);
         return true;
-    }
-
-    private static string BuildSearchPattern(string request)
-    {
-        var keyword = ExtractPrimarySearchKeyword(request);
-        return string.IsNullOrWhiteSpace(keyword)
-            ? "**/*"
-            : $"**/*{keyword}*";
-    }
-
-    private static string ExtractPrimarySearchKeyword(string request)
-    {
-        var text = request ?? "";
-        foreach (var token in new[] { "ファイル", "フォルダ", "資料", "検索", "探して", "探し", "見つけ", "関する", "について", "を", "に", "の", "から", "この" })
-        {
-            text = text.Replace(token, " ", StringComparison.OrdinalIgnoreCase);
-        }
-        var candidates = text
-            .Split(new[] { ' ', '\t', '\r', '\n', '　', '。', '、', ',', ';', ':', '/', '\\' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(token => token.Length >= 2)
-            .Where(token => !token.Contains(':'))
-            .Where(token => !token.Contains('*'))
-            .ToArray();
-        return candidates.Length == 0 ? "" : candidates[0];
     }
 }

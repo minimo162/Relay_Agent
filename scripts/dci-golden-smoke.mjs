@@ -216,10 +216,10 @@ try {
     throw new Error(`DCI guide-only readiness run did not finish: ${JSON.stringify(guideOnly.events)}`);
   }
   const guideOnlyTools = [...collectToolCalls(guideOnly.events).values()].map((call) => call.name);
-  if (guideOnlyTools.join(",") !== "read,grep,read") {
-    throw new Error(`guide-only final was not repaired through grep and exact read: ${guideOnlyTools.join(", ")}`);
+  if (guideOnlyTools.join(",") !== "read") {
+    throw new Error(`generic harness should not inject hidden guide-only repair tools: ${guideOnlyTools.join(", ")}`);
   }
-  if (assistantText(guideOnly.events) !== "guide-only repair inserted grep and exact evidence read.") {
+  if (assistantText(guideOnly.events) !== "guide-only premature final") {
     throw new Error(`guide-only readiness answer mismatch: ${assistantText(guideOnly.events)}`);
   }
 

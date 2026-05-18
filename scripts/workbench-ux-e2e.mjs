@@ -250,7 +250,7 @@ async function runBrowserFlow() {
     bodyWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
   }))()`);
-  if (initialUx.title !== "Chat") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
+  if (initialUx.title !== "Relay Agent") throw new Error(`unexpected title: ${JSON.stringify(initialUx)}`);
   if (initialUx.detailsOpen !== false) throw new Error(`details should be collapsed by default: ${JSON.stringify(initialUx)}`);
   if (initialUx.hasLegacyModes || initialUx.hasOldComposer) throw new Error(`legacy UI should not be visible: ${JSON.stringify(initialUx)}`);
   if (initialUx.readiness !== "Ready") throw new Error(`readiness should be Ready: ${JSON.stringify(initialUx)}`);

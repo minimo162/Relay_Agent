@@ -20134,3 +20134,77 @@ Result:
   `relay-agent-0.3.13-win-x64.zip`,
   `relay-agent-0.3.13-linux-x64.tar.gz`, release inventory, SBOM, and
   `relay-agent-0.3.13-sha256.txt`.
+
+## 2026-05-18: OpenCode-Style Generic Harness Reset
+
+Change:
+
+- Added the OpenCode-style generic harness reset plan to `PLANS.md` and the
+  executable `GENHARNESS*` queue to `tasks.md`.
+- Removed Relay's forced first-token file-search heuristic and the hidden
+  fallback `glob **/*` path. File search now starts from the same visible
+  generic `glob` / `grep` / `read` loop as other local work.
+- Simplified Agent Framework and Copilot projection prompts to an
+  OpenCode-style local tool contract: `glob`, `grep`, `read`, `officecli`,
+  `officecli_mutate`, `edit`, `write`, `apply_patch`, bounded `bash`,
+  `workspace_status`, `diff`, and `ask_user`.
+- Removed hidden DCI/search recovery paths that silently replaced premature
+  finals, guide-scoped greps, and invented reads with Relay-generated search
+  actions. Invalid finals and invalid tool choices now fail through the normal
+  Agent Framework/AG-UI diagnostic path, while safe read failures remain
+  observable tool results that Copilot can recover from.
+- Kept Office editing as semantic Relay-owned OfficeCLI operations with
+  approval, backup, and verification, rather than allowing raw OfficeCLI argv
+  from Copilot.
+- Refreshed the Workbench chrome so CopilotKit chat is the dominant surface:
+  compact Relay Agent header, selected workspace row, neutral color system,
+  bounded chat viewport, and reduced dashboard framing.
+- Bumped Relay Agent to `0.3.14`.
+
+References checked:
+
+- `https://opencode.ai/docs/tools/`
+- `https://opencode.ai/docs/agents/`
+- `https://docs.ag-ui.com/introduction`
+- `https://docs.ag-ui.com/concepts/events`
+- `https://docs.showcase.copilotkit.ai/pydantic-ai/prebuilt-components/chat`
+- `https://docs.showcase.copilotkit.ai/mastra/backend/ag-ui`
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm agent:choice-error-reduction-smoke
+pnpm agent:protocol-state-smoke
+pnpm agent:framework-native-prevention-smoke
+pnpm agent:dci-final-refinement-smoke
+pnpm agent:dci-guide-scoped-grep-smoke
+pnpm agent:dci-invented-read-smoke
+pnpm agent:dci-golden-smoke
+pnpm workbench:ux-e2e
+pnpm check
+pnpm sidecar:publish:linux
+pnpm sidecar:publish:windows
+pnpm sidecar:installer:windows
+pnpm release:inventory
+git diff --check -- . ':(exclude)apps/sidecar/wwwroot/assets/*'
+```
+
+Result:
+
+- Workbench typecheck and sidecar release build passed.
+- Targeted harness regression smokes passed.
+- Workbench browser UX E2E passed with screenshots
+  `workbench-chat-empty.png`, `workbench-chat-completed.png`,
+  `workbench-chat-approval.png`, and `workbench-chat-mobile.png`.
+- Full `pnpm check` passed, including hard-cut guard, Workbench build,
+  sidecar build/smokes, Copilot CDP manager smoke, workspace picker smoke,
+  AG-UI client-tool/replay smokes, DCI smokes, Office/PDF read smokes,
+  OfficeCLI registry smoke, sidecar security smoke, and release inventory/SBOM
+  generation.
+- Release packaging for `0.3.14` completed. Generated assets include
+  `Relay.Agent-0.3.14-win-x64-setup.exe`,
+  `relay-agent-0.3.14-win-x64.zip`,
+  `relay-agent-0.3.14-linux-x64.tar.gz`, release inventory, SBOM, and
+  `relay-agent-0.3.14-sha256.txt`.

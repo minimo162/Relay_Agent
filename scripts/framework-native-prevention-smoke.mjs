@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectToolCall, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
+import { postAgUi } from "./lib/agui-smoke.mjs";
 
 const token = "relay-framework-native-prevention-token";
 const port = 17918;
@@ -12,9 +12,7 @@ const promptDumpDir = mkdtempSync(join(tmpdir(), "relay-framework-prevention-pro
 const workspace = mkdtempSync(join(tmpdir(), "relay-framework-prevention-workspace-"));
 const responses = [
   JSON.stringify({ action: "final", answer: "ローカルツールは利用できません。" }),
-  JSON.stringify({ action: "final", answer: "検索を完了しました。" }),
   JSON.stringify({ action: "tool", tool: "ask_user", args: { question: "何を探しますか？" } }),
-  JSON.stringify({ action: "final", answer: "確認しました。" }),
   JSON.stringify({ action: "final", answer: "作成しました。" }),
 ];
 
@@ -129,10 +127,7 @@ try {
     runId: "framework-prevention-final-before-search",
     instruction: "seed に関するファイルを探して",
   });
-  collectToolCall(finalBeforeSearch.events, "glob");
-  if (!hasRunFinished(finalBeforeSearch.events)) {
-    throw new Error(`search run did not finish: ${JSON.stringify(finalBeforeSearch.events)}`);
-  }
+  assertRunError(finalBeforeSearch.events, "before required local tool execution");
 
   const askBeforeSearch = await postAgUi({
     port,
@@ -141,10 +136,10 @@ try {
     runId: "framework-prevention-ask-before-search",
     instruction: "seed に関するファイルを探して",
   });
-  collectToolCall(askBeforeSearch.events, "glob");
   if (askBeforeSearch.events.some((event) => event.type === "TOOL_CALL_START" && event.toolCallName === "ask_user")) {
     throw new Error(`ask_user reached the tool layer even though search could proceed: ${JSON.stringify(askBeforeSearch.events)}`);
   }
+  assertRunError(askBeforeSearch.events, "outside the admissible action envelope");
 
   const mutationFinal = await postAgUi({
     port,

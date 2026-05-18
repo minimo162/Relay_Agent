@@ -39,9 +39,9 @@ const approvalRequestSchema = z.object({
 type ApprovalRequestArgs = z.infer<typeof approvalRequestSchema>;
 
 const chatLabels: Partial<CopilotChatLabels> = {
-  chatInputPlaceholder: "何をしますか?",
+  chatInputPlaceholder: "依頼内容を入力...",
   chatDisclaimerText: "",
-  welcomeMessageText: "ローカルのファイル検索、Office編集、コード作成を自然文で依頼できます。",
+  welcomeMessageText: "作業フォルダ内の検索、Office編集、コード作成をこのチャットから依頼できます。",
   modalHeaderTitle: "Relay Agent",
   chatInputToolbarToolsButtonLabel: "ツール",
   chatInputToolbarAddButtonLabel: "追加",
@@ -306,9 +306,12 @@ export function App() {
         <RelayChatTools />
         <section className="shell" data-testid="relay-chatbot-shell">
           <header className="topbar">
-            <div>
-              <p className="eyebrow">Relay Agent</p>
-              <h1>Chat</h1>
+            <div className="brand">
+              <span className="brand-mark" aria-hidden="true">R</span>
+              <div>
+                <h1>Relay Agent</h1>
+                <p className="subtitle">Copilot-guided local workbench</p>
+              </div>
             </div>
             <button
               className="status-pill"
@@ -334,7 +337,7 @@ export function App() {
 
             <section className="workspace-bar" aria-label="Workspace">
               <div>
-                <span className="label">Workspace</span>
+                <span className="label">作業フォルダ</span>
                 <div
                   id="workspace"
                   className="workspace-chip"

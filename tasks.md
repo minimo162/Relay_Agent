@@ -59,10 +59,17 @@ Workbench composer, activity, result, and approval surface with a
 CopilotKit-first chatbot backed by the existing AG-UI `/agui/relay`
 self-managed agent.
 
-The active queue is `CKLAYOUT*`. It implements the 2026-05-18 CopilotKit Chat
-Layout Density Plan from `PLANS.md`: keep CopilotKit as the primary chat UI
-while tightening Relay's surrounding chrome, hiding redundant current-workspace
-history, bounding the chat viewport, and adding layout-density E2E assertions.
+The completed active queue is `CKLAYOUT*`. It implements the 2026-05-18
+CopilotKit Chat Layout Density Plan from `PLANS.md`: keep CopilotKit as the
+primary chat UI while tightening Relay's surrounding chrome, hiding redundant
+current-workspace history, bounding the chat viewport, and adding
+layout-density E2E assertions.
+
+The completed active queue is `GENHARNESS*`. It implements the 2026-05-18
+OpenCode-Style Generic Harness Reset Plan from `PLANS.md`: remove forced
+Relay-owned search heuristics, simplify Copilot projection to OpenCode-style
+generic tool loops, keep Office/code as recipes over the same catalog, and
+make the Workbench read as a normal CopilotKit/AG-UI chatbot.
 
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
@@ -88,6 +95,176 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### GENHARNESS-01 - Document Generic Harness Reset
+
+Status: completed
+
+Scope:
+
+- Add the OpenCode-style generic harness reset plan to `PLANS.md`.
+- Add this executable task queue to `tasks.md`.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+
+Acceptance:
+
+- The plan explicitly keeps M365 Copilot, Microsoft Agent Framework, AG-UI,
+  and the .NET sidecar as the active architecture.
+- The plan treats OpenCode as the model-visible tool-contract reference, not
+  the active runtime.
+- The plan rejects a revived dedicated document-search engine.
+
+Verification:
+
+- `git diff --check -- . ':(exclude)apps/sidecar/wwwroot/assets/*'`
+
+### GENHARNESS-02 - Remove Forced Search Heuristics
+
+Status: completed
+
+Scope:
+
+- Stop `RelayInitialToolPolicy` from forcing first-token `glob` searches for
+  file-search and unknown local-work intents.
+- Remove fallback hidden `glob **/*` injection for generic local work.
+- Keep exact inspection first tools only for exact file read, Office
+  inspection/mutation planning, code workspace status, and verification.
+
+Artifacts:
+
+- Updated `apps/sidecar/RelayInitialToolPolicy.cs`.
+
+Acceptance:
+
+- `bounded_file_discovery_before_final` and
+  `fallback_bounded_discovery_before_final` are gone from source.
+- File search is driven by Copilot choosing visible generic tools, not by a
+  Relay-owned query builder.
+
+Verification:
+
+- `rg -n "bounded_file_discovery|fallback_bounded|BuildSearchPattern" apps/sidecar`
+
+### GENHARNESS-03 - Simplify Copilot Harness Prompts
+
+Status: completed
+
+Scope:
+
+- Replace DCI/search-specific Agent Framework instructions with generic
+  OpenCode-style tool loops.
+- Replace tool-projection search guidance with visible-tool-only,
+  observation-driven `glob`/`grep`/`read` rules.
+- Remove hidden retriever and domain-specific examples from prompt text.
+
+Artifacts:
+
+- Updated `apps/sidecar/AgentRunner.cs`.
+- Updated `apps/sidecar/RelayCopilotChatClient.cs`.
+- Updated model-visible tool descriptions where needed.
+
+Acceptance:
+
+- Prompt projection no longer includes `biling_retriever`, vector-search
+  suggestions, or `部品売上`-specific examples.
+- Prompt projection still requires selectable fenced JSON and rejects images,
+  cards, canvas output, attachments, and unknown tools.
+
+Verification:
+
+- `pnpm agent:choice-error-reduction-smoke`
+
+### GENHARNESS-04 - Remove Hidden Search Recovery Paths
+
+Status: completed
+
+Scope:
+
+- Disable protocol-guard repairs that inject DCI-specific `grep` after a read
+  or after a premature final.
+- Stop converting non-admissible file-search reads into Relay-generated
+  recovery grep calls.
+- Keep hard failures for unavailable tools, invalid `ask_user`, invalid final,
+  and missing required mutations.
+
+Artifacts:
+
+- Updated `apps/sidecar/RelayProtocolGuard.cs`.
+- Updated or retired smokes that asserted hidden DCI recovery instead of
+  model-visible generic tool behavior.
+
+Acceptance:
+
+- No protocol decision reason starts with `grep_refinement_before_final`,
+  `guide_scoped_grep_widened`, `read_target_not_observed_or_existing`, or
+  `cited_evidence_read_before_final`.
+- Invalid final remains fail-fast when AG-UI/AAE does not allow final.
+
+Verification:
+
+- `pnpm check`
+
+### GENHARNESS-05 - Refresh Chatbot Layout
+
+Status: completed
+
+Scope:
+
+- Refine `apps/workbench` so the CopilotKit chat is the primary object.
+- Use a compact header, status pill, workspace picker, inline approval cards,
+  and collapsed support details.
+- Remove excess Relay dashboard framing and keep the visual style neutral,
+  minimal, and professional.
+
+Artifacts:
+
+- Updated `apps/workbench/src/App.tsx`.
+- Updated `apps/workbench/src/styles.css`.
+
+Acceptance:
+
+- The Workbench reads as a normal chatbot with workspace context rather than a
+  multi-panel task console.
+- Text remains readable and controls remain reachable at desktop/mobile sizes.
+
+Verification:
+
+- `pnpm --filter @relay-agent/workbench typecheck`
+- `pnpm workbench:ux-e2e`
+
+### GENHARNESS-06 - Version, Verify, Commit, Release
+
+Status: completed
+
+Scope:
+
+- Bump the product version for the release.
+- Update implementation notes with verification results.
+- Run the canonical verification gate.
+- Commit, push `main`, and create the GitHub Release with installer and
+  archives.
+
+Artifacts:
+
+- Updated version files.
+- Updated `docs/IMPLEMENTATION.md`.
+- Git commit on `main`.
+- GitHub Release artifacts.
+
+Acceptance:
+
+- `pnpm check` passes.
+- Release artifacts include Windows user-scope NSIS installer and platform
+  archives with checksums.
+
+Verification:
+
+- `pnpm check`
+- Release inventory/SBOM command used by the repo.
 
 ### CKLAYOUT-01 - Document CopilotKit Layout Density Plan
 

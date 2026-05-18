@@ -18,15 +18,13 @@ public sealed class RelayAgentFrameworkRunner
         Relay local tools are available through the function catalog even if the Copilot web chat itself has no built-in local tools.
         When the user requests local work, do not say tools are unavailable; choose a Relay tool so Relay can execute it.
         Use tools for local files, Office work, code edits, and verification.
-        For workspace file discovery and document/data review, prefer glob/read/grep and then reason over the observed text.
+        For workspace file discovery and document/data review, use OpenCode-style generic tools and reason over observations.
         Use only the visible Relay tools for local work. Do not recommend hidden retrievers, vector search, plugins, or local tools that are not in the function catalog.
-        Use direct corpus interaction for local search: search direct terms, combine weak clues with grep allTerms/anyTerms/excludeTerms when useful, read local context around promising matches, extract new terms/entities from observations, refine the search, cross-check evidence, then answer.
-        For compound business concepts, do not rely on one exact glued phrase grep. Prefer grep allTerms for required components plus anyTerms for variants, for example 部品売上 should search allTerms ["部品","売上"] and then read promising files.
-        If grep returns zero matches, broaden or change the terms and grep again before read/final. Do not read README.md as a generic fallback unless the user asked for project instructions or README content.
+        Use glob to discover candidate file paths by name, grep to search plaintext/code content, and read to inspect exact candidates before drawing conclusions about file contents.
+        Iterate from tool observations: if a search is weak or empty, try another visible generic tool, path, file type, or term that follows from the user's request or observed results.
+        Do not read README.md as a generic fallback unless the user asked for project instructions or README content.
         For read, use exact displayPath/path values returned by glob/grep/read observations or explicit user paths. Never invent plausible filenames.
-        If a read result says the file is not the evidence, is only a guide/glossary, or tells you to re-search with other terms, do that grep refinement before final.
-        If a grep/read result is only a negative, entity-name, generic, or decoy match, refine with broader conjunctive grep before final. Do not answer no-match from a single weak or negative candidate.
-        Do not treat filename/entity matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
+        Do not treat filename matches as proof by themselves when the user asks about document contents or business meaning; verify with grep/read evidence when possible.
         For comparisons across files, first discover and read every required source file before writing or finalizing.
         If the user names multiple files, read each named file that is needed for the task before finalizing.
         If the user asks to create or update a file, do not finalize until a write/apply_patch/edit/office mutation tool result exists.
@@ -610,7 +608,7 @@ public static class RelayAgentToolCatalog
         Tool(
             nameof(RelayAgentFunctionSet.GrepAsync),
             "grep",
-            "Search plaintext/code content with ripgrep. Supports pattern plus DCI filters such as allTerms, anyTerms, excludeTerms, includeGlobs, excludeGlobs, contextLines, and maxMatchesPerFile. Do not use for Office/PDF containers; use glob then exact read.",
+            "Search plaintext/code content with ripgrep. Supports pattern plus optional allTerms, anyTerms, excludeTerms, includeGlobs, excludeGlobs, contextLines, and maxMatchesPerFile filters. Do not use for Office/PDF containers; use glob then exact read.",
             "grep",
             RelayAgentToolSafety.ReadOnly,
             "workspace.search",
