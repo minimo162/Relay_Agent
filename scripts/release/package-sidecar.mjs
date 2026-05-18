@@ -357,11 +357,11 @@ function portableFrontDoorHtml(rid, version) {
       <div class="recipes">
         <section class="recipe">
           <strong>誤字・表記ゆれ</strong>
-          <p>Workbenchの「PDFの誤字を探す」から下書きを入れ、PDFパスを指定します。</p>
+          <p>Workbenchの「PDFを選んで誤字確認」からPDFを選択します。下書きには選択したPDFパスが入ります。</p>
         </section>
         <section class="recipe">
           <strong>2つのPDF比較</strong>
-          <p>「2つのPDFを比較」から下書きを入れ、PDF A / PDF B のパスを指定します。</p>
+          <p>「2つのPDFを選んで比較」からPDF A / PDF B を順に選択します。</p>
         </section>
       </div>
       <p>PDFはローカルのtext layerを読み取ります。画像だけのPDFやOCRが必要なページは、確認不可として扱われます。</p>

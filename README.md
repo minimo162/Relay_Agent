@@ -38,7 +38,8 @@ The Workbench is intentionally minimal:
 
 - one workspace selected through the OS file explorer;
 - one compact CopilotKit chat transcript as the primary surface;
-- small starter chips for common PDF proofreading and PDF comparison requests;
+- small PDF attachment chips for common proofreading and PDF comparison
+  requests;
 - one chat input and send action;
 - concise readiness and run status;
 - inline tool summaries and approvals only when relevant;
@@ -48,10 +49,11 @@ The UI does not expose separate search, PDF, Office, code, model, provider, or
 runtime controls. Those are implementation details behind the sidecar and the
 generic local tool catalog.
 
-For local PDFs, use the same chat. Relay can read supported PDF text layers
-through the generic `read` tool, so users can ask for typo checks, notation
-checks, or comparison between two PDFs. Image-only PDFs and pages requiring OCR
-are reported as limitations rather than inferred content.
+For local PDFs, use the same chat. The PDF starter chips open the OS file
+picker, place the selected PDF paths into a draft prompt, and then Relay reads
+the exact files through the generic `read` tool. Users can ask for typo checks,
+notation checks, or comparison between two PDFs. Image-only PDFs and pages
+requiring OCR are reported as limitations rather than inferred content.
 
 Normal users do not type workspace paths. Use `変更` / `Change` to choose a
 folder from the OS file explorer. Recent workspaces are stored user-locally and

@@ -33,6 +33,35 @@ public static class WorkspacePicker
         return new WorkspacePickResponse(false, null, false, null, "Workspace picker is not supported on this platform.");
     }
 
+    public static async Task<PdfPickResponse> PickPdfAsync(string? currentPath, string? title, CancellationToken cancellationToken)
+    {
+        var mock = Environment.GetEnvironmentVariable("RELAY_PDF_PICKER_MOCK_PATH");
+        if (!string.IsNullOrWhiteSpace(mock))
+        {
+            if (string.Equals(mock, "__CANCEL__", StringComparison.OrdinalIgnoreCase))
+            {
+                return new PdfPickResponse(true, null, false, null);
+            }
+            if (string.Equals(mock, "__ERROR__", StringComparison.OrdinalIgnoreCase))
+            {
+                return new PdfPickResponse(false, null, false, null, "Mock PDF picker failure.");
+            }
+            return NormalizePdfResult(mock);
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return await PickWindowsPdfAsync(currentPath, title, cancellationToken);
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return await PickLinuxPdfAsync(currentPath, title, cancellationToken);
+        }
+
+        return new PdfPickResponse(false, null, false, null, "PDF picker is not supported on this platform.");
+    }
+
     [SupportedOSPlatform("windows")]
     private static async Task<WorkspacePickResponse> PickWindowsAsync(string? currentPath, CancellationToken cancellationToken)
     {
@@ -95,6 +124,76 @@ exit 2
     }
 
     [SupportedOSPlatform("windows")]
+    private static async Task<PdfPickResponse> PickWindowsPdfAsync(string? currentPath, string? title, CancellationToken cancellationToken)
+    {
+        var native = await TryPickWindowsNativePdfAsync(currentPath, title, cancellationToken);
+        if (native is not null)
+        {
+            return native;
+        }
+
+        var shell = ResolveCommand("powershell.exe") ?? ResolveCommand("pwsh");
+        if (shell is null)
+        {
+            return new PdfPickResponse(false, null, false, null, "PowerShell was not found, so the PDF picker cannot be opened.");
+        }
+
+        const string script = """
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = if ($env:RELAY_PDF_PICKER_TITLE) { $env:RELAY_PDF_PICKER_TITLE } else { 'Select PDF' }
+$dialog.Filter = 'PDF files (*.pdf)|*.pdf|All files (*.*)|*.*'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$dialog.RestoreDirectory = $true
+if ($env:RELAY_WORKSPACE_PICKER_DEFAULT -and (Test-Path -LiteralPath $env:RELAY_WORKSPACE_PICKER_DEFAULT)) {
+  $item = Get-Item -LiteralPath $env:RELAY_WORKSPACE_PICKER_DEFAULT
+  if ($item.PSIsContainer) {
+    $dialog.InitialDirectory = $item.FullName
+  } else {
+    $dialog.InitialDirectory = $item.DirectoryName
+  }
+}
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.StartPosition = 'CenterScreen'
+$owner.WindowState = 'Minimized'
+try {
+  $result = $dialog.ShowDialog($owner)
+} finally {
+  $owner.Dispose()
+}
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+  Write-Output $dialog.FileName
+  exit 0
+}
+exit 2
+""";
+
+        var args = new List<string>();
+        if (string.Equals(Path.GetFileName(shell), "powershell.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("-STA");
+        }
+        args.AddRange(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]);
+
+        var result = await RunPickerProcessAsync(
+            shell,
+            args,
+            currentPath,
+            cancellationToken,
+            environment: new Dictionary<string, string?>
+            {
+                ["RELAY_PDF_PICKER_TITLE"] = string.IsNullOrWhiteSpace(title) ? "Select PDF" : title,
+            });
+        return PdfResultFromProcess(result, cancelExitCode: 2);
+    }
+
+    [SupportedOSPlatform("windows")]
     private static async Task<WorkspacePickResponse?> TryPickWindowsNativeAsync(string? currentPath, CancellationToken cancellationToken)
     {
         var tcs = new TaskCompletionSource<WorkspacePickResponse?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -131,6 +230,46 @@ exit 2
         catch (TimeoutException)
         {
             return new WorkspacePickResponse(false, null, false, null, "Folder picker timed out.");
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static async Task<PdfPickResponse?> TryPickWindowsNativePdfAsync(string? currentPath, string? title, CancellationToken cancellationToken)
+    {
+        var tcs = new TaskCompletionSource<PdfPickResponse?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                tcs.TrySetResult(ShowNativeWindowsPdfDialog(currentPath, title));
+            }
+            catch (COMException ex) when (IsDialogUnavailable(ex))
+            {
+                tcs.TrySetResult(null);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                tcs.TrySetResult(null);
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetResult(new PdfPickResponse(false, null, false, null, ex.Message));
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Relay PDF picker",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        try
+        {
+            return await tcs.Task.WaitAsync(ReadPickerTimeout(), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            return new PdfPickResponse(false, null, false, null, "PDF picker timed out.");
         }
     }
 
@@ -194,6 +333,69 @@ exit 2
         }
     }
 
+    [SupportedOSPlatform("windows")]
+    private static PdfPickResponse ShowNativeWindowsPdfDialog(string? currentPath, string? title)
+    {
+        var type = Type.GetTypeFromCLSID(FileOpenDialogClsid, throwOnError: false);
+        if (type is null) throw new PlatformNotSupportedException("Windows FileOpenDialog is not available.");
+        var instance = Activator.CreateInstance(type) ?? throw new PlatformNotSupportedException("Windows FileOpenDialog could not be created.");
+        var dialog = (IFileOpenDialog)instance;
+
+        dialog.GetOptions(out var options);
+        dialog.SetOptions(
+            options |
+            FileOpenOptions.FosForceFileSystem |
+            FileOpenOptions.FosPathMustExist |
+            FileOpenOptions.FosFileMustExist |
+            FileOpenOptions.FosNoChangeDir);
+        dialog.SetTitle(string.IsNullOrWhiteSpace(title) ? "Select PDF" : title);
+        dialog.SetOkButtonLabel("Select PDF");
+        dialog.SetDefaultExtension("pdf");
+        SetPdfFilters(dialog);
+
+        var initialDirectory = ResolveInitialDirectory(currentPath);
+        if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+        {
+            try
+            {
+                var shellItemId = typeof(IShellItem).GUID;
+                SHCreateItemFromParsingName(Path.GetFullPath(initialDirectory), IntPtr.Zero, ref shellItemId, out var folder);
+                dialog.SetFolder(folder);
+            }
+            catch
+            {
+                // Initial-folder setup is best effort. The picker remains usable
+                // through Desktop/This PC/network locations if this path is gone.
+            }
+        }
+
+        var hr = dialog.Show(IntPtr.Zero);
+        if (hr == HResultCancelled)
+        {
+            return new PdfPickResponse(true, null, false, null);
+        }
+        if (hr < 0)
+        {
+            Marshal.ThrowExceptionForHR(hr);
+        }
+
+        dialog.GetResult(out var item);
+        item.GetDisplayName(ShellItemDisplayName.FileSystemPath, out var selectedPathPointer);
+        try
+        {
+            var selectedPath = Marshal.PtrToStringUni(selectedPathPointer);
+            if (string.IsNullOrWhiteSpace(selectedPath))
+            {
+                return new PdfPickResponse(false, null, false, null, "PDF picker did not return a filesystem path.");
+            }
+            return NormalizePdfResult(selectedPath);
+        }
+        finally
+        {
+            if (selectedPathPointer != IntPtr.Zero) Marshal.FreeCoTaskMem(selectedPathPointer);
+        }
+    }
+
     private static async Task<WorkspacePickResponse> PickLinuxAsync(string? currentPath, CancellationToken cancellationToken)
     {
         if (ResolveCommand("zenity") is { } zenity)
@@ -224,6 +426,39 @@ exit 2
         return new WorkspacePickResponse(false, null, false, null, "No graphical folder picker was found. Install zenity or kdialog, or set the workspace through a supported launcher path.");
     }
 
+    private static async Task<PdfPickResponse> PickLinuxPdfAsync(string? currentPath, string? title, CancellationToken cancellationToken)
+    {
+        var dialogTitle = string.IsNullOrWhiteSpace(title) ? "Select PDF" : title;
+        var initialDirectory = ResolveInitialDirectory(currentPath);
+
+        if (ResolveCommand("zenity") is { } zenity)
+        {
+            var args = new List<string>
+            {
+                "--file-selection",
+                $"--title={dialogTitle}",
+                "--file-filter=PDF files | *.pdf",
+            };
+            if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+            {
+                args.Add($"--filename={Path.GetFullPath(initialDirectory).TrimEnd(Path.DirectorySeparatorChar)}/");
+            }
+            return PdfResultFromProcess(await RunPickerProcessAsync(zenity, args, currentPath, cancellationToken), cancelExitCode: 1);
+        }
+
+        if (ResolveCommand("kdialog") is { } kdialog)
+        {
+            var initial = !string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory)
+                ? Path.GetFullPath(initialDirectory)
+                : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return PdfResultFromProcess(
+                await RunPickerProcessAsync(kdialog, ["--title", dialogTitle, "--getopenfilename", initial, "PDF files (*.pdf)"], currentPath, cancellationToken),
+                cancelExitCode: 1);
+        }
+
+        return new PdfPickResponse(false, null, false, null, "No graphical PDF picker was found. Install zenity or kdialog, or paste an exact PDF path into the chat.");
+    }
+
     private static WorkspacePickResponse ResultFromProcess(PickerProcessResult process, int cancelExitCode)
     {
         if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(process.Output))
@@ -237,6 +472,19 @@ exit 2
         return new WorkspacePickResponse(false, null, false, null, process.Error.Trim().Length > 0 ? process.Error.Trim() : "Folder picker did not return a workspace.");
     }
 
+    private static PdfPickResponse PdfResultFromProcess(PickerProcessResult process, int cancelExitCode)
+    {
+        if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(process.Output))
+        {
+            return NormalizePdfResult(process.Output.Trim());
+        }
+        if (process.ExitCode == cancelExitCode)
+        {
+            return new PdfPickResponse(true, null, false, null);
+        }
+        return new PdfPickResponse(false, null, false, null, process.Error.Trim().Length > 0 ? process.Error.Trim() : "PDF picker did not return a file.");
+    }
+
     private static WorkspacePickResponse NormalizeResult(string path)
     {
         var expanded = Environment.ExpandEnvironmentVariables(path);
@@ -244,11 +492,32 @@ exit 2
         return new WorkspacePickResponse(false, fullPath, Directory.Exists(fullPath), fullPath);
     }
 
+    private static PdfPickResponse NormalizePdfResult(string path)
+    {
+        var expanded = Environment.ExpandEnvironmentVariables(path);
+        var fullPath = Path.GetFullPath(expanded);
+        if (!string.Equals(Path.GetExtension(fullPath), ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PdfPickResponse(false, fullPath, File.Exists(fullPath), fullPath, "Selected file is not a PDF.");
+        }
+        return new PdfPickResponse(false, fullPath, File.Exists(fullPath), fullPath);
+    }
+
+    private static string? ResolveInitialDirectory(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var expanded = Environment.ExpandEnvironmentVariables(path);
+        if (Directory.Exists(expanded)) return Path.GetFullPath(expanded);
+        if (File.Exists(expanded)) return Path.GetDirectoryName(Path.GetFullPath(expanded));
+        return null;
+    }
+
     private static async Task<PickerProcessResult> RunPickerProcessAsync(
         string fileName,
         IReadOnlyList<string> args,
         string? currentPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(ReadPickerTimeout());
@@ -263,6 +532,16 @@ exit 2
         if (!string.IsNullOrWhiteSpace(currentPath))
         {
             process.StartInfo.Environment["RELAY_WORKSPACE_PICKER_DEFAULT"] = currentPath;
+        }
+        if (environment is not null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                if (!string.IsNullOrWhiteSpace(key) && value is not null)
+                {
+                    process.StartInfo.Environment[key] = value;
+                }
+            }
         }
         foreach (var arg in args) process.StartInfo.ArgumentList.Add(arg);
 
@@ -327,6 +606,35 @@ exit 2
         return TimeSpan.FromMinutes(2);
     }
 
+    [SupportedOSPlatform("windows")]
+    private static void SetPdfFilters(IFileDialog dialog)
+    {
+        var filters = new[]
+        {
+            new ComDlgFilterSpec("PDF files", "*.pdf"),
+            new ComDlgFilterSpec("All files", "*.*"),
+        };
+        var structSize = Marshal.SizeOf<ComDlgFilterSpec>();
+        var filtersPointer = Marshal.AllocCoTaskMem(structSize * filters.Length);
+        try
+        {
+            for (var index = 0; index < filters.Length; index++)
+            {
+                Marshal.StructureToPtr(filters[index], filtersPointer + (index * structSize), fDeleteOld: false);
+            }
+            dialog.SetFileTypes((uint)filters.Length, filtersPointer);
+            dialog.SetFileTypeIndex(1);
+        }
+        finally
+        {
+            for (var index = 0; index < filters.Length; index++)
+            {
+                Marshal.DestroyStructure<ComDlgFilterSpec>(filtersPointer + (index * structSize));
+            }
+            Marshal.FreeCoTaskMem(filtersPointer);
+        }
+    }
+
     private sealed record PickerProcessResult(int ExitCode, string Output, string Error);
 
     private static bool IsDialogUnavailable(COMException ex) =>
@@ -342,6 +650,23 @@ exit 2
         FosPickFolders = 0x00000020,
         FosForceFileSystem = 0x00000040,
         FosPathMustExist = 0x00000800,
+        FosFileMustExist = 0x00001000,
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private readonly struct ComDlgFilterSpec
+    {
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public readonly string Name;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public readonly string Spec;
+
+        public ComDlgFilterSpec(string name, string spec)
+        {
+            Name = name;
+            Spec = spec;
+        }
     }
 
     private enum ShellItemDisplayName : uint

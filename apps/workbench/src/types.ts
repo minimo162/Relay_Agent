@@ -19,6 +19,14 @@ export type WorkspacePickResponse = {
   error?: string | null;
 };
 
+export type PdfPickResponse = {
+  cancelled: boolean;
+  path?: string | null;
+  exists: boolean;
+  displayPath?: string | null;
+  error?: string | null;
+};
+
 export type RunEvent = {
   type:
     | "status"

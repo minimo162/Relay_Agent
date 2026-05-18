@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,13 +8,17 @@ const token = "relay-workspace-picker-smoke-token";
 const port = 17897;
 const dataDir = mkdtempSync(join(tmpdir(), "relay-workspace-picker-data-"));
 const workspace = mkdtempSync(join(tmpdir(), "relay-workspace-picker-target-"));
+const pdfPath = join(workspace, "relay-picker-smoke.pdf");
+writeFileSync(pdfPath, "%PDF-1.4\n% Relay picker smoke\n");
 const workspacePickerSource = readFileSync(join(process.cwd(), "apps/sidecar/WorkspacePicker.cs"), "utf8");
 for (const needle of [
   "IFileOpenDialog",
   "FosPickFolders",
+  "FosFileMustExist",
   "FosForceFileSystem",
   "SHCreateItemFromParsingName",
   "FolderBrowserDialog",
+  "RELAY_PDF_PICKER_MOCK_PATH",
 ]) {
   if (!workspacePickerSource.includes(needle)) {
     throw new Error(`workspace picker source is missing ${needle}`);
@@ -32,6 +36,7 @@ const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.c
     RELAY_ALLOW_MOCK_COPILOT: "1",
     RELAY_COPILOT_MOCK_RESPONSE: JSON.stringify({ action: "final", answer: "workspace picker smoke" }),
     RELAY_WORKSPACE_PICKER_MOCK_PATH: workspace,
+    RELAY_PDF_PICKER_MOCK_PATH: pdfPath,
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -46,6 +51,10 @@ try {
   const selected = await postPick();
   if (selected.cancelled !== false || selected.path !== workspace || selected.exists !== true) {
     throw new Error(`unexpected picker response: ${JSON.stringify(selected)}`);
+  }
+  const selectedPdf = await postPdfPick();
+  if (selectedPdf.cancelled !== false || selectedPdf.path !== pdfPath || selectedPdf.exists !== true) {
+    throw new Error(`unexpected PDF picker response: ${JSON.stringify(selectedPdf)}`);
   }
 
   process.env.RELAY_WORKSPACE_PICKER_MOCK_PATH = "__CANCEL__";
@@ -79,5 +88,19 @@ async function postPick() {
     body: JSON.stringify({ currentPath: "" }),
   });
   if (!response.ok) throw new Error(`workspace picker endpoint failed: ${response.status}`);
+  return response.json();
+}
+
+async function postPdfPick() {
+  const response = await fetch(`http://127.0.0.1:${port}/api/pdf/pick?token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Relay-Token": token,
+      Origin: `http://127.0.0.1:${port}`,
+    },
+    body: JSON.stringify({ currentPath: workspace, title: "Pick smoke PDF" }),
+  });
+  if (!response.ok) throw new Error(`PDF picker endpoint failed: ${response.status}`);
   return response.json();
 }

@@ -197,23 +197,28 @@ Implementation plan:
 
 1. **Keep PDF review as promptable generic work**
    - Add Workbench starter chips for:
-     - `PDFの誤字を探す`;
-     - `2つのPDFを比較`.
-   - The chips insert a concise draft into the CopilotKit composer when
-     possible, or copy the draft to the clipboard as a fallback.
-   - Drafts instruct Copilot to use exact `read` on the user-specified PDFs,
+     - `PDFを選んで誤字確認`;
+     - `2つのPDFを選んで比較`.
+   - The chips call a sidecar-owned native PDF picker, then insert a concise
+     draft into the CopilotKit composer with the selected exact local PDF
+     paths. If the composer cannot be reached, copy the same draft to the
+     clipboard.
+   - The picker uses the same local sidecar boundary as workspace selection:
+     Windows native `FileOpenDialog` with PDF filtering and Linux `zenity` /
+     `kdialog` where available. It does not upload PDFs into the browser, write
+     picker artifacts into shared folders, or create a separate PDF runner.
+   - Drafts instruct Copilot to use exact `read` on the selected PDFs,
      cite only extracted text evidence, list suspected typos or inconsistent
      values, and clearly mark image-only/OCR-required pages as not confirmed.
    - Do not add drag-and-drop file upload unless it can be represented as
-     workspace-local paths that Relay can validate. The first version remains
-     path-based because Relay cannot safely access browser-only `File` objects
-     from the sidecar tool catalog.
+     workspace-local paths that Relay can validate; browser-only `File` objects
+     remain outside the sidecar tool catalog.
 
 2. **Add an HTML-first portable front door**
    - Include `Relay Agent.html` at the portable package root. It is a
      user-facing start page, not the runtime itself.
    - The HTML explains in a first-run friendly way how to start the local
-     launcher, choose a workspace, and use the two PDF review starters.
+     launcher, choose a workspace, and use the two PDF picker starters.
    - Windows portable packages also include a Japanese launch helper,
      `Relay Agent を起動.cmd`, alongside `Start Relay Agent.cmd`.
    - The HTML must not imply that a standalone browser page can execute local
@@ -237,10 +242,12 @@ Implementation plan:
      procedural detail inside the composer draft.
 
 5. **Acceptance criteria**
-   - Workbench shows the two PDF starter chips after a workspace is selected.
-   - Starter chips insert or copy drafts that explicitly mention `read`, PDF
-     paths, evidence, typo/表記ゆれ review, comparison, and OCR/text-layer
-     limits.
+   - Workbench shows the two PDF picker chips after a workspace is selected.
+   - Starter chips open the OS PDF picker and insert or copy drafts that
+     explicitly mention `read`, exact selected PDF paths, evidence,
+     typo/表記ゆれ review, comparison, and OCR/text-layer limits.
+   - Sidecar exposes one small PDF picker endpoint; it is a UX attachment
+     helper, not a model-facing PDF tool or a separate backend mode.
    - `Relay Agent.html`, `README_PORTABLE.txt`, and platform launch helpers are
      included in portable package roots.
    - Agent/turn prompt text contains PDF proofreading and comparison guidance

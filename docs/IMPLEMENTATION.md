@@ -33,6 +33,66 @@
 
 ## Milestone Log
 
+### 2026-05-19 Native PDF Attachment Follow-up
+
+Follow-up to the PDF review UX release: the first cut made PDF review easy to
+prompt, but still expected users to paste PDF paths. This slice makes
+attachment concrete for first-time users while keeping PDF review as a generic
+AG-UI chat recipe.
+
+Change:
+
+- Added `/api/pdf/pick`, a small sidecar endpoint that opens a native local PDF
+  picker and returns the selected exact path, cancellation, or explicit error.
+- Extended the existing workspace picker implementation instead of adding a
+  model-visible PDF tool or separate document runner:
+  - Windows uses `FileOpenDialog` with PDF filtering and file-existence
+    requirements, with a PowerShell `OpenFileDialog` fallback;
+  - Linux uses `zenity` or `kdialog` when available;
+  - tests can use `RELAY_PDF_PICKER_MOCK_PATH`.
+- Updated Workbench PDF chips to open the picker:
+  - `PDFを選んで誤字確認`;
+  - `2つのPDFを選んで比較`.
+- The selected PDF paths are inserted into the CopilotKit composer draft, and
+  the existing Agent Framework/OpenCode-style `read` guidance still drives the
+  actual review.
+- Updated the portable HTML front door, README, plan, tasks, and smoke coverage
+  to describe PDF selection rather than manual path entry.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.17`.
+
+Verification commands run locally:
+
+```bash
+pnpm sidecar:workspace-picker-smoke
+pnpm agent:pdf-review-ux-smoke
+pnpm typecheck
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm check
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.17-win-x64.zip dist/relay-agent-0.3.17-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.17-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.17-sha256.txt
+```
+
+Result:
+
+- Native picker mock smoke passed for both workspace selection and PDF
+  selection.
+- PDF review UX static smoke passed.
+- Workbench typecheck passed.
+- Sidecar Release build passed with zero warnings.
+- Full `pnpm check` passed, including Agent Framework/AG-UI smokes,
+  Office/PDF read smoke, PDF picker UX smoke, and release inventory.
+- Windows portable package generated:
+  `dist/relay-agent-0.3.17-win-x64.zip`.
+- Linux portable package generated:
+  `dist/relay-agent-0.3.17-linux-x64.tar.gz`.
+- Optional Windows user-scope installer generated:
+  `dist/installer/Relay.Agent-0.3.17-win-x64-setup.exe`.
+- Release inventory, SBOM, and SHA-256 checksum file generated under
+  `dist/release/`.
+
 ### 2026-05-19 Portable PDF Review UX
 
 Follow-up to the request for proofreading local PDFs, comparing two local PDFs,

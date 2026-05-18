@@ -86,7 +86,7 @@ The active queue is `PDFUX*`. It implements the 2026-05-19 Portable PDF Review
 UX Plan from `PLANS.md`: expose local PDF proofreading and two-PDF comparison
 as first-run friendly recipes over the same CopilotKit/AG-UI chat and generic
 OpenCode-compatible `read`/`glob`/`grep` tools, while adding an HTML-first
-portable front door.
+portable front door and a native PDF attachment picker.
 
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
@@ -248,6 +248,38 @@ Acceptance:
 - Portable package creation and release inventory pass.
 - GitHub release contains portable archives, optional installer, inventory,
   SBOM, and SHA-256 checksums.
+
+### PDFUX-06 - Add Native PDF Attachment Picker
+
+Status: completed
+
+Scope:
+
+- Add a small sidecar API for selecting a local PDF with the OS file picker.
+- Reuse the existing workspace picker boundary and keep the picker as a UX
+  helper, not a model-facing PDF tool.
+- Update Workbench PDF starter chips so first-time users choose PDFs from the
+  GUI and receive a draft prompt with exact selected paths.
+- Update portable HTML and docs to describe PDF selection rather than manual
+  path entry.
+
+Artifacts:
+
+- Updated `apps/sidecar/WorkspacePicker.cs`.
+- Updated `apps/sidecar/Program.cs`.
+- Updated `apps/workbench/src/App.tsx`.
+- Updated `apps/workbench/src/types.ts`.
+- Updated `scripts/pdf-review-ux-smoke.mjs`.
+- Updated docs and release packaging text.
+
+Acceptance:
+
+- `/api/pdf/pick` returns a selected local PDF path, cancel state, or explicit
+  error without writing artifacts into the selected/shared folder.
+- Workbench PDF starters open the picker and create exact-path prompts for
+  proofreading and comparison.
+- `pnpm check`, portable package creation, installer creation, release
+  inventory, commit, push, and GitHub release complete.
 
 ### PORTABLE-02 - Add Portable Launch Helpers And README
 

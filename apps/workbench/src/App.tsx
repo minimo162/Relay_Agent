@@ -10,7 +10,7 @@ import { Download, ExternalLink, FileText, FolderOpen, GitCompareArrows } from "
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { createRelayAgUiAgent, relayAgentId } from "./lib/relay-ag-ui";
-import type { StatusResponse, WorkspacePickResponse } from "./types";
+import type { PdfPickResponse, StatusResponse, WorkspacePickResponse } from "./types";
 
 const workspaceStorageKey = "relay.workbench.workspace";
 const workspaceHistoryKey = "relay.workbench.workspaceHistory";
@@ -53,6 +53,7 @@ export function App() {
   const [workspaceError, setWorkspaceError] = useState("");
   const [starterNotice, setStarterNotice] = useState("");
   const [isPickingWorkspace, setIsPickingWorkspace] = useState(false);
+  const [isPickingPdf, setIsPickingPdf] = useState(false);
   const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
   const [supportBusy, setSupportBusy] = useState(false);
   const threadIdRef = useRef(loadThreadId());
@@ -278,21 +279,110 @@ export function App() {
     }
   }, [api, authHeaders]);
 
-  const insertStarterPrompt = useCallback(async (prompt: string) => {
+  const insertStarterPrompt = useCallback(async (
+    prompt: string,
+    successMessage = "下書きを入力しました。内容を確認して送信してください。",
+    copiedMessage = "下書きをコピーしました。入力欄に貼り付けてください。",
+  ) => {
     setStarterNotice("");
     const inserted = insertPromptIntoComposer(prompt);
     if (inserted) {
-      setStarterNotice("下書きを入力しました。PDFパスを入れて送信してください。");
+      setStarterNotice(successMessage);
       return;
     }
 
     try {
       await navigator.clipboard.writeText(prompt);
-      setStarterNotice("下書きをコピーしました。入力欄に貼り付けてください。");
+      setStarterNotice(copiedMessage);
     } catch {
       setWorkspaceError("入力欄が見つからず、クリップボードにもコピーできませんでした。");
     }
   }, []);
+
+  const pickPdf = useCallback(async (title: string): Promise<string | null> => {
+    setWorkspaceError("");
+    setStarterNotice("");
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 120_000);
+    try {
+      const response = await fetch(api("/api/pdf/pick"), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ currentPath: workspace, title }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`PDF picker failed: ${response.status}`);
+      const result = (await response.json()) as PdfPickResponse;
+      if (result.cancelled) return null;
+      if (result.error) {
+        setWorkspaceError(result.error);
+        return null;
+      }
+      if (!result.path || !result.exists) {
+        setWorkspaceError("PDFファイルを選択できませんでした。");
+        return null;
+      }
+      return result.path;
+    } catch (error) {
+      setWorkspaceError(timedOut
+        ? "PDF選択がタイムアウトしました。もう一度押してください。"
+        : error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }, [api, authHeaders, workspace]);
+
+  const adoptWorkspaceForFiles = useCallback((paths: string[]): string => {
+    const nextWorkspace = workspaceForSelectedFiles(paths, workspace);
+    if (nextWorkspace && nextWorkspace !== workspace) {
+      setWorkspace(nextWorkspace);
+      saveWorkspace(nextWorkspace, setWorkspaceHistory);
+      return nextWorkspace;
+    }
+    return workspace;
+  }, [workspace]);
+
+  const pickPdfForProofread = useCallback(async () => {
+    setIsPickingPdf(true);
+    try {
+      const path = await pickPdf("誤字を確認するPDFを選択");
+      if (!path) return;
+      const effectiveWorkspace = adoptWorkspaceForFiles([path]);
+      const workspaceNote = effectiveWorkspace !== workspace ? "作業フォルダもPDFの場所に合わせました。" : "";
+      await insertStarterPrompt(
+        buildPdfProofreadPrompt(path),
+        `PDF確認の下書きを入力しました。送信するとRelayがPDFを読みます。${workspaceNote}`,
+      );
+    } finally {
+      setIsPickingPdf(false);
+    }
+  }, [adoptWorkspaceForFiles, insertStarterPrompt, pickPdf, workspace]);
+
+  const pickPdfsForCompare = useCallback(async () => {
+    setIsPickingPdf(true);
+    try {
+      const firstPath = await pickPdf("比較する1つ目のPDFを選択");
+      if (!firstPath) return;
+      const secondPath = await pickPdf("比較する2つ目のPDFを選択");
+      if (!secondPath) {
+        setStarterNotice("2つ目のPDF選択がキャンセルされました。");
+        return;
+      }
+      const effectiveWorkspace = adoptWorkspaceForFiles([firstPath, secondPath]);
+      const workspaceNote = effectiveWorkspace !== workspace ? "作業フォルダもPDFの共通フォルダに合わせました。" : "";
+      await insertStarterPrompt(
+        buildPdfComparePrompt(firstPath, secondPath),
+        `PDF比較の下書きを入力しました。送信するとRelayが2つのPDFを読みます。${workspaceNote}`,
+      );
+    } finally {
+      setIsPickingPdf(false);
+    }
+  }, [adoptWorkspaceForFiles, insertStarterPrompt, pickPdf, workspace]);
 
   const agent = useMemo(() =>
     createRelayAgUiAgent({
@@ -406,18 +496,20 @@ export function App() {
                   <button
                     type="button"
                     className="starter-chip"
-                    onClick={() => void insertStarterPrompt(pdfProofreadPrompt)}
+                    disabled={isPickingPdf}
+                    onClick={() => void pickPdfForProofread()}
                   >
                     <FileText size={16} aria-hidden="true" />
-                    PDFの誤字を探す
+                    {isPickingPdf ? "PDF選択中..." : "PDFを選んで誤字確認"}
                   </button>
                   <button
                     type="button"
                     className="starter-chip"
-                    onClick={() => void insertStarterPrompt(pdfComparePrompt)}
+                    disabled={isPickingPdf}
+                    onClick={() => void pickPdfsForCompare()}
                   >
                     <GitCompareArrows size={16} aria-hidden="true" />
-                    2つのPDFを比較
+                    2つのPDFを選んで比較
                   </button>
                 </section>
                 <section className="chat-card" data-ready={chatReady ? "true" : "false"}>
@@ -582,24 +674,32 @@ function createId(prefix: string): string {
   return `relay-${prefix}-${Date.now().toString(36)}-${random}`;
 }
 
-const pdfProofreadPrompt = `PDFの誤字・表記ゆれを確認してください。
-対象PDF: <ここにPDFパス>
+function buildPdfProofreadPrompt(pdfPath: string): string {
+  return `PDFの誤字・表記ゆれを確認してください。
+対象PDF: ${formatPathForPrompt(pdfPath)}
 
 進め方:
 1. 対象PDFを exact path で read してください。候補が曖昧な場合だけ glob でPDF候補を確認してください。
 2. 抽出できた本文だけを根拠に、誤字候補、表記ゆれ、日付・数値・固有名詞の不自然さを一覧化してください。
 3. 各指摘には根拠となる短い引用または周辺テキストを付けてください。
 4. 画像だけのPDF、OCRが必要な箇所、抽出できないページは確認不可と明記してください。`;
+}
 
-const pdfComparePrompt = `2つのPDFを比較し、整合しない可能性がある箇所を探してください。
-PDF A: <ここに1つ目のPDFパス>
-PDF B: <ここに2つ目のPDFパス>
+function buildPdfComparePrompt(firstPdfPath: string, secondPdfPath: string): string {
+  return `2つのPDFを比較し、整合しない可能性がある箇所を探してください。
+PDF A: ${formatPathForPrompt(firstPdfPath)}
+PDF B: ${formatPathForPrompt(secondPdfPath)}
 
 進め方:
 1. PDF A と PDF B の両方を exact path で read してください。候補が曖昧な場合だけ glob でPDF候補を確認してください。
 2. 抽出できた本文だけを根拠に、名称、日付、数値、見出し、注記、表現の差分を整理してください。
 3. 不整合候補ごとに、どちらのPDFのどの周辺テキストと食い違うのかを短く示してください。
 4. 画像だけのPDF、OCRが必要な箇所、抽出できないページは比較不可と明記してください。`;
+}
+
+function formatPathForPrompt(path: string): string {
+  return `"${path.replaceAll("\"", "\\\"")}"`;
+}
 
 function insertPromptIntoComposer(prompt: string): boolean {
   const textarea = document.querySelector<HTMLTextAreaElement>(".chat-card textarea");
@@ -627,6 +727,76 @@ function compactPath(path: string): string {
   const parts = normalized.split("/").filter(Boolean);
   if (parts.length <= 3) return path;
   return `.../${parts.slice(-3).join("/")}`;
+}
+
+function workspaceForSelectedFiles(paths: string[], currentWorkspace: string): string | null {
+  const existingWorkspace = currentWorkspace.trim();
+  if (existingWorkspace && paths.every((path) => isPathInsideFolder(existingWorkspace, path))) {
+    return existingWorkspace;
+  }
+  return commonParentDirectory(paths);
+}
+
+function isPathInsideFolder(folder: string, path: string): boolean {
+  const normalizedFolder = normalizePathForCompare(folder).replace(/\/+$/u, "");
+  const normalizedPath = normalizePathForCompare(path).replace(/\/+$/u, "");
+  return normalizedPath === normalizedFolder || normalizedPath.startsWith(`${normalizedFolder}/`);
+}
+
+function commonParentDirectory(paths: string[]): string | null {
+  const directories = paths.map(parentDirectory).filter((path): path is string => Boolean(path));
+  if (directories.length === 0) return null;
+  const parsed = directories.map(parsePathForCommonAncestor);
+  const [first] = parsed;
+  if (parsed.some((item) => item.root !== first.root)) return null;
+
+  const common: string[] = [];
+  for (let index = 0; ; index += 1) {
+    const part = first.parts[index];
+    if (!part || parsed.some((item) => item.parts[index] !== part)) break;
+    common.push(part);
+  }
+  if (common.length === 0) return first.root || null;
+  return formatCommonAncestor(first.root, common);
+}
+
+function parentDirectory(path: string): string | null {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/u, "");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) return null;
+  return normalized.slice(0, index);
+}
+
+function normalizePathForCompare(path: string): string {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return /^[a-z]:/iu.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function parsePathForCommonAncestor(path: string): { root: string; parts: string[] } {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/u, "");
+  const drive = normalized.match(/^[a-z]:/iu)?.[0];
+  if (drive) {
+    return {
+      root: `${drive}/`,
+      parts: normalized.slice(drive.length).split("/").filter(Boolean),
+    };
+  }
+  if (normalized.startsWith("/")) {
+    return {
+      root: "/",
+      parts: normalized.split("/").filter(Boolean),
+    };
+  }
+  return {
+    root: "",
+    parts: normalized.split("/").filter(Boolean),
+  };
+}
+
+function formatCommonAncestor(root: string, parts: string[]): string {
+  if (root === "/") return `/${parts.join("/")}`;
+  if (root.endsWith(":/")) return `${root}${parts.join("/")}`;
+  return [root, ...parts].filter(Boolean).join("/");
 }
 
 function parseApprovalRequest(value: unknown): Record<string, unknown> {

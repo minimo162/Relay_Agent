@@ -6,16 +6,35 @@ const root = resolve(import.meta.dirname, "..");
 
 const app = read("apps/workbench/src/App.tsx");
 for (const needle of [
-  "PDFの誤字を探す",
-  "2つのPDFを比較",
+  "PDFを選んで誤字確認",
+  "2つのPDFを選んで比較",
+  "/api/pdf/pick",
+  "pickPdfForProofread",
+  "pickPdfsForCompare",
   "insertPromptIntoComposer",
-  "対象PDF: <ここにPDFパス>",
-  "PDF A: <ここに1つ目のPDFパス>",
-  "PDF B: <ここに2つ目のPDFパス>",
+  "buildPdfProofreadPrompt",
+  "buildPdfComparePrompt",
   "exact path で read",
   "OCRが必要",
 ]) {
   assert(app.includes(needle), `Workbench PDF starter is missing: ${needle}`);
+}
+
+const program = read("apps/sidecar/Program.cs");
+for (const needle of ["/api/pdf/pick", "PdfPickRequest", "PdfPickResponse", "PickPdfAsync"]) {
+  assert(program.includes(needle), `Sidecar PDF picker route is missing: ${needle}`);
+}
+
+const workspacePicker = read("apps/sidecar/WorkspacePicker.cs");
+for (const needle of [
+  "RELAY_PDF_PICKER_MOCK_PATH",
+  "PickPdfAsync",
+  "ShowNativeWindowsPdfDialog",
+  "FosFileMustExist",
+  "PDF files (*.pdf)",
+  "--file-filter=PDF files | *.pdf",
+]) {
+  assert(workspacePicker.includes(needle), `Native PDF picker implementation is missing: ${needle}`);
 }
 
 const styles = read("apps/workbench/src/styles.css");
@@ -44,6 +63,8 @@ for (const needle of [
   "Relay Agent を起動.cmd",
   "portableFrontDoorHtml",
   "PDFを確認する",
+  "PDFを選んで誤字確認",
+  "2つのPDFを選んで比較",
   "画像だけのPDFやOCRが必要なページ",
 ]) {
   assert(packageScript.includes(needle), `Portable HTML front door is missing: ${needle}`);

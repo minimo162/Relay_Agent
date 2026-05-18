@@ -107,6 +107,12 @@ app.MapPost("/api/workspace/pick", async (WorkspacePickRequest request, Cancella
     return Results.Json(result, JsonOptions.Default);
 });
 
+app.MapPost("/api/pdf/pick", async (PdfPickRequest request, CancellationToken cancellationToken) =>
+{
+    var result = await WorkspacePicker.PickPdfAsync(request.CurrentPath, request.Title, cancellationToken);
+    return Results.Json(result, JsonOptions.Default);
+});
+
 app.MapPost("/api/copilot/open", async (CancellationToken cancellationToken) =>
 {
     var result = await new EdgeCdpManager(options.DataDirectory).ResolveAsync(startIfMissing: true, cancellationToken);
@@ -376,6 +382,10 @@ public sealed record WorkspaceResponse(string Path, bool Exists, string DisplayP
 public sealed record WorkspacePickRequest(string? CurrentPath);
 
 public sealed record WorkspacePickResponse(bool Cancelled, string? Path, bool Exists, string? DisplayPath, string? Error = null);
+
+public sealed record PdfPickRequest(string? CurrentPath, string? Title);
+
+public sealed record PdfPickResponse(bool Cancelled, string? Path, bool Exists, string? DisplayPath, string? Error = null);
 
 public sealed record CopilotOpenResponse(bool Ready, string Detail, string State);
 
