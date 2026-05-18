@@ -169,13 +169,13 @@ The sidecar prints the localhost Workbench URL with the launch token.
 
 The active release workflow publishes the .NET sidecar and static Workbench
 assets. The primary distribution is now a portable package: Windows users can
-download the zip, extract it anywhere they can write, and open
-`Relay Agent.html`, `Relay Agent を起動.cmd`, `Start Relay Agent.cmd`, or
-`Relay.Launcher.exe`; Linux users can extract the tarball, open
-`Relay Agent.html`, and run `./start-relay-agent.sh` or `./Relay.Launcher`. The Windows
-NSIS installer remains available for users who prefer Start Menu shortcuts and
-an uninstall entry, but it is not required to use Relay Agent. Tauri NSIS
-packaging is no longer the supported release path.
+download the zip, extract it anywhere they can write, and double-click
+`Relay Agent.exe`. Linux users can extract the tarball and run `./relay-agent`.
+`README-FIRST.html` is included only as a help document for first-time users;
+it is not the launcher. The Windows NSIS installer remains available for users
+who prefer Start Menu shortcuts and an uninstall entry, but it is not required
+to use Relay Agent. Tauri NSIS packaging is no longer the supported release
+path.
 
 Local publish commands:
 

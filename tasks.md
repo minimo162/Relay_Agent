@@ -100,6 +100,12 @@ read as a first-time-friendly standard chatbot while keeping CopilotKit,
 AG-UI, Microsoft Agent Framework approvals, and the OpenCode-compatible local
 tool contract as the standard harness surfaces.
 
+The completed active queue is `PORTABLEENTRY*`. It implements the 2026-05-19 Portable
+One-Click First-Run Plan from `PLANS.md`: keep the portable package as the
+primary distribution, but make the first-run path one obvious launcher
+(`Relay Agent.exe` on Windows and `relay-agent` on Linux) while moving HTML to
+optional help.
+
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
 editing inside the Agent Framework/AG-UI/OpenCode-compatible generic tool
@@ -124,6 +130,102 @@ acceptance criteria have broken.
 - Run at least `pnpm check` before marking a milestone complete.
 
 ## Task Queue
+
+### PORTABLEENTRY-01 - Document One-Click Portable Direction
+
+Status: completed
+
+Scope:
+
+- Add the portable one-click first-run plan to `PLANS.md`.
+- Add this executable `PORTABLEENTRY*` queue to `tasks.md`.
+- Update README packaging guidance so initial users see one launcher, not a
+  list of equivalent files.
+
+Artifacts:
+
+- Updated `PLANS.md`.
+- Updated `tasks.md`.
+- Updated `README.md`.
+
+Acceptance:
+
+- Windows portable guidance names `Relay Agent.exe` as the normal entrypoint.
+- Linux portable guidance names `relay-agent` as the normal entrypoint.
+- HTML is documented as help only, not as the launch path.
+
+### PORTABLEENTRY-02 - Add Portable Root Launchers And Help Alias
+
+Status: completed
+
+Scope:
+
+- Update the sidecar package script to rename the published launcher to
+  `Relay Agent.exe` for Windows packages.
+- Update the Linux package to include `relay-agent`.
+- Add `README-FIRST.html` while keeping the existing HTML help file as a
+  compatibility alias.
+- Point compatibility cmd/shell scripts at the new primary launcher where
+  possible.
+
+Artifacts:
+
+- Updated `scripts/release/package-sidecar.mjs`.
+
+Acceptance:
+
+- Windows portable packages include root `Relay Agent.exe`.
+- Linux portable packages include root executable `relay-agent`.
+- Portable text/HTML guidance presents only one primary launch path.
+
+### PORTABLEENTRY-03 - Extend Packaging Guards
+
+Status: completed
+
+Scope:
+
+- Extend release/package smoke coverage so future releases cannot drop the
+  primary portable launchers or first-run help file.
+- Keep the change inside existing packaging smokes instead of adding a new
+  runtime path.
+
+Artifacts:
+
+- Updated release smoke scripts.
+
+Acceptance:
+
+- `pnpm check` validates the new portable launcher/help contract.
+
+### PORTABLEENTRY-04 - Verify, Commit, Push, And Release
+
+Status: completed
+
+Scope:
+
+- Bump release version.
+- Run the acceptance gate and package release artifacts.
+- Commit to `main`, push, and create the GitHub Release.
+
+Artifacts:
+
+- Passing `pnpm check`.
+- Windows/Linux portable packages.
+- Optional Windows installer.
+- Release inventory, SBOM, checksum file.
+- Git commit and GitHub Release.
+
+Acceptance:
+
+- `pnpm check` passes.
+- `pnpm sidecar:portable:windows`, `pnpm sidecar:portable:linux`, and
+  `pnpm sidecar:installer:windows` pass.
+- `dist/relay-agent-win-x64` exposes `Relay Agent.exe` as the primary launcher
+  and does not expose `Relay.Launcher.exe` as a competing root entrypoint.
+- `dist/relay-agent-linux-x64` exposes `relay-agent` as the primary launcher
+  and does not expose `Relay.Launcher` as a competing root entrypoint.
+- Release artifacts are generated for the bumped version.
+- The release is published on GitHub.
 
 ### STANDARDCHAT-01 - Document Standard Chatbot Direction
 

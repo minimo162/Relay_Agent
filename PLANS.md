@@ -42,11 +42,19 @@ Distribution direction:
 
 - The primary user-facing release artifact is a **portable package**, not an
   installer. Windows users should be able to download a zip, extract it to a
-  user-writable folder, and launch `Start Relay Agent.cmd` or
-  `Relay.Launcher.exe` without administrator rights, UAC elevation, or a
-  personal Windows password.
+  user-writable folder, and launch `Relay Agent.exe` without administrator
+  rights, UAC elevation, or a personal Windows password. Compatibility scripts
+  such as `Start Relay Agent.cmd` may remain in the package, but docs and
+  first-run guidance must point to only `Relay Agent.exe` as the normal Windows
+  entrypoint. The raw `Relay.Launcher.exe` name should not be exposed as an
+  equal first-run choice in portable packages.
 - Linux users should be able to extract the tarball and launch
-  `./start-relay-agent.sh` or `./Relay.Launcher`.
+  `./relay-agent`. Compatibility scripts such as `./start-relay-agent.sh` may
+  remain, but should not be the primary first-run path.
+- HTML files in the portable package are guidance documents, not launch
+  prerequisites. `README-FIRST.html` should explain the one-click launcher,
+  Copilot sign-in, workspace selection, and safe approvals; it must not be the
+  first required step.
 - The Windows NSIS installer remains an optional convenience artifact for Start
   Menu/uninstall integration, but product docs, release notes, and default
   sharing guidance should lead with the portable package.
@@ -203,6 +211,53 @@ Implementation plan:
      `RelayDocumentSearch*`, AionUi, OpenWork, Tauri, or per-mode runners.
    - `pnpm check`, release inventory, portable packages, and the optional
      Windows user-scope installer pass for the bumped release version.
+
+### 2026-05-19 Portable One-Click First-Run Plan
+
+The current portable package is functionally usable, but its root folder exposes
+too many plausible entrypoints (`Relay.Launcher.exe`, `Relay.Sidecar.exe`,
+localized cmd files, HTML guidance). That is technically acceptable but weak for
+first-time distribution. The next release should keep the same browser
+Workbench + .NET sidecar architecture while making the portable zip read like a
+normal consumer app folder: one obvious launcher and optional help.
+
+Implementation plan:
+
+1. **Make the normal launcher obvious**
+   - Add `Relay Agent.exe` to the Windows portable root as the primary
+     user-facing launcher.
+   - Add `relay-agent` to the Linux portable root as the primary launcher.
+   - Keep scripts only as compatibility paths for old docs and
+     troubleshooting; do not expose raw `Relay.Launcher` as an equal portable
+     launcher.
+
+2. **Make HTML guidance secondary**
+   - Add `README-FIRST.html` as the help document users open only when they
+     need instructions.
+   - Keep the existing portable HTML front door as a compatibility alias, but
+     change its copy so it clearly says the HTML is a guide, not the launcher.
+   - Update portable text guidance to say: extract, double-click
+     `Relay Agent.exe`, sign in to Copilot, choose a folder, type a request.
+
+3. **Keep safety and storage boundaries unchanged**
+   - Do not move Relay caches, indexes, logs, backups, or temp files into the
+     extracted portable folder.
+   - Do not require administrator rights, a machine-wide install, or a Windows
+     password.
+   - Do not change the active AG-UI / Microsoft Agent Framework / CopilotKit
+     runtime architecture.
+
+4. **Regression gates**
+   - Extend packaging smoke coverage so the release script must contain
+     `Relay Agent.exe`, `README-FIRST.html`, and `relay-agent`.
+   - Keep `pnpm check` as the acceptance gate before packaging.
+
+5. **Acceptance criteria**
+   - The Windows portable zip contains `Relay Agent.exe` at the root.
+   - The Linux portable tarball contains `relay-agent` at the root.
+   - First-run docs describe one primary launcher and treat HTML as help.
+   - Release artifacts are versioned and published with checksums, inventory,
+     and SBOM.
 
 ### 2026-05-18 Portable-First Distribution Plan
 

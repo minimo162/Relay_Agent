@@ -81,7 +81,10 @@ for (const needle of ["PdfDocument.Open", "ExtractedDocumentPage", "PageCount", 
 
 const packageScript = read("scripts/release/package-sidecar.mjs");
 for (const needle of [
+  "Relay Agent.exe",
   "Relay Agent.html",
+  "README-FIRST.html",
+  "relay-agent",
   "Relay Agent を起動.cmd",
   "portableFrontDoorHtml",
   "PDFを確認する",

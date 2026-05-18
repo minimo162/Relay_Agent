@@ -33,6 +33,63 @@
 
 ## Milestone Log
 
+### 2026-05-19 Portable One-Click First-Run
+
+This slice keeps the browser Workbench + .NET sidecar architecture unchanged,
+but makes the portable package read like a normal app folder: one obvious
+launcher, with HTML retained only as help.
+
+Change:
+
+- Added the portable one-click first-run plan to `PLANS.md` and completed the
+  executable `PORTABLEENTRY*` queue in `tasks.md`.
+- Updated README packaging guidance so Windows users are directed to
+  `Relay Agent.exe`, Linux users are directed to `./relay-agent`, and
+  `README-FIRST.html` is documented as help rather than as the launch path.
+- Updated portable packaging so the Windows root launcher is renamed to
+  `Relay Agent.exe` and the Linux root launcher is renamed to `relay-agent`.
+  Compatibility command/shell scripts remain, but point at the new primary
+  launchers.
+- Added `README-FIRST.html` while keeping `Relay Agent.html` as a compatibility
+  help alias.
+- Updated the optional Windows NSIS installer to create shortcuts and finish
+  launch against `Relay Agent.exe`, and to stop the renamed installed launcher
+  during upgrades.
+- Extended packaging smoke coverage so `pnpm check` guards the primary
+  portable launcher names and first-run help file.
+- Bumped Workbench, sidecar, and launcher versions to `0.3.20`.
+
+Verification commands run locally:
+
+```bash
+pnpm release:icon-smoke
+pnpm agent:pdf-review-ux-smoke
+pnpm check
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.20-win-x64.zip dist/relay-agent-0.3.20-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.20-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.20-sha256.txt
+```
+
+Result:
+
+- Targeted packaging smokes passed.
+- Full `pnpm check` passed, including hard-cut guard, Workbench build,
+  sidecar build/smokes, Copilot CDP manager smoke, workspace picker smoke,
+  AG-UI client-tool/replay smokes, DCI smokes, Office/PDF read smokes,
+  OfficeCLI registry smoke, sidecar security smoke, and release inventory/SBOM
+  generation.
+- Windows portable packaging passed and produced
+  `dist/relay-agent-0.3.20-win-x64.zip` at 85 MiB.
+- Linux portable packaging passed and produced
+  `dist/relay-agent-0.3.20-linux-x64.tar.gz` at 76 MiB.
+- Windows installer packaging passed and produced
+  `dist/installer/Relay.Agent-0.3.20-win-x64-setup.exe` at 88 MiB.
+- Package inspection confirmed the Windows root contains `Relay Agent.exe` and
+  not `Relay.Launcher.exe`, and the Linux root contains `relay-agent` and not
+  `Relay.Launcher`.
+
 ### 2026-05-19 Standard Chatbot UX And Tool Harness Alignment
 
 This slice keeps Relay on the browser Workbench + .NET sidecar path, but makes

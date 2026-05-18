@@ -91,7 +91,7 @@ Section "Relay Agent" SecMain
   SetOutPath "$1"
   File /r "${source}\\*.*"
   CreateDirectory "$SMPROGRAMS\\Relay Agent"
-  CreateShortcut "$SMPROGRAMS\\Relay Agent\\Relay Agent.lnk" "$1\\Relay.Launcher.exe" "" "$1\\relay-assets\\relay-agent.ico"
+  CreateShortcut "$SMPROGRAMS\\Relay Agent\\Relay Agent.lnk" "$1\\Relay Agent.exe" "" "$1\\relay-assets\\relay-agent.ico"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
   WriteRegStr HKCU "Software\\Relay Agent" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\\Relay Agent" "AppDir" "$1"
@@ -111,7 +111,7 @@ Section "Desktop shortcut" SecDesktop
   \${If} $1 == ""
     StrCpy $1 "$INSTDIR"
   \${EndIf}
-  CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$1\\Relay.Launcher.exe" "" "$1\\relay-assets\\relay-agent.ico"
+  CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$1\\Relay Agent.exe" "" "$1\\relay-assets\\relay-agent.ico"
 SectionEnd
 
 Function LaunchRelayAgent
@@ -120,7 +120,7 @@ Function LaunchRelayAgent
   \${If} $1 == ""
     StrCpy $1 "$INSTDIR"
   \${EndIf}
-  ExecShell "open" "$1\\Relay.Launcher.exe"
+  ExecShell "open" "$1\\Relay Agent.exe"
 FunctionEnd
 
 Function StopRunningRelayAgent
@@ -129,7 +129,7 @@ Function StopRunningRelayAgent
   ; upgrades from older user-scope installers can retire old sidecars when
   ; possible. This is best-effort because the package copy no longer overwrites
   ; the running executable.
-  nsExec::ExecToStack \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'SilentlyContinue'; $$roots = @('$INSTDIR', '$LOCALAPPDATA\\Programs\\Relay Agent', '$LOCALAPPDATA\\Programs\\RelayAgent') | Where-Object { $$_ }; Get-Process -Name 'Relay.Sidecar','Relay.Launcher' -ErrorAction SilentlyContinue | Where-Object { $$processPath = $$_.Path; $$processPath -and ($$roots | Where-Object { $$processPath.StartsWith($$_, [System.StringComparison]::OrdinalIgnoreCase) }) } | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; exit 0 }"\`
+  nsExec::ExecToStack \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'SilentlyContinue'; $$roots = @('$INSTDIR', '$LOCALAPPDATA\\Programs\\Relay Agent', '$LOCALAPPDATA\\Programs\\RelayAgent') | Where-Object { $$_ }; Get-Process -Name 'Relay.Sidecar','Relay.Launcher','Relay Agent' -ErrorAction SilentlyContinue | Where-Object { $$processPath = $$_.Path; $$processPath -and ($$roots | Where-Object { $$processPath.StartsWith($$_, [System.StringComparison]::OrdinalIgnoreCase) }) } | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; exit 0 }"\`
   Pop $0
   Pop $1
 FunctionEnd
@@ -147,7 +147,7 @@ SectionEnd
 
 Function un.StopRunningRelayAgent
   DetailPrint "Stopping any running Relay Agent processes from this user install..."
-  nsExec::ExecToStack \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'SilentlyContinue'; $$roots = @('$INSTDIR', '$LOCALAPPDATA\\Programs\\Relay Agent', '$LOCALAPPDATA\\Programs\\RelayAgent') | Where-Object { $$_ }; Get-Process -Name 'Relay.Sidecar','Relay.Launcher' -ErrorAction SilentlyContinue | Where-Object { $$processPath = $$_.Path; $$processPath -and ($$roots | Where-Object { $$processPath.StartsWith($$_, [System.StringComparison]::OrdinalIgnoreCase) }) } | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; exit 0 }"\`
+  nsExec::ExecToStack \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { $$ErrorActionPreference = 'SilentlyContinue'; $$roots = @('$INSTDIR', '$LOCALAPPDATA\\Programs\\Relay Agent', '$LOCALAPPDATA\\Programs\\RelayAgent') | Where-Object { $$_ }; Get-Process -Name 'Relay.Sidecar','Relay.Launcher','Relay Agent' -ErrorAction SilentlyContinue | Where-Object { $$processPath = $$_.Path; $$processPath -and ($$roots | Where-Object { $$processPath.StartsWith($$_, [System.StringComparison]::OrdinalIgnoreCase) }) } | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; exit 0 }"\`
   Pop $0
   Pop $1
 FunctionEnd

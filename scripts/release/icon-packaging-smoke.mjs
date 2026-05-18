@@ -25,6 +25,9 @@ assert(launcherProject.includes("<OutputType>WinExe</OutputType>"), "launcher mu
 const packageScript = readFileSync(resolve(root, "scripts/release/package-sidecar.mjs"), "utf8");
 assert(packageScript.includes("relay-assets"), "package-sidecar must copy relay-assets");
 assert(packageScript.includes("relay-agent.ico"), "package-sidecar must copy relay-agent.ico");
+assert(packageScript.includes("Relay Agent.exe"), "portable Windows package must expose Relay Agent.exe as the primary launcher");
+assert(packageScript.includes("README-FIRST.html"), "portable package must include first-run help as README-FIRST.html");
+assert(packageScript.includes("relay-agent"), "portable Linux package must expose relay-agent as the primary launcher");
 
 const nsisScript = readFileSync(resolve(root, "scripts/release/build-windows-installer.mjs"), "utf8");
 for (const needle of [
@@ -38,7 +41,8 @@ for (const needle of [
   "relay-assets\\\\relay-agent.ico",
   "StopRunningRelayAgent",
   "Function LaunchRelayAgent",
-  "ExecShell \"open\" \"$1\\\\Relay.Launcher.exe\"",
+  "ExecShell \"open\" \"$1\\\\Relay Agent.exe\"",
+  "Get-Process -Name 'Relay.Sidecar','Relay.Launcher','Relay Agent'",
   "app-${version}-$0",
   "WriteRegStr HKCU \"Software\\\\Relay Agent\" \"AppDir\" \"$1\"",
   "$LOCALAPPDATA\\\\Programs\\\\Relay Agent",

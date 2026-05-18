@@ -9,6 +9,7 @@ import {
   rmSync,
   chmodSync,
   writeFileSync,
+  renameSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -59,6 +60,13 @@ run("dotnet", [
   output,
 ]);
 
+if (rid === "win-x64") {
+  renameSync(join(output, "Relay.Launcher.exe"), join(output, "Relay Agent.exe"));
+} else if (rid === "linux-x64") {
+  renameSync(join(output, "Relay.Launcher"), join(output, "relay-agent"));
+  chmodSync(join(output, "relay-agent"), 0o755);
+}
+
 copyIfExists("LICENSE", join(output, "LICENSE"));
 copyIfExists("assets/app-icon/relay-agent.ico", join(output, "relay-assets", "relay-agent.ico"));
 copyIfExists("assets/app-icon/relay-agent.svg", join(output, "relay-assets", "relay-agent.svg"));
@@ -99,7 +107,7 @@ writeFileSync(
     "",
     "Included runtime components:",
     "- Relay.Sidecar",
-    "- Relay.Launcher",
+    rid === "win-x64" ? "- Relay Agent.exe launcher" : "- relay-agent launcher",
     "- Workbench static assets",
     "- Relay app icon under relay-assets",
     "- ripgrep under relay-tools/ripgrep",
@@ -123,15 +131,20 @@ writeFileSync(
     "",
     "How to start:",
     rid === "win-x64"
-      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Start Relay Agent.cmd or Relay.Launcher.exe.\n3. Your browser opens the local Workbench automatically."
-      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./start-relay-agent.sh or ./Relay.Launcher.\n3. Your browser opens the local Workbench automatically.",
+      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Relay Agent.exe.\n3. Your browser opens the local Workbench automatically."
+      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./relay-agent.\n3. Your browser opens the local Workbench automatically.",
     "",
     "No administrator rights are required.",
     "Relay stores runtime data under the current user's local application data directory, not in the selected work folder.",
     "Keep this folder intact; relay-tools and wwwroot are required by the launcher.",
-    "For first-time guidance, open Relay Agent.html in this folder.",
+    "For first-time guidance, open README-FIRST.html in this folder.",
     "",
   ].join("\n"),
+);
+
+writeFileSync(
+  join(output, "README-FIRST.html"),
+  portableFrontDoorHtml(rid, workbenchPackage.version),
 );
 
 writeFileSync(
@@ -144,7 +157,7 @@ if (rid === "win-x64") {
     "@echo off",
     "setlocal",
     "cd /d \"%~dp0\"",
-    "start \"Relay Agent\" \"%~dp0Relay.Launcher.exe\"",
+    "start \"Relay Agent\" \"%~dp0Relay Agent.exe\"",
     "",
   ].join("\r\n");
   writeFileSync(join(output, "Start Relay Agent.cmd"), windowsLauncher);
@@ -157,7 +170,7 @@ if (rid === "win-x64") {
       "#!/usr/bin/env sh",
       "set -eu",
       "cd \"$(dirname \"$0\")\"",
-      "exec ./Relay.Launcher \"$@\"",
+      "exec ./relay-agent \"$@\"",
       "",
     ].join("\n"),
   );
@@ -205,11 +218,11 @@ function relativePath(path) {
 }
 
 function portableFrontDoorHtml(rid, version) {
-  const launchName = rid === "win-x64" ? "Relay Agent を起動.cmd" : "start-relay-agent.sh";
-  const secondaryLaunch = rid === "win-x64" ? "Start Relay Agent.cmd / Relay.Launcher.exe" : "Relay.Launcher";
+  const launchName = rid === "win-x64" ? "Relay Agent.exe" : "relay-agent";
+  const secondaryLaunch = rid === "win-x64" ? "Start Relay Agent.cmd" : "start-relay-agent.sh";
   const platformHint = rid === "win-x64"
-    ? "Windowsでは、同じフォルダの起動ファイルをダブルクリックします。"
-    : "Linuxでは、ターミナルから ./start-relay-agent.sh を実行します。";
+    ? "Windowsでは、この1つだけをダブルクリックします。"
+    : "Linuxでは、ターミナルから ./relay-agent を実行します。";
   return `<!doctype html>
 <html lang="ja">
 <head>
@@ -341,7 +354,7 @@ function portableFrontDoorHtml(rid, version) {
     <header>
       <span class="mark" aria-hidden="true">R</span>
       <h1>Relay Agent Portable</h1>
-      <p>インストールせずに使える、M365 Copilot連携のローカル作業ワークベンチです。</p>
+      <p>インストールせずに使える、M365 Copilot連携のローカル作業ワークベンチです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
     </header>
     <section class="grid" aria-labelledby="start-title">
       <h2 id="start-title">はじめかた</h2>
@@ -350,7 +363,7 @@ function portableFrontDoorHtml(rid, version) {
         <li><span class="num">2</span><span>ブラウザでWorkbenchが開いたら、作業フォルダを選択します。</span></li>
         <li><span class="num">3</span><span>チャットに依頼を入力します。PDF確認、ファイル検索、Office編集、コード作成を同じ画面で扱えます。</span></li>
       </ol>
-      <p>別の起動方法: ${escapeHtml(secondaryLaunch)}。Relayのデータはユーザーのローカルアプリデータに保存され、選択した共有フォルダにはキャッシュを書き込みません。</p>
+      <p>通常は ${escapeHtml(launchName)} だけを使います。別の起動方法: ${escapeHtml(secondaryLaunch)}。Relayのデータはユーザーのローカルアプリデータに保存され、選択した共有フォルダにはキャッシュを書き込みません。</p>
     </section>
     <section class="grid" aria-labelledby="pdf-title" style="margin-top: 18px;">
       <h2 id="pdf-title">PDFを確認する</h2>
