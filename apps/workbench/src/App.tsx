@@ -2,10 +2,13 @@ import {
   AlertCircle,
   CheckCircle2,
   Clipboard,
+  FolderOpen,
   RotateCw,
+  Send,
   Server,
+  Square,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { StatusResponse } from "./types";
 
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
@@ -27,6 +30,41 @@ type BridgeHealthResponse = {
   command?: string | null;
 };
 
+type BridgeSessionResponse = {
+  schemaVersion: "RelayCodexAppServerBridgeSession.v1";
+  sessionId: string;
+  appServerThreadId: string;
+  workArea?: string | null;
+};
+
+type BridgeTurnResponse = {
+  schemaVersion: "RelayCodexAppServerBridgeTurn.v1";
+  turnId: string;
+  sessionId: string;
+  appServerTurnId: string;
+  eventUrl: string;
+};
+
+type WorkspacePickResponse = {
+  path?: string | null;
+  displayPath?: string | null;
+  exists?: boolean;
+  cancelled?: boolean;
+  error?: string | null;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+};
+
+type ActivityItem = {
+  id: string;
+  event: string;
+  summary: string;
+};
+
 const initialReadiness: ReadinessState = {
   ready: false,
   label: "Checking",
@@ -37,9 +75,17 @@ const initialReadiness: ReadinessState = {
 export function App() {
   const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
   const [bridge, setBridge] = useState<BridgeHealthResponse | null>(null);
+  const [workspace, setWorkspace] = useState("");
+  const [session, setSession] = useState<BridgeSessionResponse | null>(null);
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [running, setRunning] = useState(false);
+  const [currentTurn, setCurrentTurn] = useState<BridgeTurnResponse | null>(null);
   const [copied, setCopied] = useState("");
   const [error, setError] = useState("");
   const [supportBusy, setSupportBusy] = useState(false);
+  const streamAbort = useRef<AbortController | null>(null);
 
   const api = useCallback((path: string): string => {
     const url = new URL(path, window.location.origin);
@@ -139,6 +185,163 @@ export function App() {
     window.setTimeout(() => setCopied(""), 1800);
   }, []);
 
+  const pickWorkspace = useCallback(async () => {
+    setError("");
+    try {
+      const response = await fetch(api("/api/workspace/pick"), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ currentPath: workspace || null }),
+      });
+      if (!response.ok) throw new Error(`Workspace picker failed: ${response.status}`);
+      const result = (await response.json()) as WorkspacePickResponse;
+      if (!result.cancelled && result.path) {
+        setWorkspace(result.path);
+        setSession(null);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [api, authHeaders, workspace]);
+
+  const ensureSession = useCallback(async (): Promise<BridgeSessionResponse> => {
+    if (session && (session.workArea ?? "") === (workspace || "")) {
+      return session;
+    }
+    const response = await fetch(api("/bridge/sessions"), {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        workArea: workspace || null,
+        ephemeral: false,
+      }),
+    });
+    if (!response.ok) throw new Error(`Bridge session failed: ${response.status} ${await response.text()}`);
+    const nextSession = (await response.json()) as BridgeSessionResponse;
+    setSession(nextSession);
+    return nextSession;
+  }, [api, authHeaders, session, workspace]);
+
+  const handleSseBlock = useCallback((block: string, assistantMessageId: string) => {
+    const event = block.match(/^event:\s*(.+)$/m)?.[1]?.trim() ?? "message";
+    const dataText = block
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    let payload: unknown = null;
+    try {
+      payload = dataText ? JSON.parse(dataText) : null;
+    } catch {
+      payload = dataText;
+    }
+    const summary = summarizeBridgeEvent(event, payload);
+    setActivity((items) => [...items.slice(-39), { id: crypto.randomUUID(), event, summary }]);
+    const delta = extractTextDelta(payload);
+    if (delta && event.toLowerCase().includes("delta")) {
+      setMessages((items) => items.map((item) =>
+        item.id === assistantMessageId ? { ...item, text: item.text + delta } : item,
+      ));
+    } else if (delta) {
+      setMessages((items) => items.map((item) =>
+        item.id === assistantMessageId && !item.text ? { ...item, text: delta } : item,
+      ));
+    }
+  }, []);
+
+  const streamTurnEvents = useCallback(async (
+    turn: BridgeTurnResponse,
+    assistantMessageId: string,
+    signal: AbortSignal,
+  ) => {
+    const response = await fetch(api(turn.eventUrl), {
+      headers: authHeaders(),
+      signal,
+    });
+    if (!response.ok) throw new Error(`Bridge event stream failed: ${response.status} ${await response.text()}`);
+    if (!response.body) throw new Error("Bridge event stream did not return a readable body.");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        handleSseBlock(part, assistantMessageId);
+      }
+    }
+    if (buffer.trim()) {
+      handleSseBlock(buffer, assistantMessageId);
+    }
+  }, [api, authHeaders, handleSseBlock]);
+
+  const sendTurn = useCallback(async () => {
+    const prompt = input.trim();
+    if (!prompt || running) return;
+    setError("");
+    setInput("");
+    setRunning(true);
+    setActivity([]);
+    const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text: prompt };
+    const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", text: "" };
+    setMessages((items) => [...items, userMessage, assistantMessage]);
+
+    const abort = new AbortController();
+    streamAbort.current = abort;
+    try {
+      const activeSession = await ensureSession();
+      const turnResponse = await fetch(api(`/bridge/sessions/${activeSession.sessionId}/turns`), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          input: prompt,
+          workArea: workspace || null,
+          attachmentIds: [],
+        }),
+        signal: abort.signal,
+      });
+      if (!turnResponse.ok) throw new Error(`Bridge turn failed: ${turnResponse.status} ${await turnResponse.text()}`);
+      const turn = (await turnResponse.json()) as BridgeTurnResponse;
+      setCurrentTurn(turn);
+      await streamTurnEvents(turn, assistantMessage.id, abort.signal);
+    } catch (reason) {
+      if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+        setMessages((items) => items.map((item) =>
+          item.id === assistantMessage.id ? { ...item, text: `実行できませんでした: ${message}` } : item,
+        ));
+      }
+    } finally {
+      streamAbort.current = null;
+      setCurrentTurn(null);
+      setRunning(false);
+      void refreshStatus().catch(() => undefined);
+    }
+  }, [api, authHeaders, ensureSession, input, refreshStatus, running, streamTurnEvents, workspace]);
+
+  const stopTurn = useCallback(async () => {
+    streamAbort.current?.abort();
+    if (!currentTurn) {
+      setRunning(false);
+      return;
+    }
+    try {
+      await fetch(api(`/bridge/turns/${currentTurn.turnId}/cancel`), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+      });
+    } catch {
+      // Cancellation is best-effort from the UI; the bridge records process state.
+    } finally {
+      setRunning(false);
+    }
+  }, [api, authHeaders, currentTurn]);
+
   const downloadSupportBundle = useCallback(async () => {
     setSupportBusy(true);
     setError("");
@@ -186,98 +389,125 @@ export function App() {
         </button>
       </header>
 
-      <section className="hero-card" aria-labelledby="bridge-title">
-        <div className="hero-copy">
-          <p className="eyebrow">Bundled app-server path</p>
-          <h2 id="bridge-title">Copilotを頭脳にして、Codex app server がローカル作業を進めます</h2>
-          <p>
-            WorkbenchはRelayのブラウザブリッジへ接続します。ブリッジはCodex app serverを起動し、
-            Relay Coreの <code>/v1</code> provider 経由でM365 Copilotに推論を渡します。
-          </p>
+      <section className="hero-card chat-card" aria-labelledby="bridge-title">
+        <div className="panel-heading">
+          <div className="hero-copy">
+            <p className="eyebrow">Bundled app-server path</p>
+            <h2 id="bridge-title">Copilotを頭脳にして、Codex app server がローカル作業を進めます</h2>
+            <p>
+              WorkbenchはRelayの <code>/bridge/*</code> にだけ接続します。Codex app server が会話とtool loopを管理し、
+              Relay Coreの <code>/v1/chat/completions</code> provider 経由でM365 Copilotに推論を渡します。
+            </p>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => void refreshStatus()}>
+            <RotateCw size={16} aria-hidden="true" />
+            更新
+          </button>
         </div>
 
-        <div className="quick-steps" aria-label="runtime chain">
-          <article>
-            <strong>1. Workbench</strong>
-            <span>ブラウザUIは <code>/bridge/*</code> を使い、Copilot CDPへ直接触れません。</span>
-          </article>
-          <article>
-            <strong>2. Codex app server</strong>
-            <span>session、turn、item、event stream、tool loop を担当します。</span>
-          </article>
-          <article>
-            <strong>3. Relay provider</strong>
-            <span><code>/v1/chat/completions</code> は app server 用の低レベルproviderです。</span>
-          </article>
+        <div className="workspace-row">
+          <div>
+            <span className="field-label">作業フォルダ</span>
+            <strong>{workspace || "未選択"}</strong>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => void pickWorkspace()}>
+            <FolderOpen size={16} aria-hidden="true" />
+            フォルダを選択
+          </button>
+        </div>
+
+        <div className="message-list" aria-live="polite">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <strong>通常のチャットとして指示できます。</strong>
+              <span>例: このフォルダから関連資料を探して / Book2.xlsx のA1を赤くして / 小さなHTMLアプリを作って</span>
+            </div>
+          ) : messages.map((message) => (
+            <article className={`message ${message.role}`} key={message.id}>
+              <span>{message.role === "user" ? "You" : "Assistant"}</span>
+              <p>{message.text || (message.role === "assistant" && running ? "応答を待っています..." : "")}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="composer">
+          {error ? <p className="error" role="alert">{error}</p> : null}
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void sendTurn();
+              }
+            }}
+            placeholder="ここに指示を入力します"
+            aria-label="Relay Agent instruction"
+            disabled={running}
+          />
+          <div className="actions">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!running && !input.trim()}
+              onClick={() => running ? void stopTurn() : void sendTurn()}
+            >
+              {running ? <Square size={16} aria-hidden="true" /> : <Send size={16} aria-hidden="true" />}
+              {running ? "停止" : "送信"}
+            </button>
+            <span className="hint">Ctrl/⌘ + Enter でも送信できます。</span>
+          </div>
         </div>
       </section>
 
       <section className="console-grid" aria-label="Relay bridge console">
-        <section className="panel test-panel" aria-labelledby="bridge-health-title">
+        <section className="panel" aria-labelledby="activity-title">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Activity</p>
+              <h2 id="activity-title">実行状況</h2>
+            </div>
+            <Server size={22} aria-hidden="true" />
+          </div>
+          <div className="activity-list" aria-live="polite">
+            {activity.length === 0 ? (
+              <p>送信すると、Codex app server のturnとtoolイベントがここに表示されます。</p>
+            ) : activity.map((item) => (
+              <article key={item.id}>
+                <strong>{item.event}</strong>
+                <span>{item.summary}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel" aria-labelledby="bridge-health-title">
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Bridge</p>
               <h2 id="bridge-health-title">Codex app-server bridge</h2>
-            </div>
-            <button className="primary-button" type="button" onClick={() => void refreshStatus()}>
-              <RotateCw size={16} aria-hidden="true" />
-              更新
-            </button>
-          </div>
-          <div className="status-region" aria-live="polite">
-            {error ? <p className="error" role="alert">{error}</p> : null}
-            <p>{readiness.detail}</p>
-            {bridge ? (
-              <pre className="answer">{JSON.stringify(bridge, null, 2)}</pre>
-            ) : (
-              <p>Bridge health を取得しています。</p>
-            )}
-          </div>
-        </section>
-
-        <section className="panel" aria-labelledby="bridge-endpoint-title">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Bridge endpoints</p>
-              <h2 id="bridge-endpoint-title">Workbench が使う経路</h2>
             </div>
             <button className="secondary-button" type="button" onClick={() => void copyText("base", window.location.origin)}>
               <Clipboard size={16} aria-hidden="true" />
               {copied === "base" ? "コピー済み" : "Base URL"}
             </button>
           </div>
-          <dl className="endpoint-list">
-            <div><dt>Health</dt><dd><code>GET /bridge/health</code></dd></div>
-            <div><dt>Session</dt><dd><code>POST /bridge/sessions</code></dd></div>
-            <div><dt>Turn</dt><dd><code>POST /bridge/sessions/{"{sessionId}"}/turns</code></dd></div>
-            <div><dt>Events</dt><dd><code>GET /bridge/turns/{"{turnId}"}/events</code></dd></div>
-            <div><dt>Provider</dt><dd><code>POST /v1/chat/completions</code></dd></div>
-          </dl>
-        </section>
-      </section>
-
-      <section className="panel starter-panel" aria-labelledby="next-title">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Next runtime gate</p>
-            <h2 id="next-title">同梱前に必要な確認</h2>
+          <div className="status-region" aria-live="polite">
+            <p>{readiness.detail}</p>
+            {bridge ? (
+              <p className="bridge-state">
+                State: <strong>{bridge.state}</strong>{bridge.command ? ` / ${bridge.command}` : ""}
+              </p>
+            ) : null}
+            <dl className="endpoint-list">
+              <div><dt>Health</dt><dd><code>GET /bridge/health</code></dd></div>
+              <div><dt>Session</dt><dd><code>POST /bridge/sessions</code></dd></div>
+              <div><dt>Turn</dt><dd><code>POST /bridge/sessions/{"{sessionId}"}/turns</code></dd></div>
+              <div><dt>Events</dt><dd><code>GET /bridge/turns/{"{turnId}"}/events</code></dd></div>
+              <div><dt>Provider</dt><dd><code>POST /v1/chat/completions</code></dd></div>
+            </dl>
           </div>
-          <Server size={22} aria-hidden="true" />
-        </div>
-        <div className="quick-steps" aria-label="bridge gaps">
-          <article>
-            <strong>Artifact</strong>
-            <span>app-server binary、schema、license、hashをpinします。</span>
-          </article>
-          <article>
-            <strong>Provider</strong>
-            <span>app server がRelayの <code>m365-copilot</code> providerを使えることを検証します。</span>
-          </article>
-          <article>
-            <strong>Tools</strong>
-            <span>local file、Office、diff、approvalを app-server tool loop に接続します。</span>
-          </article>
-        </div>
+        </section>
       </section>
 
       <details className="support">
@@ -300,4 +530,42 @@ function loadClientId(): string {
   const next = crypto.randomUUID();
   localStorage.setItem(sessionStorageKey, next);
   return next;
+}
+
+function summarizeBridgeEvent(event: string, payload: unknown): string {
+  const text = extractTextDelta(payload);
+  if (text) return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  if (typeof payload === "object" && payload !== null) {
+    const params = "params" in payload ? (payload as { params?: unknown }).params : payload;
+    if (typeof params === "object" && params !== null) {
+      const item = "item" in params ? (params as { item?: unknown }).item : null;
+      if (typeof item === "object" && item !== null && "type" in item) {
+        return String((item as { type?: unknown }).type);
+      }
+      if ("turn" in params) return "turn state updated";
+    }
+  }
+  return event;
+}
+
+function extractTextDelta(payload: unknown): string {
+  if (typeof payload === "string") return "";
+  if (typeof payload !== "object" || payload === null) return "";
+  const root = payload as Record<string, unknown>;
+  const params = (root.params && typeof root.params === "object")
+    ? root.params as Record<string, unknown>
+    : root;
+  for (const key of ["delta", "text", "content"]) {
+    const value = params[key];
+    if (typeof value === "string") return value;
+  }
+  const item = params.item;
+  if (typeof item === "object" && item !== null) {
+    const itemRecord = item as Record<string, unknown>;
+    for (const key of ["text", "content"]) {
+      const value = itemRecord[key];
+      if (typeof value === "string") return value;
+    }
+  }
+  return "";
 }

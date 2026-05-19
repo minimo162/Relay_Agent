@@ -52,6 +52,7 @@ for (const forbidden of [
 
 assert(fileExists("apps/sidecar/Relay.Sidecar.csproj"), "missing .NET sidecar project");
 assert(fileExists("apps/workbench/package.json"), "missing browser client package");
+assert(fileExists("tools/codex-app-server/manifest.json"), "missing pinned Codex app-server artifact manifest");
 assert(read("PLANS.md").includes("No transitional fallback architecture"), "PLANS.md must retain hard-cutover rule");
 assert(read("PLANS.md").includes("bundled Codex app-server mediation path"), "PLANS.md must describe the bundled app-server architecture");
 assert(read("README.md").includes("Codex app-server bridge"), "README.md must describe the Codex app-server bridge architecture");
@@ -85,6 +86,11 @@ assert(sidecarProgram.includes("/bridge/turns/{turnId}/events"), "Sidecar must e
 assert(sidecarProgram.includes("/v1/models"), "Sidecar must expose the OpenAI-compatible models endpoint");
 assert(sidecarProgram.includes("/v1/chat/completions"), "Sidecar must expose the Copilot provider endpoint");
 assert(activeScriptText.includes("sidecar:app-server-bridge-smoke"), "pnpm check must include the app-server bridge smoke");
+assert(activeScriptText.includes("sidecar:app-server-artifact-smoke"), "pnpm check must include the app-server artifact smoke");
+assert(scripts["sidecar:publish:linux"]?.includes("appserver:fetch:linux"), "linux publish must fetch the pinned app server");
+assert(scripts["sidecar:publish:windows"]?.includes("appserver:fetch:windows"), "windows publish must fetch the pinned app server");
+assert(read("scripts/release/package-sidecar.mjs").includes("copyAppServerBundle"), "release package must copy the app-server bundle");
+assert(read("scripts/release/collect-inventory.mjs").includes("tools/codex-app-server"), "release inventory must include the app-server artifact");
 assert(!sidecarProgram.includes("/v1/pdf/"), "Sidecar must not expose retired PDF review endpoints");
 assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the legacy run REST product path");
 assert(!sidecarSource.includes("Run" + "Manager"), "Sidecar must not retain the legacy RunManager runtime");

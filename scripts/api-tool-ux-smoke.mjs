@@ -16,7 +16,10 @@ for (const needle of [
   "/bridge/sessions",
   "/bridge/turns/",
   "/v1/chat/completions",
-  "Next runtime gate",
+  "message-list",
+  "フォルダを選択",
+  "sendTurn",
+  "stopTurn",
   "サポート情報を保存",
 ]) {
   assert(app.includes(needle), `bridge Workbench is missing: ${needle}`);
@@ -43,10 +46,13 @@ for (const forbidden of [
 
 for (const needle of [
   ".hero-card",
-  ".quick-steps",
+  ".chat-card",
+  ".message-list",
+  ".workspace-row",
+  ".composer",
+  ".activity-list",
   ".console-grid",
   ".endpoint-list",
-  ".code-sample",
   ".support",
 ]) {
   assert(styles.includes(needle), `Bridge Workbench styling is missing: ${needle}`);

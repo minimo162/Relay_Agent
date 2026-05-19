@@ -5,6 +5,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -24,9 +25,11 @@ const toolSources = {
   "win-x64": {
     ripgrep: "tools/ripgrep/win-x64/rg.exe",
     officecli: "tools/officecli/win-x64/officecli.exe",
+    appServer: "tools/codex-app-server/win-x64",
   },
   "linux-x64": {
     ripgrep: "tools/ripgrep/linux-x64/rg",
+    appServer: "tools/codex-app-server/linux-x64",
   },
 };
 
@@ -94,6 +97,12 @@ writeFileSync(
       ripgrep: "app/relay-core/relay-tools/ripgrep",
       officecli: rid === "win-x64" ? "app/relay-core/relay-tools/officecli" : "optional",
     },
+    appServer: {
+      command: rid === "win-x64" ? "app/app-server/codex.exe" : "app/app-server/codex",
+      args: ["app-server"],
+      home: "user-local",
+      provider: "http://127.0.0.1:<port>/v1",
+    },
     assets: {
       appIcon: "app/relay-assets/relay-agent.ico",
     },
@@ -104,6 +113,7 @@ copyTool(sources.ripgrep, join(coreRoot, "relay-tools/ripgrep", rid.startsWith("
 if (sources.officecli) {
   copyTool(sources.officecli, join(coreRoot, "relay-tools/officecli/officecli.exe"), true);
 }
+copyAppServerBundle(sources.appServer, join(appRoot, "app-server"));
 
 writeFileSync(
   join(appRoot, "RELEASE_CONTENTS.txt"),
@@ -121,7 +131,7 @@ writeFileSync(
     "- relay-assets",
     "- relay-tools/ripgrep",
     rid === "win-x64" ? "- relay-tools/officecli" : "- OfficeCLI is optional on this platform",
-    "- app-server bundle is enabled only after BRIDGEGAP artifact, license, schema, and smoke gates pass",
+    "- app-server",
     "",
     "Excluded active runtime families:",
     "- AionUi",
@@ -188,6 +198,36 @@ function copyTool(source, destination, required) {
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(fullSource, destination);
   console.log(`package-sidecar: bundled ${basename(destination)} from ${source}`);
+}
+
+function copyAppServerBundle(source, destination) {
+  const fullSource = resolve(root, source);
+  if (!existsSync(fullSource)) {
+    throw new Error(`required Codex app-server source was not found: ${source}. Run pnpm appserver:fetch:${rid === "win-x64" ? "windows" : "linux"} first.`);
+  }
+  const executableName = rid.startsWith("win") ? "codex.exe" : "codex";
+  if (!existsSync(join(fullSource, executableName))) {
+    throw new Error(`Codex app-server executable is missing from ${source}`);
+  }
+  rmSync(destination, { recursive: true, force: true });
+  copyDirectory(fullSource, destination);
+  if (!rid.startsWith("win")) {
+    chmodSync(join(destination, executableName), 0o755);
+  }
+  console.log(`package-sidecar: bundled Codex app-server from ${source}`);
+}
+
+function copyDirectory(source, destination) {
+  mkdirSync(destination, { recursive: true });
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const sourceEntry = join(source, entry.name);
+    const destinationEntry = join(destination, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectory(sourceEntry, destinationEntry);
+    } else if (entry.isFile()) {
+      copyFileSync(sourceEntry, destinationEntry);
+    }
+  }
 }
 
 function run(command, args) {

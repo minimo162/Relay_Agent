@@ -21018,3 +21018,72 @@ Result:
   typecheck/build, sidecar build/smokes, Codex app-server bridge smoke,
   existing DCI/tool smokes, sidecar security smoke, and release inventory/SBOM
   generation.
+
+## 2026-05-20: Codex App-Server Main-Path Materialization Slice
+
+Change:
+
+- Pinned the Codex app-server runtime to `@openai/codex` `0.131.0` in
+  `tools/codex-app-server/manifest.json`.
+- Recorded npm tarballs, SHA-512 SRI integrity, npm shasums, SHA-256 hashes,
+  Apache-2.0 license evidence, platform triples, executable names, and expected
+  `app/app-server` layout for Linux x64 and Windows x64.
+- Added `scripts/release/fetch-codex-app-server.mjs`, which downloads the
+  pinned npm platform artifact, verifies integrity and shasum, materializes the
+  runtime under `tools/codex-app-server/<rid>/`, and writes a generated
+  runtime manifest plus notice file.
+- Updated release packaging so `pnpm sidecar:publish:linux` and
+  `pnpm sidecar:publish:windows` fetch the pinned app server and require it to
+  be present before populating `app/app-server`.
+- Updated release inventory/SBOM generation and hard-cut checks to include the
+  app-server manifest and publish scripts.
+- Updated `CodexAppServerBridgeService` to generate `CODEX_HOME` and
+  `config.toml` under Relay user-local storage. The generated config points the
+  app server to Relay Core's `/v1` provider with model `m365-copilot` and
+  launch-token scoped credentials.
+- Replaced the status-only Bridge Workbench with a normal chat surface over
+  `/bridge/*`: workspace picker, message history, composer, session creation,
+  turn start, SSE event rendering, cancellation, activity log, and collapsed
+  diagnostics.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+node scripts/app-server-artifact-smoke.mjs
+node scripts/check-hard-cut-guard.mjs
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+node scripts/app-server-bridge-smoke.mjs
+node scripts/workbench-standard-chat-smoke.mjs
+pnpm check
+pnpm appserver:fetch:linux
+node scripts/release/package-sidecar.mjs --rid linux-x64
+pnpm release:inventory
+```
+
+Result:
+
+- Workbench typecheck passed.
+- Pinned app-server artifact smoke passed.
+- Hard-cut guard passed with the new app-server manifest, packaging, and
+  inventory requirements.
+- Sidecar Release build passed.
+- Fixture-backed bridge smoke passed after user-local Codex config generation
+  was added.
+- Workbench standard chat smoke passed.
+- Full `pnpm check` passed, including the new app-server artifact smoke,
+  updated Bridge Workbench smokes, sidecar build/smokes, existing DCI/tool
+  smokes, sidecar security smoke, and release inventory/SBOM generation.
+- Linux app-server artifact fetch succeeded and verified SHA-512 SRI, npm
+  shasum, and SHA-256 before materializing `tools/codex-app-server/linux-x64`.
+- Linux sidecar package creation succeeded and populated
+  `dist/relay-agent-linux-x64/app/app-server`.
+- Release inventory/SBOM regenerated after the materialized Linux package.
+
+Remaining gates before release claim:
+
+- Validate the real pinned app server against Relay's mock `/v1` provider.
+- Implement app-server tool-call dispatch for Relay-governed local tools and
+  approval/resume flows.
+- Add attachment staging through the app-server bridge.
+- Run live Copilot E2E through the bundled app-server bridge.

@@ -195,7 +195,7 @@ h2 {
 
 .console-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.62fr);
   gap: 18px;
   margin-top: 18px;
 }
@@ -270,6 +270,112 @@ textarea:focus-visible {
 
 .status-region {
   min-height: 44px;
+}
+
+.chat-card {
+  min-height: 620px;
+}
+
+.workspace-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: var(--surface-soft);
+}
+
+.workspace-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.workspace-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-label,
+.hint,
+.message span,
+.activity-list span,
+.bridge-state {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.message-list {
+  display: grid;
+  align-content: start;
+  min-height: 250px;
+  max-height: 48vh;
+  gap: 12px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 18px;
+  padding: 18px;
+  background: #fcfcfb;
+}
+
+.empty-state {
+  display: grid;
+  gap: 8px;
+  place-self: center;
+  max-width: 520px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty-state strong {
+  color: var(--text);
+}
+
+.message {
+  display: grid;
+  max-width: min(760px, 88%);
+  gap: 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.message.user {
+  justify-self: end;
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border-soft));
+  background: #f6f8fb;
+}
+
+.message.assistant {
+  justify-self: start;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+}
+
+.activity-list {
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.activity-list article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.activity-list strong {
+  color: var(--text);
 }
 
 .error {
@@ -352,7 +458,8 @@ textarea:focus-visible {
   }
 
   .topbar,
-  .panel-heading {
+  .panel-heading,
+  .workspace-row {
     align-items: flex-start;
     flex-direction: column;
   }

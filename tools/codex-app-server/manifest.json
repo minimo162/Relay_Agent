@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "RelayCodexAppServerArtifactManifest.v1",
+  "source": {
+    "name": "@openai/codex",
+    "packageVersion": "0.131.0",
+    "repository": "https://github.com/openai/codex",
+    "packageUrl": "https://www.npmjs.com/package/@openai/codex",
+    "license": "Apache-2.0",
+    "wrapper": {
+      "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.131.0.tgz",
+      "integrity": "sha512-5/fNFAotnPaNSX1jGAAGgWk65HGZupWPnka+DzXdoNzl78RGw0eGpOjpowF+dtPRTEvdwt0U8qoptUjtefitBQ==",
+      "shasum": "9ce635963cd7e5cea32d78e608459a38dac28b93",
+      "sha256": "2d799130988cd512429c05c430fc2015d0308f61cc01d9d742e4cb739c559505"
+    }
+  },
+  "platforms": {
+    "linux-x64": {
+      "npmSpec": "@openai/codex@0.131.0-linux-x64",
+      "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.131.0-linux-x64.tgz",
+      "integrity": "sha512-Fj9P7h3iBgjAQKzoEyUkb1Q8QMVLqaf62UzlL1jYeDhIzbDMI/gaV0tOackIGXPcfguzzORJC1g5pD9SMWqU5g==",
+      "shasum": "f9bf50b62f4979426eb0aa87b4d95f6331358104",
+      "sha256": "8613d5ce77f9bfb20ee283efe4db16ea7eea6d109ab92415220174983256113d",
+      "vendorTriple": "x86_64-unknown-linux-musl",
+      "executable": "codex",
+      "expectedExecutableSource": "vendor/x86_64-unknown-linux-musl/codex/codex",
+      "expectedPackageLayout": "app/app-server/codex",
+      "bundledRipgrepSource": "vendor/x86_64-unknown-linux-musl/path/rg"
+    },
+    "win-x64": {
+      "npmSpec": "@openai/codex@0.131.0-win32-x64",
+      "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.131.0-win32-x64.tgz",
+      "integrity": "sha512-RlIRs0hi6xIaBXWFhiPTPlz+Dfibc3pXrnVXjJtpbeYcNyBOO+SIMMVuQUswpz3RnJpsxA70dQA+05hKYraKhA==",
+      "shasum": "43c62dd9642800847adb015199c8b6e413db3e71",
+      "sha256": "242365344fc6c625f37f059aab414394a0b02030cdf97e68bf0dfa1819c56112",
+      "vendorTriple": "x86_64-pc-windows-msvc",
+      "executable": "codex.exe",
+      "expectedExecutableSource": "vendor/x86_64-pc-windows-msvc/codex/codex.exe",
+      "expectedPackageLayout": "app/app-server/codex.exe",
+      "additionalExecutables": [
+        "vendor/x86_64-pc-windows-msvc/codex/codex-command-runner.exe",
+        "vendor/x86_64-pc-windows-msvc/codex/codex-windows-sandbox-setup.exe"
+      ],
+      "bundledRipgrepSource": "vendor/x86_64-pc-windows-msvc/path/rg.exe"
+    }
+  },
+  "runtime": {
+    "commandArguments": [
+      "app-server"
+    ],
+    "home": "Relay user-local data directory/app-server-home",
+    "config": "Relay user-local data directory/app-server-home/config.toml",
+    "provider": {
+      "model": "m365-copilot",
+      "baseUrl": "http://127.0.0.1:<relay-port>/v1",
+      "credential": "RELAY_CODEX_PROVIDER_TOKEN"
+    }
+  },
+  "releaseRules": [
+    "Release packaging must fail if the selected platform executable is missing.",
+    "Release packaging must copy the selected platform runtime under app/app-server.",
+    "Runtime home, config, cache, and logs must stay under Relay user-local storage.",
+    "Workbench must route normal user turns through /bridge/*, not directly through /v1."
+  ]
+}

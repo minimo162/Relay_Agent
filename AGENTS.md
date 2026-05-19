@@ -22,7 +22,8 @@
   execution, approvals, backups, diffs, logs, support bundles, and user-local
   storage. The bundled app server owns sessions, turns, event streaming,
   transcript continuity, and the agent/tool loop.
-- Current implementation focus is the `BRIDGEGAP*` queue in `PLANS.md`:
+- Current implementation focus is the `BRIDGEMAIN*` queue in `tasks.md`, on
+  top of the broader `BRIDGEGAP*` roadmap in `PLANS.md`:
   artifact pinning, license/schema evidence, provider compatibility,
   user-local app-server home/config, hardened supervisor and stdio JSONL
   binding, browser bridge endpoints, app-server-visible local tool worker,
@@ -42,8 +43,8 @@ decisions, verification runs, and known limitations.
 ## Execution Rules
 
 - Work milestone by milestone.
-- Start new implementation work from the active `BRIDGEGAP*` queue in
-  `PLANS.md` unless a regression proves an older acceptance criterion is
+- Start new implementation work from the active `BRIDGEMAIN*` queue in
+  `tasks.md` unless a regression proves an older acceptance criterion is
   broken.
 - Do not reintroduce AionUi, OpenCode/OpenWork, Tauri, the API-Hub-first HTML
   tool path, generic Workbench modes, or PDF review as active runtime or

@@ -33,6 +33,8 @@ obj/
 **/obj/
 tools/ripgrep/
 tools/officecli/
+tools/codex-app-server/linux-x64/
+tools/codex-app-server/win-x64/
 apps/desktop/src-tauri/gen/schemas/windows-schema.json
 
 # Local signing artifacts

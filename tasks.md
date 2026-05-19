@@ -17,8 +17,10 @@ contains the right early bridge skeleton but still has gaps:
   app-server-visible local tools, attachment staging, approvals, and live E2E
   are still incomplete.
 
-The next active queue is `BRIDGEGAP*`. `AFAGUI*` was a mistaken correction and
-must not be introduced.
+The next active queue is `BRIDGEMAIN*`. It turns the broader `BRIDGEGAP*`
+roadmap into the immediate implementation path for making Codex app server the
+real primary runtime. `AFAGUI*` was a mistaken correction and must not be
+introduced.
 
 ## Active Goal
 
@@ -220,6 +222,322 @@ acceptance criteria have broken.
   superseded API-Hub-first path.
 
 ## Task Queue
+
+### BRIDGEMAIN-01 - Pin And Materialize Codex App Server Runtime
+
+Status: completed
+
+Maps to: `BRIDGEGAP-01`, `BRIDGEGAP-13`
+
+Scope:
+
+- Select the exact upstream Codex app-server artifact or source-build input.
+- Record:
+  - repository/source URL;
+  - commit, tag, or release version;
+  - platform matrix;
+  - build/download command;
+  - expected executable name;
+  - generated protocol schema version;
+  - license and third-party notice files;
+  - sha256 hashes.
+- Add a Relay-owned artifact manifest, for example
+  `tools/codex-app-server/manifest.json`, that release scripts can validate.
+- Add a fetch/build script that can populate the expected portable layout under
+  `app/app-server` during packaging.
+- Keep the fixture app server for deterministic tests, but distinguish it from
+  the pinned production artifact.
+
+Acceptance:
+
+- `docs/IMPLEMENTATION.md` records the artifact decision and license evidence.
+- Release packaging can verify artifact/schema/license/hash evidence.
+- If no redistributable artifact is available, the task must fail with an
+  explicit blocker instead of silently falling back to direct `/v1`.
+
+### BRIDGEMAIN-02 - Validate Real App Server Against Relay Provider
+
+Status: pending
+
+Maps to: `BRIDGEGAP-02`
+
+Scope:
+
+- Start the pinned app server against a mock Relay provider.
+- Verify provider compatibility for:
+  - `GET /v1/models`;
+  - `GET /v1/models/{model}` if required;
+  - `POST /v1/chat/completions`;
+  - `Authorization: Bearer <launch token>`;
+  - model id `m365-copilot`;
+  - normal assistant response;
+  - tool-call response;
+  - tool-result continuation;
+  - invalid model;
+  - provider busy/error;
+  - cancellation if supported.
+- Decide whether the app server requires streaming Chat Completions, a
+  Responses-compatible endpoint, or extra model metadata.
+- If compatibility requires a facade, implement it as an internal provider
+  adapter consumed by the app server only.
+
+Acceptance:
+
+- A deterministic smoke proves the pinned app server can use Relay's mock
+  provider with no OpenAI API key.
+- Any provider mismatch is documented as a provider-adapter task, not worked
+  around by browser/direct `/v1` fallback.
+
+### BRIDGEMAIN-03 - Generate User-Local App Server Home And Config
+
+Status: completed
+
+Maps to: `BRIDGEGAP-03`
+
+Scope:
+
+- Generate app-server home/config under Relay user-local storage on Windows and
+  Linux.
+- Write provider config pointing the app server to Relay Core:
+  - base URL;
+  - launch token or app-server scoped token;
+  - `m365-copilot` model id;
+  - timeout and request id propagation if supported.
+- Prevent unrelated environment OpenAI keys or user shell configuration from
+  overriding Relay's bundled provider path.
+- Add migration/version markers for app-server state.
+- Add cleanup policy for stale sessions, temp files, and exited runtime
+  processes.
+
+Acceptance:
+
+- Config smoke proves generated config targets Relay `/v1` and user-local
+  storage.
+- No app-server config/cache/log/temp files are written into selected work
+  folders or shared folders.
+
+### BRIDGEMAIN-04 - Promote Bridge Supervisor From Fixture To Runtime
+
+Status: in_progress
+
+Maps to: `BRIDGEGAP-04`, `BRIDGEGAP-05`, `BRIDGEGAP-06`, `BRIDGEGAP-07`
+
+Scope:
+
+- Update `CodexAppServerBridgeService` so the default path resolves the pinned
+  bundled app server, while tests can still opt into the fixture through an
+  explicit environment variable.
+- Use generated app-server config/home from `BRIDGEMAIN-03`.
+- Validate initialize/initialized against the pinned protocol schema where
+  practical.
+- Harden startup, shutdown, cancellation, timeout, stderr capture, JSONL parse
+  errors, protocol mismatch, and backpressure handling.
+- Make `/bridge/health` distinguish:
+  - artifact missing;
+  - config missing;
+  - process starting;
+  - initialized;
+  - protocol mismatch;
+  - provider incompatible;
+  - crashed/exited.
+
+Acceptance:
+
+- Runtime bridge smoke starts the pinned app server, initializes it, creates a
+  session, starts a turn, streams at least one event, cancels or completes the
+  turn, and shuts down without locked binaries.
+- Missing or incompatible app server produces setup diagnostics, not a direct
+  `/v1` fallback.
+
+### BRIDGEMAIN-05 - Implement Default Chatbot Over `/bridge/*`
+
+Status: in_progress
+
+Maps to: `BRIDGEGAP-11`, `BRIDGEGAP-15`
+
+Scope:
+
+- Replace the current status-only Bridge Workbench with a minimal normal
+  chatbot client over `/bridge/*`.
+- Implement:
+  - connection state;
+  - message history;
+  - composer;
+  - work-area picker;
+  - attachment tray;
+  - event stream rendering;
+  - stop/cancel;
+  - tool call cards;
+  - approval/rejection cards;
+  - diff/changed-file summary;
+  - collapsed diagnostics/support bundle.
+- Ensure normal turns call:
+  - `POST /bridge/sessions`;
+  - `POST /bridge/sessions/{sessionId}/turns`;
+  - `GET /bridge/turns/{turnId}/events`;
+  and never call `/v1/chat/completions` directly from the browser.
+
+Acceptance:
+
+- Workbench smoke proves first paint, session create, turn start, event stream,
+  assistant output, cancellation, and setup error rendering.
+- UI copy presents one path: Workbench -> Relay bridge -> bundled app server ->
+  Relay provider -> M365 Copilot.
+
+### BRIDGEMAIN-06 - Add App-Server Tool Worker Read-Only Tools
+
+Status: pending
+
+Maps to: `BRIDGEGAP-09`
+
+Scope:
+
+- Expose read-only Relay tools through the app-server tool protocol:
+  - `glob`;
+  - `grep`;
+  - `read`;
+  - `workspace_status`;
+  - `diff`.
+- Keep tool naming and observation style close to OpenCode/coding-agent
+  conventions while retaining Relay validation.
+- Enforce workspace containment, staged attachment access, timeout,
+  cancellation, output caps, binary handling, Office/PDF extraction, and
+  redaction.
+- Ensure `grep` always inserts `--` before user/model patterns.
+
+Acceptance:
+
+- Tool-loop smoke proves local filename search, content search, exact text
+  read, Office/PDF read where supported, workspace status, diff, invalid path
+  rejection, cancellation, and no shared-folder state.
+- No public `/v1/tools` endpoint is added.
+
+### BRIDGEMAIN-07 - Add App-Server Mutating Tools With Approval
+
+Status: pending
+
+Maps to: `BRIDGEGAP-10`
+
+Scope:
+
+- Expose mutating tools through the app-server tool protocol only:
+  - `write`;
+  - `edit`;
+  - `patch`;
+  - semantic `officecli` mutation operations.
+- Require visible browser approval before mutation execution.
+- Create backups and/or diffs before mutation.
+- Verify post-apply state and return changed paths plus diff summary to the
+  app-server turn.
+- Reject raw OfficeCLI argv, arbitrary shell command arrays, unsupported
+  Office properties, and cross-workspace writes.
+
+Acceptance:
+
+- Approval smoke covers approve, reject, resume, backup, diff summary,
+  Office semantic validation, corrupt Office rollback, and unsupported command
+  rejection.
+- Mutations cannot run without a visible approval decision.
+
+### BRIDGEMAIN-08 - Add Attachment Staging And Resource Mapping
+
+Status: pending
+
+Maps to: `BRIDGEGAP-08`
+
+Scope:
+
+- Add browser attachment staging under user-local Relay storage.
+- Track attachment id, original filename, media type, size, checksum, source,
+  retention, and extraction state.
+- Pass attachment ids/metadata to app-server turns, not raw large contents.
+- Let app-server tools explicitly read staged resources through Relay.
+- Add cleanup and clear-staged-attachments behavior.
+
+Acceptance:
+
+- Attachment smoke covers upload, metadata-only turn input, later tool read,
+  oversized rejection, unsupported type rejection, cleanup, and support-bundle
+  redaction.
+
+### BRIDGEMAIN-09 - Wire Main-Path Deterministic Acceptance Gate
+
+Status: in_progress
+
+Maps to: `BRIDGEGAP-12`
+
+Scope:
+
+- Add deterministic smokes for:
+  - pinned artifact manifest;
+  - schema/license/hash evidence;
+  - provider compatibility;
+  - app-server config/home;
+  - real supervisor initialization;
+  - browser session/turn/event stream;
+  - read-only tool call;
+  - mutating tool approval/rejection;
+  - attachment staging;
+  - support-bundle redaction;
+  - no shared-folder state.
+- Wire stable smokes into `pnpm check`.
+- Keep lower-level `/v1` provider smokes, but label them as provider tests.
+
+Acceptance:
+
+- `pnpm check` fails if the app-server main path, provider compatibility,
+  tool-loop, approval, package evidence, or storage boundaries regress.
+
+### BRIDGEMAIN-10 - Bundle App Server In Portable Packages
+
+Status: in_progress
+
+Maps to: `BRIDGEGAP-13`
+
+Scope:
+
+- Populate `app/app-server` with the pinned runtime, schemas, notices, and
+  hashes.
+- Update release inventory, SBOM, portable-root smoke, and `README-FIRST.html`.
+- Keep package roots quiet:
+  - Windows: `Relay Agent.exe`, `README-FIRST.html`, `LICENSES/`, `app/`;
+  - Linux: `relay-agent`, `README-FIRST.html`, `LICENSES/`, `app/`.
+- Ensure the standard path requires no npm, Python, Cargo, global install, or
+  network fetch at first run.
+- Verify sidecar idle exit and installer/update behavior do not leave
+  app-server binaries locked.
+
+Acceptance:
+
+- Portable package smoke verifies app-server files are under `app/app-server`,
+  release inventory/SBOM include version and hashes, and no confusing
+  app-server executable appears at package root.
+
+### BRIDGEMAIN-11 - Run Live Copilot Bridge E2E
+
+Status: pending
+
+Maps to: `BRIDGEGAP-14`
+
+Scope:
+
+- With signed-in Edge CDP available, run live E2E through the default chatbot
+  and bundled app-server bridge.
+- Cover:
+  - ambiguous local file search;
+  - exact file read;
+  - multi-file HTML/project creation;
+  - second-turn project improvement;
+  - attachment read;
+  - approval and rejection;
+  - cancellation.
+
+Acceptance:
+
+- Live E2E records app-server thread/turn/item ids, Relay provider request ids,
+  bridge event ids, and redacted diagnostics.
+- A release cannot advertise the bundled app-server runtime unless this passes
+  or release notes explicitly state live E2E was unavailable.
 
 ### BRIDGEGAP-00 - Correct App-Server Runtime Truth In Planning Docs
 
