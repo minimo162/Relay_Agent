@@ -33,6 +33,53 @@
 
 ## Milestone Log
 
+### 2026-05-20 Codex App-Server Native Tool Ownership Correction
+
+This slice corrects the bridge direction after reviewing the upstream Codex
+app-server protocol schemas. Relay no longer tries to recreate a local tool
+worker for app-server turns. Codex app-server owns local file, shell, search,
+Office-adjacent, PDF-adjacent, coding, and verification behavior through its
+native harness. Relay keeps only the browser bridge, provider adapter,
+attachment staging, app-server process supervision, approval forwarding, and
+diagnostics.
+
+Change:
+
+- Removed `RelayToolExecutor` dispatch from `CodexAppServerBridgeService`.
+- Removed app-server bridge handling that executed `glob`, `grep`, `read`,
+  `write`, OfficeCLI, custom PDF extraction, or patch logic inside Relay.
+- Added forwarding for official app-server server requests:
+  - `item/commandExecution/requestApproval`;
+  - `item/fileChange/requestApproval`;
+  - `item/permissions/requestApproval`.
+- Added JSON-RPC approval responses back to app-server after the Workbench
+  approves or rejects.
+- Added fail-fast rejection for `item/tool/call` dynamic-tool requests so Relay
+  cannot silently revive custom tools.
+- Removed OfficeCLI and custom Office/PDF extraction smokes from the canonical
+  `pnpm check` gate.
+- Removed OfficeCLI bundling and release-inventory entries from the active
+  portable package path.
+- Simplified `/api/status` and `/health` readiness to Copilot/provider checks;
+  app-server readiness remains visible through `/bridge/health`.
+
+Verification commands:
+
+```bash
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release -v:minimal
+pnpm sidecar:app-server-bridge-smoke
+pnpm check
+```
+
+Outcome:
+
+- Passed on 2026-05-20. `pnpm check` now covers the hard-cut guard,
+  Workbench typecheck/build, sidecar build/smokes, app-server artifact/bridge
+  smokes, lifecycle/CDP/workspace smokes, packaging root/icon smokes, bridge UI
+  static smokes, sidecar security smoke, and release inventory generation
+  without running retired Relay-owned OfficeCLI or custom Office/PDF extraction
+  smokes.
+
 ### 2026-05-20 Codex App-Server Bridge Skeleton
 
 This slice starts the `BRIDGEGAP*` runtime queue without claiming that a real
@@ -21086,4 +21133,58 @@ Remaining gates before release claim:
 - Implement app-server tool-call dispatch for Relay-governed local tools and
   approval/resume flows.
 - Add attachment staging through the app-server bridge.
+- Run live Copilot E2E through the bundled app-server bridge.
+
+## 2026-05-20: Codex App-Server Bridge Tool Loop Slice
+
+Change:
+
+- Removed the retired public Relay runner endpoints from the active sidecar
+  route table: `/agui/relay`, `/v1/tools`, and `/api/tool-catalog` are no
+  longer registered as product paths.
+- Kept the existing local validation/execution code only as an internal Codex
+  app-server tool worker behind `/bridge/*`.
+- Added bridge attachment staging under Relay user-local app-server storage:
+  `POST /bridge/attachments` stores browser uploads outside the selected work
+  area, records metadata/checksum, and passes attachment ids/metadata into
+  app-server turns.
+- Added app-server tool-call dispatch in `CodexAppServerBridgeService`.
+  Read-only calls execute through the internal worker and return structured
+  `tool/result` notifications. Mutating calls emit `approval/requested` and
+  execute only after `POST /bridge/approvals/{approvalId}` approves them.
+- Extended the Bridge Workbench with an attachment tray and inline approval
+  cards while keeping normal turns on `/bridge/*`.
+- Extended the fixture app server and `sidecar:app-server-bridge-smoke` to
+  cover session/turn streaming, attachment staging, read-only `glob`, tool
+  result roundtrip, approval-gated `write`, and approved mutation execution.
+- Updated hard-cut and security smokes so the canonical path is the Codex
+  app-server bridge rather than the retired AG-UI Relay runner.
+
+Verification commands run locally:
+
+```bash
+pnpm typecheck
+pnpm sidecar:build
+pnpm sidecar:app-server-bridge-smoke
+node scripts/check-hard-cut-guard.mjs
+pnpm agent:api-tool-ux-smoke
+pnpm agent:workbench-standard-chat-smoke
+pnpm sidecar:security-smoke
+```
+
+Result:
+
+- Workbench typecheck passed.
+- Sidecar Release build passed.
+- Fixture-backed bridge smoke passed with attachment, read-only tool, approval,
+  and approved mutation coverage.
+- Hard-cut guard passed and now rejects active `/agui/relay`, `/v1/tools`, and
+  `/api/tool-catalog` product routes.
+- Workbench and sidecar security smokes passed.
+
+Remaining gates before release claim:
+
+- Validate against the real pinned app-server protocol, not just the fixture.
+- Add rejection/resume smoke coverage and surface diff/changed-file summaries
+  in the Workbench.
 - Run live Copilot E2E through the bundled app-server bridge.

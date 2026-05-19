@@ -18,15 +18,15 @@
 - M365 Copilot via Edge CDP remains the primary LLM controller. Relay Core's
   OpenAI-compatible `/v1` API is the lower-level `m365-copilot` provider used
   by the bundled app server, not the primary first-time user integration path.
-- Relay owns the M365 Copilot provider adapter, local tool validation,
-  execution, approvals, backups, diffs, logs, support bundles, and user-local
+- Relay owns the M365 Copilot provider adapter, app-server supervision,
+  browser bridge, native approval forwarding, support bundles, and user-local
   storage. The bundled app server owns sessions, turns, event streaming,
-  transcript continuity, and the agent/tool loop.
+  transcript continuity, and the native local agent/tool loop.
 - Current implementation focus is the `BRIDGEMAIN*` queue in `tasks.md`, on
   top of the broader `BRIDGEGAP*` roadmap in `PLANS.md`:
   artifact pinning, license/schema evidence, provider compatibility,
   user-local app-server home/config, hardened supervisor and stdio JSONL
-  binding, browser bridge endpoints, app-server-visible local tool worker,
+  binding, browser bridge endpoints, native app-server approval forwarding,
   default chatbot HTML client over `/bridge/*`, packaging, and live Copilot
   E2E.
 
@@ -86,33 +86,20 @@ decisions, verification runs, and known limitations.
   selector drift must fail the run with structured diagnostics. Short bounded
   readiness waits inside the same CDP operation are allowed; a fallback model,
   fallback planner, old runner, or weaker tool path is not.
-- `glob` and `grep` are generic local exploration tools backed by ripgrep.
-  Push filters into ripgrep where possible, stream/cap output before buffering,
-  and keep workspace containment, timeout, cancellation, and result caps
-  enforced by Relay.
-- `grep` must pass a `--` separator before the pattern so user/model patterns
-  beginning with `-` cannot become ripgrep options.
-- `read` must support exact file reads for plaintext/code and Relay-supported
-  Office/PDF extraction. Do not revive `RelayDocumentSearch*`, SQLite/FTS, or
-  per-mode document-search engines.
-- `officecli` must be exposed through Relay-owned semantic operations compiled
-  to argv by Relay. Do not let Copilot provide arbitrary OfficeCLI command
-  arrays directly. Office mutations need backup, approval, and post-apply
-  verification.
-- `edit`, `write`, and `patch` must stay workspace-scoped, approval-gated for
-  mutations, and auditable through bridge/app-server events and backup/diff
-  artifacts.
-- `workspace_status` and `diff` are generic read-only review tools. Use them to
-  expose dirty state, changed paths, pending mutations, and applied changes
-  before final answers.
-- `bash` is a bounded verification permission category, not unrestricted
-  shell. It must use structured argv, workspace containment, timeout/output
-  caps, cancellation, and deny rules for destructive, network,
-  package-install, secret-reading, or cross-workspace behavior unless the user
-  explicitly approves a narrowly displayed command.
+- Do not implement a Relay-owned generic local tool worker for app-server
+  turns. `glob`, `grep`, `read`, Office/PDF extraction, OfficeCLI, edit/write,
+  patch, and shell execution belong to the bundled Codex app-server native
+  harness unless a future plan explicitly adopts an upstream-compatible
+  dynamic tool/MCP package.
+- Relay forwards official app-server approval requests such as command
+  execution, file changes, and permission grants. Relay must not transform
+  those requests into its own legacy tool protocol or publish Relay tool
+  observations.
+- Custom `item/tool/call` dynamic tool requests are rejected fail-fast in the
+  current architecture so accidental Relay custom-tool revival is visible.
 - File search, Office editing, coding, PDF review, and verification are common
-  recipes over the app-server tool loop, not separate UX modes or separate
-  backend runners.
+  app-server-native workflows, not separate UX modes, separate backend
+  runners, or Relay-owned tool recipes.
 - Support bundles must be explicit and redacted by default. They must not
   include raw document contents unless the user explicitly opts in.
 
@@ -147,6 +134,6 @@ decisions, verification runs, and known limitations.
 - When editing planning docs, keep `PLANS.md`, `AGENTS.md`,
   `docs/IMPLEMENTATION.md`, and `README.md` aligned on the same active
   architecture story: one browser Bridge Workbench, one .NET sidecar, bundled
-  Codex app server as the harness boundary, Relay `/v1` as the
-  M365-Copilot-backed provider, and Relay as local tool governance/execution
-  layer.
+  Codex app server as the harness/tool boundary, Relay `/v1` as the
+  M365-Copilot-backed provider, and Relay as bridge/supervisor/approval
+  forwarding layer.

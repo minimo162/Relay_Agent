@@ -8,14 +8,15 @@ The active direction is the bundled Codex app-server mediation architecture,
 not the temporary Agent-Framework-only correction. The current implementation
 contains the right early bridge skeleton but still has gaps:
 
-- the default browser UI is still an API Hub that calls `/v1/chat/completions`
-  directly;
 - `CodexAppServerBridgeService`, `/bridge/*`, the fixture app server, and
   `sidecar:app-server-bridge-smoke` exist and should remain active;
-- the bridge is not yet backed by a pinned redistributable app-server runtime;
-- provider compatibility, generated schemas, licensing, bundled packaging,
-  app-server-visible local tools, attachment staging, approvals, and live E2E
-  are still incomplete.
+- the default browser UI now uses `/bridge/*` instead of calling
+  `/v1/chat/completions` directly for normal work;
+- the bridge is backed by a pinned redistributable app-server runtime artifact
+  manifest and release fetch/package path;
+- provider compatibility, generated schemas, upstream app-server tool protocol
+  compatibility, broader live E2E, and release-claim hardening are still
+  incomplete.
 
 The next active queue is `BRIDGEMAIN*`. It turns the broader `BRIDGEGAP*`
 roadmap into the immediate implementation path for making Codex app server the
@@ -42,16 +43,24 @@ Relay Core `/v1` provider
 M365 Copilot over Edge CDP
   primary reasoning controller; no OpenAI API key
 
-Relay local tool worker
-  workspace-contained read/write/search/Office/PDF/verification tools with
-  validation, approvals, backups, diffs, logs, and user-local storage
+Codex app-server native local tool loop
+  app-server-owned read/write/search/Office-adjacent/PDF-adjacent/coding work;
+  Relay only supervises, forwards approvals, stages attachments, and logs
 ```
 
 The direct `/v1` API remains the lower-level provider API consumed by the
 bundled app server and by developer diagnostics. It is not the primary
 user-facing HTML tool path once the bridge is complete. File search, Office
-editing, coding, PDF review, and verification are recipes over the bundled app
-server's tool loop, not first-party Relay modes.
+editing, coding, PDF review, and verification are handled by the bundled app
+server's native harness, not first-party Relay modes or Relay-owned tool
+workers.
+
+The previous public Relay runner surfaces are retired for the active product
+path. `/agui/relay`, `/v1/tools`, and `/api/tool-catalog` must not be used as
+Workbench runtime, user-facing integration, or acceptance-gate dependencies.
+Relay must not implement a replacement local execution worker behind the Codex
+app-server bridge. Custom dynamic tools are rejected unless a future plan
+explicitly adopts an upstream-compatible MCP/dynamic-tool package.
 
 The completed active queue is `RESPONSIVE*`. It implements the 2026-05-18
 Installed Workbench Responsiveness Plan from `PLANS.md`: make installed
@@ -207,12 +216,12 @@ acceptance criteria have broken.
 - Do not remove or bypass the Codex app-server bridge skeleton unless this
   plan is explicitly changed.
 - Do not add Relay-side public local-tool endpoints as a new product surface.
-  The model-visible tool catalog should be exposed through the app-server tool
-  protocol.
+  Do not add a Relay-owned model-visible tool catalog behind the bridge either;
+  use Codex app-server native tools.
 - Do not fix Copilot mistakes by adding broad prompt-only folklore; prefer
   app-server/tool-state constraints, schema validation, and visible recovery.
 - Do not create separate first-party modes for file search, Office editing, or
-  coding. They are recipes over the app-server tool loop.
+  coding. They are app-server-native workflows.
 - Keep `/v1` as a lower-level provider/developer diagnostic path. It should be
   consumed by the bundled app server for normal user-facing work.
 - Every completed task must update `docs/IMPLEMENTATION.md` with the artifact
@@ -222,6 +231,52 @@ acceptance criteria have broken.
   superseded API-Hub-first path.
 
 ## Task Queue
+
+### BRIDGENATIVE-01 - Retire Relay-Owned Tool Worker From App-Server Bridge
+
+Status: completed
+
+Scope:
+
+- Remove Relay `RelayToolExecutor` dispatch from `CodexAppServerBridgeService`.
+- Stop Relay from executing `glob`, `grep`, `read`, `write`, `patch`,
+  OfficeCLI, or custom PDF extraction on behalf of app-server turns.
+- Treat official app-server server requests as the only bridge-mediated
+  approval surface:
+  - `item/commandExecution/requestApproval`;
+  - `item/fileChange/requestApproval`;
+  - `item/permissions/requestApproval`.
+- Send JSON-RPC approval responses back to app-server after the browser
+  approves or rejects.
+- Reject `item/tool/call` dynamic-tool requests fail-fast so accidental Relay
+  custom-tool revival is visible.
+
+Acceptance:
+
+- `CodexAppServerBridgeService` has no `RelayToolExecutor`,
+  `RelayToolCall`, or `ToolObservation` dependency.
+- `pnpm sidecar:app-server-bridge-smoke` proves command/file approval
+  roundtrips and dynamic-tool rejection without writing files from Relay.
+
+### BRIDGENATIVE-02 - Remove OfficeCLI And Custom PDF From Active Release Path
+
+Status: completed
+
+Scope:
+
+- Remove OfficeCLI and custom Office/PDF extraction smokes from `pnpm check`.
+- Stop release packaging and inventory from bundling or advertising OfficeCLI.
+- Stop `/api/status` from probing Relay-side ripgrep or OfficeCLI readiness.
+- Keep old runner files as historical source until a later deletion pass, but
+  do not route Workbench, release, or canonical checks through them.
+
+Acceptance:
+
+- `pnpm check` no longer runs `agent:officecli-registry-smoke` or
+  `agent:office-pdf-read-smoke`.
+- Release package scripts do not copy `relay-tools/officecli`.
+- Status readiness reflects Copilot/provider readiness only; app-server health
+  is checked through `/bridge/health`.
 
 ### BRIDGEMAIN-01 - Pin And Materialize Codex App Server Runtime
 
@@ -805,7 +860,7 @@ Verification:
 
 ### BRIDGEGAP-08 - Implement Attachment Staging For Browser Turns
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -830,7 +885,7 @@ Acceptance:
 
 ### BRIDGEGAP-09 - Implement Read-Only Local Tool Worker
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -856,7 +911,7 @@ Acceptance:
 
 ### BRIDGEGAP-10 - Implement Mutating Tools, Approval, Backup, And Diff
 
-Status: pending
+Status: in_progress
 
 Scope:
 
@@ -874,13 +929,16 @@ Scope:
 
 Acceptance:
 
-- Smokes cover approval, rejection, resume, backup creation, diff summary,
-  invalid mutation rejection, and Office semantic operation validation.
+- Current bridge smoke covers approval, approved write execution, and the fact
+  that mutating app-server tool calls do not execute before visible approval.
+- Remaining acceptance: rejection, resume with upstream app-server protocol,
+  backup/diff summary surfaced in the Workbench, invalid mutation rejection,
+  and Office semantic operation validation through the bridge.
 - Mutations cannot run without visible approval.
 
 ### BRIDGEGAP-11 - Build Default Chatbot Client On Bridge
 
-Status: pending
+Status: in_progress
 
 Scope:
 
@@ -903,13 +961,16 @@ Scope:
 
 Acceptance:
 
-- UI smoke covers first paint, readiness, work-area selection, attachment
-  staging, turn start, event streaming, approval, rejection, done, and failure.
+- Current Workbench supports bridge session/turn creation, event streaming,
+  cancellation, workspace selection, attachment staging, and inline approval
+  cards.
+- Remaining acceptance: rejection UX smoke, changed-file/diff summary cards,
+  first-run copy polish, and failure-state screenshots.
 - Normal turns do not call `/v1/chat/completions` directly from the browser.
 
 ### BRIDGEGAP-12 - Add Deterministic Bridge Acceptance Smokes
 
-Status: pending
+Status: in_progress
 
 Scope:
 
@@ -931,8 +992,13 @@ Scope:
 
 Acceptance:
 
-- `pnpm check` fails if bridge runtime, app-server protocol, tool loop,
-  approval, packaging inventory, or support-bundle contracts regress.
+- `pnpm check` now includes fixture-backed app-server bridge coverage for
+  session/turn/event streaming, attachment staging, read-only tool-result
+  roundtrip, approval-gated write, packaging inventory, and the retired
+  `/agui/relay`/`/v1/tools` public-path guard.
+- Remaining acceptance: rejection/resume smoke, real pinned app-server mock
+  provider compatibility, and support-bundle redaction coverage for bridge
+  attachments/tool events.
 - Smoke names clearly separate provider API tests from app-server bridge tests.
 
 ### BRIDGEGAP-13 - Bundle App Server In Portable Packages

@@ -2,8 +2,8 @@
 
 Relay Agent is a local **Codex app-server bridge** for Microsoft 365 Copilot:
 
-> Copilot thinks. The bundled app server runs the agent loop. Relay governs
-> local execution.
+> Copilot thinks. The bundled app server owns the local agent loop. Relay
+> connects, supervises, and forwards approvals.
 
 The active product direction is a browser-hosted **Relay Bridge Workbench**
 served by a self-contained .NET sidecar. The Workbench talks to Relay's
@@ -35,8 +35,10 @@ M365 Copilot via Edge CDP
 ```
 
 Relay owns the parts that are unique to this project: the M365 Copilot CDP
-provider adapter, local tool validation, approvals, backups, diffs, logs,
-support bundles, and user-local storage boundaries.
+provider adapter, app-server supervision, browser bridge, native approval
+forwarding, support bundles, and user-local storage boundaries. Relay does not
+implement a replacement `glob`/`grep`/`read`/OfficeCLI/PDF/edit/patch tool
+worker for app-server turns.
 
 The direct `/v1` API remains available as the lower-level provider and
 developer diagnostic surface. It is not the recommended first-time HTML tool
@@ -58,8 +60,8 @@ The active bridge surface is:
 The bridge implementation currently includes a sidecar supervisor skeleton,
 stdio JSONL fixture smoke, browser bridge endpoints, and release guards. The
 runtime must not be advertised as fully bundled until the app-server artifact,
-license inventory, generated schemas, provider compatibility, tool loop,
-approval flow, packaging, and live Copilot E2E gates pass.
+license inventory, generated schemas, provider compatibility, native approval
+flow, packaging, and live Copilot E2E gates pass.
 
 ## Requirements
 
@@ -156,12 +158,13 @@ state is stored under the current user's local application data directory.
 
 ## Boundaries
 
-- M365 Copilot may plan and synthesize; Relay executes local work only through
-  validated bridge/tool contracts.
+- M365 Copilot may plan and synthesize; the bundled Codex app server executes
+  local work through its native harness.
 - Browser clients must not implement their own Copilot CDP automation,
   app-server process management, cache/index storage, or workspace policy.
-- Mutating local tools require explicit approval, backups, verification, and
-  auditable events.
+- Relay forwards app-server native command/file/permission approval requests
+  and records auditable bridge events.
 - Shared folders are never used for Relay caches, indexes, logs, or temp
   state.
-- Unrestricted shell is not part of the default tool catalog.
+- Relay does not expose a public `/v1/tools` catalog or Relay-owned OfficeCLI,
+  PDF, or shell tool surface.

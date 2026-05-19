@@ -17,8 +17,7 @@ Workbench browser UI
   -> bundled Codex app server
   -> Relay `/v1` m365-copilot provider
   -> M365 Copilot via Edge CDP
-  -> app-server tool loop
-  -> Relay-governed local tools
+  -> Codex app-server native local tool loop
 ```
 
 The direct `/v1/chat/completions` path remains available only as the provider
@@ -66,16 +65,16 @@ should be a visible setup error with diagnostics.
    - The browser must not call `/v1/chat/completions` directly for normal
      turns.
 
-5. **Tool Loop Gate**
-   - Expose Relay's generic local tools only through the app-server tool
-     protocol:
-     `glob`, `grep`, `read`, `workspace_status`, `diff`, `write`, `edit`,
-     `patch`, `officecli`, and `officecli_mutate`.
-   - Keep ripgrep-backed search generic and OpenCode-style. Do not revive
-     `RelayDocumentSearch*`, SQLite/FTS search engines, or dedicated
-     file-search/Office/code modes.
-   - Keep mutating operations approval-gated, backed up, verified, and
-     auditable through bridge/app-server events.
+5. **Native Tool Loop Gate**
+   - Do not implement or expose a Relay generic local tool worker. Codex
+     app-server owns local file, shell, search, coding, Office-adjacent, and
+     PDF-adjacent work through its native harness.
+   - Relay must not revive `RelayDocumentSearch*`, SQLite/FTS search engines,
+     dedicated file-search/Office/code modes, custom PDF extraction, or
+     OfficeCLI semantic mutation handling.
+   - Relay's bridge role is limited to launching/supervising app-server,
+     forwarding native approval requests, streaming events, staging browser
+     attachments as files, and exposing redacted diagnostics.
 
 6. **Packaging And Release Gate**
    - Bundle the app server, schemas, notices, and hashes under `app/app-server`
@@ -120,9 +119,17 @@ high-risk gaps into ordered implementation tasks.
 - Replaced the status-only Workbench surface with a normal chat client that
   creates bridge sessions, starts turns, streams bridge events, and can cancel
   an active turn.
-- Added deterministic artifact smoke coverage. Remaining high-risk work is
-  real app-server/provider compatibility, app-server tool-loop execution,
-  mutation approval roundtrips, attachment staging, and live Copilot bridge
+- Added browser attachment staging under Relay user-local app-server storage.
+- Corrected the bridge away from a Relay-owned tool worker. Relay now forwards
+  Codex app-server native command/file/permission approval requests and rejects
+  custom dynamic tool calls instead of executing `glob`, `grep`, `read`,
+  OfficeCLI, PDF extraction, or write/patch logic itself.
+- Extended deterministic bridge smoke coverage to prove attachment staging,
+  native approval request/resolution roundtrips, and fail-fast rejection of
+  custom dynamic tools through `/bridge/*`.
+- Remaining high-risk work is real pinned app-server/provider compatibility,
+  generated protocol schema drift checks, broader native approval/event
+  compatibility with the upstream app-server protocol, and live Copilot bridge
   E2E.
 
 ## 2026-05-20 Current Implementation Review Remediation Plan
@@ -137,8 +144,8 @@ active target architecture is now the bundled Codex app-server mediation path:
   browser clients;
 - Relay Core's OpenAI-compatible `/v1` provider backed by M365 Copilot over
   Edge CDP;
-- Relay-owned local tool governance, validation, approvals, backups, diffs,
-  diagnostics, and user-local storage.
+- Relay-owned supervision, provider adaptation, native approval forwarding,
+  diagnostics, and user-local storage boundaries.
 
 The product runtime chain is:
 
@@ -177,15 +184,16 @@ was already started, not remove it.
 - The sidecar supervisor and stdio JSONL client are only skeleton-level. They
   need schema-backed protocol validation, lifecycle cleanup, error taxonomy,
   cancellation, backpressure, and version mismatch handling.
-- Browser bridge endpoints need attachment staging, approval/tool-result
+- Browser bridge endpoints need attachment staging, native app-server approval
   roundtrips, support-bundle correlation, and work-area isolation.
 - A default chatbot client now exists over the bridge. It still needs complete
   app-server tool cards, approval/rejection roundtrips, attachment staging,
   diff summaries, and live bundled-runtime E2E.
-- There is no app-server-visible local tool worker for `glob`, `grep`, `read`,
-  workspace/diff, write/edit/patch, Office/PDF read, or semantic OfficeCLI
-  mutation. Existing Relay tool logic should be adapted behind the app-server
-  protocol instead of becoming public `/v1/tools` product surface.
+- Relay must not add an app-server-visible local tool worker for `glob`,
+  `grep`, `read`, workspace/diff, write/edit/patch, Office/PDF read, or
+  semantic OfficeCLI mutation. Those are delegated to the bundled Codex
+  app-server native harness. Relay only forwards native app-server approval
+  requests and rejects custom dynamic tool-call requests.
 - `scripts/check-hard-cut-guard.mjs`, README, AGENTS, and release packaging
   now protect the bridge direction and fail package creation when the
   materialized app-server runtime is missing. Remaining guards should cover
@@ -207,8 +215,8 @@ Continue the `BRIDGEMAIN*` queue in `tasks.md`:
 6. implement browser-safe session/turn/attachment/approval/tool-result bridge
    endpoints;
 7. stream bridge events with app-server/Relay/Copilot correlation ids;
-8. implement read-only and mutating local tool workers behind the app-server
-   protocol;
+8. remove Relay-owned local tool workers from the app-server bridge and rely
+   on Codex app-server native tools;
 9. complete the default chatbot HTML client over the bridge;
 10. add artifact, provider, tool-loop, attachment, approval, packaging, and
     support-bundle smokes;

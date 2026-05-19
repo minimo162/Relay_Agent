@@ -14,8 +14,6 @@ const inputs = [
   "apps/workbench/package.json",
   "apps/workbench/dist",
   "assets/app-icon",
-  "tools/ripgrep",
-  "tools/officecli",
   "tools/codex-app-server/manifest.json",
   "tools/codex-app-server/linux-x64",
   "tools/codex-app-server/win-x64",
@@ -81,8 +79,6 @@ const sbom = {
   bundledBinaries: [
     { name: "Relay.Sidecar", source: "self-contained dotnet publish" },
     { name: "Relay.Launcher", source: "self-contained dotnet publish" },
-    { name: "ripgrep", source: "tools/ripgrep copied into app/relay-core/relay-tools/ripgrep" },
-    { name: "officecli", source: "Windows release bundle when dist/relay-agent-win-x64/app/relay-core/relay-tools/officecli/officecli.exe is present", optional: true },
     { name: "Codex app server", source: "pinned @openai/codex artifact copied into app/app-server by sidecar publish scripts" },
   ],
   intentionallyExcludedRuntimeFamilies: inventory.excludedLegacyActivePaths,

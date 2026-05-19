@@ -41,7 +41,7 @@ for (const forbidden of [
   assert(!app.includes(forbidden), `Bridge Workbench must not expose retired UI code: ${forbidden}`);
 }
 
-for (const scriptName of ["agent:tool-catalog-smoke", "agent:workbench-standard-chat-smoke", "agent:api-tool-ux-smoke"]) {
+for (const scriptName of ["agent:workbench-standard-chat-smoke", "agent:api-tool-ux-smoke", "sidecar:app-server-bridge-smoke"]) {
   assert(packageJson.scripts[scriptName], `missing package script: ${scriptName}`);
 }
 

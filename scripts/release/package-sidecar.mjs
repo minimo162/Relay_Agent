@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "../..");
 const rid = readArg("--rid") ?? process.env.RELAY_TARGET_RID ?? platformRid();
@@ -23,12 +23,9 @@ const workbenchPackage = JSON.parse(readFileSync(resolve(root, "apps/workbench/p
 
 const toolSources = {
   "win-x64": {
-    ripgrep: "tools/ripgrep/win-x64/rg.exe",
-    officecli: "tools/officecli/win-x64/officecli.exe",
     appServer: "tools/codex-app-server/win-x64",
   },
   "linux-x64": {
-    ripgrep: "tools/ripgrep/linux-x64/rg",
     appServer: "tools/codex-app-server/linux-x64",
   },
 };
@@ -93,10 +90,6 @@ writeFileSync(
       launchTokenRequired: true,
       hostOriginValidation: true,
     },
-    tools: {
-      ripgrep: "app/relay-core/relay-tools/ripgrep",
-      officecli: rid === "win-x64" ? "app/relay-core/relay-tools/officecli" : "optional",
-    },
     appServer: {
       command: rid === "win-x64" ? "app/app-server/codex.exe" : "app/app-server/codex",
       args: ["app-server"],
@@ -109,10 +102,6 @@ writeFileSync(
   }, null, 2),
 );
 
-copyTool(sources.ripgrep, join(coreRoot, "relay-tools/ripgrep", rid.startsWith("win") ? "rg.exe" : "rg"), true);
-if (sources.officecli) {
-  copyTool(sources.officecli, join(coreRoot, "relay-tools/officecli/officecli.exe"), true);
-}
 copyAppServerBundle(sources.appServer, join(appRoot, "app-server"));
 
 writeFileSync(
@@ -129,9 +118,8 @@ writeFileSync(
     "- relay-core/wwwroot",
     "- relay bridge endpoints for Codex app-server mediation",
     "- relay-assets",
-    "- relay-tools/ripgrep",
-    rid === "win-x64" ? "- relay-tools/officecli" : "- OfficeCLI is optional on this platform",
     "- app-server",
+    "- Codex app-server native tool runtime owns local file, shell, Office/PDF-adjacent, and coding work",
     "",
     "Excluded active runtime families:",
     "- AionUi",
@@ -187,17 +175,6 @@ function copyIfExists(source, destination) {
   if (!existsSync(fullSource)) return;
   mkdirSync(dirname(destination), { recursive: true });
   copyFileSync(fullSource, destination);
-}
-
-function copyTool(source, destination, required) {
-  const fullSource = resolve(root, source);
-  if (!existsSync(fullSource)) {
-    if (required) throw new Error(`required tool source was not found: ${source}`);
-    return;
-  }
-  mkdirSync(dirname(destination), { recursive: true });
-  copyFileSync(fullSource, destination);
-  console.log(`package-sidecar: bundled ${basename(destination)} from ${source}`);
 }
 
 function copyAppServerBundle(source, destination) {

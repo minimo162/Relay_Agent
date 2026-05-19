@@ -3,10 +3,12 @@ import {
   CheckCircle2,
   Clipboard,
   FolderOpen,
+  Paperclip,
   RotateCw,
   Send,
   Server,
   Square,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StatusResponse } from "./types";
@@ -65,6 +67,30 @@ type ActivityItem = {
   summary: string;
 };
 
+type BridgeAttachment = {
+  schemaVersion: "RelayCodexAppServerBridgeAttachment.v1";
+  attachmentId: string;
+  fileName: string;
+  path: string;
+  mediaType?: string | null;
+  size: number;
+  sha256: string;
+  source: string;
+  createdAt: string;
+};
+
+type BridgeApproval = {
+  schemaVersion: "RelayCodexAppServerBridgeApproval.v1";
+  approvalId: string;
+  turnId: string;
+  appServerTurnId: string;
+  toolCallId: string;
+  toolName: string;
+  summary: string;
+  args: Record<string, unknown>;
+  createdAt: string;
+};
+
 const initialReadiness: ReadinessState = {
   ready: false,
   label: "Checking",
@@ -80,6 +106,8 @@ export function App() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [attachments, setAttachments] = useState<BridgeAttachment[]>([]);
+  const [approvalRequests, setApprovalRequests] = useState<BridgeApproval[]>([]);
   const [running, setRunning] = useState(false);
   const [currentTurn, setCurrentTurn] = useState<BridgeTurnResponse | null>(null);
   const [copied, setCopied] = useState("");
@@ -204,6 +232,37 @@ export function App() {
     }
   }, [api, authHeaders, workspace]);
 
+  const stageFiles = useCallback(async (files: FileList | null) => {
+    if (!files?.length) return;
+    setError("");
+    const form = new FormData();
+    Array.from(files).forEach((file) => form.append("files", file, file.name));
+    try {
+      const response = await fetch(api("/bridge/attachments"), {
+        method: "POST",
+        headers: authHeaders(),
+        body: form,
+      });
+      if (!response.ok) throw new Error(`Attachment staging failed: ${response.status} ${await response.text()}`);
+      const result = await response.json() as { attachments?: BridgeAttachment[] };
+      setAttachments((items) => [...items, ...(result.attachments ?? [])]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [api, authHeaders]);
+
+  const removeAttachment = useCallback(async (attachmentId: string) => {
+    setAttachments((items) => items.filter((item) => item.attachmentId !== attachmentId));
+    try {
+      await fetch(api(`/bridge/attachments/${attachmentId}`), {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+    } catch {
+      // Attachment cleanup is best-effort from the UI; the sidecar owns retention cleanup.
+    }
+  }, [api, authHeaders]);
+
   const ensureSession = useCallback(async (): Promise<BridgeSessionResponse> => {
     if (session && (session.workArea ?? "") === (workspace || "")) {
       return session;
@@ -237,6 +296,13 @@ export function App() {
     }
     const summary = summarizeBridgeEvent(event, payload);
     setActivity((items) => [...items.slice(-39), { id: crypto.randomUUID(), event, summary }]);
+    if (event === "approval/requested" && isBridgeApproval(payload)) {
+      setApprovalRequests((items) => [...items.filter((item) => item.approvalId !== payload.approvalId), payload]);
+    }
+    if (event === "approval/resolved" && typeof payload === "object" && payload !== null && "approvalId" in payload) {
+      const approvalId = String((payload as { approvalId?: unknown }).approvalId ?? "");
+      setApprovalRequests((items) => items.filter((item) => item.approvalId !== approvalId));
+    }
     const delta = extractTextDelta(payload);
     if (delta && event.toLowerCase().includes("delta")) {
       setMessages((items) => items.map((item) =>
@@ -248,6 +314,21 @@ export function App() {
       ));
     }
   }, []);
+
+  const resolveApproval = useCallback(async (approvalId: string, approved: boolean) => {
+    setError("");
+    try {
+      const response = await fetch(api(`/bridge/approvals/${approvalId}`), {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ approved }),
+      });
+      if (!response.ok) throw new Error(`Approval failed: ${response.status} ${await response.text()}`);
+      setApprovalRequests((items) => items.filter((item) => item.approvalId !== approvalId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [api, authHeaders]);
 
   const streamTurnEvents = useCallback(async (
     turn: BridgeTurnResponse,
@@ -286,6 +367,7 @@ export function App() {
     setInput("");
     setRunning(true);
     setActivity([]);
+    setApprovalRequests([]);
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: "user", text: prompt };
     const assistantMessage: ChatMessage = { id: crypto.randomUUID(), role: "assistant", text: "" };
     setMessages((items) => [...items, userMessage, assistantMessage]);
@@ -300,7 +382,7 @@ export function App() {
         body: JSON.stringify({
           input: prompt,
           workArea: workspace || null,
-          attachmentIds: [],
+          attachmentIds: attachments.map((item) => item.attachmentId),
         }),
         signal: abort.signal,
       });
@@ -322,7 +404,7 @@ export function App() {
       setRunning(false);
       void refreshStatus().catch(() => undefined);
     }
-  }, [api, authHeaders, ensureSession, input, refreshStatus, running, streamTurnEvents, workspace]);
+  }, [api, attachments, authHeaders, ensureSession, input, refreshStatus, running, streamTurnEvents, workspace]);
 
   const stopTurn = useCallback(async () => {
     streamAbort.current?.abort();
@@ -432,6 +514,39 @@ export function App() {
 
         <div className="composer">
           {error ? <p className="error" role="alert">{error}</p> : null}
+          {attachments.length > 0 ? (
+            <div className="attachment-tray" aria-label="添付ファイル">
+              {attachments.map((attachment) => (
+                <span className="attachment-chip" key={attachment.attachmentId} title={attachment.path}>
+                  <Paperclip size={14} aria-hidden="true" />
+                  {attachment.fileName}
+                  <button type="button" aria-label={`${attachment.fileName} を外す`} onClick={() => void removeAttachment(attachment.attachmentId)}>
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {approvalRequests.length > 0 ? (
+            <div className="approval-list" aria-live="polite">
+              {approvalRequests.map((approval) => (
+                <article className="approval-card" key={approval.approvalId}>
+                  <div>
+                    <span>{approval.toolName}</span>
+                    <strong>{approval.summary}</strong>
+                  </div>
+                  <div className="approval-actions">
+                    <button className="secondary-button" type="button" onClick={() => void resolveApproval(approval.approvalId, false)}>
+                      拒否
+                    </button>
+                    <button className="primary-button" type="button" onClick={() => void resolveApproval(approval.approvalId, true)}>
+                      承認
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -446,6 +561,19 @@ export function App() {
             disabled={running}
           />
           <div className="actions">
+            <label className="secondary-button file-button">
+              <Paperclip size={16} aria-hidden="true" />
+              添付
+              <input
+                type="file"
+                multiple
+                onChange={(event) => {
+                  void stageFiles(event.currentTarget.files);
+                  event.currentTarget.value = "";
+                }}
+                disabled={running}
+              />
+            </label>
             <button
               className="primary-button"
               type="button"
@@ -568,4 +696,11 @@ function extractTextDelta(payload: unknown): string {
     }
   }
   return "";
+}
+
+function isBridgeApproval(payload: unknown): payload is BridgeApproval {
+  return typeof payload === "object" &&
+    payload !== null &&
+    (payload as { schemaVersion?: unknown }).schemaVersion === "RelayCodexAppServerBridgeApproval.v1" &&
+    typeof (payload as { approvalId?: unknown }).approvalId === "string";
 }

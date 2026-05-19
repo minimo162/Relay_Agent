@@ -54,9 +54,8 @@ try {
   if (!status.checks.some((check) => check.name === "copilot-cdp" && check.ready === true)) {
     throw new Error(`mock Copilot readiness was not reported: ${JSON.stringify(status)}`);
   }
-  const officeCli = status.checks.find((check) => check.name === "officecli");
-  if (!officeCli || officeCli.required !== false) {
-    throw new Error(`OfficeCLI readiness must be optional: ${JSON.stringify(status)}`);
+  if (status.checks.some((check) => check.name === "officecli" || check.name === "ripgrep")) {
+    throw new Error(`Relay Core readiness must not check retired Relay-side tool bundles: ${JSON.stringify(status)}`);
   }
 
   const models = await fetch(`http://127.0.0.1:${port}/v1/models?token=${encodeURIComponent(token)}`, {

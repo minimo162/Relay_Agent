@@ -29,7 +29,8 @@ assert(packageScript.includes("Relay Agent.exe"), "portable Windows package must
 assert(packageScript.includes("README-FIRST.html"), "portable package must include first-run help as README-FIRST.html");
 assert(packageScript.includes("relay-agent"), "portable Linux package must expose relay-agent as the primary launcher");
 assert(packageScript.includes('join(appRoot, "relay-assets"'), "package-sidecar must place implementation assets under app/");
-assert(packageScript.includes('join(coreRoot, "relay-tools'), "package-sidecar must place tools under app/relay-core/");
+assert(packageScript.includes("copyAppServerBundle"), "package-sidecar must bundle the Codex app-server runtime under app/");
+assert(!packageScript.includes('join(coreRoot, "relay-tools/officecli'), "package-sidecar must not bundle retired Relay-owned OfficeCLI tools");
 
 const nsisScript = readFileSync(resolve(root, "scripts/release/build-windows-installer.mjs"), "utf8");
 for (const needle of [

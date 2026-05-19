@@ -1,17 +1,24 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 public sealed class CodexAppServerBridgeService : IDisposable
 {
+    private const long MaxAttachmentBytes = 25L * 1024 * 1024;
+    private const long MaxTotalAttachmentBytes = 100L * 1024 * 1024;
+    private const int MaxAttachmentCount = 20;
+
     private readonly CodexAppServerOptions options;
     private readonly SemaphoreSlim startGate = new(1, 1);
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonNode?>> pending = new();
     private readonly Dictionary<string, CodexBridgeSessionState> sessions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CodexBridgeTurnState> turns = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CodexBridgeApprovalRequest> approvals = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CodexBridgeAttachment> attachments = new(StringComparer.Ordinal);
     private readonly List<CodexBridgeEventRecord> events = [];
     private readonly object stateGate = new();
     private readonly CancellationTokenSource shutdown = new();
@@ -103,6 +110,7 @@ public sealed class CodexAppServerBridgeService : IDisposable
         {
             throw new CodexBridgeException(StatusCodes.Status400BadRequest, "invalid_turn_input", "Turn input is required.");
         }
+        ValidateAttachmentIds(request.AttachmentIds);
 
         var result = await SendRequestAsync("turn/start", new JsonObject
         {
@@ -110,12 +118,13 @@ public sealed class CodexAppServerBridgeService : IDisposable
             ["input"] = request.Input,
             ["cwd"] = request.WorkArea ?? session.WorkArea,
             ["attachmentIds"] = request.AttachmentIds is null ? null : JsonSerializer.SerializeToNode(request.AttachmentIds, JsonOptions.Default),
+            ["attachments"] = BuildAttachmentMetadata(request.AttachmentIds),
         }, cancellationToken);
         var appTurnId = ExtractString(result, "turnId")
             ?? ExtractString(result, "turn", "id")
             ?? throw new CodexBridgeException(StatusCodes.Status502BadGateway, "app_server_protocol_error", "turn/start did not return a turn id.");
         var turnId = "turn-" + Guid.NewGuid().ToString("N")[..12];
-        var turn = new CodexBridgeTurnState(turnId, sessionId, appTurnId, DateTimeOffset.UtcNow);
+        var turn = new CodexBridgeTurnState(turnId, sessionId, appTurnId, request.WorkArea ?? session.WorkArea, DateTimeOffset.UtcNow);
         lock (stateGate)
         {
             turns[turnId] = turn;
@@ -136,6 +145,159 @@ public sealed class CodexAppServerBridgeService : IDisposable
             ["turnId"] = turn.AppTurnId,
         }, cancellationToken);
         return new CodexBridgeCancelResponse("RelayCodexAppServerBridgeCancel.v1", turnId, true);
+    }
+
+    public IReadOnlyList<CodexBridgeApprovalRequestResponse> ListApprovals(string turnId)
+    {
+        _ = GetTurn(turnId);
+        lock (stateGate)
+        {
+            return approvals.Values
+                .Where(item => item.TurnId == turnId)
+                .OrderBy(item => item.CreatedAt)
+                .Select(ToApprovalResponse)
+                .ToList();
+        }
+    }
+
+    public async Task<CodexBridgeApprovalResult> ResolveApprovalAsync(
+        string approvalId,
+        CodexBridgeApprovalDecision decision,
+        CancellationToken cancellationToken)
+    {
+        CodexBridgeApprovalRequest approval;
+        lock (stateGate)
+        {
+            if (!approvals.TryGetValue(approvalId, out approval!))
+            {
+                throw new CodexBridgeException(StatusCodes.Status404NotFound, "approval_not_found", $"Bridge approval '{approvalId}' was not found.");
+            }
+            approvals.Remove(approvalId);
+        }
+
+        var resolved = new JsonObject
+        {
+            ["schemaVersion"] = "RelayCodexBridgeApprovalResolved.v1",
+            ["approvalId"] = approval.ApprovalId,
+            ["turnId"] = approval.TurnId,
+            ["appServerTurnId"] = approval.AppTurnId,
+            ["requestId"] = approval.RequestId,
+            ["method"] = approval.Method,
+            ["approved"] = decision.Approved,
+            ["reason"] = decision.Reason,
+        };
+
+        var response = BuildApprovalResponse(approval.Method, approval.Params, decision.Approved);
+        await SendResponseAsync(approval.RequestId, response, cancellationToken);
+        AppendEvent(approval.AppTurnId, "approval/resolved", resolved);
+
+        return new CodexBridgeApprovalResult(
+            "RelayCodexAppServerBridgeApprovalResult.v1",
+            approvalId,
+            approval.TurnId,
+            decision.Approved,
+            approval.Method);
+    }
+
+    public async Task<CodexBridgeAttachmentListResponse> StageAttachmentsAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.HasFormContentType)
+        {
+            throw new CodexBridgeException(StatusCodes.Status400BadRequest, "invalid_attachment_request", "Attachment upload must use multipart/form-data.");
+        }
+
+        var form = await request.ReadFormAsync(cancellationToken);
+        if (form.Files.Count == 0)
+        {
+            throw new CodexBridgeException(StatusCodes.Status400BadRequest, "invalid_attachment_request", "At least one file is required.");
+        }
+        if (form.Files.Count > MaxAttachmentCount)
+        {
+            throw new CodexBridgeException(StatusCodes.Status413PayloadTooLarge, "too_many_attachments", $"At most {MaxAttachmentCount} files can be staged at once.");
+        }
+
+        var totalBytes = form.Files.Sum(file => file.Length);
+        if (totalBytes > MaxTotalAttachmentBytes)
+        {
+            throw new CodexBridgeException(StatusCodes.Status413PayloadTooLarge, "attachments_too_large", $"Total staged upload size must be {MaxTotalAttachmentBytes} bytes or less.");
+        }
+
+        var root = Path.Combine(options.HomeDirectory, "attachments");
+        Directory.CreateDirectory(root);
+        var staged = new List<CodexBridgeAttachmentResponse>();
+        foreach (var file in form.Files)
+        {
+            if (file.Length <= 0)
+            {
+                throw new CodexBridgeException(StatusCodes.Status400BadRequest, "empty_attachment", $"Attachment '{file.FileName}' is empty.");
+            }
+            if (file.Length > MaxAttachmentBytes)
+            {
+                throw new CodexBridgeException(StatusCodes.Status413PayloadTooLarge, "attachment_too_large", $"Attachment '{file.FileName}' exceeds {MaxAttachmentBytes} bytes.");
+            }
+
+            var attachmentId = "attachment-" + Guid.NewGuid().ToString("N")[..12];
+            var safeName = SanitizeFileName(string.IsNullOrWhiteSpace(file.FileName) ? "attachment" : file.FileName);
+            var fileRoot = Path.Combine(root, attachmentId);
+            Directory.CreateDirectory(fileRoot);
+            var targetPath = Path.Combine(fileRoot, safeName);
+            await using (var input = file.OpenReadStream())
+            await using (var output = File.Create(targetPath))
+            {
+                await input.CopyToAsync(output, cancellationToken);
+            }
+
+            var sha256 = await ComputeSha256Async(targetPath, cancellationToken);
+            var attachment = new CodexBridgeAttachment(
+                attachmentId,
+                safeName,
+                targetPath,
+                file.ContentType,
+                file.Length,
+                sha256,
+                "browser_upload",
+                DateTimeOffset.UtcNow);
+            lock (stateGate)
+            {
+                attachments[attachmentId] = attachment;
+            }
+
+            var metadataPath = Path.Combine(fileRoot, "metadata.json");
+            await File.WriteAllTextAsync(
+                metadataPath,
+                JsonSerializer.Serialize(attachment, JsonOptions.Default),
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken);
+            staged.Add(ToAttachmentResponse(attachment));
+        }
+
+        return new CodexBridgeAttachmentListResponse("RelayCodexAppServerBridgeAttachments.v1", staged);
+    }
+
+    public CodexBridgeAttachmentDeleteResponse DeleteAttachment(string attachmentId)
+    {
+        CodexBridgeAttachment? attachment;
+        lock (stateGate)
+        {
+            attachments.Remove(attachmentId, out attachment);
+        }
+        if (attachment is not null)
+        {
+            var root = Path.GetDirectoryName(attachment.Path);
+            if (!string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch
+                {
+                    // Best-effort cleanup; the user-local attachment store is also cleaned by retention jobs.
+                }
+            }
+        }
+
+        return new CodexBridgeAttachmentDeleteResponse("RelayCodexAppServerBridgeAttachmentDelete.v1", attachmentId, attachment is not null);
     }
 
     public async Task StreamTurnEventsAsync(string turnId, HttpContext context)
@@ -401,7 +563,15 @@ public sealed class CodexAppServerBridgeService : IDisposable
                     methodNode is JsonValue methodValue &&
                     methodValue.TryGetValue<string>(out var method))
                 {
-                    AppendEvent(ExtractTurnId(obj), method, obj.DeepClone());
+                    if (obj.TryGetPropertyValue("id", out var requestIdNode) && TryGetInt64(requestIdNode, out var requestId))
+                    {
+                        await HandleServerRequestAsync(requestId, method, obj, cancellationToken);
+                    }
+                    else
+                    {
+                        var appTurnId = ExtractTurnId(obj);
+                        AppendEvent(appTurnId, method, obj.DeepClone());
+                    }
                 }
             }
         }
@@ -441,6 +611,220 @@ public sealed class CodexAppServerBridgeService : IDisposable
             return turn;
         }
     }
+
+    private bool TryGetTurnByAppTurnId(string appTurnId, out CodexBridgeTurnState turn)
+    {
+        lock (stateGate)
+        {
+            turn = turns.Values.FirstOrDefault(item => item.AppTurnId == appTurnId)!;
+            return turn is not null;
+        }
+    }
+
+    private async Task HandleServerRequestAsync(long requestId, string method, JsonObject obj, CancellationToken cancellationToken)
+    {
+        var appTurnId = ExtractTurnId(obj);
+        AppendEvent(appTurnId, method, obj.DeepClone());
+
+        if (IsApprovalRequestMethod(method))
+        {
+            if (string.IsNullOrWhiteSpace(appTurnId) || !TryGetTurnByAppTurnId(appTurnId, out var turn))
+            {
+                await SendErrorResponseAsync(
+                    requestId,
+                    -32602,
+                    "Approval request arrived before Relay could map the app-server turn.",
+                    cancellationToken);
+                return;
+            }
+            var parameters = obj.TryGetPropertyValue("params", out var paramsNode) && paramsNode is JsonObject paramsObject
+                ? paramsObject.DeepClone().AsObject()
+                : new JsonObject();
+            var approvalId = "approval-" + Guid.NewGuid().ToString("N")[..12];
+            var approval = new CodexBridgeApprovalRequest(
+                approvalId,
+                turn.TurnId,
+                turn.AppTurnId,
+                requestId,
+                method,
+                parameters,
+                DescribeApprovalRequest(method, parameters),
+                DateTimeOffset.UtcNow);
+            lock (stateGate)
+            {
+                approvals[approvalId] = approval;
+            }
+            AppendEvent(turn.AppTurnId, "approval/requested", JsonSerializer.SerializeToNode(ToApprovalResponse(approval), JsonOptions.Default)!);
+            return;
+        }
+
+        if (method.Equals("item/tool/call", StringComparison.OrdinalIgnoreCase))
+        {
+            AppendEvent(appTurnId, "dynamic-tool/rejected", new JsonObject
+            {
+                ["schemaVersion"] = "RelayCodexBridgeDynamicToolRejected.v1",
+                ["requestId"] = requestId,
+                ["method"] = method,
+                ["message"] = "Relay does not provide custom dynamic tools. Codex app-server native tools must handle local work.",
+            });
+            await SendErrorResponseAsync(
+                requestId,
+                -32601,
+                "Relay does not provide custom dynamic tools. Use Codex app-server native tools.",
+                cancellationToken);
+            return;
+        }
+
+        await SendErrorResponseAsync(requestId, -32601, $"Unsupported app-server request method: {method}", cancellationToken);
+    }
+
+    private async Task SendResponseAsync(long id, JsonObject result, CancellationToken cancellationToken)
+    {
+        await WriteJsonLineAsync(new JsonObject
+        {
+            ["id"] = id,
+            ["result"] = result,
+        }, cancellationToken);
+    }
+
+    private async Task SendErrorResponseAsync(long id, int code, string message, CancellationToken cancellationToken)
+    {
+        await WriteJsonLineAsync(new JsonObject
+        {
+            ["id"] = id,
+            ["error"] = new JsonObject
+            {
+                ["code"] = code,
+                ["message"] = message,
+            },
+        }, cancellationToken);
+    }
+
+    private static JsonObject BuildApprovalResponse(string method, JsonObject parameters, bool approved)
+    {
+        if (method.Equals("item/permissions/requestApproval", StringComparison.OrdinalIgnoreCase))
+        {
+            var permissions = approved && parameters.TryGetPropertyValue("permissions", out var permissionsNode) && permissionsNode is JsonObject permissionsObject
+                ? permissionsObject.DeepClone().AsObject()
+                : new JsonObject();
+            return new JsonObject
+            {
+                ["permissions"] = permissions,
+                ["scope"] = "turn",
+                ["strictAutoReview"] = !approved,
+            };
+        }
+
+        return new JsonObject
+        {
+            ["decision"] = approved ? "accept" : "decline",
+        };
+    }
+
+    private JsonArray? BuildAttachmentMetadata(IReadOnlyList<string>? attachmentIds)
+    {
+        if (attachmentIds is null || attachmentIds.Count == 0)
+        {
+            return null;
+        }
+
+        var array = new JsonArray();
+        lock (stateGate)
+        {
+            foreach (var id in attachmentIds)
+            {
+                if (attachments.TryGetValue(id, out var attachment))
+                {
+                    array.Add(JsonSerializer.SerializeToNode(ToAttachmentResponse(attachment), JsonOptions.Default));
+                }
+            }
+        }
+        return array;
+    }
+
+    private void ValidateAttachmentIds(IReadOnlyList<string>? attachmentIds)
+    {
+        if (attachmentIds is null || attachmentIds.Count == 0)
+        {
+            return;
+        }
+
+        lock (stateGate)
+        {
+            foreach (var id in attachmentIds)
+            {
+                if (!attachments.ContainsKey(id))
+                {
+                    throw new CodexBridgeException(StatusCodes.Status400BadRequest, "attachment_not_found", $"Bridge attachment '{id}' was not found.");
+                }
+            }
+        }
+    }
+
+    private static bool IsApprovalRequestMethod(string method) =>
+        method.Equals("item/commandExecution/requestApproval", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("item/fileChange/requestApproval", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("item/permissions/requestApproval", StringComparison.OrdinalIgnoreCase);
+
+    private static string DescribeApprovalRequest(string method, JsonObject parameters)
+    {
+        var reason = ExtractString(parameters, "reason");
+        if (method.Equals("item/commandExecution/requestApproval", StringComparison.OrdinalIgnoreCase))
+        {
+            var command = ExtractString(parameters, "command");
+            var cwd = ExtractString(parameters, "cwd");
+            return FirstNonEmpty(
+                reason,
+                command is not null && cwd is not null ? $"Run command in {cwd}: {command}" : null,
+                command is not null ? $"Run command: {command}" : null,
+                "Codex app-server requests command execution approval.");
+        }
+        if (method.Equals("item/fileChange/requestApproval", StringComparison.OrdinalIgnoreCase))
+        {
+            var root = ExtractString(parameters, "grantRoot");
+            return FirstNonEmpty(
+                reason,
+                root is not null ? $"Allow file changes under {root}" : null,
+                "Codex app-server requests file change approval.");
+        }
+        return FirstNonEmpty(reason, "Codex app-server requests additional permissions.");
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "Approval requested.";
+
+    private static CodexBridgeApprovalRequestResponse ToApprovalResponse(CodexBridgeApprovalRequest approval) =>
+        new(
+            "RelayCodexAppServerBridgeApproval.v1",
+            approval.ApprovalId,
+            approval.TurnId,
+            approval.AppTurnId,
+            approval.RequestId.ToString(),
+            ApprovalDisplayName(approval.Method),
+            approval.Summary,
+            approval.Params,
+            approval.CreatedAt);
+
+    private static string ApprovalDisplayName(string method) =>
+        method.Equals("item/commandExecution/requestApproval", StringComparison.OrdinalIgnoreCase)
+            ? "command"
+            : method.Equals("item/fileChange/requestApproval", StringComparison.OrdinalIgnoreCase)
+                ? "file change"
+                : method.Equals("item/permissions/requestApproval", StringComparison.OrdinalIgnoreCase)
+                    ? "permissions"
+                    : method;
+
+    private static CodexBridgeAttachmentResponse ToAttachmentResponse(CodexBridgeAttachment attachment) =>
+        new(
+            "RelayCodexAppServerBridgeAttachment.v1",
+            attachment.AttachmentId,
+            attachment.FileName,
+            attachment.Path,
+            attachment.MediaType,
+            attachment.Size,
+            attachment.Sha256,
+            attachment.Source,
+            attachment.CreatedAt);
 
     private void AppendEvent(string? appTurnId, string method, JsonNode payload)
     {
@@ -533,6 +917,25 @@ public sealed class CodexAppServerBridgeService : IDisposable
         }
         return jsonValue.TryGetValue<string>(out var text) && long.TryParse(text, out value);
     }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var builder = new StringBuilder(fileName.Length);
+        foreach (var ch in fileName)
+        {
+            builder.Append(invalid.Contains(ch) ? '_' : ch);
+        }
+        var result = builder.ToString().Trim();
+        return string.IsNullOrWhiteSpace(result) ? "attachment" : result;
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
 }
 
 public sealed record CodexBridgeHealthResponse(
@@ -565,6 +968,41 @@ public sealed record CodexBridgeTurnResponse(
 
 public sealed record CodexBridgeCancelResponse(string SchemaVersion, string TurnId, bool Cancelled);
 
+public sealed record CodexBridgeApprovalDecision(bool Approved, string? Reason = null);
+
+public sealed record CodexBridgeApprovalRequestResponse(
+    string SchemaVersion,
+    string ApprovalId,
+    string TurnId,
+    string AppServerTurnId,
+    string ToolCallId,
+    string ToolName,
+    string Summary,
+    JsonObject Args,
+    DateTimeOffset CreatedAt);
+
+public sealed record CodexBridgeApprovalResult(
+    string SchemaVersion,
+    string ApprovalId,
+    string TurnId,
+    bool Approved,
+    string Method);
+
+public sealed record CodexBridgeAttachmentListResponse(string SchemaVersion, IReadOnlyList<CodexBridgeAttachmentResponse> Attachments);
+
+public sealed record CodexBridgeAttachmentResponse(
+    string SchemaVersion,
+    string AttachmentId,
+    string FileName,
+    string Path,
+    string? MediaType,
+    long Size,
+    string Sha256,
+    string Source,
+    DateTimeOffset CreatedAt);
+
+public sealed record CodexBridgeAttachmentDeleteResponse(string SchemaVersion, string AttachmentId, bool Deleted);
+
 public sealed record CodexBridgeErrorResponse(string SchemaVersion, string Code, string Error);
 
 public sealed class CodexBridgeException(int statusCode, string code, string message) : Exception(message)
@@ -590,6 +1028,27 @@ public sealed record CodexBridgeTurnState(
     string TurnId,
     string SessionId,
     string AppTurnId,
+    string? WorkArea,
+    DateTimeOffset CreatedAt);
+
+public sealed record CodexBridgeApprovalRequest(
+    string ApprovalId,
+    string TurnId,
+    string AppTurnId,
+    long RequestId,
+    string Method,
+    JsonObject Params,
+    string Summary,
+    DateTimeOffset CreatedAt);
+
+public sealed record CodexBridgeAttachment(
+    string AttachmentId,
+    string FileName,
+    string Path,
+    string? MediaType,
+    long Size,
+    string Sha256,
+    string Source,
     DateTimeOffset CreatedAt);
 
 public sealed record CodexAppServerOptions(

@@ -4,13 +4,11 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
-using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseKestrel(options => options.AddServerHeader = false);
-builder.Services.AddAGUI();
 
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.3.3";
 var options = RelayOptions.FromEnvironment(args);
@@ -18,10 +16,7 @@ var token = options.Token;
 var copilot = CopilotTransportFactory.FromEnvironment(options.DataDirectory);
 var copilotChatClient = new RelayCopilotChatClient(copilot);
 var chatGate = new SemaphoreSlim(1, 1);
-var toolResolver = new ToolResolver(options.DataDirectory);
-var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
-var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
-var agUiHostedAgent = agentRunner.CreateHostedAgent();
+var tools = new ToolReadiness(copilot);
 var appServerBridge = new CodexAppServerBridgeService(options);
 
 var app = builder.Build();
@@ -133,9 +128,6 @@ app.MapGet("/v1/workspace", () =>
         Exists: false,
         SelectionMode: "native-picker-or-browser-upload")));
 
-app.MapGet("/v1/tools", () =>
-    Results.Json(RelayToolCatalogSnapshot.FromCurrentCatalog(), JsonOptions.Default));
-
 app.MapGet("/v1/relay/manifest", (HttpRequest request) =>
 {
     var requestBase = $"{request.Scheme}://{request.Host}";
@@ -147,9 +139,6 @@ app.MapPost("/v1/workspace/select", async (WorkspacePickRequest request, Cancell
     var result = await WorkspacePicker.PickAsync(request.CurrentPath, cancellationToken);
     return Results.Json(result, JsonOptions.Default);
 });
-
-app.MapGet("/api/tool-catalog", () =>
-    Results.Json(RelayToolCatalogSnapshot.FromCurrentCatalog(), JsonOptions.Default));
 
 app.MapGet("/api/prevention-metrics", () =>
     Results.Json(RelayPreventionMetrics.Snapshot().ToJson(), JsonOptions.Default));
@@ -211,8 +200,6 @@ app.MapPost("/api/session/closed", async (HttpRequest request, CancellationToken
 app.MapGet("/api/session/status", () =>
     Results.Json(lifecycle.Status(), JsonOptions.Default));
 
-app.MapAGUI("/agui/relay", agUiHostedAgent);
-
 app.MapGet("/bridge/health", () =>
     Results.Json(appServerBridge.Health(), JsonOptions.Default));
 
@@ -257,6 +244,54 @@ app.MapPost("/bridge/turns/{turnId}/cancel", async (string turnId, CancellationT
     try
     {
         return Results.Json(await appServerBridge.CancelTurnAsync(turnId, cancellationToken), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapGet("/bridge/turns/{turnId}/approvals", (string turnId) =>
+{
+    try
+    {
+        return Results.Json(appServerBridge.ListApprovals(turnId), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapPost("/bridge/approvals/{approvalId}", async (string approvalId, CodexBridgeApprovalDecision request, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await appServerBridge.ResolveApprovalAsync(approvalId, request, cancellationToken), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapPost("/bridge/attachments", async (HttpRequest request, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await appServerBridge.StageAttachmentsAsync(request, cancellationToken), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapDelete("/bridge/attachments/{attachmentId}", (string attachmentId) =>
+{
+    try
+    {
+        return Results.Json(appServerBridge.DeleteAttachment(attachmentId), JsonOptions.Default);
     }
     catch (CodexBridgeException ex)
     {
@@ -501,66 +536,11 @@ public sealed record RelayOptions(
     }
 }
 
-public sealed class ToolReadiness(ICopilotTransport copilot, ToolResolver resolver, string dataDirectory)
+public sealed class ToolReadiness(ICopilotTransport copilot)
 {
-    private ReadinessCheck? _officeCache;
-    private DateTimeOffset _officeCacheAt;
-    private Task<ReadinessCheck>? _officeProbeTask;
-    private readonly object _officeGate = new();
-
     public async Task<IReadOnlyList<ReadinessCheck>> CheckAllAsync(CancellationToken cancellationToken)
     {
-        var ripgrepTask = ToolReadinessChecks.CheckExecutableAsync(
-            resolver.ResolveRipgrep(),
-            ["--version"],
-            AppContext.BaseDirectory,
-            cancellationToken);
-        var copilotTask = copilot.CheckAsync(cancellationToken);
-        var office = CheckOfficeCliCachedOrStart();
-
-        await Task.WhenAll(ripgrepTask, copilotTask);
-        return [await ripgrepTask, office, await copilotTask];
-    }
-
-    private ReadinessCheck CheckOfficeCliCachedOrStart()
-    {
-        if (_officeCache is not null && DateTimeOffset.UtcNow - _officeCacheAt < TimeSpan.FromMinutes(3))
-        {
-            return _officeCache;
-        }
-
-        lock (_officeGate)
-        {
-            if (_officeProbeTask is { IsCompleted: true })
-            {
-                try
-                {
-                    _officeCache = _officeProbeTask.GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    _officeCache = new ReadinessCheck(
-                        "officecli",
-                        false,
-                        $"OfficeCLI readiness check failed: {ex.Message}",
-                        Required: false,
-                        State: "provider_error");
-                }
-                _officeCacheAt = DateTimeOffset.UtcNow;
-                _officeProbeTask = null;
-                return _officeCache;
-            }
-
-            _officeProbeTask ??= Task.Run(() =>
-                ToolReadinessChecks.CheckOfficeCliAsync(resolver.ResolveOfficeCli(), dataDirectory, CancellationToken.None));
-        }
-
-        return new ReadinessCheck(
-            "officecli",
-            false,
-            "OfficeCLI readiness check is warming up in the background.",
-            Required: false,
-            State: "connecting");
+        return [await copilot.CheckAsync(cancellationToken)];
     }
 }
 

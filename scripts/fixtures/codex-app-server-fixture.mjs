@@ -10,6 +10,8 @@ const rl = readline.createInterface({
 let initialized = false;
 let threadSeq = 0;
 let turnSeq = 0;
+const pendingApprovals = new Map();
+const pendingDynamicToolRequests = new Map();
 const tracePath = process.env.RELAY_APP_SERVER_FIXTURE_TRACE;
 
 function trace(message) {
@@ -28,6 +30,26 @@ function error(id, code, message) {
 
 function notify(method, params = {}) {
   send({ method, params });
+}
+
+function completeTurn(turn, text) {
+  notify("item/agentMessage/delta", {
+    turnId: turn.id,
+    itemId: `item-${turn.id}-message`,
+    delta: text,
+  });
+  notify("item/completed", {
+    turnId: turn.id,
+    item: {
+      id: `item-${turn.id}-message`,
+      type: "agent_message",
+      text,
+    },
+  });
+  notify("turn/completed", {
+    turnId: turn.id,
+    turn: { ...turn, status: "completed" },
+  });
 }
 
 rl.on("line", (line) => {
@@ -88,23 +110,58 @@ rl.on("line", (line) => {
       send({ id, result: { turn } });
       setTimeout(() => {
         notify("turn/started", { turnId, turn });
-        notify("item/agentMessage/delta", {
-          turnId,
-          itemId: `item-${turnSeq}-message`,
-          delta: `Fixture response for: ${params.input ?? ""}`,
-        });
-        notify("item/completed", {
-          turnId,
-          item: {
-            id: `item-${turnSeq}-message`,
-            type: "agent_message",
-            text: `Fixture response for: ${params.input ?? ""}`,
-          },
-        });
-        notify("turn/completed", {
-          turnId,
-          turn: { ...turn, status: "completed" },
-        });
+        if (String(params.input ?? "").includes("fixture-command-approval")) {
+          const requestId = 9000 + turnSeq;
+          pendingApprovals.set(requestId, { turn, kind: "command" });
+          send({
+            id: requestId,
+            method: "item/commandExecution/requestApproval",
+            params: {
+              itemId: `item-${turnSeq}-command`,
+              threadId,
+              turnId,
+              startedAtMs: Date.now(),
+              cwd: params.cwd ?? null,
+              command: "node --version",
+              reason: "Fixture command approval",
+            },
+          });
+          return;
+        }
+        if (String(params.input ?? "").includes("fixture-file-approval")) {
+          const requestId = 9100 + turnSeq;
+          pendingApprovals.set(requestId, { turn, kind: "file" });
+          send({
+            id: requestId,
+            method: "item/fileChange/requestApproval",
+            params: {
+              itemId: `item-${turnSeq}-file`,
+              threadId,
+              turnId,
+              startedAtMs: Date.now(),
+              grantRoot: params.cwd ?? null,
+              reason: "Fixture file-change approval",
+            },
+          });
+          return;
+        }
+        if (String(params.input ?? "").includes("fixture-dynamic-tool")) {
+          const requestId = 9200 + turnSeq;
+          pendingDynamicToolRequests.set(requestId, { turn });
+          send({
+            id: requestId,
+            method: "item/tool/call",
+            params: {
+              threadId,
+              turnId,
+              callId: `tool-fixture-${turnSeq}-dynamic`,
+              tool: "relay_custom_tool",
+              arguments: { value: "should be rejected" },
+            },
+          });
+          return;
+        }
+        completeTurn(turn, `Fixture response for: ${params.input ?? ""}`);
       }, 10);
       break;
     }
@@ -120,7 +177,22 @@ rl.on("line", (line) => {
     }
 
     default:
-      error(id, -32601, `Unknown method: ${method}`);
+      if (pendingApprovals.has(id)) {
+        const pending = pendingApprovals.get(id);
+        pendingApprovals.delete(id);
+        const decision = params?.decision ?? message.result?.decision ?? "unknown";
+        completeTurn(pending.turn, `Approval ${pending.kind} resolved: ${decision}`);
+      } else if (pendingDynamicToolRequests.has(id)) {
+        const pending = pendingDynamicToolRequests.get(id);
+        pendingDynamicToolRequests.delete(id);
+        if (!message.error) {
+          error(id, -32603, "Dynamic tool request should have been rejected by Relay");
+          return;
+        }
+        completeTurn(pending.turn, `Dynamic tool rejected: ${message.error.message}`);
+      } else {
+        error(id, -32601, `Unknown method: ${method}`);
+      }
       break;
   }
 });
