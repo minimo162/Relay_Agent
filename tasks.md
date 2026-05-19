@@ -118,6 +118,13 @@ one-PDF proofreading and two-PDF consistency comparison, and package Relay Core
 so users with a Microsoft 365 Copilot-capable signed-in Edge profile can run it
 without admin rights or separate LLM credentials.
 
+The completed active queue is `PDFALIGN*`. It implements the 2026-05-19 PDF Section
+Alignment And Simplified UX Plan from `PLANS.md`: remove manual review-type
+selection, make PDF count determine the review behavior, split long PDFs by
+chapter/heading sections, preserve a section correspondence table for
+multi-PDF comparison, and keep the portable package as the primary release
+artifact.
+
 Forward implementation should treat `COREAPI*` and `PDFHTML*` as completed unless a
 regression in their acceptance gates is found. Older
 generic Workbench queues remain historical context unless a regression in their
@@ -183,6 +190,76 @@ Acceptance:
   surface after cutover.
 - Docs clearly state the Copilot subscription/sign-in requirement and the
   no-admin portable distribution target.
+
+### PDFALIGN-01 - Add Section-Aware PDF Review Contract
+
+Status: completed
+
+Scope:
+
+- Extend PDF review output with document sections and section alignments.
+- Treat `auto` as the default review type.
+- Allow one to eight PDFs in a single review request.
+- For one PDF, run typo, wording, and internal consistency checks together.
+- For two or more PDFs, use the first PDF as the baseline and align every
+  other PDF to it before cross-document comparison.
+
+Artifacts:
+
+- Updated `PdfReviewService` contracts.
+- Updated `/v1/pdf/capabilities` response.
+
+Acceptance:
+
+- Response JSON includes `documents[].sections` and `sectionAlignments`.
+- Multi-PDF findings are based on aligned sections where possible.
+- Fallback page-range sections are explicitly labeled as limitations.
+
+### PDFALIGN-02 - Simplify PDF Review UX
+
+Status: completed
+
+Scope:
+
+- Remove manual `誤字・表記`, `文書内整合`, and `2つのPDF比較` choices.
+- Use a single multi-file PDF picker.
+- Explain the count-based behavior in one short paragraph.
+- Show selected files, one primary run button, page-cited findings, and a
+  compact section correspondence table after multi-PDF runs.
+- Keep diagnostics collapsed.
+
+Artifacts:
+
+- Updated React PDF client.
+- Updated CSS and UX smoke.
+
+Acceptance:
+
+- A first-time user can infer the flow by selecting PDFs only.
+- No review-type buttons remain in the default client.
+- Multi-PDF results show section alignment count and table.
+
+### PDFALIGN-03 - Update Packaging And Release Guidance
+
+Status: completed
+
+Scope:
+
+- Update README, implementation log, and portable `README-FIRST.html` copy.
+- Lead release guidance with the portable zip as the primary artifact.
+- Keep the Windows installer as optional.
+- Bump version and release artifacts.
+
+Artifacts:
+
+- Updated docs and packaging help.
+- Version `0.3.22` artifacts.
+
+Acceptance:
+
+- README and release notes make the first-time path clear.
+- `pnpm check` passes.
+- Windows/Linux portable packages and optional Windows installer are created.
 
 ### PDFHTML-02 - Specify Relay Core PDF Review API
 

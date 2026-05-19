@@ -12,7 +12,7 @@ export type StatusResponse = {
   }>;
 };
 
-export type ReviewType = "proofread" | "consistency" | "compare";
+export type ReviewType = "auto" | "single-document" | "multi-document" | "proofread" | "consistency" | "compare";
 
 export type PdfReviewJobResponse = {
   schemaVersion: "RelayPdfReviewJob.v1";
@@ -22,6 +22,7 @@ export type PdfReviewJobResponse = {
   createdAt: string;
   documents: PdfReviewDocument[];
   findings: PdfReviewFinding[];
+  sectionAlignments: PdfReviewSectionAlignment[];
   limitations: string[];
   reportMarkdown: string;
 };
@@ -32,6 +33,7 @@ export type PdfReviewDocument = {
   sha256: string;
   pageCount: number;
   pages: PdfReviewPage[];
+  sections: PdfReviewSection[];
   warnings: string[];
   extractionTruncated: boolean;
 };
@@ -41,6 +43,31 @@ export type PdfReviewPage = {
   charCount: number;
   preview: string;
   hasText: boolean;
+};
+
+export type PdfReviewSection = {
+  sectionId: string;
+  title: string;
+  startPage: number;
+  endPage: number;
+  preview: string;
+  charCount: number;
+};
+
+export type PdfReviewSectionAlignment = {
+  alignmentId: string;
+  baseDocumentId: string;
+  baseSectionId: string;
+  baseTitle: string;
+  basePageStart: number;
+  basePageEnd: number;
+  comparedDocumentId: string;
+  comparedSectionId?: string | null;
+  comparedTitle?: string | null;
+  comparedPageStart?: number | null;
+  comparedPageEnd?: number | null;
+  score: number;
+  status: "aligned" | "low_confidence" | "unmatched_base" | "unmatched_compared" | string;
 };
 
 export type PdfReviewFinding = {

@@ -210,12 +210,14 @@ app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken
 app.MapGet("/v1/pdf/capabilities", () =>
     Results.Json(new PdfReviewCapabilities(
         SchemaVersion: "RelayPdfReviewCapabilities.v1",
-        ReviewTypes: ["proofread", "consistency", "compare"],
+        ReviewTypes: ["auto"],
         SupportedFileTypes: ["pdf"],
-        MaxDocuments: 2,
+        MaxDocuments: 8,
         Storage: "user-local-app-data/pdf-review/jobs",
         Limitations: [
             "Text-layer PDF extraction is supported.",
+            "One PDF is reviewed for typos, wording, and internal consistency in one pass.",
+            "Two or more PDFs are section-aligned before cross-document comparison.",
             "OCR for image-only or scanned PDFs is not included.",
             "Findings are page-cited candidates for human review."
         ]), JsonOptions.Default));

@@ -114,8 +114,8 @@ try {
 
   const pdfA = join(dataDir, "sample-a.pdf");
   const pdfB = join(dataDir, "sample-b.pdf");
-  writeFileSync(pdfA, makeTextPdf("This is is a sample. Date 2026-05-19. Amount 1,000."));
-  writeFileSync(pdfB, makeTextPdf("This is a sample. Date 2026-05-20. Amount 1,500."));
+  writeFileSync(pdfA, makeTextPdf("1. Overview\nThis is is a sample.\n2. Terms\nDate 2026-05-19. Amount 1,000."));
+  writeFileSync(pdfB, makeTextPdf("1. Overview\nThis is a sample.\n2. Terms\nDate 2026-05-20. Amount 1,500."));
 
   const capabilities = await fetch(`http://127.0.0.1:${port}/v1/pdf/capabilities?token=${encodeURIComponent(token)}`, {
     headers: { "X-Relay-Token": token },
@@ -129,7 +129,7 @@ try {
       "X-Relay-Token": token,
       Origin: `http://127.0.0.1:${port}`,
     },
-    body: JSON.stringify({ reviewType: "compare", paths: [pdfA, pdfB] }),
+    body: JSON.stringify({ reviewType: "auto", paths: [pdfA, pdfB] }),
   });
   if (!pdfReview.ok) throw new Error(`pdf review endpoint failed: ${pdfReview.status} ${await pdfReview.text()}`);
   const pdfReviewJson = await pdfReview.json();
@@ -138,6 +138,9 @@ try {
   }
   if (!pdfReviewJson.findings?.length) {
     throw new Error(`pdf review did not return page-cited findings: ${JSON.stringify(pdfReviewJson)}`);
+  }
+  if (!pdfReviewJson.sectionAlignments?.length) {
+    throw new Error(`pdf review did not return a section correspondence table: ${JSON.stringify(pdfReviewJson)}`);
   }
   if (!pdfReviewJson.findings.every((finding) => finding.documentId && finding.page && finding.evidence !== undefined)) {
     throw new Error(`pdf findings are missing anchors: ${JSON.stringify(pdfReviewJson.findings)}`);

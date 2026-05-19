@@ -96,6 +96,47 @@ Distribution direction:
   into shared work folders or into the extracted portable folder unless the
   user explicitly configures that.
 
+### 2026-05-19 PDF Section Alignment And Simplified UX Plan
+
+The next PDF review refinement removes the manual review-type choice and makes
+the product behavior depend on the number of PDFs selected:
+
+- one PDF: review typos, duplicated words, punctuation, wording candidates,
+  dates, numbers, and internal consistency in one run;
+- two or more PDFs: run the same per-document checks, then split each document
+  into chapter/heading sections, build a section correspondence table, and
+  compare aligned sections before reporting cross-document differences;
+- three or more PDFs: use the first selected PDF as the comparison baseline
+  and align each additional PDF to it.
+
+Long PDFs must not be handled by blind independent chunking. Relay should
+prefer numbered headings, chapter labels, and short heading-like lines as
+section boundaries. If no headings are available, Relay may fall back to
+bounded page-range sections, but it must label that limitation in the result.
+Every finding still cites document id, page, anchor text, and evidence
+snippet. The section correspondence table is a first-class result artifact and
+is included in the Markdown report.
+
+The browser UI should stay minimal and first-time friendly:
+
+- one large PDF picker, no review-type tabs or radio buttons;
+- selected files list with clear count;
+- one primary review button;
+- results summarize findings, document count, and section alignment count;
+- section correspondence appears as a compact table only after a multi-PDF
+  review;
+- diagnostics remain collapsed.
+
+Distribution decision for this slice:
+
+- the **portable package remains the primary recommended release artifact**
+  because it is easier to share, does not require administrator rights, and
+  aligns with the current first-run help;
+- the Windows installer remains an optional convenience for Start Menu,
+  desktop shortcut, and uninstall integration;
+- release notes and README should lead with the Windows portable zip for
+  first-time sharing, then list the optional installer.
+
 Framework adoption rule:
 
 - Prefer official Microsoft Agent Framework and AG-UI concepts before adding
@@ -378,9 +419,9 @@ Implementation plan:
 ### 2026-05-19 PDF Review HTML Tool And Distributable Relay Core API Plan
 
 The product should pivot from a generic Workbench to a focused PDF review tool:
-users open Relay, select one or two PDFs, and ask Copilot-backed Relay to find
-typos, omissions, awkward wording, terminology drift, numerical mismatches, and
-cross-document inconsistencies. The goal is a tool that can be distributed
+users open Relay, select one or more PDFs, and Relay checks typos, omissions,
+awkward wording, terminology drift, numerical mismatches, and cross-document
+inconsistencies. The goal is a tool that can be distributed
 simply inside a portable Relay package and used by anyone who has access to
 Microsoft 365 Copilot in their signed-in Edge profile.
 
@@ -401,8 +442,9 @@ Product scope:
   - Detect mismatched headings, section references, table/figure references,
     dates, labels, defined terms, numbers, and repeated statements that drift
     across pages.
-- **Two-PDF consistency comparison**
-  - Compare two documents while preserving page/section correspondence.
+- **Multi-PDF consistency comparison**
+  - Compare two or more documents while preserving page/section correspondence.
+  - Use the first selected PDF as the baseline for three-or-more-PDF reviews.
   - Detect mismatched names, dates, amounts, labels, headings, definitions,
     exhibit/table references, and statements that should align.
   - Avoid simple blind chunking that loses document-to-document alignment.
@@ -428,8 +470,8 @@ Architecture plan:
 1. **Make the PDF HTML tool the default client**
    - Replace the current generic Workbench release entry with a focused static
      HTML client served by Relay Core.
-   - The client should be understandable on first open: select PDF(s), choose
-     review type, run review, inspect findings, export report.
+   - The client should be understandable on first open: select PDF(s), run
+     review, inspect findings and section correspondence, export report.
    - Keep the UI minimal, with a large document selection area, one review
      action, a clear progress region, and a findings table. Avoid developer
      diagnostics unless the user opens support details.

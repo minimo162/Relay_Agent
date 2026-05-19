@@ -360,8 +360,8 @@ function portableFrontDoorHtml(rid, version) {
       <h2 id="start-title">はじめかた</h2>
       <ol class="steps">
         <li><span class="num">1</span><span><span class="file">${escapeHtml(launchName)}</span> を開きます。${escapeHtml(platformHint)}</span></li>
-        <li><span class="num">2</span><span>ブラウザでRelay PDF Reviewが開いたら、確認したいPDFを選択します。</span></li>
-        <li><span class="num">3</span><span>誤字・表記、文書内整合、または2つのPDF比較を選んでレビューを開始します。</span></li>
+        <li><span class="num">2</span><span>ブラウザでRelay PDF Reviewが開いたら、確認したいPDFを1つ以上選択します。</span></li>
+        <li><span class="num">3</span><span>1つなら誤字脱字・表記・文書内整合を一括確認し、2つ以上なら章見出しの対応表を作って比較します。</span></li>
       </ol>
       <p>通常は ${escapeHtml(launchName)} だけを使います。別の起動方法: ${escapeHtml(secondaryLaunch)}。Relayのデータはユーザーのローカルアプリデータに保存され、選択した共有フォルダにはキャッシュを書き込みません。</p>
     </section>
@@ -369,15 +369,15 @@ function portableFrontDoorHtml(rid, version) {
       <h2 id="pdf-title">PDFを確認する</h2>
       <div class="recipes">
         <section class="recipe">
-          <strong>誤字・表記ゆれ</strong>
-          <p>画面中央のファイル選択からPDFを選びます。手作業でPDFパスを入力する必要はありません。</p>
+          <strong>1つのPDF</strong>
+          <p>誤字脱字、表記ゆれ、日付や数値の文書内整合性を一括で確認します。</p>
         </section>
         <section class="recipe">
-          <strong>2つのPDF比較</strong>
-          <p>「2つのPDF比較」を選び、PDF A / PDF B を同じファイル選択で指定します。</p>
+          <strong>複数のPDF</strong>
+          <p>章見出しやページ範囲の対応表を作成し、対応範囲ごとに差分候補を確認します。</p>
         </section>
       </div>
-      <p>ページ数が多いPDFは、ページ構成を先に確認して必要な範囲だけを読みます。2つのPDF比較では、両方のページ構成をそろえてから対応範囲を比較します。</p>
+      <p>ページ数が多いPDFは、章見出しを優先して分割します。見出しが明確でない場合だけ、ページ範囲で安全に分けます。</p>
       <p>PDFはローカルのtext layerを読み取ります。画像だけのPDFやOCRが必要なページは、確認不可として扱われます。</p>
     </section>
     <p style="margin-top: 22px;">Version ${escapeHtml(version)} / ${escapeHtml(rid)}</p>

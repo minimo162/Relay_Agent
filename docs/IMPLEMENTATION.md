@@ -6,7 +6,8 @@
   self-contained .NET Relay Core sidecar. Relay Core remains the owner of M365
   Copilot CDP adaptation, Microsoft Agent Framework/AG-UI execution, local
   tools, approvals, user-local storage, diagnostics, and packaging. The default
-  browser client is thin: it selects PDFs, starts reviews through `/v1/pdf/*`,
+  browser client is thin: it selects one or more PDFs, starts reviews through
+  `/v1/pdf/*`, shows section correspondence tables for multi-PDF reviews,
   shows page-cited findings, exports reports, supports cancellation, and keeps
   diagnostics collapsed. File search, Office editing, and coding remain
   high-frequency recipes over the generic tool catalog and `/agui/relay`, not
@@ -33,6 +34,57 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-19 PDF Section Alignment And Simplified UX
+
+This slice completes the `PDFALIGN*` queue. The PDF client no longer asks users
+to choose separate proofreading, internal-consistency, or comparison modes.
+Users select one or more PDFs and Relay infers the review behavior from the
+file count.
+
+Change:
+
+- Extended PDF review requests to accept up to eight PDFs with `reviewType:
+  auto`.
+- Added page-aware section extraction from numbered headings, chapter labels,
+  and heading-like lines.
+- Added fallback page-range sections when clear headings are not present, with
+  explicit limitations in the result.
+- Added section correspondence output for multi-PDF reviews. The first selected
+  PDF is the baseline for three-or-more-PDF reviews.
+- Changed multi-PDF comparison to use aligned sections before reporting date
+  and amount differences.
+- Simplified the browser UI to one PDF picker, one primary review action,
+  selected-file list, page-cited findings, and a compact correspondence table.
+- Kept the portable package as the primary release artifact and the Windows
+  installer as optional convenience.
+- Bumped client, sidecar, and launcher versions to `0.3.22`.
+
+Verification commands for this slice:
+
+```bash
+pnpm check
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.22-win-x64.zip dist/relay-agent-0.3.22-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.22-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.22-sha256.txt
+```
+
+Result:
+
+- Full `pnpm check` passed, including hard-cut guard, PDF client
+  typecheck/build, sidecar Release build, section-alignment PDF API smoke,
+  AG-UI smokes, DCI/read smokes, Office/PDF extraction smoke, OfficeCLI
+  registry smoke, sidecar security smoke, and release inventory/SBOM
+  generation.
+- Windows portable packaging passed and produced
+  `dist/relay-agent-0.3.22-win-x64.zip` at 81 MiB.
+- Linux portable packaging passed and produced
+  `dist/relay-agent-0.3.22-linux-x64.tar.gz` at 73 MiB.
+- Optional Windows installer packaging passed and produced
+  `dist/installer/Relay.Agent-0.3.22-win-x64-setup.exe` at 84 MiB.
+- Wrote `dist/release/relay-agent-0.3.22-sha256.txt`.
 
 ### 2026-05-19 PDF HTML Client And Relay Core API Cutover
 

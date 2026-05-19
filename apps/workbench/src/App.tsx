@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   Download,
   FileText,
-  GitCompareArrows,
   RotateCw,
   ShieldCheck,
   Trash2,
@@ -15,24 +14,13 @@ import type { ChangeEvent } from "react";
 import type {
   PdfReviewFinding,
   PdfReviewJobResponse,
-  ReviewType,
   StatusResponse,
 } from "./types";
 
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
 const sessionStorageKey = "relay.pdfReview.clientId";
 
-const reviewLabels: Record<ReviewType, string> = {
-  proofread: "誤字・表記",
-  consistency: "文書内整合",
-  compare: "2つのPDF比較",
-};
-
-const reviewDescriptions: Record<ReviewType, string> = {
-  proofread: "誤字、重複語、句読点、言い回しの違和感をページ付きで確認します。",
-  consistency: "同じPDF内の日付、数値、表記ゆれなどをページ単位で確認します。",
-  compare: "2つのPDFをページ単位で読み、日付・数値・記載差分の候補を整理します。",
-};
+const maxPdfFiles = 8;
 
 type ReadinessState = {
   ready: boolean;
@@ -50,7 +38,6 @@ const initialReadiness: ReadinessState = {
 
 export function App() {
   const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
-  const [reviewType, setReviewType] = useState<ReviewType>("proofread");
   const [files, setFiles] = useState<File[]>([]);
   const [job, setJob] = useState<PdfReviewJobResponse | null>(null);
   const [error, setError] = useState("");
@@ -136,29 +123,23 @@ export function App() {
     };
   }, [api, authHeaders]);
 
-  const requiredFiles = reviewType === "compare" ? 2 : 1;
-  const canRun = readiness.ready && files.length === requiredFiles && !running;
+  const canRun = readiness.ready && files.length > 0 && files.length <= maxPdfFiles && !running;
+  const reviewMode = files.length <= 1
+    ? "1つのPDFをまとめて確認"
+    : `${files.length}つのPDFを対応表で比較`;
   const visibleFiles = useMemo(() => files.map((file) => ({
     name: file.name,
     size: formatBytes(file.size),
   })), [files]);
 
-  const chooseReviewType = useCallback((nextType: ReviewType) => {
-    setReviewType(nextType);
-    setJob(null);
-    setError("");
-    setFiles((current) => nextType === "compare" ? current.slice(0, 2) : current.slice(0, 1));
-    if (inputRef.current) inputRef.current.value = "";
-  }, []);
-
   const onFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const nextFiles = Array.from(event.target.files ?? [])
       .filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
-      .slice(0, requiredFiles);
+      .slice(0, maxPdfFiles);
     setFiles(nextFiles);
     setJob(null);
     setError(nextFiles.length === 0 ? "PDFファイルを選択してください。" : "");
-  }, [requiredFiles]);
+  }, []);
 
   const clearSelection = useCallback(() => {
     setFiles([]);
@@ -177,7 +158,7 @@ export function App() {
     abortRef.current = controller;
     try {
       const form = new FormData();
-      form.append("reviewType", reviewType);
+      form.append("reviewType", "auto");
       for (const file of files) form.append("files", file, file.name);
       setProgress("ページ単位でテキストを抽出しています。");
       const response = await fetch(api("/v1/pdf/review"), {
@@ -204,7 +185,7 @@ export function App() {
       abortRef.current = null;
       setRunning(false);
     }
-  }, [api, authHeaders, canRun, files, reviewType]);
+  }, [api, authHeaders, canRun, files]);
 
   const cancelReview = useCallback(() => {
     abortRef.current?.abort();
@@ -283,44 +264,27 @@ export function App() {
       <section className="hero-card" aria-labelledby="review-title">
         <div className="hero-copy">
           <p className="eyebrow">PDF review</p>
-          <h2 id="review-title">PDFを選ぶだけで確認を開始できます</h2>
+          <h2 id="review-title">PDFを選ぶだけでまとめて確認できます</h2>
           <p>
-            ファイルはRelay Coreのユーザーローカル領域で処理されます。
-            共有フォルダや元PDFの場所にキャッシュは作りません。
+            1つなら誤字脱字・表記・文書内整合を一括チェックします。
+            2つ以上なら章見出しの対応表を作ってから文書間の違いも確認します。
           </p>
         </div>
-
-        <div className="review-type-group" role="radiogroup" aria-label="レビュー種別">
-          {(Object.keys(reviewLabels) as ReviewType[]).map((type) => (
-            <button
-              key={type}
-              type="button"
-              role="radio"
-              aria-checked={reviewType === type}
-              className="review-type"
-              data-selected={reviewType === type}
-              onClick={() => chooseReviewType(type)}
-            >
-              {type === "compare" ? <GitCompareArrows size={17} aria-hidden="true" /> : <FileText size={17} aria-hidden="true" />}
-              <span>{reviewLabels[type]}</span>
-            </button>
-          ))}
-        </div>
-
-        <p className="review-description">{reviewDescriptions[reviewType]}</p>
 
         <label className="drop-zone">
           <input
             ref={inputRef}
             type="file"
             accept="application/pdf,.pdf"
-            multiple={reviewType === "compare"}
+            multiple
             onChange={onFileChange}
           />
           <UploadCloud size={26} aria-hidden="true" />
-          <span>{reviewType === "compare" ? "比較するPDFを2つ選択" : "確認するPDFを選択"}</span>
-          <small>ブラウザの標準ファイル選択を使います。パス入力は不要です。</small>
+          <span>PDFを選択</span>
+          <small>1〜{maxPdfFiles}件まで。処理データはユーザーローカル領域に保存されます。</small>
         </label>
+
+        <p className="review-description">{reviewMode}</p>
 
         {visibleFiles.length > 0 ? (
           <ul className="file-list" aria-label="選択中のPDF">
@@ -363,7 +327,7 @@ export function App() {
             <div>
               <p className="eyebrow">Result</p>
               <h2 id="result-title">レビュー結果</h2>
-              <p>{job.findings.length}件の候補 · {job.documents.length}文書 · {job.status}</p>
+              <p>{job.findings.length}件の候補 · {job.documents.length}文書 · {job.sectionAlignments.length}件の対応 · {job.status}</p>
             </div>
             <div className="result-actions">
               <button className="secondary-button" type="button" onClick={downloadReport}>
@@ -383,6 +347,33 @@ export function App() {
                 {job.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
               </ul>
             </div>
+          ) : null}
+
+          {job.sectionAlignments.length > 0 ? (
+            <section className="alignment-panel" aria-labelledby="alignment-title">
+              <div>
+                <p className="eyebrow">Alignment</p>
+                <h3 id="alignment-title">章見出しの対応表</h3>
+              </div>
+              <div className="alignment-list">
+                {job.sectionAlignments.slice(0, 24).map((alignment) => (
+                  <article key={alignment.alignmentId} className="alignment-row" data-status={alignment.status}>
+                    <div>
+                      <strong>{alignment.baseTitle}</strong>
+                      <small>{documentLabel(job, alignment.baseDocumentId)} · p.{alignment.basePageStart}-{alignment.basePageEnd}</small>
+                    </div>
+                    <div>
+                      <strong>{alignment.comparedTitle ?? "対応なし"}</strong>
+                      <small>
+                        {documentLabel(job, alignment.comparedDocumentId)}
+                        {alignment.comparedPageStart ? ` · p.${alignment.comparedPageStart}-${alignment.comparedPageEnd}` : ""}
+                      </small>
+                    </div>
+                    <span>{alignment.status} · {alignment.score}</span>
+                  </article>
+                ))}
+              </div>
+            </section>
           ) : null}
 
           <div className="finding-groups">

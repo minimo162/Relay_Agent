@@ -11,10 +11,9 @@ const pdfService = read("apps/sidecar/PdfReviewService.cs");
 
 for (const needle of [
   "Relay PDF Review",
-  "PDFを選ぶだけで確認を開始できます",
-  "誤字・表記",
-  "文書内整合",
-  "2つのPDF比較",
+  "PDFを選ぶだけでまとめて確認できます",
+  "1つなら誤字脱字・表記・文書内整合",
+  "章見出しの対応表",
   "/v1/pdf/review",
   "/v1/pdf/jobs/",
   "type=\"file\"",
@@ -28,6 +27,7 @@ for (const needle of [
 for (const forbidden of [
   "CopilotChat",
   "useHumanInTheLoop",
+  "review-type-group",
   "作業フォルダ",
   "資料を探す",
   "Officeファイルを編集する",
@@ -40,7 +40,7 @@ for (const forbidden of [
 for (const needle of [
   ".hero-card",
   ".drop-zone",
-  ".review-type-group",
+  ".alignment-panel",
   ".finding-card",
   ".support",
 ]) {
@@ -55,12 +55,14 @@ for (const needle of [
   "PdfReviewService",
   "RelayPdfReviewCapabilities.v1",
   "Text-layer PDF extraction is supported.",
+  "Two or more PDFs are section-aligned",
 ]) {
   assert(program.includes(needle), `Sidecar PDF API route is missing: ${needle}`);
 }
 
 for (const needle of [
   "RelayPdfReviewJob.v1",
+  "PdfReviewSectionAlignment",
   "OCR is not included",
   "Page",
   "ReportMarkdown",

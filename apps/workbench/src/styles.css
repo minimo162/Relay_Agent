@@ -2,7 +2,7 @@
 
 :root {
   color-scheme: light;
-  --bg: #f7f8fb;
+  --bg: #fbfbfa;
   --surface: #ffffff;
   --surface-soft: #f9fafb;
   --border: #dce3ea;
@@ -10,8 +10,8 @@
   --text: #111827;
   --muted: #667085;
   --muted-soft: #98a2b3;
-  --accent: #2454d6;
-  --accent-soft: #eef4ff;
+  --accent: #1f2937;
+  --accent-soft: #f4f2ec;
   --ok: #027a48;
   --ok-soft: #ecfdf3;
   --danger: #b42318;
@@ -186,27 +186,6 @@ h3 {
   color: var(--muted);
 }
 
-.review-type-group {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.review-type {
-  display: inline-flex;
-  min-height: 46px;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--muted);
-  background: var(--surface);
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
-}
-
-.review-type:hover,
-.review-type:focus-visible,
 .primary-button:hover,
 .primary-button:focus-visible,
 .secondary-button:hover,
@@ -215,12 +194,6 @@ h3 {
 .icon-button:focus-visible {
   border-color: var(--accent);
   outline: none;
-}
-
-.review-type[data-selected="true"] {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 .drop-zone {
@@ -370,6 +343,50 @@ h3 {
   padding-left: 20px;
 }
 
+.alignment-panel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  padding: 16px;
+  background: var(--surface-soft);
+}
+
+.alignment-list {
+  display: grid;
+  gap: 8px;
+}
+
+.alignment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.alignment-row strong,
+.alignment-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alignment-row strong {
+  font-size: 14px;
+}
+
+.alignment-row small,
+.alignment-row > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .finding-groups {
   display: grid;
   gap: 20px;
@@ -456,15 +473,15 @@ pre {
     flex-direction: column;
   }
 
-  .review-type-group {
-    grid-template-columns: 1fr;
-  }
-
   .file-list li {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
   .file-list small {
     grid-column: 2;
+  }
+
+  .alignment-row {
+    grid-template-columns: 1fr;
   }
 }

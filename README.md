@@ -6,8 +6,8 @@ Core sidecar:
 > Copilot thinks. Relay executes local work safely.
 
 The active user-facing surface is a **PDF review HTML client** served by Relay
-Core. Users select one or two PDFs in the browser and run page-cited checks for
-typos, wording issues, internal consistency, or cross-document consistency.
+Core. Users select one or more PDFs in the browser and run page-cited checks
+for typos, wording issues, internal consistency, or cross-document consistency.
 Relay keeps extraction, staging, diagnostics, and support artifacts under the
 current user's local application data directory. It does not write caches,
 indexes, or temp files into selected PDFs, shared folders, or work folders.
@@ -16,7 +16,7 @@ indexes, or temp files into selected PDFs, shared folders, or work folders.
 
 ```text
 PDF review HTML client
-  file selection, review type, progress, page-cited findings, report export
+  file selection, progress, section correspondence, page-cited findings, report export
 
 .NET Relay Core sidecar
   serves the HTML client, owns /v1 APIs, AG-UI /agui/relay, Copilot provider
@@ -39,9 +39,10 @@ implementation inputs only. They are not active release or fallback paths.
 
 The default browser client is intentionally narrow and first-time friendly:
 
-- choose `誤字・表記`, `文書内整合`, or `2つのPDF比較`;
-- select PDFs with the standard browser file picker;
+- select one or more PDFs with the standard browser file picker;
 - start one review;
+- let Relay infer the review behavior from the number of selected PDFs;
+- inspect the section correspondence table for multi-PDF reviews;
 - inspect page-cited findings;
 - export a Markdown report;
 - cancel long work from the browser;
@@ -54,9 +55,12 @@ behind stable local APIs and AG-UI.
 Current PDF support is text-layer based. Image-only or scanned pages are
 reported as extraction limitations unless OCR is added in a later release.
 Long-document handling is page-aware: Relay builds page maps and findings cite
-document IDs, page numbers, anchors, and evidence snippets. Two-PDF comparison
-preserves document-to-document correspondence through page and token evidence
-instead of blindly splitting documents into unrelated chunks.
+document IDs, page numbers, anchors, and evidence snippets. Long PDFs are
+split by numbered headings, chapter labels, and heading-like lines when
+available. If no headings are clear, Relay falls back to bounded page-range
+sections and labels that limitation. Multi-PDF comparison preserves
+document-to-document correspondence through a section alignment table before
+reporting date or amount differences.
 
 ## Relay Core API
 
@@ -132,18 +136,22 @@ shows the PDF review HTML client.
 
 ## Packaging
 
-The primary distribution is a portable package:
+The primary distribution is the portable package. This is the recommended file
+to share with first-time users because it does not require administrator
+rights:
 
 ```bash
 pnpm sidecar:portable:linux
 pnpm sidecar:portable:windows
 ```
 
-Windows users extract the zip and double-click `Relay Agent.exe`. Linux users
-extract the tarball and run `./relay-agent`. `README-FIRST.html` is included
-as first-run help, not as the launcher.
+Windows users should download `relay-agent-<version>-win-x64.zip`, extract it,
+and double-click `Relay Agent.exe`. Linux users extract the tarball and run
+`./relay-agent`. `README-FIRST.html` is included as first-run help, not as the
+launcher.
 
-The optional Windows NSIS installer remains available:
+The Windows NSIS installer is optional convenience for Start Menu, desktop
+shortcut, and uninstall integration:
 
 ```bash
 pnpm sidecar:installer:windows
