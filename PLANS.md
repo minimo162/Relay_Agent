@@ -2,6 +2,93 @@
 
 Date: 2026-05-18
 
+## 2026-05-20 Current Implementation Review Remediation Plan
+
+This review supersedes any older wording that implies the Codex app-server
+bridge is already shipped as a runtime feature. The current implemented product
+after the `0.3.25` release is:
+
+- a browser-hosted Relay API Hub served by Relay Core;
+- a .NET sidecar exposing OpenAI-compatible `/v1/models` and
+  `/v1/chat/completions` backed by M365 Copilot over Edge CDP;
+- portable packages with a hardened visible root:
+  `Relay Agent.exe` or `relay-agent`, `README-FIRST.html`, `LICENSES/`, and
+  `app/`;
+- Codex app-server compatibility documents and protocol fixtures only.
+
+The runtime Codex app-server bridge is **not** complete yet. Relay does not yet
+bundle a pinned app-server runtime, does not supervise an app-server process,
+does not expose browser-to-app-server turn/event endpoints, and does not ship a
+chatbot HTML client backed by that bridge. Direct `/v1` remains the current
+supported product path until the bridge runtime passes its own acceptance
+gates.
+
+### Review Findings
+
+- `APPBRIDGE*` completed app-server contract research, fixture creation, and
+  release package-root hardening, but its task wording overstates runtime
+  completion.
+- `docs/IMPLEMENTATION.md` correctly says app-server is not an active product
+  path, while `PLANS.md` and `tasks.md` can be read as if the bridge already
+  exists.
+- There is no pinned redistributable app-server artifact, generated schema
+  bundle, license inventory, or hash recorded for a bundled runtime.
+- There is no sidecar app-server supervisor, stdio JSONL client, initialize
+  handshake, turn lifecycle management, or shutdown policy.
+- There are no browser-safe bridge endpoints for creating sessions, starting
+  turns, streaming events, cancelling turns, staging attachments, or submitting
+  approvals/tool results.
+- There is no default chatbot HTML client that uses the bridge. The current UI
+  is still an API Hub for direct OpenAI-compatible usage.
+- There is no app-server-visible local tool worker behind the bridge. Existing
+  public `/v1` deliberately returns client-managed tool calls and must not
+  execute client tools server-side.
+- There are no bridge-specific acceptance smokes proving app-server
+  initialize, turn streaming, tool-call roundtrip, attachment staging,
+  mutation approval, support-bundle correlation, or no-shared-folder-cache
+  behavior.
+- Current portable packaging reserves a clean `app/` layout but does not prove
+  an `app/app-server` runtime exists.
+
+### Remediation Direction
+
+Keep the current `/v1` API Hub honest as the released product while building a
+separate bridge runtime in ordered slices. Do not remove or hide the direct
+OpenAI-compatible API until the bridge has deterministic smokes and a live
+Copilot acceptance path. Do not reintroduce `/v1/tools`, `/agui/relay`,
+document-search modes, Office modes, code modes, or old Workbench fallback
+paths as public product surfaces.
+
+The next implementation queue is `BRIDGEGAP*` in `tasks.md`:
+
+1. correct the planning truth and mark the current runtime gap;
+2. pin the redistributable app-server artifact, license set, and generated
+   schemas;
+3. validate Relay `/v1` as an app-server provider;
+4. create the user-local app-server home/config model;
+5. implement the sidecar supervisor;
+6. implement the typed stdio JSONL client binding;
+7. implement browser-safe session/turn bridge endpoints;
+8. stream bridge events with app-server/Relay/Copilot correlation ids;
+9. stage browser attachments without writing to work areas;
+10. implement read-only local tools behind the app-server protocol;
+11. implement mutating tools with approval, backups, and diffs;
+12. build the default chatbot HTML client over the bridge;
+13. add bridge, tool-loop, attachment, approval, and packaging smokes;
+14. bundle the app-server runtime in portable packages only after artifact,
+   license, and schema checks pass;
+15. run live Copilot bridge E2E before any release that advertises the bridge;
+16. make the chatbot bridge the primary UX and demote direct `/v1` to
+    developer diagnostics after all gates pass.
+
+Acceptance for this planning slice:
+
+- `PLANS.md` and `tasks.md` clearly state that the app-server bridge runtime is
+  pending, not shipped.
+- `tasks.md` contains pending runtime implementation tasks instead of treating
+  `APPBRIDGE*` as full completion.
+- No code or non-planning documentation is changed in this slice.
+
 ## 2026-05-19 HTML Tool API Hub Cutover
 
 Relay_Agent is pivoting away from the focused PDF review client. The active
@@ -341,6 +428,178 @@ Implications for Relay:
   provider boundary and test it with app-server schema fixtures.
 - Do not build a custom Relay thread/turn/event harness in parallel with the
   app server. The point of adopting app server is to let it own that surface.
+
+### Detailed Codex App Server Runtime Blueprint
+
+The bridge must be implemented as narrow components inside Relay Core. Each
+component has one ownership boundary so Relay does not recreate a second agent
+framework beside the app server.
+
+#### 1. Artifact And Schema Layer
+
+Relay must pin one app-server artifact before writing runtime code against it.
+The artifact layer owns:
+
+- upstream source/release identity: repository, commit/tag, build command, and
+  artifact name;
+- redistribution evidence: license, NOTICE, third-party notices, hashes, and
+  SBOM entries;
+- generated protocol schemas for the pinned version;
+- contract fixtures derived from generated schemas, not hand-written example
+  JSON only;
+- a release gate that blocks packaging if the bundled binary, schema version,
+  and fixture version do not match.
+
+If no redistributable binary exists, Relay should build one in the release
+pipeline and package only the resulting binary plus notices. End users should
+not need Rust, Cargo, Node project setup, Python, npm global install, or a
+network download.
+
+#### 2. Provider Compatibility Layer
+
+Relay Core's `/v1` API remains the M365 Copilot provider boundary. The app
+server should see Relay as a configured `m365-copilot` provider, not as a
+special Relay mode.
+
+Provider compatibility work must verify:
+
+- exact model discovery shape expected by the app server;
+- whether non-streaming Chat Completions is sufficient or whether Relay must
+  add a provider-only streaming or Responses-compatible facade;
+- how tool calls, tool results, refusals, errors, rate limits, and busy-session
+  responses are represented;
+- whether the app server requires provider metadata beyond `baseURL`,
+  `apiKey`, and `model`;
+- how Relay request ids are propagated into app-server diagnostics.
+
+Any adapter added here is a provider adapter only. It must not become a public
+Relay task API or revive `/v1/tools`.
+
+#### 3. App Server Supervisor
+
+Relay Core should own a long-lived app-server child process for each Relay
+session. The supervisor owns:
+
+- artifact resolution under the installed or portable `app/app-server` path;
+- user-local home creation under Relay's data directory;
+- generated provider config pointing at Relay `/v1`;
+- environment isolation so OpenAI keys or unrelated user shell state do not
+  change app-server behavior unexpectedly;
+- child process start, stdout/stdin/stderr lifecycle, startup timeout, idle
+  shutdown, explicit shutdown, orphan cleanup, and upgrade-safe file release;
+- structured readiness: process alive is not ready; initialize plus protocol
+  compatibility is ready;
+- error classification for missing binary, bad permissions, schema mismatch,
+  initialization failure, provider configuration failure, and early process
+  exit.
+
+The supervisor must write app-server sessions, logs, and temporary files only
+to user-local Relay storage. It must never create caches, indexes, logs, or
+config files in a selected work area or shared folder.
+
+#### 4. Stdio JSONL Client Binding
+
+The app-server client binding should be typed and schema-checked for the
+pinned protocol. It owns:
+
+- one JSON message per line framing;
+- correlation ids;
+- `initialize` request and initialized notification;
+- request dispatch and notification demultiplexing;
+- backpressure and bounded event buffering;
+- cancellation and timeout behavior;
+- invalid JSON and unknown-method diagnostics;
+- transcript-safe redaction for logs/support bundles.
+
+Relay must not use a generic strict JSON-RPC client that assumes the
+`jsonrpc` field exists if the pinned app-server protocol omits it.
+
+#### 5. Browser Bridge
+
+The browser bridge is the only browser-facing runtime path for the app-server
+chatbot. It should expose stable, token-protected loopback endpoints such as:
+
+- `GET /bridge/health`;
+- `POST /bridge/sessions`;
+- `GET /bridge/sessions/{sessionId}`;
+- `POST /bridge/sessions/{sessionId}/turns`;
+- `GET /bridge/turns/{turnId}/events` using SSE or WebSocket;
+- `POST /bridge/turns/{turnId}/cancel`;
+- `POST /bridge/approvals/{approvalId}`;
+- `POST /bridge/attachments`;
+- `DELETE /bridge/attachments/{attachmentId}`;
+- `POST /bridge/support-bundle`.
+
+The exact route names may change during implementation, but the contract must
+preserve these capabilities. The bridge validates launch token, host, origin,
+payload size, session ids, turn ids, attachment ids, and work-area references
+before writing anything to app-server stdio.
+
+Bridge events should be normalized for the browser without hiding app-server
+identity. Every run event should carry enough correlation to trace:
+
+```text
+browser session id -> app-server thread id -> app-server turn id
+-> Relay provider request id -> Copilot CDP request id
+```
+
+#### 6. Chatbot Client
+
+The default client is a normal chatbot, not an API documentation page. It
+connects to the browser bridge and renders:
+
+- connection state: Relay Core, Copilot provider, app server, selected work
+  area;
+- one conversation thread with messages and streaming app-server events;
+- work-area picker;
+- attachment tray;
+- inline approval cards;
+- changed-file/diff summaries;
+- stop/cancel;
+- collapsed support details.
+
+The client must not call `/v1/chat/completions` for normal turns. Direct `/v1`
+examples can remain only under developer diagnostics after the bridge path is
+ready.
+
+#### 7. Local Tool Worker
+
+Local tools are app-server tools executed by Relay, not public Relay APIs. The
+worker owns:
+
+- canonical tool registry and schemas;
+- argument validation before execution;
+- workspace containment;
+- read-only versus mutating permission classification;
+- approval prompts and resume payloads;
+- backup/diff artifacts;
+- result caps, timeouts, cancellation, and redaction;
+- structured observations returned to the app-server turn.
+
+Start with read-only `glob`, `grep`, `read`, `workspace_status`, and `diff`.
+Then add mutating `write`, `edit`, `patch`, and semantic Office/PDF extensions
+behind approval. Bounded shell verification remains a later explicit-permission
+category, not a default unrestricted tool.
+
+#### 8. Acceptance Gates
+
+The app-server bridge is not complete until these gates exist:
+
+- artifact/schema pin smoke;
+- app-server initialize smoke;
+- provider compatibility smoke against Relay `/v1`;
+- browser bridge session/turn/event smoke;
+- tool-call roundtrip smoke;
+- attachment staging/read smoke;
+- mutation approval/rejection/resume smoke;
+- portable package inventory/SBOM smoke proving bundled app-server files;
+- no-shared-folder-state smoke;
+- live Copilot E2E through the chatbot bridge when a signed-in Edge CDP session
+  is available.
+
+The release process must not advertise "Codex app-server bridge included" until
+all deterministic smokes pass and live E2E is either passed or explicitly
+documented as unavailable.
 
 ### Relay UI Role After The Bridge
 

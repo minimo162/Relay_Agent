@@ -38,6 +38,66 @@
 
 ## Milestone Log
 
+### 2026-05-20 Codex App-Server Bridge Skeleton
+
+This slice starts the `BRIDGEGAP*` runtime queue without claiming that a real
+Codex app-server binary is bundled yet. Relay now has a fixture-backed
+app-server bridge skeleton that can exercise the process, stdio JSONL,
+session, turn, and event-stream boundaries before the pinned upstream runtime
+is selected.
+
+Change:
+
+- Added `apps/sidecar/CodexAppServerBridge.cs` with:
+  - app-server command resolution from environment or future bundled
+    `app/app-server/codex` path;
+  - user-local app-server home under Relay data storage;
+  - child-process supervisor skeleton;
+  - UTF-8-without-BOM stdio JSONL framing;
+  - `initialize` plus `initialized` handshake;
+  - request/response correlation;
+  - notification capture and turn-event streaming;
+  - loopback bridge response contracts and structured setup errors.
+- Added bridge endpoints:
+  - `GET /bridge/health`;
+  - `POST /bridge/sessions`;
+  - `GET /bridge/sessions/{sessionId}`;
+  - `POST /bridge/sessions/{sessionId}/turns`;
+  - `GET /bridge/turns/{turnId}/events`;
+  - `POST /bridge/turns/{turnId}/cancel`.
+- Added `scripts/fixtures/codex-app-server-fixture.mjs`, a tiny JSONL fixture
+  app-server used only for deterministic bridge tests.
+- Added `scripts/app-server-bridge-smoke.mjs` and wired
+  `pnpm sidecar:app-server-bridge-smoke` into `pnpm check`.
+- Updated `PLANS.md` and `tasks.md` to detail the app-server implementation
+  queue and mark the completed bridge skeleton tasks.
+
+Verification commands:
+
+```bash
+node --check scripts/fixtures/codex-app-server-fixture.mjs
+node --check scripts/app-server-bridge-smoke.mjs
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release -v:minimal
+pnpm sidecar:app-server-bridge-smoke
+```
+
+Outcome on 2026-05-20:
+
+- Script syntax checks passed.
+- Sidecar Release build passed.
+- `pnpm sidecar:app-server-bridge-smoke` passed. The smoke verified token
+  enforcement, bad-origin rejection, fixture app-server process startup,
+  protocol initialization, bridge session creation, turn start, SSE event
+  streaming, app-server turn-id correlation, and bridge readiness transition.
+
+Remaining work:
+
+- Pin and license a real app-server artifact.
+- Validate real app-server provider compatibility against Relay `/v1`.
+- Add attachment staging, local tool worker, approval roundtrips, deterministic
+  bridge smokes for edge cases, portable bundling, chatbot UI, and live Copilot
+  E2E.
+
 ### 2026-05-20 App-Server Contract And Portable Root Hardening
 
 This slice completes the `APPBRIDGE*` planning and release-hardening queue

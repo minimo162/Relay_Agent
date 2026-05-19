@@ -22,10 +22,12 @@ var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
 var agUiHostedAgent = agentRunner.CreateHostedAgent();
+var appServerBridge = new CodexAppServerBridgeService(options);
 
 var app = builder.Build();
 await using var lifecycle = new SidecarLifecycle(app.Lifetime, options.IdleExit);
 lifecycle.Start();
+app.Lifetime.ApplicationStopping.Register(appServerBridge.Dispose);
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.None,
@@ -211,6 +213,73 @@ app.MapGet("/api/session/status", () =>
 
 app.MapAGUI("/agui/relay", agUiHostedAgent);
 
+app.MapGet("/bridge/health", () =>
+    Results.Json(appServerBridge.Health(), JsonOptions.Default));
+
+app.MapPost("/bridge/sessions", async (CodexBridgeSessionRequest request, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await appServerBridge.CreateSessionAsync(request, cancellationToken), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapGet("/bridge/sessions/{sessionId}", (string sessionId) =>
+{
+    try
+    {
+        return Results.Json(appServerBridge.GetSession(sessionId), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapPost("/bridge/sessions/{sessionId}/turns", async (string sessionId, CodexBridgeTurnRequest request, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await appServerBridge.StartTurnAsync(sessionId, request, cancellationToken), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapPost("/bridge/turns/{turnId}/cancel", async (string turnId, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await appServerBridge.CancelTurnAsync(turnId, cancellationToken), JsonOptions.Default);
+    }
+    catch (CodexBridgeException ex)
+    {
+        return BridgeError(ex);
+    }
+});
+
+app.MapGet("/bridge/turns/{turnId}/events", async (string turnId, HttpContext context) =>
+{
+    try
+    {
+        await appServerBridge.StreamTurnEventsAsync(turnId, context);
+    }
+    catch (CodexBridgeException ex) when (!context.Response.HasStarted)
+    {
+        context.Response.StatusCode = ex.StatusCode;
+        await context.Response.WriteAsJsonAsync(
+            new CodexBridgeErrorResponse("RelayCodexAppServerBridgeError.v1", ex.Code, ex.Message),
+            JsonOptions.Default,
+            context.RequestAborted);
+    }
+});
+
 app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken cancellationToken) =>
 {
     var includeSensitive = false;
@@ -313,9 +382,16 @@ static bool RequiresToken(HttpRequest request)
     if (request.Path == "/" || request.Path == "/index.html") return false;
     return request.Path.StartsWithSegments("/api")
         || request.Path.StartsWithSegments("/agui")
+        || request.Path.StartsWithSegments("/bridge")
         || request.Path.StartsWithSegments("/events")
         || request.Path.StartsWithSegments("/v1");
 }
+
+static IResult BridgeError(CodexBridgeException ex) =>
+    Results.Json(
+        new CodexBridgeErrorResponse("RelayCodexAppServerBridgeError.v1", ex.Code, ex.Message),
+        JsonOptions.Default,
+        statusCode: ex.StatusCode);
 
 static Task WriteHttpErrorAsync(HttpContext context, string message, int statusCode, string type, string code)
 {
