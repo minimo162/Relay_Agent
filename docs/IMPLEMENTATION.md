@@ -34,6 +34,46 @@
 
 ## Milestone Log
 
+### 2026-05-20 Live Copilot Bridge E2E Parser Hardening
+
+This slice removes the narrow live blocker found after the real app-server
+Responses provider cutover. The live path reached the Workbench, bundled Codex
+app server, Relay `/v1/responses`, and signed-in Edge CDP Copilot, but failed
+because M365 Copilot returned a valid JSON object followed by UI suggestion
+text. Relay now extracts the first balanced JSON object before validating the
+provider output, while keeping fail-fast validation for missing JSON, unknown
+tools, bad arguments, and schema errors.
+
+Change:
+
+- Added stable Workbench selectors used by browser E2E automation.
+- Updated `pnpm workbench:live-copilot-e2e` to drive the current Bridge
+  Workbench and bundled app-server path instead of stale Workbench fields.
+- Hardened `ParseResponsesCopilotOutput` so valid leading JSON remains usable
+  when Copilot appends suggestion text after the object.
+- Extended the deterministic real app-server/provider smoke so mock Copilot
+  responses include the same trailing suggestion pattern.
+
+Verification commands:
+
+```bash
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release -v:minimal
+node --check scripts/workbench-live-copilot-e2e.mjs
+pnpm sidecar:smoke
+pnpm sidecar:app-server-real-provider-smoke
+pnpm workbench:live-copilot-e2e
+pnpm check
+```
+
+Outcome:
+
+- Passed on 2026-05-20. `pnpm workbench:live-copilot-e2e` completed through
+  real signed-in Edge CDP Copilot on port 9360 with readiness `Ready` and a
+  final assistant response in 12.9 seconds.
+- Broader live scenarios for native app-server file/search/project/approval
+  behavior remain tracked under `BRIDGEMAIN-11`; this entry proves the live
+  bridge canary and fixes the observed parser regression.
+
 ### 2026-05-20 Codex App-Server Responses Provider Compatibility
 
 This slice finishes the real app-server/provider compatibility task for the

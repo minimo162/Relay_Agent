@@ -134,7 +134,7 @@ public static partial class OpenAiApi
             return OpenAiResponsesParseResult.Text(copilotText);
         }
 
-        var candidate = StripJsonFenceForResponses(copilotText);
+        var candidate = ExtractJsonObjectForResponses(copilotText);
         JsonNode? root;
         try
         {
@@ -504,6 +504,86 @@ public static partial class OpenAiApi
         return firstNewline >= 0 && lastFence > firstNewline
             ? trimmed[(firstNewline + 1)..lastFence].Trim()
             : trimmed;
+    }
+
+    private static string ExtractJsonObjectForResponses(string text)
+    {
+        var candidate = StripJsonFenceForResponses(text).TrimStart('\uFEFF').Trim();
+        if (TryExtractBalancedJsonObject(candidate, 0, out var directEnd))
+        {
+            return candidate[..directEnd];
+        }
+
+        for (var i = 0; i < candidate.Length; i++)
+        {
+            if (candidate[i] == '{' && TryExtractBalancedJsonObject(candidate, i, out var end))
+            {
+                return candidate[i..end];
+            }
+        }
+
+        return candidate;
+    }
+
+    private static bool TryExtractBalancedJsonObject(string text, int start, out int end)
+    {
+        end = 0;
+        if (start < 0 || start >= text.Length || text[start] != '{')
+        {
+            return false;
+        }
+
+        var depth = 0;
+        var inString = false;
+        var escaping = false;
+        for (var i = start; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (inString)
+            {
+                if (escaping)
+                {
+                    escaping = false;
+                }
+                else if (ch == '\\')
+                {
+                    escaping = true;
+                }
+                else if (ch == '"')
+                {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+            if (ch == '{')
+            {
+                depth++;
+                continue;
+            }
+            if (ch != '}')
+            {
+                continue;
+            }
+
+            depth--;
+            if (depth == 0)
+            {
+                end = i + 1;
+                return true;
+            }
+            if (depth < 0)
+            {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private static string? ValidateResponsesArgumentsAgainstSchema(string toolName, JsonObject arguments, JsonObject? schema)

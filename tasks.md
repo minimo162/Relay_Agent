@@ -559,12 +559,23 @@ Acceptance:
 
 ### BRIDGEMAIN-11 - Run Live Copilot Bridge E2E
 
-Status: pending
+Status: in progress
 
 Maps to: `BRIDGEGAP-14`
 
 Scope:
 
+- Completed on 2026-05-20:
+  - refreshed `pnpm workbench:live-copilot-e2e` for the current Bridge
+    Workbench selectors and bundled app-server path;
+  - verified workspace selection, browser Workbench submission, app-server
+    turn creation, Relay `/v1/responses`, signed-in Edge CDP Copilot, and final
+    assistant response in one live canary;
+  - hardened Responses parsing so valid leading JSON from Copilot remains
+    usable when the M365 UI appends suggestion text after the JSON object.
+- Remaining broader coverage before treating this task as complete:
+  - expand the live suite beyond the canary into representative app-server
+    native tool scenarios.
 - With signed-in Edge CDP available, run live E2E through the default chatbot
   and bundled app-server bridge.
 - Cover:

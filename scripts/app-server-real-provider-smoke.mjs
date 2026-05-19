@@ -41,9 +41,9 @@ const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.c
     RELAY_WORKBENCH_DIST: join(root, "apps/sidecar/wwwroot"),
     RELAY_ALLOW_MOCK_COPILOT: "1",
     RELAY_COPILOT_MOCK_RESPONSES_JSON: JSON.stringify([
-      JSON.stringify({ content: "bundled app-server text turn complete" }),
-      JSON.stringify({ tool_calls: [{ name: "exec_command", arguments: { cmd: "cat note.txt", workdir: workArea, max_output_tokens: 2000 } }] }),
-      JSON.stringify({ content: "bundled app-server tool turn complete" }),
+      `${JSON.stringify({ content: "bundled app-server text turn complete" })}\n次の作業を教えて`,
+      `${JSON.stringify({ tool_calls: [{ name: "exec_command", arguments: { cmd: "cat note.txt", workdir: workArea, max_output_tokens: 2000 } }] })}\nこの環境でできることは？`,
+      `${JSON.stringify({ content: "bundled app-server tool turn complete" })}\nテストを実行して`,
     ]),
     RELAY_APP_SERVER_COMMAND: executable,
     RELAY_APP_SERVER_ARGS_JSON: JSON.stringify(["app-server"]),

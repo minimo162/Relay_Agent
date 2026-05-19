@@ -459,8 +459,10 @@ export function App() {
           </div>
         </div>
         <button
+          id="readiness"
           className="status-pill"
           type="button"
+          data-testid="relay-readiness"
           data-ready={readiness.ready ? "true" : "false"}
           title={readiness.detail}
           onClick={() => void refreshStatus()}
@@ -490,15 +492,15 @@ export function App() {
         <div className="workspace-row">
           <div>
             <span className="field-label">作業フォルダ</span>
-            <strong>{workspace || "未選択"}</strong>
+            <strong id="workspace" data-testid="relay-workspace">{workspace || "未選択"}</strong>
           </div>
-          <button className="secondary-button" type="button" onClick={() => void pickWorkspace()}>
+          <button id="workspace-change" data-testid="relay-workspace-pick" className="secondary-button" type="button" onClick={() => void pickWorkspace()}>
             <FolderOpen size={16} aria-hidden="true" />
             フォルダを選択
           </button>
         </div>
 
-        <div className="message-list" aria-live="polite">
+        <div id="messages" data-testid="relay-messages" className="message-list" aria-live="polite">
           {messages.length === 0 ? (
             <div className="empty-state">
               <strong>通常のチャットとして指示できます。</strong>
@@ -528,7 +530,7 @@ export function App() {
             </div>
           ) : null}
           {approvalRequests.length > 0 ? (
-            <div className="approval-list" aria-live="polite">
+            <div id="approval" data-testid="relay-approval-list" className="approval-list" aria-live="polite">
               {approvalRequests.map((approval) => (
                 <article className="approval-card" key={approval.approvalId}>
                   <div>
@@ -548,6 +550,8 @@ export function App() {
             </div>
           ) : null}
           <textarea
+            id="instruction"
+            data-testid="relay-instruction"
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
@@ -575,6 +579,8 @@ export function App() {
               />
             </label>
             <button
+              id="send"
+              data-testid="relay-send"
               className="primary-button"
               type="button"
               disabled={!running && !input.trim()}
@@ -597,7 +603,7 @@ export function App() {
             </div>
             <Server size={22} aria-hidden="true" />
           </div>
-          <div className="activity-list" aria-live="polite">
+          <div id="events" data-testid="relay-events" className="activity-list" aria-live="polite">
             {activity.length === 0 ? (
               <p>送信すると、Codex app server のturnとtoolイベントがここに表示されます。</p>
             ) : activity.map((item) => (

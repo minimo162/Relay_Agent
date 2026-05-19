@@ -129,6 +129,10 @@ high-risk gaps into ordered implementation tasks.
 - Added a deterministic real app-server/provider smoke that proves a pinned
   app-server turn can receive a Copilot mock response and can execute a native
   `commandExecution` tool loop through the app-server harness.
+- Hardened the Responses provider parser for M365 Copilot UI chrome by
+  extracting the first balanced JSON object before validating tool names and
+  arguments. This preserves fail-fast schema validation while tolerating
+  Copilot's post-answer suggestion text.
 - Corrected the bridge away from a Relay-owned tool worker. Relay now forwards
   Codex app-server native command/file/permission approval requests and rejects
   custom dynamic tool calls instead of executing `glob`, `grep`, `read`,
@@ -136,10 +140,13 @@ high-risk gaps into ordered implementation tasks.
 - Extended deterministic bridge smoke coverage to prove attachment staging,
   native approval request/resolution roundtrips, and fail-fast rejection of
   custom dynamic tools through `/bridge/*`.
+- Added a current Bridge Workbench live Copilot canary that drives the browser
+  UI, selected workspace, bundled app server, `/v1/responses` provider, and
+  signed-in Edge CDP Copilot path end to end.
 - Remaining high-risk work is generated protocol schema drift checks, broader
   native approval/event compatibility with the upstream app-server protocol,
   polished Workbench tool/diff rendering, package-level runtime verification,
-  and live Copilot bridge E2E.
+  and broader live Copilot bridge scenarios beyond the canary.
 
 ## 2026-05-20 Current Implementation Review Remediation Plan
 
