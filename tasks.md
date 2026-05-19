@@ -6,7 +6,9 @@ Date: 2026-05-18
 
 Move Relay away from default first-party feature modes and toward a stable
 local **HTML tool API hub**: arbitrary local HTML tools should be able to call
-Relay Core for M365 Copilot, AG-UI runs, and governed local tool execution.
+Relay Core for M365 Copilot through a normal OpenAI-compatible API. Tool
+calling is client-managed; Relay-side local tool execution is no longer part
+of the target public product contract.
 
 Relay still uses M365 Copilot through Edge CDP as the reasoning controller.
 Relay should not adopt Codex app-server as the runtime in this task queue, but
@@ -14,11 +16,12 @@ Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
 The current product cutover is no longer the PDF review HTML client. Relay Core
-remains the local API/tool/governance host, but the default client is now Relay
-API Hub: first-run guidance, manifest discovery, starter HTML generation,
-OpenAI-compatible chat API testing, AG-UI endpoint visibility, and collapsed
-diagnostics. PDF review, Office editing, file search, coding, and similar
-workflows are external thin HTML tools or AG-UI recipes over Relay Core.
+is now planned as a local OpenAI-compatible Copilot gateway, and the default
+client is Relay API Hub: first-run guidance, manifest discovery, starter HTML
+generation, OpenAI-compatible chat API testing, client-managed tool-calling
+examples, and collapsed diagnostics. PDF review, Office editing, file search,
+coding, and similar workflows should be external thin HTML tools that call the
+normal API; Relay-side local tools are not part of the target public product.
 
 The completed active queue is `RESPONSIVE*`. It implements the 2026-05-18
 Installed Workbench Responsiveness Plan from `PLANS.md`: make installed
@@ -125,9 +128,19 @@ chapter/heading sections, preserve a section correspondence table for
 multi-PDF comparison, and keep the portable package as the primary release
 artifact.
 
-The active queue is `HTMLTOOL*`. It supersedes the PDFHTML/PDFALIGN product
-surface while preserving Relay Core APIs, Microsoft Agent Framework, AG-UI, and
-OpenCode-style local tools as the backend substrate.
+The completed active queue is `HTMLTOOL*`. It superseded the PDFHTML/PDFALIGN
+product surface with an API Hub. Its AG-UI/local-tool assumptions are now
+superseded by the `OPENAIAPI*` queue, which makes the public product a normal
+OpenAI-compatible API with client-managed tool calling only.
+
+The completed active queue is `OPENAIAPI*`. It implements the 2026-05-19
+OpenAI-Compatible Local API Rules from `PLANS.md`: make the primary product
+contract a normal OpenAI-compatible local API backed by M365 Copilot. Any
+self-made HTML file, script, or OpenAI-compatible client should be able to
+connect by setting `baseURL`, `apiKey`, and `model`, and ordinary
+client-managed OpenAI tool calling should work through `/v1/chat/completions`.
+Relay-side local tools, `/v1/tools`, and `/agui/relay` are removed from the
+target public product contract.
 
 Forward implementation should treat `COREAPI*`, `PDFHTML*`, and `PDFALIGN*` as
 completed history unless a regression in their shared backend acceptance gates
@@ -147,11 +160,13 @@ acceptance criteria have broken.
 ## Execution Rules
 
 - Execute tasks in order unless a task explicitly says it can run in parallel.
-- Do not add new model-visible Relay-specific tool names.
+- Do not add Relay-side public tool endpoints or model-visible Relay-specific
+  tool names.
 - Do not fix Copilot mistakes by adding broad prompt-only folklore.
-- Prefer Agent Framework function/MCP tools and middleware for tool admission,
-  approval, terminal eligibility, and tool-result feedback.
-- Keep AG-UI as the only frontend run/event/state/approval protocol.
+- Prefer ordinary OpenAI-compatible request/response semantics over new Relay
+  protocol surfaces.
+- Do not expose AG-UI as a public product path while the `OPENAIAPI*` cutover
+  is active.
 - Every completed task must update `docs/IMPLEMENTATION.md` with the artifact
   and verification result.
 - Run at least `pnpm check` before marking a milestone complete.
@@ -171,8 +186,9 @@ Scope:
 - Update `PLANS.md`, `tasks.md`, `AGENTS.md`, `README.md`, and
   `docs/IMPLEMENTATION.md` so the active product is Relay API Hub.
 - State that the PDF review client is retired as the default product surface.
-- State that arbitrary HTML tools call Relay Core over localhost using
-  `/v1/relay/manifest`, `/v1/chat/completions`, `/agui/relay`, and `/v1/tools`.
+- State that arbitrary HTML tools call Relay Core over localhost. The
+  historical `/agui/relay` and `/v1/tools` parts of that queue are superseded
+  by `OPENAIAPI*`; new public integrations use `/v1/chat/completions`.
 
 Artifacts:
 
@@ -229,6 +245,386 @@ Artifacts:
 Acceptance:
 
 - `pnpm check` passes.
+
+### OPENAIAPI-01 - Lock Public OpenAI-Compatible Surface
+
+Status: completed
+
+Scope:
+
+- Define the only public OpenAI-compatible endpoints:
+  - `GET /v1/models`;
+  - `OPTIONS /v1/models`;
+  - `GET /v1/models/{model}`;
+  - `OPTIONS /v1/models/{model}`;
+  - `POST /v1/chat/completions`;
+  - `OPTIONS /v1/chat/completions`.
+- Define status/support endpoints as non-OpenAI diagnostic APIs only:
+  - `GET /health`;
+  - `GET /v1/relay/manifest`;
+  - `GET /v1/copilot/session`;
+  - `POST /api/support-bundle`.
+- Mark `/v1/tools` and `/agui/relay` as retired public-product surfaces.
+- Confirm the only model id is `m365-copilot`.
+- State explicitly that Relay targets Chat Completions + Models, not the
+  Responses API.
+
+Artifacts:
+
+- Updated API design notes.
+- Updated endpoint inventory in implementation docs.
+
+Acceptance:
+
+- A developer can understand the complete public surface without learning
+  Relay-specific tools or AG-UI.
+
+### OPENAIAPI-02 - Implement Auth, CORS, And Models Compatibility
+
+Status: completed
+
+Scope:
+
+- Support `Authorization: Bearer <token>`, `X-Relay-Token`, and `?token=` for
+  local examples.
+- Require auth for every `/v1/*` request.
+- Return OpenAI-compatible `401 authentication_error` for missing or invalid
+  tokens.
+- Support browser CORS for:
+  - `Origin: null` from `file://`;
+  - `http://localhost:*`;
+  - `http://127.0.0.1:*`.
+- Reject non-local origins by default.
+- Implement `GET /v1/models` with an OpenAI-compatible list object.
+- Implement `GET /v1/models/m365-copilot`.
+- Return `404 model_not_found` for unknown model ids.
+- Add request id response headers for support correlation without leaking
+  tokens.
+
+Artifacts:
+
+- Updated sidecar API/auth/CORS code.
+- Updated tests for models/auth/CORS.
+
+Acceptance:
+
+- OpenAI-compatible clients can discover `m365-copilot`.
+- Browser `file://` examples can call Relay after passing the launch token.
+
+### OPENAIAPI-03 - Implement Non-Streaming Chat Completions Core
+
+Status: completed
+
+Scope:
+
+- Validate `POST /v1/chat/completions` request JSON.
+- Require `model: "m365-copilot"` and non-empty `messages`.
+- Accept roles: `system`, `developer`, `user`, `assistant`, and `tool`.
+- Accept optional message `name` where OpenAI-compatible clients send it.
+- Support text string message content.
+- Accept `assistant` messages with `content: null` when `tool_calls` exists.
+- Accept assistant `tool_calls` and tool `tool_call_id` for prior tool-call
+  context.
+- Support tool message text string content.
+- Reject multimodal content arrays, images, audio, files, and attachments with
+  `400 unsupported_content`.
+- Support or safely validate these request fields:
+  - `stream`;
+  - `stream_options`;
+  - `temperature`;
+  - `top_p`;
+  - `frequency_penalty`;
+  - `presence_penalty`;
+  - `max_tokens`;
+  - `max_completion_tokens`;
+  - `stop`;
+  - `seed`;
+  - `service_tier`;
+  - `response_format`;
+  - `user`;
+  - `metadata`.
+- Reject first-cut non-goals with clear errors:
+  - `n` other than `1`;
+  - `logprobs`;
+  - `top_logprobs`;
+  - `logit_bias`;
+  - legacy `functions` and `function_call`;
+  - custom tool types other than function tools;
+  - audio output;
+  - stored completion operations.
+- Reject unknown top-level request fields with `unsupported_parameter` until
+  explicitly allowed.
+- Enforce documented request body, message count, and total text-size limits
+  before provider submission; return `request_too_large` on overflow.
+- Return a standard `chat.completion` object with:
+  - `id`;
+  - `object`;
+  - `created`;
+  - `model`;
+  - one `choices[]` item;
+  - `choices[0].message`;
+  - `choices[0].finish_reason`;
+  - `choices[0].logprobs: null`;
+  - `choices[0].message.tool_calls: null` unless tool calls are returned;
+  - `choices[0].message.function_call: null`;
+  - optional/nullable `system_fingerprint`;
+  - `usage` with zero counts when token counts are unavailable.
+
+Artifacts:
+
+- Updated chat completion request validator.
+- Updated Copilot adapter response normalization.
+- API golden fixtures for success and rejected request shapes.
+
+Acceptance:
+
+- A standard OpenAI SDK chat completion call succeeds with `baseURL`,
+  `apiKey`, `model`, and `messages`.
+
+### OPENAIAPI-04 - Implement OpenAI-Compatible Error Contract
+
+Status: completed
+
+Scope:
+
+- Use the envelope:
+  `{ "error": { "message": "...", "type": "...", "param": "...", "code": "..." } }`.
+- Map failures to stable HTTP status and codes:
+  - `400 invalid_request_error`;
+  - `401 authentication_error`;
+  - `404 invalid_request_error`;
+  - `408 timeout_error`;
+  - `409 conflict_error`;
+  - `429 rate_limit_error`;
+  - `500 api_error`;
+  - `502 api_error`;
+  - `504 timeout_error`.
+- Treat Copilot send failure, selector drift, stale response pickup, invalid
+  JSON, and invalid tool call as machine-readable API failures.
+- Do not turn provider failures into assistant prose.
+- Define single-session concurrency behavior:
+  - return `409 conflict_error` when Copilot is busy and no queue exists;
+  - return `429 rate_limit_error` when a bounded queue overflows;
+  - ensure cancellation releases Relay request state.
+
+Artifacts:
+
+- Centralized OpenAI-compatible error mapper.
+- Negative API tests.
+- Timeout/concurrency tests.
+
+Acceptance:
+
+- SDK users receive structured errors instead of HTML, plaintext, or Relay
+  internal exception text.
+
+### OPENAIAPI-05 - Implement Client-Managed Tool Calling
+
+Status: completed
+
+Scope:
+
+- Accept OpenAI-style `tools` entries with `type: "function"`.
+- Validate:
+  - `function.name`;
+  - optional `function.description`;
+  - JSON Schema object `function.parameters`.
+- Accept `function.strict`; if true, validate returned arguments against the
+  enforceable schema subset and fail invalid output with
+  `provider_invalid_tool_call`.
+- Treat omitted `function.parameters` as an empty object schema.
+- Reject OpenAI `custom` tools with `unsupported_tool_type`.
+- Support `tool_choice` values:
+  - `none`;
+  - `auto`;
+  - `required`;
+  - named function choice.
+- Support `parallel_tool_calls`.
+- Return standard assistant `tool_calls` with:
+  - generated `call_...` ids;
+  - `type: "function"`;
+  - exact function name;
+  - `function.arguments` as a valid JSON string.
+- Return `finish_reason: "tool_calls"` for tool-call responses.
+- Accept follow-up messages with `role: "tool"` and `tool_call_id`.
+- Validate tool result continuity when feasible.
+- Relay must never execute client-supplied tools server-side.
+- If `tool_choice` requires a tool and Copilot returns prose or an invalid
+  tool call, return `502 provider_invalid_tool_call`.
+- If `parallel_tool_calls: false` and Copilot returns more than one tool call,
+  fail validation instead of dropping calls.
+
+Artifacts:
+
+- Tool-call prompt compiler for M365 Copilot.
+- Tool-call response validator.
+- Tool-result continuation tests.
+
+Acceptance:
+
+- A standalone HTML/OpenAI SDK client can define a function, receive a tool
+  call, execute the function locally, send `role: "tool"`, and get a final
+  assistant response.
+- No Relay-side local tool execution occurs during the flow.
+
+### OPENAIAPI-06 - Implement JSON Mode And Structured Output Limits
+
+Status: completed
+
+Scope:
+
+- Support `response_format: { "type": "text" }`.
+- Support `response_format: { "type": "json_object" }` by asking Copilot for
+  one JSON object and validating the final assistant content.
+- Reject unsupported `json_schema` or future formats with
+  `400 unsupported_parameter` until implemented.
+- Return `502 provider_invalid_json` when Copilot produces invalid JSON in JSON
+  mode.
+- Do not repair invalid JSON with hidden fallback prose.
+
+Artifacts:
+
+- JSON mode prompt/validator.
+- JSON mode positive and negative tests.
+
+Acceptance:
+
+- Valid JSON mode returns assistant content that parses as one JSON object.
+- Invalid provider output fails as an API error.
+
+### OPENAIAPI-07 - Implement Streaming SSE Compatibility
+
+Status: completed
+
+Scope:
+
+- Implement `stream: true` as OpenAI-compatible SSE.
+- Emit chunks with:
+  - `object: "chat.completion.chunk"`;
+  - `choices[].delta.content` for assistant text;
+  - `choices[].delta.tool_calls` for tool-call deltas when available;
+  - final `data: [DONE]`.
+- Accept `stream_options.include_usage`; if usage is emitted and token counts
+  are unavailable, emit zero counts rather than fabricated values.
+- If streaming is not ready in an intermediate build, return
+  `400 unsupported_parameter` for `stream: true` and ensure examples use
+  `stream: false`.
+- Add cancellation/timeout behavior that does not leave orphaned Copilot
+  browser operations.
+
+Artifacts:
+
+- Streaming response implementation or explicit unsupported guard.
+- SSE parser smoke tests.
+
+Acceptance:
+
+- Either streaming works with OpenAI-compatible chunk shape, or it fails
+  explicitly and predictably before public docs advertise it.
+
+### OPENAIAPI-08 - Update API Hub And Starter HTML
+
+Status: completed
+
+Scope:
+
+- Make the Hub a concise OpenAI-compatible connection page.
+- Show copyable:
+  - `baseURL`;
+  - `apiKey`;
+  - `model: m365-copilot`.
+- Provide:
+  - fetch snippet;
+  - curl snippet;
+  - optional OpenAI JavaScript SDK snippet;
+  - compact client-managed tool-calling example.
+- Generate a dependency-free starter HTML file that uses
+  `POST /v1/chat/completions`.
+- Keep diagnostics, manifest JSON, and support bundle under developer details.
+- Do not show `/v1/tools`, `/agui/relay`, Relay-side tool names, or built-in
+  PDF/search/Office/code modes.
+
+Artifacts:
+
+- Updated `apps/workbench/` Hub UI and styles.
+- Updated starter HTML generator.
+
+Acceptance:
+
+- A first-time user sees one rule: configure `baseURL`, `apiKey`, and `model`.
+- The generated HTML can be saved outside the repo and call Relay.
+
+### OPENAIAPI-09 - Add OpenAI-Compatible SDK And Standalone E2E Smokes
+
+Status: completed
+
+Scope:
+
+- Add smokes for:
+  - `GET /v1/models`;
+  - `GET /v1/models/m365-copilot`;
+  - non-streaming `POST /v1/chat/completions`;
+  - auth failure;
+  - invalid model;
+  - invalid messages;
+  - unsupported content;
+  - unsupported parameters;
+  - deprecated `functions` / `function_call`;
+  - unsupported custom tool types;
+  - JSON mode success/failure;
+  - client-managed tool calling;
+  - strict tool schema success/failure;
+  - `stream: true` success or explicit unsupported error;
+  - request-size limit behavior;
+  - concurrency/busy-session behavior.
+- Add a smoke that writes a temporary standalone HTML file outside the Relay
+  repo and calls Relay with mock Copilot enabled.
+- Add an OpenAI JavaScript SDK compatibility smoke when dependency impact is
+  acceptable; otherwise add a generated SDK-style sample validation.
+- Add guard checks that fail if Hub/docs advertise `/v1/tools`, `/agui/relay`,
+  or Relay-side local tool execution.
+
+Artifacts:
+
+- Updated smoke scripts.
+- Updated `pnpm check` gate.
+
+Acceptance:
+
+- `pnpm check` fails if ordinary OpenAI-compatible usage regresses.
+
+### OPENAIAPI-10 - Update Product Docs And Release Guidance
+
+Status: completed
+
+Scope:
+
+- Update `README.md`, `README-FIRST.html`, and `docs/IMPLEMENTATION.md`.
+- Teach first-time usage:
+  - start Relay Agent;
+  - copy `baseURL`, `apiKey`, and `model`;
+  - use any OpenAI-compatible client or self-made HTML tool.
+- Document supported origins: `file://`, `localhost`, `127.0.0.1`.
+- Document client-managed tool calling and state that clients execute tools.
+- Document request size, message count, timeout, and concurrency limits.
+- Document unsupported surfaces:
+  - no Responses API;
+  - no file/audio/image Chat Completions content;
+  - no legacy `functions` / `function_call` first-target support;
+  - no OpenAI custom tool types first-target support;
+  - no Relay-side public local tools;
+  - no `/v1/tools` or `/agui/relay` public integration path.
+- Document accepted no-op generation fields, error codes, concurrency behavior,
+  and streaming status.
+
+Artifacts:
+
+- Updated product docs and release packaging help.
+
+Acceptance:
+
+- Documentation clearly teaches ordinary OpenAI-compatible usage without
+  Relay-specific wrappers.
 
 ### PDFHTML-01 - Document PDF HTML Product Cutover
 
@@ -5405,7 +5801,7 @@ Completion artifact:
 
 ### HARN03 - Make AgentSession the State Authority
 
-Status: pending
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5436,7 +5832,7 @@ Verification:
 
 ### HARN04 - Replace Custom Approval Handling with Agent Framework HITL
 
-Status: pending
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5512,7 +5908,7 @@ Completion artifact:
 
 ### HARN06 - Normalize Tool Observations and Transcript Storage
 
-Status: partial
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5554,7 +5950,7 @@ Remaining:
 
 ### HARN07 - Rework Multi-File Project Creation Around `apply_patch`
 
-Status: blocked by provider quota
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5596,7 +5992,7 @@ Blocker:
 
 ### HARN08 - Project Agent Framework Runs Through AG-UI Only
 
-Status: pending
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5625,7 +6021,7 @@ Verification:
 
 ### HARN09 - Live Copilot Harness E2E Suite
 
-Status: blocked by provider quota
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5674,7 +6070,7 @@ Remaining:
 
 ### HARN10 - Remove Superseded Relay Harness Paths
 
-Status: pending
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 
@@ -5709,7 +6105,7 @@ Verification:
 
 ### HARN11 - Release Readiness Gate for Harness Migration
 
-Status: pending
+Status: superseded by `OPENAIAPI*`
 
 Scope:
 

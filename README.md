@@ -24,9 +24,8 @@ Relay API Hub
   first-run guidance, API manifest, starter HTML, test prompt, diagnostics
 
 .NET Relay Core sidecar
-  localhost API, Microsoft Agent Framework runtime, AG-UI endpoint, M365
-  Copilot CDP adapter, local tool validation/execution, approvals, backups,
-  logs, support bundles, and user-local storage
+  localhost OpenAI-compatible API, M365 Copilot CDP adapter, token/CORS
+  boundaries, support bundles, and user-local storage
 
 M365 Copilot via Edge CDP
   primary reasoning controller; no OpenAI API key is required
@@ -45,20 +44,18 @@ can discover the current contract through:
 - `GET /health` for readiness;
 - `GET /v1/relay/manifest` for endpoint, auth, and CORS discovery;
 - `GET /v1/copilot/session` for Copilot provider state;
-- `GET /v1/tools` for the OpenCode-style local tool catalog snapshot;
+- `GET /v1/models` and `GET /v1/models/{model}` for model discovery;
 - `POST /v1/chat/completions` for an OpenAI-compatible chat shape backed by
   M365 Copilot;
-- `POST /agui/relay` for Agent Framework runs with AG-UI events, tool calls,
-  approvals, and local execution governance;
 - `POST /api/support-bundle` for explicit redacted diagnostics bundles.
 
 Local HTML files are supported through a narrow CORS policy for `null`,
 `localhost`, and `127.0.0.1` origins. The launch token must be supplied either
-as `?token=...` or `X-Relay-Token`.
+as `?token=...`, `X-Relay-Token`, or `Authorization: Bearer ...`.
 
-Relay does not expose raw Edge CDP, arbitrary shell, arbitrary OfficeCLI argv,
-or unapproved mutation endpoints. Mutating tools are validated, approval-gated,
-audited, and backed up by Relay Core.
+Relay does not execute client-side tools. When an HTML app uses OpenAI function
+tools, Relay returns normal OpenAI-compatible `tool_calls`; the HTML app owns
+tool execution, approvals, and follow-up tool messages.
 
 ## Requirements
 
@@ -98,9 +95,8 @@ pnpm check
 ```
 
 `pnpm check` covers the hard-cut guard, API Hub typecheck/build, sidecar
-build/smokes, Relay Core API smokes, AG-UI agent/tool approval smokes, ripgrep
-and Office/PDF extraction smokes, OfficeCLI policy, sidecar security checks,
-and release inventory/SBOM generation.
+build/smokes, Relay Core API smokes, sidecar security checks, and release
+inventory/SBOM generation.
 
 Start the local sidecar:
 

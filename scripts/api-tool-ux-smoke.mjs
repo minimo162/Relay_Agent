@@ -13,8 +13,8 @@ for (const needle of [
   "Relay API Hub",
   "任意のHTMLツール",
   "/v1/relay/manifest",
+  "/v1/models",
   "/v1/chat/completions",
-  "/agui/relay",
   "HTMLスターター",
   "Copilotに送信",
   "サポート情報を保存",
@@ -33,6 +33,8 @@ for (const forbidden of [
   "資料を探す",
   "Officeファイルを編集する",
   "コードを書く",
+  "/agui/relay",
+  "/v1/tools",
 ]) {
   assert(!app.includes(forbidden), `API Hub client must not expose retired feature UI: ${forbidden}`);
 }
@@ -51,8 +53,8 @@ for (const needle of [
 for (const needle of [
   "/v1/relay/manifest",
   "RelayHtmlToolManifest.v1",
+  "/v1/models",
   "/v1/chat/completions",
-  "/agui/relay",
   "ApplyCorsHeaders",
 ]) {
   assert(program.includes(needle), `Sidecar HTML tool API route is missing: ${needle}`);

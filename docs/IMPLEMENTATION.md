@@ -4,18 +4,20 @@
 
 - Current phase: Relay_Agent uses Relay API Hub, a browser-hosted local HTML
   tool gateway served by a self-contained .NET Relay Core sidecar. Relay Core
-  remains the owner of M365 Copilot CDP adaptation, Microsoft Agent
-  Framework/AG-UI execution, local tools, approvals, user-local storage,
-  diagnostics, and packaging. The default browser client is thin: it explains
-  how arbitrary local HTML tools connect to Relay Core, shows the API manifest,
-  provides starter HTML, tests `/v1/chat/completions`, exposes `/agui/relay`
-  and `/v1/tools`, and keeps diagnostics collapsed. PDF review is retired as
-  the default product surface. File search, Office editing, coding, PDF review,
-  and other workflows are expected to be thin HTML tools or AG-UI recipes over
-  the generic Relay Core API. OpenCode's built-in local tool model remains the
-  reference contract for model-visible file/code tools, while AionUi, OpenWork,
-  Tauri, Python workflow wrappers, Codex app-server, the old generic Workbench,
-  the old PDF client, and hidden fallback runners are not fallback paths.
+  is now the public OpenAI-compatible localhost API for M365 Copilot:
+  `GET /v1/models`, `GET /v1/models/{model}`, and
+  `POST /v1/chat/completions`. The default browser client is thin: it explains
+  how arbitrary local HTML tools connect with `baseURL`, `apiKey`, and
+  `model`, shows the API manifest, provides starter HTML, tests the chat
+  endpoint, and keeps diagnostics collapsed. Public tool calling is
+  client-managed OpenAI function calling; Relay returns `tool_calls` and never
+  executes client tools server-side. PDF review is retired as the default
+  product surface. File search, Office editing, coding, PDF review, and other
+  workflows are expected to be external thin HTML tools or SDK clients over the
+  OpenAI-compatible API. AionUi, OpenWork, Tauri, Python workflow wrappers,
+  Codex app-server, the old generic Workbench, the old PDF client, AG-UI as a
+  public integration path, `/v1/tools` as a public catalog, and hidden fallback
+  runners are not active product paths.
 - Repository state: active source lives under `apps/workbench/`,
   `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
   docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
@@ -35,6 +37,65 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-20 OpenAI-Compatible API Hub Completion
+
+This slice completes the `OPENAIAPI*` cutover and makes Relay's public product
+surface a normal OpenAI-compatible local gateway backed by signed-in M365
+Copilot.
+
+Change:
+
+- Expanded the sidecar OpenAI contract to support:
+  - standard model discovery through `/v1/models` and
+    `/v1/models/m365-copilot`;
+  - `Authorization: Bearer`, `X-Relay-Token`, and query-token auth;
+  - OpenAI-style error envelopes for `/v1/*`;
+  - non-streaming Chat Completions validation;
+  - accepted system/developer/user/assistant/tool text messages;
+  - explicit unsupported guard for `stream: true`;
+  - JSON object mode validation;
+  - client-managed OpenAI function tool declarations and returned
+    `tool_calls`;
+  - a single active Copilot request gate returning `409 conflict_error`.
+- Updated Relay API Hub so it no longer advertises `/agui/relay`, `/v1/tools`,
+  Relay-side local tools, PDF review, Office editing, file search, or coding
+  modes as first-party product surfaces.
+- Updated the manifest, README, portable first-run HTML, hard-cut guard, API
+  Hub smoke, standard chat smoke, and sidecar smoke around the public
+  OpenAI-compatible contract.
+- Marked the old harness/AG-UI public-product tasks as superseded by
+  `OPENAIAPI*` in `tasks.md`.
+
+Verification commands for this slice:
+
+```bash
+dotnet build apps/sidecar/Relay.Sidecar.csproj -v:minimal
+pnpm check
+```
+
+Outcome on 2026-05-20: both commands passed. `pnpm check` included the
+OpenAI-compatible sidecar smoke for models, chat, JSON mode, client-managed
+tool calling, auth, CORS, and the updated API Hub guard checks.
+
+Packaging commands for release `0.3.24`:
+
+```bash
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.24-win-x64.zip dist/relay-agent-0.3.24-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.24-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.24-sha256.txt
+```
+
+Outcome on 2026-05-20: all packaging commands passed. Artifacts:
+
+- `dist/relay-agent-0.3.24-win-x64.zip` (81 MiB);
+- `dist/relay-agent-0.3.24-linux-x64.tar.gz` (73 MiB);
+- `dist/installer/Relay.Agent-0.3.24-win-x64-setup.exe` (84 MiB);
+- `dist/release/relay-agent-0.3.24-sha256.txt`;
+- `dist/release/relay-release-inventory.json`;
+- `dist/release/relay-sbom.json`.
 
 ### 2026-05-19 HTML Tool API Hub Cutover
 

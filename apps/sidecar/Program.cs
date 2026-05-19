@@ -17,6 +17,7 @@ var options = RelayOptions.FromEnvironment(args);
 var token = options.Token;
 var copilot = CopilotTransportFactory.FromEnvironment(options.DataDirectory);
 var copilotChatClient = new RelayCopilotChatClient(copilot);
+var chatGate = new SemaphoreSlim(1, 1);
 var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
@@ -32,17 +33,19 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 
 app.Use(async (context, next) =>
 {
+    context.Response.Headers["x-request-id"] = context.TraceIdentifier;
+
     if (!IsLocalHost(context.Request.Host.Host))
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse("Host is not allowed."));
+        await WriteHttpErrorAsync(context, "Host is not allowed.", StatusCodes.Status403Forbidden, "invalid_request_error", "host_not_allowed");
         return;
     }
 
     if (RequiresToken(context.Request) && !HasValidToken(context.Request, token))
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse("Relay launch token is required."));
+        await WriteHttpErrorAsync(context, "Relay launch token is required.", StatusCodes.Status401Unauthorized, "authentication_error", "missing_api_key");
         return;
     }
 
@@ -57,7 +60,7 @@ app.Use(async (context, next) =>
         if (!HasAllowedOrigin(origin, options.PublicOrigin))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await context.Response.WriteAsJsonAsync(new ErrorResponse("Origin is not allowed."));
+            await WriteHttpErrorAsync(context, "Origin is not allowed.", StatusCodes.Status403Forbidden, "invalid_request_error", "origin_not_allowed");
             return;
         }
         context.Response.StatusCode = StatusCodes.Status204NoContent;
@@ -67,7 +70,7 @@ app.Use(async (context, next) =>
     if (IsStateChanging(context.Request.Method) && !HasAllowedOrigin(origin, options.PublicOrigin))
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse("Origin is not allowed."));
+        await WriteHttpErrorAsync(context, "Origin is not allowed.", StatusCodes.Status403Forbidden, "invalid_request_error", "origin_not_allowed");
         return;
     }
 
@@ -224,33 +227,48 @@ app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken
     return Results.File(path, "application/zip", Path.GetFileName(path));
 });
 
-app.MapGet("/v1/models", () => Results.Json(new
-{
-    @object = "list",
-    data = new[]
-    {
-        new
-        {
-            id = "m365-copilot",
-            @object = "model",
-            owned_by = "relay-sidecar",
-        },
-    },
-}));
+app.MapGet("/v1/models", () => Results.Json(OpenAiApi.ModelsList(), JsonOptions.Default));
 
-app.MapPost("/v1/chat/completions", async (OpenAiChatCompletionRequest request, CancellationToken cancellationToken) =>
+app.MapGet("/v1/models/{modelId}", (string modelId) =>
+    string.Equals(modelId, OpenAiApi.ModelId, StringComparison.Ordinal)
+        ? Results.Json(OpenAiApi.ModelObject(), JsonOptions.Default)
+        : OpenAiApi.Error(404, $"Model '{modelId}' was not found. Use '{OpenAiApi.ModelId}'.", param: "model", code: "model_not_found"));
+
+app.MapPost("/v1/chat/completions", async (HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {
-    var prompt = request.LastUserMessage();
-    if (string.IsNullOrWhiteSpace(prompt))
+    var (request, error) = await OpenAiApi.ReadChatRequestAsync(httpRequest, cancellationToken);
+    if (error is not null || request is null)
     {
-        return Results.BadRequest(new ErrorResponse("No user message was supplied."));
+        return error ?? OpenAiApi.Error(400, "Invalid request.");
     }
 
-    var reply = (await copilotChatClient.GetResponseAsync(
-        [new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt)],
-        new Microsoft.Extensions.AI.ChatOptions { ModelId = request.Model ?? "m365-copilot" },
-        cancellationToken)).Text;
-    return Results.Json(OpenAiChatCompletionResponse.FromText(request.Model ?? "m365-copilot", reply));
+    if (!await chatGate.WaitAsync(0, cancellationToken))
+    {
+        return OpenAiApi.Error(409, "Copilot is already handling another request. Retry after the current request completes.", type: "conflict_error", code: "copilot_busy");
+    }
+
+    try
+    {
+        var prompt = OpenAiApi.BuildCopilotPrompt(request);
+        var reply = (await copilotChatClient.GetResponseAsync(
+            [new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt)],
+            new Microsoft.Extensions.AI.ChatOptions { ModelId = OpenAiApi.ModelId },
+            cancellationToken)).Text;
+
+        return OpenAiApi.BuildOpenAiResponse(request, reply);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return OpenAiApi.Error(408, "The request was cancelled or timed out.", type: "timeout_error", code: "request_cancelled");
+    }
+    catch (Exception ex)
+    {
+        return OpenAiApi.Error(502, $"Copilot provider failed: {ex.Message}", type: "api_error", code: "provider_error");
+    }
+    finally
+    {
+        chatGate.Release();
+    }
 });
 
 app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>
@@ -299,9 +317,35 @@ static bool RequiresToken(HttpRequest request)
         || request.Path.StartsWithSegments("/v1");
 }
 
+static Task WriteHttpErrorAsync(HttpContext context, string message, int statusCode, string type, string code)
+{
+    context.Response.StatusCode = statusCode;
+    context.Response.ContentType = "application/json; charset=utf-8";
+    if (context.Request.Path.StartsWithSegments("/v1"))
+    {
+        return context.Response.WriteAsJsonAsync(
+            new OpenAiErrorEnvelope(new OpenAiError(message, type, null, code)),
+            JsonOptions.Default);
+    }
+
+    return context.Response.WriteAsJsonAsync(new ErrorResponse(message), JsonOptions.Default);
+}
+
 static bool HasValidToken(HttpRequest request, string token)
 {
     if (request.Headers.TryGetValue("X-Relay-Token", out var header) && header == token) return true;
+    if (request.Headers.TryGetValue("Authorization", out var authorization))
+    {
+        foreach (var value in authorization)
+        {
+            if (!string.IsNullOrWhiteSpace(value) &&
+                value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(value["Bearer ".Length..].Trim(), token, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+    }
     return request.Query.TryGetValue("token", out var query) && query == token;
 }
 
@@ -321,7 +365,7 @@ static bool HasAllowedOrigin(string origin, string publicOrigin)
 static void ApplyCorsHeaders(HttpResponse response, string origin)
 {
     response.Headers["Access-Control-Allow-Origin"] = origin;
-    response.Headers["Access-Control-Allow-Headers"] = "Content-Type, X-Relay-Token";
+    response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Relay-Token";
     response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
     response.Headers["Access-Control-Max-Age"] = "600";
     response.Headers["Vary"] = "Origin";
@@ -505,9 +549,9 @@ public sealed record RelayHtmlToolManifest(
                 new RelayHtmlToolEndpoint("GET", "/health", "Read Relay Core readiness."),
                 new RelayHtmlToolEndpoint("GET", "/v1/relay/manifest", "Discover the HTML tool API contract."),
                 new RelayHtmlToolEndpoint("GET", "/v1/copilot/session", "Read Copilot provider state."),
-                new RelayHtmlToolEndpoint("GET", "/v1/tools", "Read the Agent Framework/OpenCode-style local tool catalog."),
-                new RelayHtmlToolEndpoint("POST", "/v1/chat/completions", "Ask M365 Copilot through an OpenAI-compatible chat shape."),
-                new RelayHtmlToolEndpoint("POST", "/agui/relay", "Run an Agent Framework turn with AG-UI events and local tool governance."),
+                new RelayHtmlToolEndpoint("GET", "/v1/models", "List OpenAI-compatible Relay models."),
+                new RelayHtmlToolEndpoint("GET", "/v1/models/{model}", "Read a single OpenAI-compatible Relay model."),
+                new RelayHtmlToolEndpoint("POST", "/v1/chat/completions", "Ask M365 Copilot through an OpenAI-compatible chat shape. Client tools are declared with OpenAI function tools and executed by the client."),
                 new RelayHtmlToolEndpoint("POST", "/api/support-bundle", "Export an explicit redacted diagnostics bundle.")
             ]);
 }

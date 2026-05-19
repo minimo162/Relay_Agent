@@ -373,8 +373,8 @@ function portableFrontDoorHtml(rid, version) {
           <p><code>/v1/chat/completions</code> を呼ぶと、自作HTMLからCopilotに依頼できます。</p>
         </section>
         <section class="recipe">
-          <strong>Agent API</strong>
-          <p><code>/agui/relay</code> を呼ぶと、AG-UIイベントとローカルツール実行を扱えます。</p>
+          <strong>OpenAI互換</strong>
+          <p><code>/v1/models</code> と <code>/v1/chat/completions</code> を通常のOpenAI互換APIとして使います。ツール実行はHTML側で扱います。</p>
         </section>
       </div>
       <p>APIには起動時のlaunch tokenが必要です。Relay API HubのスターターHTMLをコピーすると、最小構成の呼び出し例から始められます。</p>

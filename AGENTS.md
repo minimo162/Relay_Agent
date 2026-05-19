@@ -15,18 +15,20 @@
   the generic chatbot Workbench, and the PDF review client are historical
   implementation context only. They are not active product architecture,
   release targets, or fallback paths.
-- M365 Copilot via Edge CDP remains the primary LLM controller. Microsoft Agent
-  Framework is the backend agent runtime inside the .NET sidecar. Relay owns
-  the M365 Copilot provider adapter, local tool validation, execution,
-  approvals, backups, diffs, logs, and app storage.
-- The active generic tool catalog is `glob`, `grep`, `read`, `officecli`,
-  `officecli_mutate`, `edit`, `write`, `patch`, `workspace_status`, `diff`,
-  `bash`, and `ask_user`. Final answers are normal Agent Framework assistant
-  responses, not a Relay tool.
-- Current implementation focus is the HTMLTOOL/COREAPI cutover in `PLANS.md`:
-  Relay Core exposes stable localhost APIs for arbitrary HTML tools, including
-  `/v1/relay/manifest`, `/v1/chat/completions`, `/agui/relay`, `/v1/tools`,
-  `/v1/copilot/session`, `/health`, and explicit redacted support bundles.
+- M365 Copilot via Edge CDP remains the primary LLM controller. Relay Core is
+  now the public OpenAI-compatible local gateway: `GET /v1/models`,
+  `GET /v1/models/{model}`, and `POST /v1/chat/completions`.
+- Public tool calling is OpenAI-compatible and client-managed. Relay returns
+  `tool_calls`; the calling HTML tool or SDK client executes its own tools and
+  sends follow-up `role: "tool"` messages. Relay-side local tools are not part
+  of the public product contract.
+- `/agui/relay` and `/v1/tools` may still exist as historical/internal
+  compatibility routes until removed, but they must not be advertised in the
+  API Hub, README, starter HTML, release notes, or new integration docs.
+- Current implementation focus is the `OPENAIAPI*` cutover in `PLANS.md`:
+  normal OpenAI-compatible Chat Completions and Models shapes, client-managed
+  function tools, fail-fast Copilot provider behavior, explicit diagnostics,
+  and no active AionUi/OpenCode/OpenWork/Tauri/PDF-review fallback paths.
 
 ## Source of Truth
 
@@ -52,24 +54,21 @@ decisions, verification runs, and known limitations.
 - Prefer the smallest change that advances the hard-cutover architecture.
 - Preserve user-local storage boundaries. Shared folders and searched folders
   must not receive Relay caches, indexes, or temp artifacts.
-- Any mutation to Office or code must go through Relay validation and explicit
-  user approval.
-- Do not add unrestricted shell execution to the default tool catalog.
+- Do not add unrestricted shell execution or Relay-side public tool execution
+  to the OpenAI-compatible API.
 
 ## Tool Implementation Rules
 
-- AG-UI remains the backend run/event/approval protocol through `/agui/relay`.
-  The default browser client is the Relay API Hub and should call stable Relay
-  Core APIs rather than owning tool execution or CDP logic.
+- The default browser client is the Relay API Hub and should teach ordinary
+  OpenAI-compatible usage: `baseURL`, `apiKey`, `model`, and
+  `/v1/chat/completions`.
 - The API Hub visual implementation should stay minimal and professional:
   React + Vite + TypeScript, clear first-run steps, endpoint discovery,
   starter HTML generation, a small Copilot connectivity test, and collapsed
   diagnostics. Use lucide-react for icons.
 - Do not choose Next.js or Chakra UI by default unless `PLANS.md` is explicitly
   changed with the reason and verification impact.
-- Use Microsoft Agent Framework in the .NET sidecar as the production backend
-  agent runtime while adopting AG-UI. Implement M365 Copilot as a
-  `RelayCopilotChatClient` or equivalent Agent Framework-compatible provider
+- Implement M365 Copilot as a `RelayCopilotChatClient` or equivalent provider
   adapter over Edge CDP. Python workflow examples may be read as comparison
   material, but do not add a Python runtime dependency unless `PLANS.md` is
   explicitly changed with packaging and verification criteria.
@@ -78,32 +77,13 @@ decisions, verification runs, and known limitations.
   selector drift must fail the run with AG-UI error events and diagnostics.
   Short bounded readiness waits inside the same CDP operation are allowed; a
   fallback model, fallback planner, old runner, or weaker tool path is not.
-- `glob` and `grep` are generic local exploration tools backed by ripgrep.
-  Push filters into ripgrep where possible, stream/cap output before buffering,
-  and keep workspace containment, timeout, cancellation, and result caps
-  enforced by Relay.
-- `grep` must pass a `--` separator before the pattern so user/model patterns
-  beginning with `-` cannot become ripgrep options.
-- `read` must support exact file reads for plaintext/code and Relay-supported
-  Office/PDF extraction. Do not revive `RelayDocumentSearch*`, SQLite/FTS, or
-  per-mode document-search engines to satisfy Office/PDF reads.
-- `officecli` must be exposed through Relay-owned semantic operations compiled
-  to argv by Relay. Do not let Copilot provide arbitrary OfficeCLI command
-  arrays directly. Office mutations need backup, approval, and post-apply
-  verification.
-- `edit`, `write`, and `patch` must stay workspace-scoped, approval-gated for
-  mutations, and auditable through run events and backup/diff artifacts.
-- `workspace_status` and `diff` are generic read-only review tools. Use them to
-  expose dirty state, changed paths, pending mutations, and applied changes
-  before final answers.
-- `bash` is a bounded verification permission category, not unrestricted shell.
-  It must use structured argv, workspace containment, timeout/output caps,
-  cancellation, and deny rules for destructive, network, package-install,
-  secret-reading, or cross-workspace behavior unless the user explicitly
-  approves a narrowly displayed command.
+- `tools` in `/v1/chat/completions` are OpenAI function tools supplied by the
+  client. Relay validates the schema shape, asks Copilot to choose a call when
+  appropriate, returns OpenAI-compatible `tool_calls`, and never executes those
+  tools server-side.
 - File search, Office editing, coding, PDF review, and domain-specific checks
-  are thin HTML tools or recipes over the same generic API and tool catalog;
-  they are not separate default UI modes in Relay.
+  are external thin HTML tools or SDK clients over the same OpenAI-compatible
+  API; they are not separate default UI modes or Relay-side public tools.
 - Support bundles must be explicit and redacted by default. They must not
   include raw document contents unless the user explicitly opts in.
 
@@ -115,11 +95,8 @@ decisions, verification runs, and known limitations.
   - hard-cut guard;
   - API Hub typecheck/build;
   - sidecar build;
-  - sidecar smoke;
-  - official AG-UI agent golden smoke for search, Office, coding, generic
-    verification, approvals, and fail-fast invalid output;
-  - official AG-UI client-tool approval smoke for read-only execution,
-    mutation approval, rejection, and resume;
+  - sidecar smoke for OpenAI-compatible models, chat, JSON mode, tool calling,
+    auth, and CORS;
   - sidecar security smoke;
   - release inventory/SBOM generation.
 - Use `pnpm workbench:ux-e2e` for user-visible browser-client flow changes when
@@ -141,6 +118,5 @@ decisions, verification runs, and known limitations.
 - When editing planning docs, keep `PLANS.md`, `AGENTS.md`,
   `docs/IMPLEMENTATION.md`, and `README.md` aligned on the same active
   architecture story: arbitrary local HTML tools, one Relay API Hub, one .NET
-  Relay Core sidecar, Microsoft Agent Framework as backend runtime, M365
-  Copilot through Relay's CDP adapter as planner, and Relay as local tool
-  governance/execution layer.
+  Relay Core sidecar, Relay Core as a local OpenAI-compatible API, M365
+  Copilot through Relay's CDP adapter as planner, and client-managed tools.

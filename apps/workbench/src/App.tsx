@@ -219,8 +219,8 @@ export function App() {
           <p className="eyebrow">Local Copilot API</p>
           <h2 id="hub-title">HTMLをつなぐだけでCopilotを使えます</h2>
           <p>
-            Relay CoreがCopilot接続、トークン認証、AG-UI実行、ローカルツールの安全確認を受け持ちます。
-            HTMLツール側はAPIを呼ぶだけです。
+            Relay CoreがCopilot接続、トークン認証、OpenAI互換APIを受け持ちます。
+            HTMLツール側は通常のChat Completions APIとして呼び、必要なツールはHTML側で実行します。
           </p>
         </div>
 
@@ -234,8 +234,8 @@ export function App() {
             <span><code>/v1/chat/completions</code> でCopilotに依頼します。</span>
           </article>
           <article>
-            <strong>3. 必要ならAG-UI</strong>
-            <span><code>/agui/relay</code> でローカルツール実行まで扱えます。</span>
+            <strong>3. ツールはHTML側</strong>
+            <span>function callingの結果を受け取り、クライアント側で安全に実行します。</span>
           </article>
         </div>
       </section>
@@ -278,9 +278,9 @@ export function App() {
           <dl className="endpoint-list">
             <div><dt>Health</dt><dd><code>GET /health</code></dd></div>
             <div><dt>Manifest</dt><dd><code>GET /v1/relay/manifest</code></dd></div>
+            <div><dt>Models</dt><dd><code>GET /v1/models</code></dd></div>
             <div><dt>Chat</dt><dd><code>POST /v1/chat/completions</code></dd></div>
-            <div><dt>Agent</dt><dd><code>POST /agui/relay</code></dd></div>
-            <div><dt>Tools</dt><dd><code>GET /v1/tools</code></dd></div>
+            <div><dt>Session</dt><dd><code>GET /v1/copilot/session</code></dd></div>
           </dl>
         </section>
       </section>
@@ -330,8 +330,9 @@ function loadClientId(): string {
 
 function extractError(text: string): string | null {
   try {
-    const parsed = JSON.parse(text) as { error?: string };
-    return parsed.error ?? null;
+    const parsed = JSON.parse(text) as { error?: string | { message?: string } };
+    if (typeof parsed.error === "string") return parsed.error;
+    return parsed.error?.message ?? null;
   } catch {
     return text.trim() || null;
   }

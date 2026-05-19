@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assistantText, hasRunFinished, postAgUi } from "./lib/agui-smoke.mjs";
 
 const token = "relay-smoke-token";
 const port = 17891;
@@ -15,7 +14,12 @@ const env = {
   RELAY_DATA_DIR: dataDir,
   RELAY_WORKBENCH_DIST: join(process.cwd(), "apps/sidecar/wwwroot"),
   RELAY_ALLOW_MOCK_COPILOT: "1",
-  RELAY_COPILOT_MOCK_RESPONSE: JSON.stringify({ action: "final", answer: "mock Copilot response from sidecar transport" }),
+  RELAY_COPILOT_MOCK_RESPONSES_JSON: JSON.stringify([
+    "mock Copilot response from sidecar transport",
+    "{\"ok\":true}",
+    "{\"tool_calls\":[{\"name\":\"find_file\",\"arguments\":{\"query\":\"車名\"}}]}",
+    "not json",
+  ]),
 };
 
 const child = spawn("dotnet", ["run", "--project", "apps/sidecar/Relay.Sidecar.csproj", "--no-build", "--configuration", "Release"], {
@@ -59,6 +63,15 @@ try {
     headers: { "X-Relay-Token": token },
   });
   if (!models.ok) throw new Error(`models endpoint failed: ${models.status}`);
+  const modelsJson = await models.json();
+  if (!modelsJson.data?.some((model) => model.id === "m365-copilot")) {
+    throw new Error(`models endpoint did not return m365-copilot: ${JSON.stringify(modelsJson)}`);
+  }
+
+  const model = await fetch(`http://127.0.0.1:${port}/v1/models/m365-copilot`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!model.ok) throw new Error(`single model endpoint failed with bearer auth: ${model.status}`);
 
   const health = await fetch(`http://127.0.0.1:${port}/health?token=${encodeURIComponent(token)}`, {
     headers: { "X-Relay-Token": token },
@@ -74,42 +87,92 @@ try {
   });
   if (!session.ok) throw new Error(`copilot session endpoint failed: ${session.status}`);
 
-  const tools = await fetch(`http://127.0.0.1:${port}/v1/tools?token=${encodeURIComponent(token)}`, {
-    headers: { "X-Relay-Token": token },
+  const completion = await chat({
+    model: "m365-copilot",
+    messages: [{ role: "user", content: "ping" }],
   });
-  if (!tools.ok) throw new Error(`tools endpoint failed: ${tools.status}`);
+  if (!completion.ok) throw new Error(`completion endpoint failed: ${completion.status}`);
+  const completionJson = await completion.json();
+  if (completionJson.choices?.[0]?.message?.content !== "mock Copilot response from sidecar transport") {
+    throw new Error(`unexpected completion response: ${JSON.stringify(completionJson)}`);
+  }
 
-  const completion = await fetch(`http://127.0.0.1:${port}/v1/chat/completions?token=${encodeURIComponent(token)}`, {
+  const jsonMode = await chat({
+    model: "m365-copilot",
+    response_format: { type: "json_object" },
+    messages: [{ role: "user", content: "return json" }],
+  });
+  if (!jsonMode.ok) throw new Error(`json mode endpoint failed: ${jsonMode.status} ${await jsonMode.text()}`);
+  const jsonModeJson = await jsonMode.json();
+  if (JSON.parse(jsonModeJson.choices?.[0]?.message?.content ?? "{}").ok !== true) {
+    throw new Error(`unexpected json mode response: ${JSON.stringify(jsonModeJson)}`);
+  }
+
+  const toolCall = await chat({
+    model: "m365-copilot",
+    messages: [{ role: "user", content: "find 車名" }],
+    tools: [{
+      type: "function",
+      function: {
+        name: "find_file",
+        description: "Find a local file in the client.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+        strict: true,
+      },
+    }],
+    tool_choice: "required",
+    parallel_tool_calls: false,
+  });
+  if (!toolCall.ok) throw new Error(`tool call endpoint failed: ${toolCall.status} ${await toolCall.text()}`);
+  const toolCallJson = await toolCall.json();
+  const returnedTool = toolCallJson.choices?.[0]?.message?.tool_calls?.[0];
+  if (toolCallJson.choices?.[0]?.finish_reason !== "tool_calls" || returnedTool?.function?.name !== "find_file") {
+    throw new Error(`unexpected tool call response: ${JSON.stringify(toolCallJson)}`);
+  }
+  if (JSON.parse(returnedTool.function.arguments).query !== "車名") {
+    throw new Error(`unexpected tool arguments: ${JSON.stringify(toolCallJson)}`);
+  }
+
+  const invalidJsonMode = await chat({
+    model: "m365-copilot",
+    response_format: { type: "json_object" },
+    messages: [{ role: "user", content: "return invalid json" }],
+  });
+  if (invalidJsonMode.status !== 502) {
+    throw new Error(`invalid JSON mode should fail with 502, got ${invalidJsonMode.status}: ${await invalidJsonMode.text()}`);
+  }
+
+  const invalidModel = await chat({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: "ping" }],
+  });
+  if (invalidModel.status !== 404) {
+    throw new Error(`invalid model should fail with 404, got ${invalidModel.status}: ${await invalidModel.text()}`);
+  }
+
+  const unsupportedStream = await chat({
+    model: "m365-copilot",
+    stream: true,
+    messages: [{ role: "user", content: "ping" }],
+  });
+  if (unsupportedStream.status !== 400) {
+    throw new Error(`stream=true should fail with 400, got ${unsupportedStream.status}: ${await unsupportedStream.text()}`);
+  }
+
+  async function chat(body) {
+    return fetch(`http://127.0.0.1:${port}/v1/chat/completions?token=${encodeURIComponent(token)}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Relay-Token": token,
       Origin: `http://127.0.0.1:${port}`,
     },
-    body: JSON.stringify({
-      model: "m365-copilot",
-      messages: [{ role: "user", content: "ping" }],
-    }),
+    body: JSON.stringify(body),
   });
-  if (!completion.ok) throw new Error(`completion endpoint failed: ${completion.status}`);
-  const completionJson = await completion.json();
-  const expected = JSON.stringify({ action: "final", answer: "mock Copilot response from sidecar transport" });
-  if (completionJson.choices?.[0]?.message?.content !== expected) {
-    throw new Error(`unexpected completion response: ${JSON.stringify(completionJson)}`);
-  }
-
-  const agui = await postAgUi({
-    port,
-    token,
-    workspace: process.cwd(),
-    runId: "sidecar-smoke-run",
-    instruction: "ping",
-  });
-  if (!hasRunFinished(agui.events)) {
-    throw new Error(`official AG-UI stream did not emit run lifecycle events: ${agui.text}`);
-  }
-  if (assistantText(agui.events) !== "mock Copilot response from sidecar transport") {
-    throw new Error(`official AG-UI final text mismatch: ${agui.text}`);
   }
 
   const manifest = await fetch(`http://127.0.0.1:${port}/v1/relay/manifest?token=${encodeURIComponent(token)}`, {
@@ -123,18 +186,27 @@ try {
   if (!manifestJson.endpoints?.some((endpoint) => endpoint.path === "/v1/chat/completions")) {
     throw new Error(`manifest did not advertise chat completions: ${JSON.stringify(manifestJson)}`);
   }
+  if (!manifestJson.endpoints?.some((endpoint) => endpoint.path === "/v1/models")) {
+    throw new Error(`manifest did not advertise models: ${JSON.stringify(manifestJson)}`);
+  }
+  if (manifestJson.endpoints?.some((endpoint) => endpoint.path === "/agui/relay" || endpoint.path === "/v1/tools")) {
+    throw new Error(`manifest must not advertise retired local runner endpoints: ${JSON.stringify(manifestJson)}`);
+  }
 
   const preflight = await fetch(`http://127.0.0.1:${port}/v1/chat/completions?token=${encodeURIComponent(token)}`, {
     method: "OPTIONS",
     headers: {
       Origin: "null",
       "Access-Control-Request-Method": "POST",
-      "Access-Control-Request-Headers": "content-type",
+      "Access-Control-Request-Headers": "authorization, content-type",
     },
   });
   if (preflight.status !== 204) throw new Error(`HTML tool CORS preflight failed: ${preflight.status}`);
   if (preflight.headers.get("access-control-allow-origin") !== "null") {
     throw new Error(`HTML tool CORS origin was not echoed: ${preflight.headers.get("access-control-allow-origin")}`);
+  }
+  if (!preflight.headers.get("access-control-allow-headers")?.toLowerCase().includes("authorization")) {
+    throw new Error(`HTML tool CORS did not allow Authorization: ${preflight.headers.get("access-control-allow-headers")}`);
   }
 
   console.log("[sidecar-smoke] ok");

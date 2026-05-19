@@ -15,7 +15,7 @@ The design goal is first-time clarity:
 - confirm Relay Core is Ready;
 - copy or download a starter HTML file;
 - build or open any task-specific HTML tool;
-- call Relay Core through `/v1/chat/completions` or `/agui/relay`.
+- call Relay Core through `/v1/chat/completions`.
 
 The PDF review feature is retired as a default product surface. Future PDF
 review, Office editing, file search, coding, proofreading, comparison, or
@@ -28,23 +28,22 @@ same API rather than separate Relay modes or separate backend runners.
   not a PDF review client.
 - `apps/sidecar/` hosts **Relay Core**, the local API and execution boundary.
 - `apps/launcher/` starts Relay Core and opens the API Hub.
-- Relay Core owns M365 Copilot CDP connectivity, Microsoft Agent Framework,
-  AG-UI `/agui/relay`, local tool governance, approvals, backups, diagnostics,
-  and user-local storage.
+- Relay Core owns M365 Copilot CDP connectivity, the OpenAI-compatible API
+  adapter, diagnostics, and user-local storage.
 - HTML tools are thin clients. They may provide specialized UI, but they must
-  not implement their own CDP automation, local execution harness, approval
-  policy, cache/index storage, or workspace governance.
+  not implement their own CDP automation, cache/index storage, or workspace
+  governance. Tool execution is client-side when a client chooses to use
+  OpenAI-compatible function calling.
 
 ### API Contract
 
 Relay Core must expose and smoke-test these stable APIs:
 
 - `GET /health`;
+- `GET /v1/models`;
 - `GET /v1/relay/manifest`;
 - `GET /v1/copilot/session`;
-- `GET /v1/tools`;
 - `POST /v1/chat/completions`;
-- `POST /agui/relay`;
 - `POST /api/support-bundle`.
 
 The API Hub must show the manifest, endpoint list, authentication pattern,
@@ -64,10 +63,528 @@ directory and never in shared folders or selected work folders.
 
 Older sections below that describe the PDF review HTML client as the active
 default product are superseded by this HTML Tool API Hub cutover. PDF/Office/
-search/coding remain supported capabilities through Relay Core tools and
-external HTML clients, not first-party default UI modes.
+search/coding should be implemented by external HTML clients through the
+OpenAI-compatible API and client-managed tools, not first-party Relay modes or
+Relay-side local tool execution.
+
+## 2026-05-19 OpenAI-Compatible Local API Rules
+
+Implementation status: completed in the 2026-05-20 `OPENAIAPI*` slice. The
+public product contract is now the OpenAI-compatible Models + Chat
+Completions API with client-managed function tools.
+
+The target is to make Relay usable as a **normal
+OpenAI-compatible local API** backed by Microsoft 365 Copilot. Anyone should be
+able to connect an HTML tool, script, or existing OpenAI-compatible client by
+changing only:
+
+- `baseURL` to Relay's local `/v1` endpoint;
+- `apiKey` to the Relay launch token;
+- `model` to `m365-copilot`.
+
+The product should behave like a small local OpenAI-compatible gateway:
+
+> **Start Relay Agent. Point any OpenAI-compatible client at Relay. Use Copilot.**
+
+The user should not need npm, a build step, a browser extension, an app
+registration, OpenAI credentials, or edits to Relay itself to make a new tool.
+Creating a new workflow should be as simple as using the standard OpenAI chat
+completions shape from a normal `.html` file, script, or low-code tool.
+
+### Compatibility Baseline
+
+Relay targets OpenAI's **Chat Completions** and **Models** shapes, not the
+Responses API. This keeps compatibility with existing OpenAI-compatible
+clients while avoiding a second stateful API surface that Relay cannot honestly
+emulate through the browser-hosted M365 Copilot controller.
+
+Reference shapes:
+
+- OpenAI Chat Completions API:
+  `https://platform.openai.com/docs/api-reference/chat/create-chat-completion`
+- OpenAI Models API:
+  `https://platform.openai.com/docs/api-reference/models/list`
+
+Relay's public API compatibility promise is:
+
+- text chat through `/v1/chat/completions`;
+- model discovery through `/v1/models`;
+- optional OpenAI-style **client-managed** function tool calling;
+- OpenAI-compatible JSON responses and error envelopes;
+- no Relay-side local file, Office, shell, patch, AG-UI, or workspace tools in
+  the public API contract.
+
+### Public Endpoints
+
+The public OpenAI-compatible endpoints are:
+
+- `GET /v1/models`;
+- `OPTIONS /v1/models`;
+- `GET /v1/models/{model}`;
+- `OPTIONS /v1/models/{model}`;
+- `POST /v1/chat/completions`;
+- `OPTIONS /v1/chat/completions` for browser CORS preflight.
+
+Support endpoints may remain for Relay status and diagnostics, but they are not
+part of the OpenAI-compatible contract:
+
+- `GET /health`;
+- `GET /v1/relay/manifest`;
+- `GET /v1/copilot/session`;
+- `POST /api/support-bundle`.
+
+Endpoints that expose Relay-side tool execution are retired from the public
+product:
+
+- `/v1/tools` must not be advertised in the Hub, README, starter HTML, or
+  release first-run docs;
+- `/agui/relay` must not be advertised as an active product path;
+- if existing implementation routes still exist, they are historical
+  compatibility until removed and must not receive new product flows.
+
+### Authentication And CORS
+
+Relay should accept the following local authentication styles:
+
+- `Authorization: Bearer <relay-launch-token>`;
+- `X-Relay-Token: <relay-launch-token>`;
+- `?token=<relay-launch-token>` only for simple browser/file examples.
+
+Authentication behavior:
+
+- missing or invalid token returns HTTP `401` with
+  `type: "authentication_error"`;
+- a valid token is required for all `/v1/*` requests;
+- token values must never be logged in clear text or included in support
+  bundles;
+- response headers should include a request id such as `x-request-id` for
+  support correlation.
+
+CORS behavior:
+
+- allow `file://` callers, which may arrive with `Origin: null`;
+- allow `http://localhost:*` and `http://127.0.0.1:*`;
+- reject other browser origins by default;
+- allow `authorization`, `content-type`, and `x-relay-token` request headers;
+- return `application/json; charset=utf-8` for JSON responses.
+
+### Models API Contract
+
+`GET /v1/models` returns a standard list object:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "m365-copilot",
+      "object": "model",
+      "created": 0,
+      "owned_by": "relay"
+    }
+  ]
+}
+```
+
+`GET /v1/models/m365-copilot` returns the same model object. Unknown models
+return HTTP `404` with `type: "invalid_request_error"` and
+`code: "model_not_found"`.
+
+The only public model id is `m365-copilot` unless a later plan adds aliases.
+Relay must not expose OpenAI model names because it does not call the OpenAI
+API and does not require OpenAI credentials.
+
+### Chat Request Contract
+
+`POST /v1/chat/completions` accepts a JSON object.
+
+Required fields:
+
+- `model`: must be `m365-copilot`;
+- `messages`: non-empty array.
+
+Supported message roles:
+
+- `system`;
+- `developer`;
+- `user`;
+- `assistant`;
+- `tool`.
+
+Supported message fields:
+
+- `role`;
+- `content`;
+- optional `name` where OpenAI-compatible clients send it;
+- assistant `tool_calls` for prior tool-call context;
+- tool `tool_call_id` for tool-result continuation.
+
+Supported message content:
+
+- text string content is supported;
+- `null` assistant content is accepted when `tool_calls` is present;
+- tool message content is text string content in the first target;
+- OpenAI-style array content, images, audio, files, and multimodal parts are
+  not part of the first compatibility target and should return HTTP `400`
+  `code: "unsupported_content"` rather than being silently flattened.
+
+Supported request fields:
+
+- `model`;
+- `messages`;
+- `stream`;
+- `stream_options`;
+- `tools`;
+- `tool_choice`;
+- `parallel_tool_calls`;
+- `temperature`;
+- `top_p`;
+- `frequency_penalty`;
+- `presence_penalty`;
+- `max_tokens`;
+- `max_completion_tokens`;
+- `stop`;
+- `seed`;
+- `service_tier`;
+- `response_format`;
+- `user`;
+- `metadata`.
+
+Compatibility-only request fields:
+
+- harmless generation controls that M365 Copilot cannot honor exactly may be
+  accepted for SDK compatibility but are best-effort/no-op;
+- accepted no-op fields must be documented and must not cause Relay to pretend
+  it can reproduce OpenAI sampling behavior;
+- unsupported fields should fail with a standard error rather than being
+  accidentally ignored.
+- unknown top-level request fields should fail with
+  `code: "unsupported_parameter"` until explicitly allowed.
+
+Initial explicit non-goals:
+
+- `n` values other than `1`;
+- `logprobs`;
+- `top_logprobs`;
+- `logit_bias`;
+- legacy `functions` and `function_call` request parameters;
+- OpenAI custom tool types other than `type: "function"`;
+- audio output;
+- file upload or attachments through Chat Completions;
+- persistent stored completions (`store`, list, retrieve, update, delete).
+
+Deprecated OpenAI fields such as `functions`, `function_call`, and assistant
+`function_call` messages should fail with
+`code: "unsupported_deprecated_parameter"` in the first target. Do not
+silently translate them unless a later task adds a tested compatibility
+adapter.
+
+Request limits:
+
+- request body size must be capped and documented;
+- message count and total text size must be capped before sending to Copilot;
+- rejected oversized requests return HTTP `400` with
+  `code: "request_too_large"`;
+- limits must be enforced before provider submission so a local HTML tool
+  cannot freeze the Copilot bridge with an accidental huge payload.
+
+### Chat Response Contract
+
+Non-streaming success returns:
+
+```json
+{
+  "id": "chatcmpl-relay-...",
+  "object": "chat.completion",
+  "created": 0,
+  "model": "m365-copilot",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "...",
+        "tool_calls": null,
+        "function_call": null,
+        "refusal": null,
+        "annotations": []
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  }
+}
+```
+
+Response rules:
+
+- `object` is `chat.completion`;
+- `id` is unique per request and uses a stable prefix such as
+  `chatcmpl-relay-`;
+- `created` is a Unix timestamp in seconds;
+- `choices` contains exactly one item for the first compatibility target;
+- `choices[].message.tool_calls` is `null` unless tool calls are returned;
+- deprecated `choices[].message.function_call` is always `null`;
+- `choices[].message.refusal` is `null` unless Relay has a real corresponding
+  refusal signal;
+- `choices[].message.annotations` is an empty array unless Relay has real
+  annotations;
+- `choices[].logprobs` is always `null` because Relay does not expose token
+  log probabilities;
+- `finish_reason` may be `stop`, `length`, or `tool_calls`;
+- `content_filter` is not used unless Relay has a real corresponding signal;
+- `system_fingerprint` may be omitted or `null`;
+- `usage` must be present for SDK compatibility, but token counts should be
+  `0` when Relay cannot measure them reliably. Do not fabricate nonzero token
+  counts.
+
+### Streaming Contract
+
+`stream: false` or omitted must be supported first.
+
+`stream: true` should be implemented as OpenAI-compatible Server-Sent Events
+before the API is called complete:
+
+- response content type is `text/event-stream`;
+- chunks use `object: "chat.completion.chunk"`;
+- chunks include `choices[].delta`;
+- assistant text is emitted as `choices[].delta.content`;
+- tool-call deltas are emitted as `choices[].delta.tool_calls` when tool
+  calling streams;
+- the final event is `data: [DONE]`;
+- `stream_options.include_usage` may be accepted; if requested and token
+  counts are unavailable, the usage chunk must contain zero counts rather than
+  fabricated counts;
+- provider send/readiness failures during streaming become an SSE error chunk
+  when possible, otherwise the HTTP request fails before the stream starts.
+
+If streaming is not implemented in an intermediate build, `stream: true` must
+return HTTP `400` `code: "unsupported_parameter"` and the Hub/starter examples
+must use `stream: false`.
+
+### Client-Managed Tool Calling Contract
+
+Tool calling is OpenAI-compatible function calling where the **client executes
+the tool**. Relay never executes client-supplied tools server-side.
+
+Request support:
+
+- `tools` accepts entries with `type: "function"`;
+- `function.name` is required and must be validated as a safe identifier;
+- `function.description` is optional;
+- `function.parameters` is a JSON Schema object;
+- `function.strict` is accepted. If `true`, Relay validates returned arguments
+  against the supplied schema subset that Relay can enforce and fails invalid
+  output with `provider_invalid_tool_call`; Relay must not claim perfect
+  OpenAI Structured Outputs parity;
+- omitted `function.parameters` means an empty object schema;
+- `tool_choice` accepts `none`, `auto`, `required`, or
+  `{ "type": "function", "function": { "name": "..." } }`;
+- `parallel_tool_calls: false` means Relay must return at most one tool call;
+- OpenAI `custom` tools are not part of the first target and return
+  `code: "unsupported_tool_type"`.
+
+Assistant tool-call response:
+
+```json
+{
+  "role": "assistant",
+  "content": null,
+  "tool_calls": [
+    {
+      "id": "call_...",
+      "type": "function",
+      "function": {
+        "name": "tool_name",
+        "arguments": "{\"key\":\"value\"}"
+      }
+    }
+  ]
+}
+```
+
+Tool-call rules:
+
+- `finish_reason` is `tool_calls` when a tool call is returned;
+- `function.arguments` is always a JSON string containing a valid JSON object;
+- generated tool names must exactly match one of the supplied tool names;
+- if `tool_choice` is `none`, Relay must not return tool calls;
+- if `tool_choice` is `required` or a named tool and Copilot does not produce
+  a valid matching tool call, Relay must fail fast with HTTP `502`
+  `code: "provider_invalid_tool_call"` rather than returning prose;
+- if `parallel_tool_calls` is `false` and Copilot returns multiple tool calls,
+  Relay must fail validation rather than silently dropping calls.
+
+Tool result continuation:
+
+- clients send tool results as standard messages:
+  `{ "role": "tool", "tool_call_id": "call_...", "content": "..." }`;
+- Relay passes tool result content back to Copilot as conversation context;
+- Relay validates that `tool_call_id` references a prior assistant tool call in
+  the supplied conversation when feasible;
+- final assistant responses after tool results use normal
+  `choices[].message.content`.
+
+### Structured Output And JSON Mode
+
+`response_format` support should be narrow and explicit:
+
+- `{ "type": "text" }` is supported;
+- `{ "type": "json_object" }` should ask Copilot for one valid JSON object and
+  validate the returned content before success;
+- unsupported `json_schema` or future response formats should return HTTP
+  `400` `code: "unsupported_parameter"` until implemented and tested.
+
+Invalid JSON from Copilot in JSON mode is a provider validation failure:
+
+- HTTP status: `502`;
+- error type: `api_error`;
+- error code: `provider_invalid_json`;
+- no best-effort prose fallback.
+
+### Error Contract
+
+All errors use the OpenAI-compatible envelope:
+
+```json
+{
+  "error": {
+    "message": "Human readable error",
+    "type": "invalid_request_error",
+    "param": "messages",
+    "code": "invalid_messages"
+  }
+}
+```
+
+Required status mapping:
+
+- `400 invalid_request_error`: malformed JSON, invalid messages, unsupported
+  parameter, unsupported content, unsupported model in request body;
+- `401 authentication_error`: missing or invalid launch token;
+- `404 invalid_request_error`: unknown model or unknown endpoint;
+- `408 timeout_error`: bounded local timeout before provider submission or
+  provider response;
+- `409 conflict_error`: Copilot session busy when concurrent execution is not
+  supported;
+- `429 rate_limit_error`: Relay-side concurrency or queue limit;
+- `500 api_error`: Relay internal error;
+- `502 api_error`: Copilot provider failed, returned stale output, invalid
+  JSON, invalid tool call, or selector drift;
+- `504 timeout_error`: Copilot provider exceeded the response deadline.
+
+Relay must not convert provider errors into generic assistant prose. Failures
+remain machine-readable API errors.
+
+Concurrency and timeout rules:
+
+- default request timeout should be bounded and documented;
+- if the single Copilot browser session is busy and Relay does not implement a
+  queue, return `409 conflict_error`;
+- if a bounded queue is implemented, queue overflow returns
+  `429 rate_limit_error`;
+- cancellation must stop waiting for Copilot and release Relay request state,
+  even if the browser tab continues rendering late content.
+
+### SDK And HTML Tool Compatibility
+
+The primary success path is:
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: relayLaunchToken,
+  baseURL: "http://127.0.0.1:<port>/v1",
+  dangerouslyAllowBrowser: true
+});
+
+const response = await client.chat.completions.create({
+  model: "m365-copilot",
+  messages: [{ role: "user", content: "..." }]
+});
+```
+
+Relay API Hub should generate dependency-free `fetch` examples first, then
+optional OpenAI SDK examples for users who already use that SDK.
+
+HTML tool rules:
+
+- any local `.html` file must be able to call Relay Core while Relay Agent is
+  running;
+- support `file://`, `http://localhost:*`, and `http://127.0.0.1:*` callers;
+- users should be able to copy a working OpenAI-compatible snippet and paste it
+  into their own HTML;
+- users should not need to understand Edge CDP, M365 Copilot selectors,
+  AG-UI events, or Relay-specific tool runners.
+
+### API Hub Role
+
+Relay API Hub should become an OpenAI-compatible API connection page, not a
+custom SDK page:
+
+- show Relay readiness;
+- show the current `baseURL`;
+- show/copy the current `apiKey`;
+- show the current `model` value: `m365-copilot`;
+- offer "OpenAI互換スニペットをコピー";
+- offer "スターターHTMLを保存";
+- offer "接続テスト";
+- include a compact client-managed tool-calling example;
+- keep manifest JSON, support bundle, and diagnostics under
+  "開発者向け詳細".
+
+The Hub must make it obvious that users can bring their own HTML or existing
+OpenAI-compatible client. It should not imply that users must use a
+Relay-specific wrapper such as `Relay.ask()` or a built-in PDF/search/Office/
+code screen.
+
+### Security And Storage Rules
+
+- Relay Core keeps host validation, origin validation, launch-token/api-key
+  protection, diagnostics, and user-local storage.
+- HTML tools are untrusted clients. They can request Copilot reasoning, but
+  Relay does not execute their tools or perform local file/Office/shell
+  mutations for them.
+- Shared folders, selected folders, and HTML tool folders must not receive
+  Relay caches, indexes, token files, logs, or temp artifacts.
+- Generated snippets must avoid exposing more than the current local base URL
+  and launch token needed for the running session.
+- There is no Relay-side mutation approval flow in the target product because
+  Relay-side mutation tools are not exposed. Client-side tools are the
+  client's responsibility.
+
+### Acceptance Direction
+
+The next implementation should prove that Relay can be used by an arbitrary
+HTML file that is not part of the Relay repo using only an OpenAI-compatible
+request. Acceptance requires E2E/API smokes that:
+
+- call `GET /v1/models` and `GET /v1/models/m365-copilot`;
+- call `POST /v1/chat/completions` with `Authorization: Bearer <token>`;
+- verify the non-streaming `chat.completion` response shape;
+- verify OpenAI-compatible errors for missing auth, invalid model, invalid
+  messages, unsupported content, and unsupported parameters;
+- verify streaming SSE once `stream: true` is implemented, or verify the
+  explicit unsupported error before then;
+- verify client-managed tool calling: send `tools`, receive `tool_calls`, send
+  `role: "tool"` result, then receive a final assistant answer;
+- verify that Relay never executes client-supplied tools server-side;
+- verify that `/v1/tools` and `/agui/relay` are not advertised as public API
+  paths.
 
 ## Product Direction
+
+The material below this point is historical planning context unless a newer
+2026-05-19 section above explicitly reuses it. The active product direction is
+the OpenAI-compatible local API: M365 Copilot behind `/v1/chat/completions`,
+client-managed OpenAI tool calling, and no Relay-side local tool execution as
+part of the public product contract.
 
 Relay_Agent moved from a three-mode utility app into a single local
 business-agent workbench, and is now pivoting again toward a focused PDF review

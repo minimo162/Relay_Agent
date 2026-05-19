@@ -61,17 +61,20 @@ const workbenchSource = walk("apps/workbench/src")
   .join("\n");
 assert(workbenchSource.includes("Relay API Hub"), "default browser client must be the Relay API Hub");
 assert(workbenchSource.includes("/v1/relay/manifest"), "API Hub must call the Relay Core manifest API");
+assert(workbenchSource.includes("/v1/models"), "API Hub must expose the OpenAI-compatible model API");
 assert(workbenchSource.includes("/v1/chat/completions"), "API Hub must expose the OpenAI-compatible Copilot API");
 assert(!workbenchSource.includes("Relay PDF Review"), "PDF review UI must not remain the default client");
 assert(!workbenchSource.includes("/v1/pdf/"), "PDF review client routes must not remain in the default client");
 assert(!workbenchSource.includes("CopilotChat"), "generic CopilotKit Workbench must not remain the default client");
+assert(!workbenchSource.includes("/agui/relay"), "default API Hub must not advertise AG-UI as the public HTML tool contract");
+assert(!workbenchSource.includes("/v1/tools"), "default API Hub must not advertise Relay-owned local tools as the public HTML tool contract");
 const sidecarProgram = read("apps/sidecar/Program.cs");
 const sidecarSource = walk("apps/sidecar")
   .filter((path) => /\.(cs|csproj)$/.test(path))
   .map((path) => read(path))
   .join("\n");
-assert(sidecarProgram.includes("/agui/relay"), "Sidecar must expose the official Agent Framework AG-UI endpoint");
 assert(sidecarProgram.includes("/v1/relay/manifest"), "Sidecar must expose the HTML tool manifest endpoint");
+assert(sidecarProgram.includes("/v1/models"), "Sidecar must expose the OpenAI-compatible models endpoint");
 assert(sidecarProgram.includes("/v1/chat/completions"), "Sidecar must expose the Copilot chat API endpoint");
 assert(!sidecarProgram.includes("/v1/pdf/"), "Sidecar must not expose retired PDF review endpoints");
 assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the legacy run REST product path");
