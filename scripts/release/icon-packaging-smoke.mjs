@@ -28,6 +28,8 @@ assert(packageScript.includes("relay-agent.ico"), "package-sidecar must copy rel
 assert(packageScript.includes("Relay Agent.exe"), "portable Windows package must expose Relay Agent.exe as the primary launcher");
 assert(packageScript.includes("README-FIRST.html"), "portable package must include first-run help as README-FIRST.html");
 assert(packageScript.includes("relay-agent"), "portable Linux package must expose relay-agent as the primary launcher");
+assert(packageScript.includes('join(appRoot, "relay-assets"'), "package-sidecar must place implementation assets under app/");
+assert(packageScript.includes('join(coreRoot, "relay-tools'), "package-sidecar must place tools under app/relay-core/");
 
 const nsisScript = readFileSync(resolve(root, "scripts/release/build-windows-installer.mjs"), "utf8");
 for (const needle of [
@@ -38,7 +40,7 @@ for (const needle of [
   "!define MUI_UNICON \"${icon}\"",
   "!define MUI_FINISHPAGE_RUN",
   "!define MUI_FINISHPAGE_RUN_FUNCTION LaunchRelayAgent",
-  "relay-assets\\\\relay-agent.ico",
+  "app\\\\relay-assets\\\\relay-agent.ico",
   "StopRunningRelayAgent",
   "Function LaunchRelayAgent",
   "ExecShell \"open\" \"$1\\\\Relay Agent.exe\"",
@@ -68,8 +70,8 @@ assert(
 );
 
 for (const packagedAsset of [
-  "dist/relay-agent-win-x64/relay-assets/relay-agent.ico",
-  "dist/relay-agent-linux-x64/relay-assets/relay-agent.ico",
+  "dist/relay-agent-win-x64/app/relay-assets/relay-agent.ico",
+  "dist/relay-agent-linux-x64/app/relay-assets/relay-agent.ico",
 ]) {
   const path = resolve(root, packagedAsset);
   if (existsSync(resolve(root, packagedAsset.split("/").slice(0, -1).join("/")))) {

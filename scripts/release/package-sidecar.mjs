@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
-  chmodSync,
   writeFileSync,
-  renameSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "../..");
 const rid = readArg("--rid") ?? process.env.RELAY_TARGET_RID ?? platformRid();
 const output = resolve(root, "dist", `relay-agent-${rid}`);
+const appRoot = join(output, "app");
+const coreRoot = join(appRoot, "relay-core");
+const launcherPublishRoot = join(appRoot, "_launcher-publish");
+const licensesRoot = join(output, "LICENSES");
 const workbenchPackage = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.json"), "utf8"));
 
 const toolSources = {
@@ -32,7 +34,9 @@ const sources = toolSources[rid];
 if (!sources) throw new Error(`unsupported RID: ${rid}`);
 
 rmSync(output, { recursive: true, force: true });
-mkdirSync(output, { recursive: true });
+mkdirSync(coreRoot, { recursive: true });
+mkdirSync(launcherPublishRoot, { recursive: true });
+mkdirSync(licensesRoot, { recursive: true });
 
 run("dotnet", [
   "publish",
@@ -44,7 +48,7 @@ run("dotnet", [
   "--self-contained",
   "true",
   "--output",
-  output,
+  coreRoot,
 ]);
 
 run("dotnet", [
@@ -57,26 +61,29 @@ run("dotnet", [
   "--self-contained",
   "true",
   "--output",
-  output,
+  launcherPublishRoot,
 ]);
 
 if (rid === "win-x64") {
-  renameSync(join(output, "Relay.Launcher.exe"), join(output, "Relay Agent.exe"));
+  copyFileSync(join(launcherPublishRoot, "Relay.Launcher.exe"), join(output, "Relay Agent.exe"));
 } else if (rid === "linux-x64") {
-  renameSync(join(output, "Relay.Launcher"), join(output, "relay-agent"));
+  copyFileSync(join(launcherPublishRoot, "Relay.Launcher"), join(output, "relay-agent"));
   chmodSync(join(output, "relay-agent"), 0o755);
 }
+rmSync(launcherPublishRoot, { recursive: true, force: true });
 
-copyIfExists("LICENSE", join(output, "LICENSE"));
-copyIfExists("assets/app-icon/relay-agent.ico", join(output, "relay-assets", "relay-agent.ico"));
-copyIfExists("assets/app-icon/relay-agent.svg", join(output, "relay-assets", "relay-agent.svg"));
-copyIfExists("assets/app-icon/relay-agent.png", join(output, "relay-assets", "relay-agent.png"));
+copyIfExists("LICENSE", join(licensesRoot, "Relay_Agent_LICENSE.txt"));
+copyIfExists("assets/app-icon/relay-agent.ico", join(appRoot, "relay-assets", "relay-agent.ico"));
+copyIfExists("assets/app-icon/relay-agent.svg", join(appRoot, "relay-assets", "relay-agent.svg"));
+copyIfExists("assets/app-icon/relay-agent.png", join(appRoot, "relay-assets", "relay-agent.png"));
+
 writeFileSync(
-  join(output, "relay-default-config.json"),
+  join(appRoot, "relay-default-config.json"),
   JSON.stringify({
     schemaVersion: "RelayDefaultConfig.v1",
     version: workbenchPackage.version,
     architecture: "html-tool-api-hub-relay-core-sidecar",
+    packageLayout: "portable-root-v2",
     dataDirectory: "user-local",
     localHttp: {
       bind: "127.0.0.1",
@@ -84,46 +91,47 @@ writeFileSync(
       hostOriginValidation: true,
     },
     tools: {
-      ripgrep: "relay-tools/ripgrep",
-      officecli: rid === "win-x64" ? "relay-tools/officecli" : "optional",
+      ripgrep: "app/relay-core/relay-tools/ripgrep",
+      officecli: rid === "win-x64" ? "app/relay-core/relay-tools/officecli" : "optional",
     },
     assets: {
-      appIcon: "relay-assets/relay-agent.ico",
+      appIcon: "app/relay-assets/relay-agent.ico",
     },
   }, null, 2),
 );
 
-copyTool(sources.ripgrep, join(output, "relay-tools/ripgrep", rid.startsWith("win") ? "rg.exe" : "rg"), true);
+copyTool(sources.ripgrep, join(coreRoot, "relay-tools/ripgrep", rid.startsWith("win") ? "rg.exe" : "rg"), true);
 if (sources.officecli) {
-  copyTool(sources.officecli, join(output, "relay-tools/officecli/officecli.exe"), true);
+  copyTool(sources.officecli, join(coreRoot, "relay-tools/officecli/officecli.exe"), true);
 }
 
 writeFileSync(
-  join(output, "RELAY_RELEASE_CONTENTS.txt"),
+  join(appRoot, "RELEASE_CONTENTS.txt"),
   [
-    "Relay Agent API Hub package",
+    "Relay Agent portable package",
     `Version: ${workbenchPackage.version}`,
     `RID: ${rid}`,
     "",
-    "Included runtime components:",
-    "- Relay.Sidecar",
-    rid === "win-x64" ? "- Relay Agent.exe launcher" : "- relay-agent launcher",
-    "- Relay API Hub static assets",
-    "- Relay app icon under relay-assets",
-    "- ripgrep under relay-tools/ripgrep",
-    rid === "win-x64" ? "- OfficeCLI under relay-tools/officecli" : "- OfficeCLI is optional on this platform",
+    "Top-level files are intentionally limited to the launcher, README-FIRST.html, LICENSES/, and app/.",
     "",
-    "Excluded runtime families:",
+    "Included runtime components under app/:",
+    "- relay-core/Relay.Sidecar",
+    "- relay-core/wwwroot",
+    "- relay-assets",
+    "- relay-tools/ripgrep",
+    rid === "win-x64" ? "- relay-tools/officecli" : "- OfficeCLI is optional on this platform",
+    "",
+    "Excluded active runtime families:",
     "- AionUi",
     "- OpenCode/OpenWork",
     "- Tauri desktop shell",
-    "- Codex app-server or upstream Codex CLI bundle",
+    "- Codex app-server binary bundle (planned bridge work only)",
     "",
   ].join("\n"),
 );
 
 writeFileSync(
-  join(output, "README_PORTABLE.txt"),
+  join(appRoot, "README_PORTABLE.txt"),
   [
     "Relay Agent Portable",
     `Version: ${workbenchPackage.version}`,
@@ -131,51 +139,24 @@ writeFileSync(
     "",
     "How to start:",
     rid === "win-x64"
-      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Relay Agent.exe.\n3. Your browser opens Relay API Hub automatically."
-      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./relay-agent.\n3. Your browser opens Relay API Hub automatically.",
+      ? "1. Extract the zip.\n2. Double-click the top-level Relay Agent.exe.\n3. Your browser opens Relay API Hub automatically."
+      : "1. Extract the tar.gz.\n2. Run the top-level ./relay-agent.\n3. Your browser opens Relay API Hub automatically.",
     "",
     "No administrator rights are required.",
     "Relay stores runtime data under the current user's local application data directory, not in the selected work folder.",
-    "Keep this folder intact; relay-tools and wwwroot are required by the launcher.",
-    "For first-time guidance, open README-FIRST.html in this folder.",
+    "Implementation files are under app/. Keep this folder intact.",
+    "For first-time guidance, open the top-level README-FIRST.html.",
     "",
   ].join("\n"),
 );
 
-writeFileSync(
-  join(output, "README-FIRST.html"),
-  portableFrontDoorHtml(rid, workbenchPackage.version),
-);
+writeFileSync(join(output, "README-FIRST.html"), portableFrontDoorHtml(rid, workbenchPackage.version));
 
+mkdirSync(join(appRoot, "starters"), { recursive: true });
 writeFileSync(
-  join(output, "Relay Agent.html"),
-  portableFrontDoorHtml(rid, workbenchPackage.version),
+  join(appRoot, "starters", "relay-html-tool-starter.html"),
+  starterHtml(),
 );
-
-if (rid === "win-x64") {
-  const windowsLauncher = [
-    "@echo off",
-    "setlocal",
-    "cd /d \"%~dp0\"",
-    "start \"Relay Agent\" \"%~dp0Relay Agent.exe\"",
-    "",
-  ].join("\r\n");
-  writeFileSync(join(output, "Start Relay Agent.cmd"), windowsLauncher);
-  writeFileSync(join(output, "Relay Agent を起動.cmd"), windowsLauncher);
-} else if (rid === "linux-x64") {
-  const launcher = join(output, "start-relay-agent.sh");
-  writeFileSync(
-    launcher,
-    [
-      "#!/usr/bin/env sh",
-      "set -eu",
-      "cd \"$(dirname \"$0\")\"",
-      "exec ./relay-agent \"$@\"",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(launcher, 0o755);
-}
 
 console.log(`package-sidecar: wrote ${relativePath(output)}`);
 
@@ -219,7 +200,6 @@ function relativePath(path) {
 
 function portableFrontDoorHtml(rid, version) {
   const launchName = rid === "win-x64" ? "Relay Agent.exe" : "relay-agent";
-  const secondaryLaunch = rid === "win-x64" ? "Start Relay Agent.cmd" : "start-relay-agent.sh";
   const platformHint = rid === "win-x64"
     ? "Windowsでは、この1つだけをダブルクリックします。"
     : "Linuxでは、ターミナルから ./relay-agent を実行します。";
@@ -261,19 +241,18 @@ function portableFrontDoorHtml(rid, version) {
     }
     .mark {
       display: inline-grid;
-      width: 40px;
-      height: 40px;
+      width: 38px;
+      height: 38px;
       place-items: center;
-      border: 1px solid var(--border);
       border-radius: 12px;
-      color: var(--accent);
-      background: var(--surface);
-      font-weight: 700;
+      background: var(--text);
+      color: white;
+      font-weight: 800;
     }
     h1 {
       margin: 0;
-      font-size: clamp(30px, 6vw, 48px);
-      line-height: 1.05;
+      font-size: clamp(30px, 5vw, 52px);
+      line-height: 1.04;
       letter-spacing: 0;
     }
     p {
@@ -363,7 +342,7 @@ function portableFrontDoorHtml(rid, version) {
         <li><span class="num">2</span><span>ブラウザでRelay API Hubが開き、Readyになっていることを確認します。</span></li>
         <li><span class="num">3</span><span>画面のスターターHTML、または自作HTMLからRelay Core APIを呼び出します。</span></li>
       </ol>
-      <p>通常は ${escapeHtml(launchName)} だけを使います。別の起動方法: ${escapeHtml(secondaryLaunch)}。Relayのデータはユーザーのローカルアプリデータに保存され、選択した共有フォルダにはキャッシュを書き込みません。</p>
+      <p>通常は ${escapeHtml(launchName)} だけを使います。内部ファイルは <span class="file">app/</span> にまとめています。削除や移動はしないでください。</p>
     </section>
     <section class="grid" aria-labelledby="api-title" style="margin-top: 18px;">
       <h2 id="api-title">HTMLツールから使う</h2>
@@ -385,6 +364,47 @@ function portableFrontDoorHtml(rid, version) {
 </body>
 </html>
 `;
+}
+
+function starterHtml() {
+  return `<!doctype html>
+<html lang="ja">
+<meta charset="utf-8" />
+<title>Relay HTML Tool Starter</title>
+<body>
+  <textarea id="prompt" rows="6" style="width:100%">このHTMLツールからCopilotに接続できているか確認してください。</textarea>
+  <button id="send">Send to Copilot</button>
+  <pre id="output"></pre>
+  <script>
+    const relayBase = prompt('Relay API HubのBase URLを入力してください');
+    const relayToken = prompt('Relay launch tokenを入力してください');
+    async function askCopilot(message) {
+      const url = new URL('/v1/chat/completions', relayBase);
+      url.searchParams.set('token', relayToken);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm365-copilot',
+          messages: [{ role: 'user', content: message }]
+        })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const json = await response.json();
+      return json.choices?.[0]?.message?.content ?? '';
+    }
+    document.querySelector('#send').onclick = async () => {
+      const output = document.querySelector('#output');
+      output.textContent = 'Running...';
+      try {
+        output.textContent = await askCopilot(document.querySelector('#prompt').value);
+      } catch (error) {
+        output.textContent = String(error);
+      }
+    };
+  </script>
+</body>
+</html>`;
 }
 
 function escapeHtml(value) {

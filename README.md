@@ -117,10 +117,24 @@ pnpm sidecar:portable:linux
 pnpm sidecar:portable:windows
 ```
 
-Windows users download `relay-agent-<version>-win-x64.zip`, extract it, and
-double-click `Relay Agent.exe`. Linux users extract the tarball and run
-`./relay-agent`. `README-FIRST.html` is included as first-run help, not as the
-launcher.
+Windows users download `relay-agent-<version>-win-x64-portable.zip`, extract
+it, and double-click the top-level `Relay Agent.exe`. Linux users download
+`relay-agent-<version>-linux-x64-portable.tar.gz`, extract it, and run the
+top-level `./relay-agent`. `README-FIRST.html` is included as first-run help,
+not as the launcher.
+
+Portable package roots are intentionally quiet:
+
+```text
+Relay Agent/
+  Relay Agent.exe or relay-agent
+  README-FIRST.html
+  LICENSES/
+  app/
+```
+
+Implementation files, tools, assets, and runtime payloads live under `app/`.
+They should not appear beside the primary launcher.
 
 The Windows NSIS installer is optional convenience for Start Menu, desktop
 shortcut, and uninstall integration:

@@ -1,0 +1,9 @@
+{"id":3,"method":"thread/start","params":{"ephemeral":true,"cwd":"<work-area>"}}
+{"method":"thread/started","params":{"thread":{"id":"thread-example","status":"loaded","ephemeral":true}}}
+{"id":3,"result":{"thread":{"id":"thread-example","status":"loaded","ephemeral":true}}}
+{"id":4,"method":"turn/start","params":{"threadId":"thread-example","input":[{"type":"user_message","text":"Summarize this folder."}]}}
+{"method":"turn/started","params":{"threadId":"thread-example","turn":{"id":"turn-example","status":"running"}}}
+{"method":"item/started","params":{"threadId":"thread-example","turnId":"turn-example","item":{"id":"item-example","type":"agent_message"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"thread-example","turnId":"turn-example","itemId":"item-example","delta":"Summary"}}
+{"method":"item/completed","params":{"threadId":"thread-example","turnId":"turn-example","item":{"id":"item-example","type":"agent_message","text":"Summary"}}}
+{"method":"turn/completed","params":{"threadId":"thread-example","turn":{"id":"turn-example","status":"completed"}}}

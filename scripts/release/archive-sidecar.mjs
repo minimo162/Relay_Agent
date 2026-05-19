@@ -10,8 +10,8 @@ const version = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.js
 const packageDir = resolve(root, "dist", `relay-agent-${rid}`);
 const output =
   rid === "win-x64"
-    ? resolve(root, "dist", `relay-agent-${version}-${rid}.zip`)
-    : resolve(root, "dist", `relay-agent-${version}-${rid}.tar.gz`);
+    ? resolve(root, "dist", `relay-agent-${version}-${rid}-portable.zip`)
+    : resolve(root, "dist", `relay-agent-${version}-${rid}-portable.tar.gz`);
 
 if (!existsSync(packageDir)) {
   throw new Error(`package directory does not exist. Run pnpm sidecar:publish:${ridName(rid)} first: ${packageDir}`);

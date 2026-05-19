@@ -1,0 +1,3 @@
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"relay_agent","title":"Relay Agent","version":"0.3.25"},"capabilities":{"experimentalApi":true}}}
+{"method":"initialized","params":{}}
+{"id":1,"result":{"userAgent":"relay-agent/0.3.25","codexHome":"<relay-user-local>/codex-home","platformFamily":"linux","platformOs":"linux"}}

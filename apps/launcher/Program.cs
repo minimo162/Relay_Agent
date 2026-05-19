@@ -5,8 +5,9 @@ using System.Security.Cryptography;
 using System.Text.Json;
 
 var appDir = AppContext.BaseDirectory;
+var sidecarDir = ResolveSidecarDirectory(appDir);
 var sidecarName = OperatingSystem.IsWindows() ? "Relay.Sidecar.exe" : "Relay.Sidecar";
-var sidecarPath = Path.Combine(appDir, sidecarName);
+var sidecarPath = Path.Combine(sidecarDir, sidecarName);
 
 if (!File.Exists(sidecarPath))
 {
@@ -17,14 +18,14 @@ if (!File.Exists(sidecarPath))
 var port = ResolvePort();
 var token = CreateToken();
 var dataDir = ResolveDataDirectory();
-var workbenchDist = Path.Combine(appDir, "wwwroot");
+var workbenchDist = Path.Combine(sidecarDir, "wwwroot");
 
 Directory.CreateDirectory(dataDir);
 
 var startInfo = new ProcessStartInfo
 {
     FileName = sidecarPath,
-    WorkingDirectory = appDir,
+    WorkingDirectory = sidecarDir,
     UseShellExecute = false,
     RedirectStandardOutput = true,
     RedirectStandardError = true,
@@ -77,6 +78,19 @@ static int ResolvePort()
     var port = ((IPEndPoint)listener.LocalEndpoint).Port;
     listener.Stop();
     return port;
+}
+
+static string ResolveSidecarDirectory(string launcherDirectory)
+{
+    var packagedSidecarDirectory = Path.Combine(launcherDirectory, "app", "relay-core");
+    if (File.Exists(Path.Combine(
+            packagedSidecarDirectory,
+            OperatingSystem.IsWindows() ? "Relay.Sidecar.exe" : "Relay.Sidecar")))
+    {
+        return packagedSidecarDirectory;
+    }
+
+    return launcherDirectory;
 }
 
 static string ResolveDataDirectory()

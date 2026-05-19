@@ -73,6 +73,641 @@ Implementation status: completed in the 2026-05-20 `OPENAIAPI*` slice. The
 public product contract is now the OpenAI-compatible Models + Chat
 Completions API with client-managed function tools.
 
+## 2026-05-20 Codex App Server Mediation Plan
+
+New target direction: **do not make ordinary HTML tools talk directly to
+Relay's `/v1` API as their main integration path**. Instead, use Relay's
+OpenAI-compatible API as a Copilot-backed provider for a Codex app
+server-compatible local harness, and let HTML tools connect through a
+Relay-served browser bridge to that app server.
+
+The target runtime chain becomes:
+
+```text
+Standard chatbot HTML client and task-specific HTML tools
+  ordinary browser UI, no Edge CDP, no Copilot selectors
+
+Relay browser/app-server bridge
+  loopback browser facade; launch-token protected; maps browser events to
+  app-server stdio JSONL; stages attachments; dispatches approved local tools
+
+Codex app server-compatible local harness
+  sessions, agent loop, tool registry, client tool calls, approvals,
+  streaming/events, transcripts, and app-facing API
+
+Relay Core OpenAI-compatible provider
+  /v1/models + /v1/chat/completions backed by M365 Copilot over Edge CDP
+
+M365 Copilot in signed-in Edge
+  reasoning controller; no OpenAI API key
+```
+
+### Why This Direction
+
+The direct Relay `/v1/chat/completions` API is useful as a provider boundary,
+but it is too low-level as the primary app integration layer. If every HTML
+tool talks directly to Relay, each tool must reinvent session state,
+multi-turn tool-call loops, retries, transcript handling, approval UX,
+streaming/event handling, and tool-result continuation. That risks repeating
+the same harness-design problem Relay has already tried to avoid.
+
+Codex app server should become the higher-level harness boundary where
+possible:
+
+- HTML tools connect to one app-server bridge/protocol rather than hand-rolling
+  OpenAI loop logic.
+- Relay stays focused on the hard part that is unique to this project:
+  reliable M365 Copilot provider access through Edge CDP.
+- Tool execution can move closer to the app-server/client boundary instead of
+  becoming Relay-specific public surface again.
+- Existing Codex app server concepts for sessions, threads, event streams,
+  tool calls, approvals, and diagnostics can be reused or mirrored instead of
+  rebuilt ad hoc.
+
+### Product Contract
+
+The user-facing integration should be:
+
+> **Start Relay Agent. It starts or connects to the local app server. Open the
+> chatbot HTML page. The page talks to Relay's app-server bridge. The app
+> server uses Relay as its `m365-copilot` provider.**
+
+Relay's direct `/v1` API remains stable but becomes a lower-level provider API,
+not the recommended HTML tool API. Documentation and starter examples should
+lead with the app-server bridge endpoint once implemented.
+
+The default user-facing tool should be a normal chatbot-style HTML client, not
+an API-only diagnostics page. A first-time user should be able to:
+
+1. start Relay Agent;
+2. pick or confirm a local work area when the request needs folder search,
+   editing, or saving;
+3. type a natural-language request such as "find files about deferred hedge
+   gains and summarize likely candidates" or "create a small HTML tool in this
+   folder";
+4. see app-server events, proposed local-file actions, approval prompts, diffs,
+   and final results in the chat.
+
+Task-specific HTML tools remain possible, but the shipped reference UI should
+prove the general path: **chatbot HTML -> Relay app-server bridge -> Codex app
+server -> Relay `m365-copilot` provider -> M365 Copilot**, with local file
+operations mediated through the app-server tool loop.
+
+The app server must be configured without OpenAI credentials:
+
+- provider `baseURL`: Relay Core local `/v1`;
+- provider `apiKey`: Relay launch token;
+- provider `model`: `m365-copilot`.
+
+If Codex app server requires additional model/provider fields, Relay should
+generate that configuration. Users should not edit JSON by hand for the
+standard path.
+
+### Boundary Rules
+
+- Relay does **not** reintroduce `/v1/tools`, `/agui/relay`, document-search
+  modes, Office modes, or code modes as public product surfaces.
+- Relay's public responsibility is provider access, readiness, token/CORS,
+  diagnostics, packaging, app-server bootstrap/configuration, and a
+  browser-safe bridge to the bundled app server.
+- Codex app server-compatible harness owns sessions, transcript continuity,
+  event streams, app-facing task APIs, and tool-call orchestration.
+- HTML tools own their UI and any browser/client-side tools they choose to
+  expose to the app server.
+- Browser clients must not connect to app-server `stdio` directly. Relay owns a
+  local browser bridge that converts browser-friendly HTTP/SSE/WebSocket calls
+  into the pinned app-server protocol over stdio, enforces launch-token and
+  origin checks, and keeps the user-facing protocol stable.
+- Natural-language local file work is allowed only through the app-server tool
+  loop. The HTML chat client may expose local tools to the app server, and a
+  bundled local tool worker may execute approved file operations, but Relay
+  must not recreate `/v1/tools` or mode-specific public Relay APIs.
+- Local file tools should follow established coding-agent tool shapes where
+  practical: `glob`, `grep`, `read`, `write`, `edit`/`patch`,
+  `workspace_status`, `diff`, and bounded verification command execution.
+  Office and PDF reads can be specialized tools, but they should still appear
+  as app-server tools rather than separate Relay modes.
+- Mutating operations require visible approval, work-area containment,
+  backup/diff artifacts, and auditable app-server events. Read-only search and
+  read operations may run without approval when they remain inside the selected
+  work area or a staged attachment.
+- No fallback should silently bypass the app server and call Relay directly in
+  the user-facing HTML tool path. Direct Relay API examples may remain only as
+  provider diagnostics and developer reference.
+
+### Browser-To-App-Server Bridge
+
+Because the production-favored app-server transport is `stdio://` JSONL,
+browser HTML cannot connect to it directly. Relay must provide a narrow local
+bridge for browser clients.
+
+The bridge should:
+
+- bind only to loopback;
+- require the per-launch Relay token;
+- validate `Host` and `Origin`;
+- serve the default chatbot HTML and static assets;
+- expose browser-safe session/event endpoints for app-server threads and turns;
+- translate browser requests into the pinned app-server JSONL protocol;
+- forward app-server item/turn notifications to the browser as streaming UI
+  events;
+- surface app-server errors as setup/run errors, not as assistant prose;
+- stage browser-picked attachments into Relay user-local storage;
+- dispatch app-server tool calls to the approved local tool worker;
+- preserve app-server thread/turn/item ids in support bundles and UI events.
+
+The bridge is not a new Relay agent protocol. It is a transport adapter around
+the app server. The public mental model remains "HTML chatbot talks to the
+local app server"; the implementation detail is that Relay brokers browser
+traffic to the stdio app-server process.
+
+### Local Tool Worker Boundary
+
+Natural-language local file work requires a place where app-server tool calls
+become local operations. That boundary must be explicit.
+
+The local tool worker should:
+
+- expose only the app-server-visible tools selected for the chatbot path;
+- validate every argument before execution;
+- enforce work-area containment for file paths;
+- keep Relay/app-server state in user-local storage, never in the work area;
+- run read-only tools without approval only when they are safely inside the work
+  area or a staged attachment;
+- require approval for write/edit/patch/Office mutation and bounded command
+  execution;
+- create backups/diffs for mutations and return those artifacts to the
+  app-server turn;
+- fail fast on unsupported tools, invalid arguments, cross-work-area paths,
+  unknown attachment ids, or missing approvals.
+
+This worker can be implemented inside Relay Core, but it must be used only as
+the app-server tool execution backend. It must not become a public
+Relay-specific `/v1/tools` API or a revival of separate search/Office/code
+modes.
+
+### Compatibility Risks To Verify First
+
+Before implementation, verify the actual Codex app server contract against the
+current Relay API:
+
+- license, redistribution, NOTICE, and attribution requirements for bundling
+  Codex app server code/binaries inside Relay packages;
+- whether the upstream project publishes a stable binary, npm package, source
+  crate, or other artifact that Relay can pin and verify;
+- whether the app server can be built reproducibly in CI for Windows and
+  Linux, or whether Relay needs to vendor a pinned source snapshot;
+- whether it accepts an OpenAI-compatible Chat Completions provider or requires
+  Responses-style APIs;
+- how it represents model ids, sessions, tool calls, streaming/events, and
+  approvals;
+- whether it can run without OpenAI API credentials when pointed at Relay;
+- whether browser HTML clients can connect to it with a simple token/local
+  origin story through Relay's browser bridge;
+- whether it supports client-managed tools or expects server-owned tools;
+- how it handles provider errors, rate limits, and busy sessions;
+- how much of the app server can be packaged portably without admin rights;
+- whether the bundled app server can be launched with a user-local profile,
+  no machine-wide install, no service registration, and no runtime download.
+
+If Codex app server cannot consume the existing Relay Chat Completions shape,
+the fix should be an adapter at the provider boundary, not a return to
+Relay-specific app modes. For example, Relay may add a small compatibility
+facade only if it is required by the app server and is covered by smokes.
+
+### Codex App Server Utilization Requirements
+
+Research status as of 2026-05-20:
+
+- The app server is a `codex` binary subcommand, not a Python service. The
+  upstream test-client quickstart builds a `codex` binary with Cargo before
+  starting the app server.
+- The app-server protocol is JSON-RPC 2.0 shaped, but the on-wire messages omit
+  the `"jsonrpc": "2.0"` field. Relay must therefore implement the app-server
+  client binding as the protocol actually uses it, not as a generic strict
+  JSON-RPC library with incompatible framing assumptions.
+- The production-favored local transport should be `stdio://` JSONL. The
+  official app-server README lists websocket and unix socket transports, but
+  websocket is explicitly experimental/unsupported. Relay may use websocket in
+  diagnostics only after proving it is necessary; the default bundled path
+  should launch app-server as a child process over stdio.
+- Since stdio is not browser-accessible, Relay must provide the browser bridge
+  above. Treat this as required infrastructure, not an optional convenience.
+- The app server requires an `initialize` request immediately after opening the
+  transport, followed by the initialized notification. Other requests before
+  this handshake are rejected.
+- The app-server mental model is `thread` -> `turn` -> `item`. Relay must not
+  flatten this into stateless chat calls. The bridge must expose thread start,
+  thread resume, turn start, turn completion, item events, and transcript
+  continuity to HTML tools through the app-server layer.
+- The app server emits detailed event notifications while a turn runs. Relay's
+  HTML-facing bridge should consume and forward those events rather than
+  polling only for a final message.
+- App-server schema generation is version-specific. For any pinned bundled
+  version, the release process should generate and store the matching
+  TypeScript/JSON schema artifacts, then validate Relay's client binding
+  against that exact version.
+- App-server readiness must be protocol-level, not just process-alive. For
+  stdio, Relay should verify initialize + a lightweight method such as model
+  list/account read. For websocket diagnostics, `/readyz` and `/healthz` exist,
+  but HTTP requests with an `Origin` header are rejected by design.
+- App-server auth/account state is provider-dependent. It can report that no
+  OpenAI auth is required when the active provider does not need OpenAI
+  credentials. Relay's goal is to configure the app server so `m365-copilot`
+  uses Relay's local provider and does not trigger OpenAI API-key or ChatGPT
+  login flows.
+- The app server is long-lived and owns Codex core threads. Relay must manage
+  startup, stdout/stdin lifecycle, shutdown, orphan cleanup, stderr logging,
+  and version mismatch failure states.
+- State must be user-local. Use a Relay-owned `CODEX_HOME` or equivalent under
+  Relay's user-local data directory so app-server config, threads, logs, and
+  auth/account state never land in a searched/shared workspace.
+- Bundling should pin one tested app-server version or commit. The package must
+  include license/NOTICE files, generated schemas for the pinned protocol, and
+  hashes for the binary/source artifact.
+- End users should not need Python, Rust, Cargo, Node project setup, npm
+  global install, or a runtime network download. Rust/Cargo may be required
+  only in Relay's release build pipeline if no upstream binary artifact is
+  usable.
+
+Implications for Relay:
+
+- Relay needs an app-server supervisor and a small typed client binding, not a
+  Python microservice.
+- Relay's `/v1` provider remains necessary, but it should be consumed by the
+  app server as a configured provider, not by ordinary HTML tools directly.
+- If app server cannot be configured to use Relay's existing Chat Completions
+  provider without OpenAI auth, add a provider compatibility adapter at Relay's
+  provider boundary and test it with app-server schema fixtures.
+- Do not build a custom Relay thread/turn/event harness in parallel with the
+  app server. The point of adopting app server is to let it own that surface.
+
+### Relay UI Role After The Bridge
+
+Relay API Hub should become a small "connection and health" page:
+
+- show Relay Core readiness;
+- show Copilot provider readiness;
+- show app-server readiness;
+- show the chatbot/app-server bridge URL for HTML tools;
+- show whether the app server is configured to use Relay's `m365-copilot`
+  provider;
+- provide one starter HTML that connects to the app-server bridge, not directly
+  to Relay `/v1`;
+- keep direct Relay `/v1` snippets under developer diagnostics only.
+
+The main first-time story should not be "copy this `/v1/chat/completions`
+fetch". It should be "open or build an HTML tool that connects to the local
+app-server bridge."
+
+### First-Run User Experience
+
+The product should feel like a simple local assistant, not a developer server
+that users have to assemble.
+
+Recommended first-run path:
+
+1. User receives one package: `Relay Agent` portable folder or user-scope
+   installer.
+2. User starts one launcher:
+   - Windows: `Relay Agent.exe` or Start Menu/Desktop shortcut;
+   - Linux: `relay-agent` launcher script/binary.
+3. Launcher starts Relay Core and the bundled app server in the background.
+4. Launcher opens the default chatbot HTML page in the user's browser.
+5. The page shows a short setup checklist:
+   - Copilot connection;
+   - app server connection;
+   - selected work area;
+   - files for this request ready.
+6. If Edge/M365 Copilot is not signed in or reachable, show one clear action:
+   "Open Copilot and sign in", then re-check automatically.
+7. If no work area is selected and the request needs search/edit/save, prompt
+   for a folder with a native folder picker. Do not ask the user to type paths.
+8. When ready, the user sees a normal chat composer with examples such as:
+   - "このフォルダから繰延ヘッジ損益に関係するファイルを探して";
+   - "添付した PDF の誤字と表記ゆれを確認して";
+   - "このフォルダに簡単な HTML ツールを作って";
+   - "Book2.xlsx の Sheet1 A1 を赤くして".
+
+The user should not need to know about ports, JSON, OpenAI-compatible API
+shape, app-server transport, `CODEX_HOME`, CDP, or provider tokens in the
+standard path.
+
+Setup states should be plain:
+
+- **Starting**: Relay Core/app server are launching.
+- **Sign in required**: Copilot is not reachable; open Copilot sign-in.
+- **Choose work area**: search/edit/save needs a folder.
+- **Ready**: user can chat.
+- **Working**: a run is active.
+- **Needs approval**: a local mutation is waiting for confirmation.
+- **Problem**: actionable setup error with a "details" expander.
+
+The page should include one small "Support details" disclosure for diagnostics,
+but it must stay collapsed by default and should never be the primary UX.
+
+### Standard Chatbot HTML Client
+
+Relay should ship one default chatbot-style HTML client connected to the local
+app server. This is the proof that the app-server bridge is useful for normal
+users, not only for developers copying API snippets.
+
+The chatbot client should:
+
+- look like a familiar single-thread chat surface: message list, composer,
+  send/stop, work-area/attachment affordance, and a compact status line;
+- support file attachment through a visible attach button, drag/drop where the
+  browser permits it, and an attachment tray beside the composer;
+- hide low-level protocol details by default;
+- show tool activity as understandable timeline rows: searching, reading,
+  editing, verifying, waiting for approval, done, failed;
+- expose approvals inline before any write/edit/patch/Office mutation or
+  bounded command execution;
+- show file diffs and changed paths after mutations;
+- keep a single selected work area visible and easy to change through a native
+  folder picker where available;
+- route all chat turns to the app server, never directly to Relay `/v1` except
+  for collapsed diagnostics;
+- use Relay's `m365-copilot` provider through the app server so M365 Copilot is
+  the reasoning controller while the app server owns session/tool orchestration.
+
+The default natural-language capabilities should include:
+
+- local file discovery through `glob`/`grep`;
+- exact file reading, including Relay-supported text/PDF/Office extraction when
+  available;
+- attached file review through the same exact-read/extraction tools, without
+  injecting whole files into prompts by default;
+- work-area-scoped file creation and edits through `write` and `edit`/`patch`;
+- work-area status and diff review;
+- bounded verification commands where explicitly approved or safely categorized;
+- Office file edits through semantic Office operations when the app-server tool
+  registry exposes them.
+
+### Chatbot File Attachment Model
+
+The chatbot should support attachments, but attachments must preserve the same
+local-safety model as work-area file tools.
+
+Attachment types:
+
+- **Work-area references**: files already inside the selected work area are
+  attached as path references. The app server can ask the `read` tool to
+  extract content when needed.
+- **Browser-picked files outside the work area**: files selected through the
+  browser file picker or dropped into the chat are staged into a Relay-owned
+  user-local attachment store and represented by attachment ids. They must not
+  be copied into the work area or shared folder unless the user explicitly asks
+  for that.
+- **Generated or edited attachment outputs**: any mutation of an attached file
+  must happen through the normal approval/diff/backup flow. If the source file
+  came from outside the work area, default to creating an approved output copy
+  rather than overwriting the original.
+
+Attachment handling rules:
+
+- The app-server turn input should include attachment metadata and ids, not raw
+  large file contents.
+- Browser-picked files must be uploaded or streamed to Relay's user-local
+  attachment store through the bridge before the app-server turn starts.
+- Copilot may inspect an attachment only through app-server tools such as
+  `read`, Office/PDF extraction, or chunked reads. Tool activity must be visible
+  in the chat timeline.
+- Large or binary attachments must be summarized/extracted incrementally rather
+  than pasted wholesale into the prompt.
+- Attachments need explicit limits: maximum file size, maximum files per turn,
+  supported extraction types, unsupported file error text, retention period,
+  and cleanup behavior.
+- The UI should show file name, type, size, origin, and whether content has
+  been read/extracted.
+- A user can remove an attachment before sending and clear staged attachment
+  data after a run.
+- Support bundles include attachment metadata by default, but not raw
+  attachment contents unless the user explicitly opts in.
+- Contents of files that Copilot reads may be sent to M365 Copilot through the
+  provider path; the UI should make this clear without adding noisy warnings to
+  every message.
+
+### Work Area And Attachment Mental Model
+
+The UI must make the difference between a work area and attachments obvious to
+first-time users.
+
+Use these product concepts:
+
+- **Work area**: the folder where Relay may search, read, create,
+  edit, and save files. It is persistent across turns until changed. It defines
+  the safe boundary for local file operations.
+- **Attachments / Files for this request**: specific files the user wants the
+  assistant to inspect in the current message or thread. Attachments can come
+  from inside or outside the work area. They are temporary context, not the
+  default save/search location.
+
+The visible UI should use a simple two-part context bar above the composer:
+
+```text
+Work area        [folder name] [Change]
+This is where Relay can search and save.
+
+Files for this request   [paperclip] Attach
+Optional documents to inspect now.
+```
+
+Design rules:
+
+- Do not show a raw path input in the primary UI. Show the folder name and a
+  shortened path only after selection.
+- Work-area selection should use a native folder picker where possible.
+- If the browser File System Access API is unavailable or unsuitable, the
+  chatbot should call a Relay bridge folder-picker endpoint that opens the
+  platform-native folder dialog. Do not fall back to requiring path typing.
+- Attachment selection should use a normal file picker and drag/drop area.
+- Work-area and attachment chips must look visually different:
+  - work area: one persistent folder chip with a folder icon;
+  - attachments: removable file chips with file type, size, and read/extracted
+    state.
+- If no work area is selected, attachment-only review should still be possible,
+  but search/edit/save actions should show "Choose a work area first".
+- If a user asks to "find files", the UI should guide them to choose a work
+  area. If a user attaches files and asks about them, the UI should not force a
+  work area.
+- If a user asks to save or edit output while only attachments are present,
+  ask for a work area or explicit output destination before mutation.
+- Attachment chips should be per-message by default. Provide "keep in thread"
+  only as an advanced inline option if the app-server protocol supports it.
+- Use concise microcopy:
+  - "Work area: where Relay can search and save."
+  - "Attachments: files to inspect for this request."
+  - "Nothing is saved to this folder unless you approve it."
+  - "Large files are read in parts."
+
+Visual direction:
+
+- Use a normal professional chatbot layout: one centered conversation column,
+  generous whitespace, compact context bar, large readable composer.
+- Keep the initial screen to three actions: choose work area, attach files,
+  ask a question.
+- Use Inter or the system UI font, 14-16px body text, high contrast slate text,
+  white/off-white surfaces, subtle borders, and one restrained accent color.
+- Use lucide-style icons for folder, paperclip, file, shield/check, and warning.
+  Do not use emoji icons.
+- Keep diagnostics collapsed under "Support details". Ports, CDP, provider
+  tokens, `CODEX_HOME`, and app-server transport must never compete with the
+  chat as primary content.
+
+The product should avoid separate first-party modes such as "search", "Office
+edit", or "code". Those become recipes that the chatbot can perform using the
+same app-server tool loop.
+
+### Packaging Direction
+
+Packaging should **bundle** the app server in the Relay release whenever the
+upstream license and build/distribution form allow it. Runtime download should
+not be the normal path because the product goal is easy internal distribution:
+one Relay package should contain the provider sidecar, app-server harness, and
+first-run HTML guidance.
+
+The primary release artifact should be the **portable package**. It is easier
+to share internally, does not require administrator rights, does not need a
+personal password/UAC prompt, and keeps the first-run path visible. The
+Windows user-scope installer can remain an optional convenience for Start Menu,
+desktop shortcut, and uninstall integration, but release notes and README-first
+guidance should lead with the portable zip/tarball.
+
+The portable package must avoid a noisy top level. A first-time user should see
+only the files they are likely to use:
+
+```text
+Relay Agent/ (Windows portable)
+  Relay Agent.exe          # Windows primary launcher
+  README-FIRST.html        # short first-run help
+  LICENSES/                # bundled license/notice files
+  app/                     # everything else
+
+Relay Agent/ (Linux portable)
+  relay-agent              # Linux primary launcher
+  README-FIRST.html
+  LICENSES/
+  app/
+```
+
+Windows packages should omit the Linux launcher from the top level; Linux
+packages should omit `Relay Agent.exe`. Developer scripts, raw sidecar
+binaries, app-server binaries, tools, schemas, examples, logs, and diagnostics
+must not appear beside the primary launcher. They belong under `app/` or in
+user-local runtime storage.
+
+GitHub Releases should make the intended download obvious:
+
+- primary Windows download: `relay-agent-<version>-win-x64-portable.zip`;
+- primary Linux download: `relay-agent-<version>-linux-x64-portable.tar.gz`;
+- optional Windows installer: `Relay.Agent-<version>-win-x64-setup.exe`;
+- support assets: checksums, release inventory, and SBOM-style metadata.
+
+Release notes should label the portable downloads as **Recommended** and the
+installer as **Optional**. Do not require users to infer which file to run from
+artifact names alone.
+
+Target package layout:
+
+```text
+Relay Agent package
+  Relay Agent.exe or relay-agent   # platform-specific primary launcher
+  README-FIRST.html
+  LICENSES/
+  app/
+    relay-core/
+      Relay.Sidecar(.exe)
+      browser/app-server bridge endpoints
+      relay-tools/
+      wwwroot/
+    app-server/
+      relay-app-server launcher/wrapper
+      pinned Codex app server files or binary
+      bundled license/NOTICE files
+    starters/
+      chat.html
+      app-server-starter.html
+      examples/
+    schemas/
+      pinned app-server protocol schemas and fixtures
+    diagnostics/
+      empty placeholder or generated support-bundle target
+```
+
+Bundling rules:
+
+- no administrator rights;
+- no OpenAI API key;
+- no Python/Node project setup for the user;
+- no npm/pip/cargo install at first run;
+- no runtime network fetch as the default startup path;
+- one visible top-level launcher starts Relay Core, the browser bridge, the
+  bundled app server, and the browser page;
+- the default browser page is the chatbot HTML client, with the lower-level API
+  Hub available from diagnostics/help;
+- first-run instructions live in `README-FIRST.html` and in the launcher page,
+  but the user should not have to read documentation before the first chat;
+- all app state, logs, and config live under user-local app data;
+- shared folders never receive Relay/app-server cache or config files;
+- top-level package clutter is a release blocker. The release smoke should fail
+  if extra executables, raw DLLs, app-server internals, scripts, schemas,
+  caches, or logs appear at the package root.
+
+The release package should clearly distinguish:
+
+- Relay Core provider binary;
+- app server harness binary/files;
+- starter HTML tools;
+- diagnostics/support bundle files.
+
+If upstream Codex app server cannot legally or practically be redistributed as
+a bundled artifact, the fallback is **not** to return HTML tools to direct
+Relay `/v1` as the main UX. Instead, define a small Relay-owned compatibility
+wrapper that implements the subset of the Codex app-server protocol needed by
+the HTML tools, while continuing to treat the upstream contract as the design
+source. That fallback must be explicitly documented and smoke-tested before
+use.
+
+Release inventory must record:
+
+- Codex app server source/version/commit or release tag;
+- artifact hash;
+- license and NOTICE files included;
+- build command or fetch URL;
+- whether the artifact is upstream binary, source-built, or vendored snapshot;
+- supported platforms;
+- startup command and configured Relay provider endpoint;
+- top-level file inventory for each platform package;
+- user-facing primary launcher name for each platform;
+- whether optional installer artifacts were also produced.
+
+### Acceptance Direction
+
+The first implementation milestone should pass without relying on a real
+task-specific tool:
+
+- start Relay Core with mock Copilot;
+- start or connect to the Codex app server-compatible harness;
+- configure that harness to use Relay `/v1` as provider;
+- run a simple HTML client against the Relay app-server bridge;
+- prove the bridge translates the browser request into app-server stdio JSONL;
+- confirm the resulting request reaches Relay `/v1/chat/completions`;
+- confirm assistant text returns through the app server and bridge to the HTML
+  client;
+- confirm direct Relay `/v1` remains available for diagnostics but is not the
+  main starter path.
+
+The second milestone should prove the reason for using the app server:
+
+- run a multi-turn task through the app server;
+- include at least one tool-call round trip where the app server/client owns
+  the tool result;
+- preserve session/transcript continuity across the tool result;
+- surface errors as app-server/bridge events rather than Relay-specific prose;
+- export diagnostics containing app-server session id, Relay request id, and
+  redacted provider traces.
+
 The target is to make Relay usable as a **normal
 OpenAI-compatible local API** backed by Microsoft 365 Copilot. Anyone should be
 able to connect an HTML tool, script, or existing OpenAI-compatible client by
@@ -270,7 +905,9 @@ Initial explicit non-goals:
 - legacy `functions` and `function_call` request parameters;
 - OpenAI custom tool types other than `type: "function"`;
 - audio output;
-- file upload or attachments through Chat Completions;
+- file upload or attachments through direct Relay Chat Completions. Attachment
+  support belongs to the app-server chatbot path above, where attachments are
+  represented as app-server input/resources and inspected through tools;
 - persistent stored completions (`store`, list, retrieve, update, delete).
 
 Deprecated OpenAI fields such as `functions`, `function_call`, and assistant

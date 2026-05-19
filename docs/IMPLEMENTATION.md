@@ -38,6 +38,74 @@
 
 ## Milestone Log
 
+### 2026-05-20 App-Server Contract And Portable Root Hardening
+
+This slice completes the `APPBRIDGE*` planning and release-hardening queue
+without bundling an unpinned Codex app-server runtime. Relay now records the
+verified app-server contract, keeps the direct `/v1` API as the current
+provider/diagnostic surface, and prevents portable releases from exposing
+implementation internals at the package root.
+
+Change:
+
+- Added app-server compatibility notes and JSONL fixtures under
+  `docs/app-server/`.
+- Verified the official Codex app-server shape:
+  - `codex app-server` command;
+  - stdio JSONL as the production-favored local transport;
+  - websocket marked experimental/unsupported;
+  - JSON-RPC-shaped messages without the wire `jsonrpc` field;
+  - required `initialize` plus `initialized` handshake;
+  - `thread` -> `turn` -> `item` conversation model;
+  - version-specific schema generation.
+- Updated the launcher so the visible root launcher can start
+  `app/relay-core/Relay.Sidecar(.exe)`.
+- Reworked portable packaging so package roots contain only:
+  - Windows: `Relay Agent.exe`, `README-FIRST.html`, `LICENSES/`, `app/`;
+  - Linux: `relay-agent`, `README-FIRST.html`, `LICENSES/`, `app/`.
+- Moved Relay Core, tools, icons, release notes, and starters under `app/`.
+- Renamed portable archives to:
+  - `relay-agent-<version>-win-x64-portable.zip`;
+  - `relay-agent-<version>-linux-x64-portable.tar.gz`.
+- Added `scripts/release/portable-root-smoke.mjs` and wired it into
+  `pnpm check`.
+- Updated release inventory and GitHub release workflow upload names.
+- Bumped client, sidecar, and launcher versions to `0.3.25`.
+
+Verification commands for this slice:
+
+```bash
+node --check scripts/release/package-sidecar.mjs
+node --check scripts/release/archive-sidecar.mjs
+node --check scripts/release/portable-root-smoke.mjs
+dotnet build apps/launcher/Relay.Launcher.csproj --configuration Release
+pnpm sidecar:portable:linux
+pnpm sidecar:portable:windows
+pnpm sidecar:installer:windows
+node scripts/release/icon-packaging-smoke.mjs
+node scripts/release/portable-root-smoke.mjs
+RELAY_ALLOW_MOCK_COPILOT=1 ./dist/relay-agent-linux-x64/relay-agent
+pnpm check
+```
+
+Outcome on 2026-05-20:
+
+- Script syntax checks passed.
+- Launcher Release build passed.
+- Linux portable package generation passed and produced
+  `dist/relay-agent-0.3.25-linux-x64-portable.tar.gz`.
+- Windows portable package generation passed and produced
+  `dist/relay-agent-0.3.25-win-x64-portable.zip`.
+- Optional Windows installer generation passed and produced
+  `dist/installer/Relay.Agent-0.3.25-win-x64-setup.exe`.
+- Portable root and icon smoke checks passed.
+- Linux portable launcher smoke passed: the top-level `relay-agent` found
+  `app/relay-core/Relay.Sidecar`, opened the API Hub URL, and `/health`
+  returned version `0.3.25` with bundled ripgrep ready.
+- Full `pnpm check` passed after package-root smoke was added to the gate.
+- Wrote `dist/release/relay-agent-0.3.25-sha256.txt` after the final release
+  inventory/SBOM generation.
+
 ### 2026-05-20 OpenAI-Compatible API Hub Completion
 
 This slice completes the `OPENAIAPI*` cutover and makes Relay's public product

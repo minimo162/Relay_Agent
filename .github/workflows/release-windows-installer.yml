@@ -98,8 +98,8 @@ jobs:
           VERSION: ${{ steps.release_meta.outputs.version }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar Workbench release."
-          gh release upload "$RELEASE_TAG" "dist/relay-agent-${VERSION}-win-x64.zip" --clobber
+            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Recommended: download the portable zip/tarball. Optional: use the Windows setup.exe for shortcuts and uninstall integration."
+          gh release upload "$RELEASE_TAG" "dist/relay-agent-${VERSION}-win-x64-portable.zip" --clobber
           gh release upload "$RELEASE_TAG" "dist/installer/Relay.Agent-${VERSION}-win-x64-setup.exe" --clobber
           gh release upload "$RELEASE_TAG" "dist/release/relay-release-inventory.json" --clobber
           gh release upload "$RELEASE_TAG" "dist/release/relay-sbom.json" --clobber
@@ -175,5 +175,5 @@ jobs:
           VERSION: ${{ steps.release_meta.outputs.version }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
-            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Relay Agent sidecar Workbench release."
-          gh release upload "$RELEASE_TAG" "dist/relay-agent-${VERSION}-linux-x64.tar.gz" --clobber
+            gh release create "$RELEASE_TAG" --title "$RELEASE_NAME" --notes "Recommended: download the portable zip/tarball. Optional: use the Windows setup.exe for shortcuts and uninstall integration."
+          gh release upload "$RELEASE_TAG" "dist/relay-agent-${VERSION}-linux-x64-portable.tar.gz" --clobber

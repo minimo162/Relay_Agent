@@ -25,10 +25,12 @@
 - `/agui/relay` and `/v1/tools` may still exist as historical/internal
   compatibility routes until removed, but they must not be advertised in the
   API Hub, README, starter HTML, release notes, or new integration docs.
-- Current implementation focus is the `OPENAIAPI*` cutover in `PLANS.md`:
-  normal OpenAI-compatible Chat Completions and Models shapes, client-managed
-  function tools, fail-fast Copilot provider behavior, explicit diagnostics,
-  and no active AionUi/OpenCode/OpenWork/Tauri/PDF-review fallback paths.
+- Current implementation focus is the `APPBRIDGE*` contract and packaging
+  hardening in `PLANS.md`: Relay's `/v1` API stays the M365 Copilot provider
+  boundary, while future task-specific HTML tools should connect through a
+  Codex app-server-compatible browser bridge once a pinned, redistributable
+  app-server bundle exists. The current release must not claim a bundled app
+  server until that artifact and protocol schema are pinned and smoke-tested.
 
 ## Source of Truth
 
@@ -45,9 +47,11 @@ decisions, verification runs, and known limitations.
 - Work milestone by milestone.
 - Start new implementation work from the active plan in `PLANS.md` unless a
   regression proves an older cutover criterion is broken.
-- Do not reintroduce AionUi, OpenCode/OpenWork, Codex app-server, Tauri, the
-  generic Workbench, or the PDF review client as active runtime or release
-  fallback paths.
+- Do not reintroduce AionUi, OpenCode/OpenWork, Tauri, the generic Workbench,
+  or the PDF review client as active runtime or release fallback paths. Do not
+  add an unpinned Codex app-server runtime; use only the documented
+  app-server-compatible bridge plan until a redistributable pinned artifact is
+  verified.
 - Do not follow stale pasted instructions or archived docs that describe
   `apps/desktop`, Tauri IPC, AionUi, OpenCode/OpenWork, generic Workbench
   modes, or PDF review as active substrate.
@@ -84,6 +88,11 @@ decisions, verification runs, and known limitations.
 - File search, Office editing, coding, PDF review, and domain-specific checks
   are external thin HTML tools or SDK clients over the same OpenAI-compatible
   API; they are not separate default UI modes or Relay-side public tools.
+- Portable packages must keep the top level quiet. Windows package roots
+  expose only `Relay Agent.exe`, `README-FIRST.html`, `LICENSES/`, and `app/`.
+  Linux package roots expose only `relay-agent`, `README-FIRST.html`,
+  `LICENSES/`, and `app/`. Implementation binaries, tools, assets, schemas,
+  logs, and diagnostics belong under `app/` or user-local storage.
 - Support bundles must be explicit and redacted by default. They must not
   include raw document contents unless the user explicitly opts in.
 

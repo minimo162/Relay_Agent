@@ -5,15 +5,21 @@ Date: 2026-05-18
 ## Active Goal
 
 Move Relay away from default first-party feature modes and toward a stable
-local **HTML tool API hub**: arbitrary local HTML tools should be able to call
-Relay Core for M365 Copilot through a normal OpenAI-compatible API. Tool
-calling is client-managed; Relay-side local tool execution is no longer part
-of the target public product contract.
+local provider + harness architecture: Relay Core exposes M365 Copilot through
+an OpenAI-compatible provider API, and a Codex app server-compatible local
+harness becomes the preferred endpoint for task-specific HTML tools. Tool
+calling remains client/app-server managed; Relay-side local tool execution is
+not part of the target public product contract.
 
 Relay still uses M365 Copilot through Edge CDP as the reasoning controller.
-Relay should not adopt Codex app-server as the runtime in this task queue, but
-Codex app-server remains useful prior art for approvals, sessions, tool
-results, sandboxing, streaming, and diagnostics.
+The next direction is to put a Codex app server-compatible harness between
+HTML tools and Relay's `/v1` provider so each HTML tool does not reinvent
+sessions, tool loops, transcripts, approvals, and event streaming. Because the
+preferred app-server transport is stdio, browser clients reach it through a
+Relay-owned browser/app-server bridge, not by opening stdio directly.
+The default user-facing client should be a normal chatbot-style HTML page that
+connects to that app server, uses M365 Copilot through Relay as the reasoning
+provider, and performs local file work through app-server tools.
 
 The current product cutover is no longer the PDF review HTML client. Relay Core
 is now planned as a local OpenAI-compatible Copilot gateway, and the default
@@ -142,6 +148,22 @@ client-managed OpenAI tool calling should work through `/v1/chat/completions`.
 Relay-side local tools, `/v1/tools`, and `/agui/relay` are removed from the
 target public product contract.
 
+The completed active queue is `APPBRIDGE*`. It implements the 2026-05-20 Codex App
+Server Mediation Plan from `PLANS.md`: keep Relay's `/v1` API as the
+Copilot-backed provider boundary, but make task-specific HTML tools connect to
+a Codex app server-compatible local harness instead of directly calling Relay.
+The app server owns sessions, event streams, tool-call orchestration,
+transcript continuity, and app-facing APIs. Relay owns M365 Copilot provider
+access, readiness, provider diagnostics, app-server bootstrap/configuration,
+and packaging. The target distribution bundles the app server in the Relay
+portable/installer package when the upstream license and artifact form allow
+redistribution; runtime download is not the normal startup path.
+The shipped reference UX should be a chatbot HTML client, not just an API Hub:
+the user types natural language, the browser bridge forwards the turn to the
+app server, the app server manages the thread/turn/tool loop, Copilot reasons
+through Relay's provider API, and approved local file tools operate inside the
+selected work area.
+
 Forward implementation should treat `COREAPI*`, `PDFHTML*`, and `PDFALIGN*` as
 completed history unless a regression in their shared backend acceptance gates
 is found. Older generic Workbench and PDF queues remain historical context.
@@ -163,10 +185,16 @@ acceptance criteria have broken.
 - Do not add Relay-side public tool endpoints or model-visible Relay-specific
   tool names.
 - Do not fix Copilot mistakes by adding broad prompt-only folklore.
-- Prefer ordinary OpenAI-compatible request/response semantics over new Relay
-  protocol surfaces.
-- Do not expose AG-UI as a public product path while the `OPENAIAPI*` cutover
-  is active.
+- Prefer existing Codex app server-compatible harness semantics over inventing
+  new Relay app protocols.
+- Keep Relay's direct `/v1` API as provider/diagnostic surface. Do not make it
+  the recommended first path for task-specific HTML tools once `APPBRIDGE*`
+  lands.
+- Do not expose AG-UI as a public product path while the `OPENAIAPI*` /
+  `APPBRIDGE*` cutover is active.
+- Do not create separate first-party modes for file search, Office editing, or
+  coding. Those are recipes over the app-server tool loop surfaced through the
+  chatbot HTML client.
 - Every completed task must update `docs/IMPLEMENTATION.md` with the artifact
   and verification result.
 - Run at least `pnpm check` before marking a milestone complete.
@@ -176,6 +204,760 @@ acceptance criteria have broken.
   after HTMLTOOL acceptance passes.
 
 ## Task Queue
+
+### APPBRIDGE-01 - Verify Codex App Server Contract Against Relay Provider
+
+Status: completed
+
+Scope:
+
+- Inspect the Codex app server contract that Relay would depend on before any
+  runtime code is changed.
+- Verify the upstream runtime/protocol requirements before choosing an
+  implementation strategy:
+  - app server is launched through the `codex` binary, not a Python service;
+  - Rust/Cargo is a release-build concern only if Relay builds from source,
+    never an end-user first-run dependency;
+  - stdio JSONL is the default local transport; websocket is experimental and
+    unsupported for production use;
+  - protocol is JSON-RPC-shaped but omits the `jsonrpc` field on the wire;
+  - every connection must perform `initialize` plus initialized notification
+    before any other request;
+  - the canonical conversation model is `thread` -> `turn` -> `item`, with
+    turn/item notifications during execution;
+  - protocol schemas are generated for the exact pinned app-server version;
+  - state must live under a Relay-owned user-local `CODEX_HOME` or equivalent.
+- Verify bundling feasibility:
+  - upstream license and redistribution terms;
+  - required NOTICE/attribution files;
+  - available release binaries/packages/source build path;
+  - Windows and Linux support;
+  - whether a user-local portable layout is practical;
+  - whether first run can avoid npm/pip/cargo install and network fetch.
+- Determine whether the app server can consume:
+  - OpenAI-compatible Chat Completions;
+  - `GET /v1/models`;
+  - `Authorization: Bearer <token>`;
+  - model id `m365-copilot`;
+  - non-streaming provider responses;
+  - function/tool-call responses.
+- Determine whether it requires Responses API, extra model metadata, server
+  tool registration, streaming-only events, or OpenAI-specific auth semantics.
+- Record the minimum compatibility surface Relay must provide to be a provider
+  for that app server.
+- Decide whether Relay needs a small provider adapter facade for the app
+  server. If yes, define it as provider compatibility only, not a new HTML tool
+  API.
+- Decide the bundled artifact strategy:
+  - upstream binary;
+  - source-built artifact;
+  - pinned vendored snapshot;
+  - or documented non-bundlable blocker.
+
+Artifacts:
+
+- `docs/IMPLEMENTATION.md` note with the verified app-server contract.
+- Updated `PLANS.md` if the verified contract changes the bridge design.
+
+Acceptance:
+
+- The project has a concrete compatibility checklist before adopting the app
+  server path.
+- The project has a yes/no bundling decision with licensing, artifact, and
+  platform evidence.
+- The requirements list explicitly proves whether end users need Python, Rust,
+  Cargo, Node project setup, npm global install, or runtime downloads. The
+  target answer is no.
+- No task-specific HTML tool is asked to call Relay `/v1` directly as the
+  primary product path.
+
+### APPBRIDGE-01A - Pin App Server Version And Protocol Schema
+
+Status: completed
+
+Scope:
+
+- Choose the exact Codex app-server source version, commit, or binary artifact
+  Relay will integrate with.
+- Generate and store the matching protocol schema artifacts for that version:
+  - TypeScript schema;
+  - JSON Schema bundle;
+  - representative JSONL fixtures.
+- Record the required transport and lifecycle sequence:
+  - process start;
+  - stdio JSONL framing;
+  - `initialize`;
+  - initialized notification;
+  - `thread/start` or `thread/resume`;
+  - `turn/start`;
+  - streamed notifications;
+  - `turn/completed`;
+  - shutdown.
+- Add fixture examples for:
+  - initialization success;
+  - request before initialization failure;
+  - thread creation;
+  - turn event stream;
+  - provider error;
+  - protocol version mismatch.
+- Decide where generated schema files belong in the repo and release package.
+
+Artifacts:
+
+- Version/schema decision in `docs/IMPLEMENTATION.md`.
+- Schema and fixture inventory requirement in `PLANS.md` or this task list.
+
+Acceptance:
+
+- No implementation task depends on a floating upstream protocol.
+- Relay has exact fixtures to test its app-server client binding before live
+  Copilot or HTML UX work starts.
+
+### APPBRIDGE-02 - Define Relay/App-Server Boundary And Bootstrap Model
+
+Status: completed
+
+Scope:
+
+- Define the target process topology:
+  - Relay Core sidecar;
+  - Relay browser/app-server bridge;
+  - Codex app server-compatible harness;
+  - browser API Hub / starter HTML;
+  - task-specific HTML tools.
+- Define the default process control model:
+  - Relay launches the app server as a child process over stdio;
+  - Relay owns stdin/stdout/stderr lifecycle, startup timeout, cancellation,
+    shutdown, and orphan cleanup;
+  - websocket is reserved for diagnostics only unless the plan is explicitly
+    changed with production evidence.
+- Define who owns:
+  - sessions;
+  - event streams;
+  - tool-call loop;
+  - browser-to-stdio transport translation;
+  - transcript storage;
+  - provider auth;
+  - attachment staging;
+  - local tool dispatch;
+  - support bundles;
+  - startup/shutdown;
+  - error propagation.
+- Treat `thread`, `turn`, and `item` as the canonical app-facing session model.
+  Do not flatten the bridge back into stateless chat completions.
+- Define how Relay supplies provider config to the app server:
+  - `baseURL`;
+  - `apiKey` / launch token;
+  - `model`;
+  - optional timeout and request-id propagation.
+- Define how Relay creates a user-local app-server home:
+  - no config, indexes, sessions, logs, or auth/account files in searched or
+    shared workspaces;
+  - per-install version marker and migration/error behavior.
+- Define lifecycle behavior so one launcher starts Relay Core and app server
+  without admin rights or user JSON editing.
+
+Artifacts:
+
+- Boundary section in `PLANS.md`.
+- Implementation note or diagram in `docs/IMPLEMENTATION.md`.
+
+Acceptance:
+
+- The architecture clearly says HTML tools connect to Relay's app-server
+  bridge, which brokers to the app server.
+- Relay direct `/v1` snippets are diagnostics/developer reference only.
+- The plan does not reintroduce `/v1/tools`, `/agui/relay`, or Relay-owned
+  public local tools.
+
+### APPBRIDGE-02A - Define Browser/App-Server Bridge Contract
+
+Status: completed
+
+Scope:
+
+- Define the local browser bridge because browser HTML cannot connect to
+  app-server stdio directly.
+- Define browser-facing endpoints:
+  - serve default chatbot HTML/static assets;
+  - create/resume app-server thread;
+  - start/cancel turn;
+  - stream app-server item/turn events;
+  - submit approval or tool-result responses where the app-server protocol
+    requires client participation;
+  - upload/stage attachments;
+  - fetch run/session diagnostics.
+- Define transport translation:
+  - browser HTTP/SSE/WebSocket request enters Relay;
+  - Relay validates token, origin, and session;
+  - Relay writes app-server JSONL messages over stdio;
+  - Relay reads app-server notifications;
+  - Relay forwards normalized browser events without inventing a separate
+    agent protocol.
+- Define security behavior:
+  - loopback only;
+  - per-launch token required;
+  - `Host` and `Origin` validation;
+  - no arbitrary static file serving from the work area;
+  - no unauthenticated attachment upload;
+  - no direct access to Relay `/v1` provider from normal chatbot UI.
+- Define failure behavior:
+  - app server not started;
+  - initialize not completed;
+  - protocol version mismatch;
+  - stale thread/turn id;
+  - bridge/app-server backpressure;
+  - cancelled turn.
+
+Artifacts:
+
+- Bridge contract in `PLANS.md` or `docs/IMPLEMENTATION.md`.
+- Future browser bridge schema fixtures.
+
+Acceptance:
+
+- The plan no longer assumes browser HTML can speak to app-server stdio
+  directly.
+- The bridge is a transport adapter around the app server, not a new Relay
+  agent runtime or public `/v1/tools` surface.
+
+### APPBRIDGE-03 - Design App-Server-Facing Starter HTML UX
+
+Status: completed
+
+Scope:
+
+- Replace the current direct Relay starter concept with an app-server-facing
+  chatbot client as the default HTML UX.
+- The Hub should show:
+  - Relay readiness;
+  - Copilot readiness;
+  - app-server readiness;
+  - app-server bridge readiness;
+  - chatbot/app-server bridge URL;
+  - provider wiring status: chatbot -> bridge -> app server -> Relay `/v1` ->
+    M365 Copilot.
+- The default chatbot HTML should call Relay's app-server bridge, not Relay
+  `/v1` directly and not app-server stdio directly.
+- The chatbot should include:
+  - familiar chat message list and composer;
+  - attach button, drag/drop affordance where supported, and attachment tray;
+  - selected work-area display and native folder picker;
+  - compact run/tool timeline;
+  - inline approval prompts for mutations;
+  - changed-file and diff summary after mutations;
+  - collapsed diagnostics for provider/app-server health.
+- Use first-time-friendly terminology:
+  - "Work area" for the folder where Relay can search, edit, and save;
+  - "Files for this request" for attachments the assistant should inspect;
+  - avoid raw path inputs, protocol names, and developer labels in the primary
+    UI.
+- Keep direct Relay `/v1` curl/fetch examples collapsed under developer
+  diagnostics.
+- Keep UI minimal: one recommended path and no duplicate low-level choices.
+- Define first-run copy and examples so a new user understands what to do
+  without reading protocol/API docs:
+  - clear selected work-area line;
+  - one composer placeholder;
+  - three or four natural-language examples;
+  - one collapsed support/details panel.
+
+Artifacts:
+
+- UX plan in `PLANS.md` or `docs/IMPLEMENTATION.md`.
+- Updated smoke requirements for the starter path.
+
+Acceptance:
+
+- A first-time user sees one integration path: HTML tool -> Relay app-server
+  bridge -> app server.
+- The API Hub does not teach users to rebuild an agent loop in each HTML file.
+- A first-time user can type a natural-language request in the default chatbot
+  without reading API instructions first.
+
+### APPBRIDGE-03A - Clarify Work Area And Attachment UX
+
+Status: completed
+
+Scope:
+
+- Define the primary context model:
+  - Work area: persistent folder boundary for search, read, create, edit, save;
+  - Files for this request: temporary files to inspect in the current message
+    or thread.
+- Define the visual layout:
+  - one centered chatbot column;
+  - compact context bar above the composer;
+  - one persistent folder chip for the work area;
+  - removable file chips for attachments;
+  - diagnostics collapsed under "Support details".
+- Define empty and partial states:
+  - no work area and no attachments: show three choices, "Choose work area",
+    "Attach files", and "Ask a question";
+  - attachments only: allow attachment review, but disable search/save/edit
+    operations until a work area is chosen;
+  - work area only: allow search/edit/save inside that folder;
+  - work area plus attachments: attachments are extra context, work area remains
+    the save/search boundary.
+- Define microcopy:
+  - "Work area: where Relay can search and save.";
+  - "Files for this request: documents to inspect now.";
+  - "Nothing is saved unless you approve it.";
+  - "Large files are read in parts.";
+  - "Choose a work area first" for search/edit/save without a work area.
+- Define interaction rules:
+  - no raw path text box in the primary UI;
+  - native folder picker for work area;
+  - when browser-native directory picking is unavailable, use a Relay bridge
+    picker endpoint that opens a platform-native folder dialog;
+  - file picker and drag/drop for attachments;
+  - attachment chips show file type, size, origin, and read/extracted state;
+  - attachments can be removed before send and cleared after the run.
+- Define visual design requirements:
+  - professional chatbot, not admin dashboard;
+  - generous whitespace;
+  - high-contrast neutral text;
+  - white/off-white surfaces and subtle borders;
+  - one restrained accent color;
+  - lucide-style icons, no emoji icons;
+  - keyboard focus visible and accessible labels for picker/attach controls.
+
+Artifacts:
+
+- Work-area/attachment UX contract in `PLANS.md` or
+  `docs/IMPLEMENTATION.md`.
+- Future E2E checklist for first-run comprehension and attachment-only flow.
+
+Acceptance:
+
+- A first-time user can tell whether Relay will search a folder, inspect an
+  attached file, or save changes.
+- Attachment-only review does not force a work area.
+- Search/edit/save requests without a work area produce a clear UI prompt, not
+  a confusing assistant failure.
+
+### APPBRIDGE-03B - Define First-Run Launch And Onboarding Flow
+
+Status: completed
+
+Scope:
+
+- Define the user-facing launch contract:
+  - Windows user starts `Relay Agent.exe`, Start Menu item, or Desktop shortcut;
+  - Linux user starts `relay-agent`;
+  - no terminal window, manual port selection, JSON editing, or command-line
+    setup is required for the standard path.
+- Define startup sequence:
+  - launcher starts Relay Core;
+  - launcher starts bundled app server;
+  - launcher opens the chatbot HTML page;
+  - chatbot waits for protocol readiness and shows progress in plain language.
+- Define first-run checklist states:
+  - Starting;
+  - Sign in required;
+  - Choose work area;
+  - Ready;
+  - Working;
+  - Needs approval;
+  - Problem.
+- Define Copilot sign-in behavior:
+  - if signed-in Edge/Copilot is not reachable, show one action to open Copilot;
+  - re-check readiness automatically after sign-in;
+  - do not expose CDP port configuration in the primary UI.
+- Define work-area onboarding:
+  - show no path text box by default;
+  - use a native folder picker where available;
+  - remember recent work area only in user-local storage;
+  - never create hidden state in the chosen workspace.
+- Define first-use examples:
+  - file search example;
+  - attachment review example;
+  - file creation/editing example;
+  - Office edit example if OfficeCLI is available.
+- Define failure UX:
+  - primary error should be a short action-oriented message;
+  - raw diagnostics go behind a collapsed "Support details" disclosure;
+  - setup errors must not appear as assistant chat prose.
+
+Artifacts:
+
+- First-run UX contract in `PLANS.md` or `docs/IMPLEMENTATION.md`.
+- Future E2E scenario list for first install/portable launch.
+
+Acceptance:
+
+- A first-time user can launch the package, sign in to Copilot if needed,
+  choose a work area, and send a useful request without seeing ports, JSON,
+  tokens, CDP, `CODEX_HOME`, or app-server transport details.
+- The same first-run path works for portable and installed builds.
+
+### APPBRIDGE-03C - Define Chatbot Local File Tool Contract
+
+Status: completed
+
+Scope:
+
+- Define the app-server-visible local file tools for the chatbot path, using
+  existing coding-agent/tool conventions wherever practical:
+  - `glob`;
+  - `grep`;
+  - `read`;
+  - `write`;
+  - `edit` or `patch`;
+  - `workspace_status`;
+  - `diff`;
+  - bounded verification command execution;
+  - optional semantic Office/PDF tools when available.
+- Keep these tools behind the app-server tool protocol. Do not expose a new
+  public Relay `/v1/tools` surface.
+- Define the local tool worker boundary:
+  - app-server tool call enters Relay through the bridge;
+  - Relay validates tool name and arguments;
+  - Relay executes the local operation only through the approved worker;
+  - Relay returns structured observations to the app-server turn;
+  - unsupported tools and invalid arguments fail fast.
+- Define read-only versus mutating behavior:
+  - work-area-scoped `glob`, `grep`, `read`, status, and diff can execute
+    directly when inside the selected work area;
+  - write/edit/patch/Office mutation and command execution require explicit
+    user approval;
+  - every mutation produces backup or diff artifacts and app-server events.
+- Define the work-area containment and storage rules:
+  - selected work area is the only default file-operation root;
+  - Relay/app-server caches and logs remain in user-local storage;
+  - searched/shared folders never receive hidden Relay state.
+- Define how Copilot receives tool availability:
+  - concise tool descriptors;
+  - no direct shell folklore;
+  - no mode-specific search/Office/coding prompts;
+  - fail-fast when Copilot emits unsupported tool calls or invalid arguments.
+- Define how tool output is surfaced:
+  - tool progress appears as timeline events;
+  - read/extraction output is capped and redacted where needed;
+  - mutation output includes approval status, backup path, changed paths, and
+    diff summary;
+  - app-server thread/turn/item ids are preserved for diagnostics.
+
+Artifacts:
+
+- Tool contract section in `PLANS.md` or `docs/IMPLEMENTATION.md`.
+- Future schema fixtures for tool calls and approvals.
+
+Acceptance:
+
+- Local file operation is possible from natural language through the chatbot,
+  app server, and Copilot provider chain.
+- The implementation path does not revive Relay-owned public tool endpoints or
+  separate search/Office/code modes.
+
+### APPBRIDGE-03D - Define Chatbot File Attachment Contract
+
+Status: completed
+
+Scope:
+
+- Define the attachment UX for the default chatbot:
+  - attach button in the composer;
+  - drag/drop support when the browser allows it;
+  - attachment tray with file name, type, size, origin, and remove action;
+  - visible "content read/extracted" state after app-server tools inspect it.
+- Define attachment origins:
+  - selected work-area file reference;
+  - browser-picked file outside the work area;
+  - generated output file from a previous turn.
+- Define storage behavior:
+  - work-area references stay as paths;
+  - browser-picked external files are staged into a Relay-owned user-local
+    attachment store;
+  - staging happens through the app-server bridge before the app-server turn
+    receives attachment ids;
+  - no attachment cache, copy, or index is written into searched/shared
+    workspaces;
+  - attachment staging can be cleared by the user and by retention cleanup.
+- Define attachment limits and cleanup:
+  - maximum files per turn;
+  - maximum file size and total staged bytes;
+  - supported extraction types;
+  - clear unsupported-type messaging;
+  - retention duration;
+  - manual clear action;
+  - support-bundle redaction defaults.
+- Define app-server integration:
+  - if the pinned app-server protocol supports file/input attachments, use the
+    official item shape;
+  - otherwise represent attachments as app-server-visible local resources with
+    ids and metadata, then let `read`/Office/PDF extraction tools inspect them;
+  - do not inject raw large/binary file contents into the initial user prompt.
+- Define safety behavior:
+  - read/extraction activity appears in the chat timeline;
+  - mutating an attached file requires approval and diff/backup artifacts;
+  - external attachments default to output-copy edits rather than overwriting
+    the original;
+  - support bundles include attachment metadata by default and raw contents
+    only with explicit opt-in.
+
+Artifacts:
+
+- Attachment contract in `PLANS.md` or `docs/IMPLEMENTATION.md`.
+- Future schema fixtures for attachment metadata and staged-resource reads.
+
+Acceptance:
+
+- The default chatbot can accept files without bypassing the app-server tool
+  loop or writing hidden state into the work area.
+- Large or binary attachments are inspected through tools, not pasted directly
+  into Copilot prompts.
+- Attachment upload/staging is token-protected, user-local, capped, and
+  covered by cleanup rules.
+
+### APPBRIDGE-03E - Add Chatbot HTML Acceptance Flow
+
+Status: completed
+
+Scope:
+
+- Specify the default chatbot user flow:
+  - launch Relay Agent;
+  - app server starts and connects to Relay provider;
+  - chatbot opens;
+  - user selects work area when the request needs local search/edit/save;
+  - optional user attaches one or more files;
+  - user sends a natural-language local file request;
+  - app server starts/resumes a thread;
+  - Copilot chooses app-server tools;
+  - read-only tools execute;
+  - mutating tools request approval;
+  - final answer and changed-file summary render in chat.
+- Define minimum UX states:
+  - connecting;
+  - ready;
+  - running;
+  - waiting for approval;
+  - failed with actionable setup error;
+  - done.
+- Keep the visual design close to a normal professional chatbot:
+  - one central conversation column;
+  - minimal chrome;
+  - tool activity secondary to the answer;
+  - diagnostics collapsed by default.
+
+Artifacts:
+
+- UX acceptance checklist in `docs/IMPLEMENTATION.md`.
+- Future E2E script names in this task list.
+
+Acceptance:
+
+- The app-server bridge is validated through the default chatbot path, not only
+  through low-level protocol or direct Relay `/v1` tests.
+
+### APPBRIDGE-04 - Plan Packaging And Distribution For The Harness
+
+Status: completed
+
+Scope:
+
+- Make the portable package the primary release artifact. Keep the Windows
+  user-scope installer optional for Start Menu/Desktop/uninstall integration,
+  not the recommended first download.
+- Make bundling the target path, not runtime acquisition.
+- Decide exactly how to include the app server in the portable release:
+  - fetch pinned upstream binary at build time;
+  - build from pinned source at release time;
+  - vendor a pinned source/binary snapshot;
+  - or implement a clearly documented compatibility wrapper only if upstream
+    bundling is blocked.
+- Define top-level portable package inventory:
+  - Windows package root contains only `Relay Agent.exe`,
+    `README-FIRST.html`, `LICENSES/`, and `app/`;
+  - Linux package root contains only `relay-agent`, `README-FIRST.html`,
+    `LICENSES/`, and `app/`;
+  - no raw sidecar executable, app-server executable, DLL, schema, script,
+    cache, log, or diagnostic dump appears at the package root.
+- Define user-local install/storage layout for:
+  - Relay Core;
+  - browser/app-server bridge routes and static chatbot assets;
+  - app server files;
+  - license/NOTICE files;
+  - generated provider config;
+  - generated app-server protocol schema/fixtures for the pinned version;
+  - default chatbot HTML client;
+  - optional lower-level API Hub/starter examples;
+  - app-server session/log data;
+  - support bundles.
+- Keep the no-admin distribution constraint.
+- Keep shared folders free of Relay/app-server caches, indexes, tokens, logs,
+  and temporary artifacts.
+- Define update behavior so app-server binaries are not locked indefinitely and
+  can be replaced by a future installer/portable update.
+- Define release inventory/SBOM entries for the app server:
+  - source URL or commit;
+  - artifact hash;
+  - license;
+  - build/fetch command;
+  - supported runtime ids.
+- Define first-download guidance:
+  - GitHub Release highlights the portable zip/tarball first;
+  - primary Windows asset is named
+    `relay-agent-<version>-win-x64-portable.zip`;
+  - primary Linux asset is named
+    `relay-agent-<version>-linux-x64-portable.tar.gz`;
+  - optional Windows installer is named
+    `Relay.Agent-<version>-win-x64-setup.exe`;
+  - installer is labeled optional;
+  - `README-FIRST.html` explains "start this one file" before any technical
+    details.
+
+Artifacts:
+
+- Packaging plan in `PLANS.md`.
+- Release inventory requirements.
+
+Acceptance:
+
+- The app-server bridge can be distributed without requiring npm, Python,
+  Rust/Cargo, Node project setup, OpenAI credentials, network download, or
+  admin rights from the end user.
+- A first-time user opening the portable package root sees one obvious launcher
+  and one short help file, not implementation internals.
+
+### APPBRIDGE-04A - Define Bundled App Server Startup Contract
+
+Status: completed
+
+Scope:
+
+- Define launcher responsibilities for bundled app-server startup:
+  - start Relay Core;
+  - start/enable the browser bridge inside Relay Core;
+  - launch app server over stdio JSONL by default;
+  - choose ports only for Relay Core and any optional diagnostic listener;
+  - generate provider config pointing app server to Relay `/v1`;
+  - pass Relay launch token as provider API key;
+  - send app-server `initialize` and initialized notification;
+  - verify app-server protocol readiness, not just process liveness;
+  - open the chatbot HTML client only after both Relay and app server are
+    known;
+  - shut down app server when the Relay session ends.
+- Define failure states:
+  - app server missing from bundle;
+  - app server failed readiness;
+  - `initialize` rejected or times out;
+  - app server cannot reach Relay provider;
+  - Copilot provider not ready;
+  - app-server protocol version mismatch.
+- Ensure failures are shown as setup errors, not as assistant prose.
+
+Artifacts:
+
+- Startup contract in `PLANS.md` or `docs/IMPLEMENTATION.md`.
+- Future smoke requirements.
+
+Acceptance:
+
+- A packaged Relay build has a deterministic local startup story for the
+  bundled app server.
+- The user does not need to manually start or configure the app server.
+
+### APPBRIDGE-04B - Add Portable Root Inventory Smoke
+
+Status: completed
+
+Scope:
+
+- Add or update the release smoke so each portable package root is inspected.
+- Assert allowed root entries by platform:
+  - Windows: `Relay Agent.exe`, `README-FIRST.html`, `LICENSES/`, `app/`;
+  - Linux: `relay-agent`, `README-FIRST.html`, `LICENSES/`, `app/`.
+- Assert disallowed root entries:
+  - raw `Relay.Sidecar` binary;
+  - raw app-server or `codex` binary;
+  - DLL/shared library clutter;
+  - schemas/fixtures;
+  - scripts;
+  - logs/caches/temp files;
+  - diagnostics/support bundles.
+- Assert all implementation files are under `app/` or generated at runtime in
+  user-local app data.
+- Assert `README-FIRST.html` names the exact visible launcher for the platform.
+- Assert GitHub Release naming and labeling:
+  - portable Windows zip and Linux tarball are marked recommended;
+  - optional installer is clearly labeled optional;
+  - checksums/inventory/SBOM are support assets, not first-run choices.
+
+Artifacts:
+
+- Portable root inventory smoke plan.
+- Release inventory field for root entries.
+
+Acceptance:
+
+- Future release packaging cannot accidentally expose implementation internals
+  at the top level without failing the release gate.
+- GitHub Release assets make the portable package the obvious primary download.
+
+### APPBRIDGE-05 - Add Bridge Acceptance Smokes
+
+Status: completed
+
+Scope:
+
+- Add planned smokes for the eventual implementation:
+  - start Relay Core with mock Copilot;
+  - start or connect to the app server;
+  - complete stdio `initialize` and initialized notification;
+  - configure app server provider to Relay `/v1`;
+  - run the default chatbot HTML client against the Relay app-server bridge;
+  - verify the bridge translates the browser turn to app-server stdio messages;
+  - confirm the request reaches Relay `/v1/chat/completions`;
+  - confirm the answer returns to the chatbot through the app server and
+    bridge.
+- Add a second planned smoke for tool-loop value:
+  - app-server thread starts or resumes;
+  - turn starts;
+  - item/turn events stream to the client;
+  - assistant emits a tool call;
+  - client/app-server returns a tool result;
+  - assistant continues in the same thread/turn context;
+  - turn completes;
+  - diagnostics include app-server session id and Relay request id.
+- Add a third planned smoke for natural-language local file work:
+  - user asks the chatbot to find a file in a fixture workspace;
+  - app server uses `glob`/`grep`/`read` tools;
+  - answer cites the selected local path from tool observations;
+  - no Relay cache/config file appears in the workspace.
+- Add an attachment smoke:
+  - user attaches a text/PDF/Office fixture file;
+  - browser uploads/stages the attachment through the bridge with a launch
+    token;
+  - initial app-server input contains attachment metadata/id, not full content;
+  - app server reads/extracts the attachment through the tool loop;
+  - answer references extracted evidence from the attached file;
+  - staged attachment data is user-local and can be cleared.
+- Add a fourth planned smoke for approved mutation:
+  - user asks the chatbot to create or edit a file;
+  - app server requests approval before mutation;
+  - rejection stops the mutation cleanly;
+  - approval applies the change, records diff/backup, and returns a final
+    changed-file summary.
+- Add a packaging smoke:
+  - packaged Relay starts without Python, Rust/Cargo, Node project setup, npm
+    global install, or runtime network download;
+  - browser bridge is loopback-only and launch-token protected;
+  - app-server state is created under Relay user-local storage;
+  - searched/shared workspaces receive no app-server cache or config files.
+
+Artifacts:
+
+- Smoke specification in `tasks.md`.
+- Future script names and acceptance criteria.
+
+Acceptance:
+
+- Future implementation cannot be marked complete by only proving direct Relay
+  `/v1` calls.
+- The app server must demonstrate session/tool-loop behavior that direct
+  stateless HTML fetch examples do not provide.
 
 ### HTMLTOOL-01 - Document HTML Tool API Hub Cutover
 
@@ -326,8 +1108,10 @@ Scope:
 - Accept assistant `tool_calls` and tool `tool_call_id` for prior tool-call
   context.
 - Support tool message text string content.
-- Reject multimodal content arrays, images, audio, files, and attachments with
-  `400 unsupported_content`.
+- Reject multimodal content arrays, images, audio, files, and direct
+  Chat-Completions attachments with `400 unsupported_content`. Attachment
+  support is planned only for the app-server chatbot path, where attachments
+  are represented by metadata/resource ids and inspected through tools.
 - Support or safely validate these request fields:
   - `stream`;
   - `stream_options`;

@@ -16,7 +16,7 @@ const version = JSON.parse(readFileSync(resolve(root, "apps/workbench/package.js
 const installerDir = resolve(root, "dist", "installer");
 const installerPath = resolve(installerDir, `Relay.Agent-${version}-win-x64-setup.exe`);
 const scriptPath = resolve(installerDir, "relay-agent-win-x64.nsi");
-const iconPath = resolve(packageDir, "relay-assets", "relay-agent.ico");
+const iconPath = resolve(packageDir, "app", "relay-assets", "relay-agent.ico");
 if (!existsSync(iconPath)) {
   throw new Error(`installer icon is missing from package. Run pnpm sidecar:publish:windows first: ${iconPath}`);
 }
@@ -91,7 +91,7 @@ Section "Relay Agent" SecMain
   SetOutPath "$1"
   File /r "${source}\\*.*"
   CreateDirectory "$SMPROGRAMS\\Relay Agent"
-  CreateShortcut "$SMPROGRAMS\\Relay Agent\\Relay Agent.lnk" "$1\\Relay Agent.exe" "" "$1\\relay-assets\\relay-agent.ico"
+  CreateShortcut "$SMPROGRAMS\\Relay Agent\\Relay Agent.lnk" "$1\\Relay Agent.exe" "" "$1\\app\\relay-assets\\relay-agent.ico"
   WriteUninstaller "$INSTDIR\\Uninstall.exe"
   WriteRegStr HKCU "Software\\Relay Agent" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\\Relay Agent" "AppDir" "$1"
@@ -99,7 +99,7 @@ Section "Relay Agent" SecMain
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayVersion" "${version}"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "Publisher" "Relay"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayIcon" "$1\\relay-assets\\relay-agent.ico"
+  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "DisplayIcon" "$1\\app\\relay-assets\\relay-agent.ico"
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "UninstallString" "$INSTDIR\\Uninstall.exe"
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "NoModify" 1
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Relay Agent" "NoRepair" 1
@@ -111,7 +111,7 @@ Section "Desktop shortcut" SecDesktop
   \${If} $1 == ""
     StrCpy $1 "$INSTDIR"
   \${EndIf}
-  CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$1\\Relay Agent.exe" "" "$1\\relay-assets\\relay-agent.ico"
+  CreateShortcut "$DESKTOP\\Relay Agent.lnk" "$1\\Relay Agent.exe" "" "$1\\app\\relay-assets\\relay-agent.ico"
 SectionEnd
 
 Function LaunchRelayAgent

@@ -16,10 +16,10 @@ const inputs = [
   "assets/app-icon",
   "tools/ripgrep",
   "tools/officecli",
-  "dist/relay-agent-win-x64/relay-tools",
-  "dist/relay-agent-linux-x64/relay-tools",
-  `dist/relay-agent-${workbenchPackage.version}-win-x64.zip`,
-  `dist/relay-agent-${workbenchPackage.version}-linux-x64.tar.gz`,
+  "dist/relay-agent-win-x64",
+  "dist/relay-agent-linux-x64",
+  `dist/relay-agent-${workbenchPackage.version}-win-x64-portable.zip`,
+  `dist/relay-agent-${workbenchPackage.version}-linux-x64-portable.tar.gz`,
   "dist/installer",
 ];
 
@@ -44,6 +44,11 @@ const inventory = {
   schemaVersion: "RelayReleaseInventory.v1",
   generatedAt: new Date().toISOString(),
   activeArchitecture: "html-tool-api-hub-relay-core-sidecar",
+  portableRootPolicy: {
+    windows: ["Relay Agent.exe", "README-FIRST.html", "LICENSES/", "app/"],
+    linux: ["relay-agent", "README-FIRST.html", "LICENSES/", "app/"],
+    internalsUnder: "app/",
+  },
   excludedLegacyActivePaths: [
     "AionUi",
     "OpenCode/OpenWork",
@@ -73,8 +78,8 @@ const sbom = {
   bundledBinaries: [
     { name: "Relay.Sidecar", source: "self-contained dotnet publish" },
     { name: "Relay.Launcher", source: "self-contained dotnet publish" },
-    { name: "ripgrep", source: "tools/ripgrep copied into relay-tools/ripgrep" },
-    { name: "officecli", source: "Windows release bundle when dist/relay-agent-win-x64/relay-tools/officecli/officecli.exe is present", optional: true },
+    { name: "ripgrep", source: "tools/ripgrep copied into app/relay-core/relay-tools/ripgrep" },
+    { name: "officecli", source: "Windows release bundle when dist/relay-agent-win-x64/app/relay-core/relay-tools/officecli/officecli.exe is present", optional: true },
   ],
   intentionallyExcludedRuntimeFamilies: inventory.excludedLegacyActivePaths,
   fileHashes: files,
