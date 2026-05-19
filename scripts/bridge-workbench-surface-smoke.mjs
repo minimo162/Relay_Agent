@@ -78,11 +78,11 @@ for (const forbidden of [
   assert(!program.includes(forbidden), `Sidecar must not expose retired PDF review API: ${forbidden}`);
 }
 
-assert(packageJson.scripts["agent:api-tool-ux-smoke"], "missing API tool UX smoke script");
-assert(packageJson.scripts.check.includes("pnpm agent:api-tool-ux-smoke"), "pnpm check must include API tool UX smoke");
+assert(packageJson.scripts["workbench:bridge-surface-smoke"], "missing Bridge Workbench surface smoke script");
+assert(packageJson.scripts.check.includes("pnpm workbench:bridge-surface-smoke"), "pnpm check must include Bridge Workbench surface smoke");
 assert(packageJson.scripts.check.includes("pnpm sidecar:app-server-bridge-smoke"), "pnpm check must include app-server bridge smoke");
 
-console.log("[api-tool-ux-smoke] ok");
+console.log("[bridge-workbench-surface-smoke] ok");
 
 function read(path) {
   return readFileSync(resolve(root, path), "utf8");

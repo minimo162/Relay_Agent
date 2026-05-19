@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -35,9 +36,22 @@ function assertNoForbidden(path, patterns) {
   }
 }
 
+function gitTrackedFiles() {
+  const result = spawnSync("git", ["ls-files"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    assert(false, `git ls-files failed: ${result.stderr || result.stdout}`);
+    return [];
+  }
+  return result.stdout.split(/\r?\n/).filter(Boolean);
+}
+
 const rootPackage = JSON.parse(read("package.json"));
 const scripts = rootPackage.scripts ?? {};
 const activeScriptText = JSON.stringify(scripts, null, 2);
+const trackedFiles = gitTrackedFiles();
 
 for (const forbidden of [
   "opencode",
@@ -106,6 +120,9 @@ assert(!scripts.check.includes("agent:agui-client-tool-smoke"), "pnpm check must
 assert(!scripts.check.includes("agent:tool-catalog-smoke"), "pnpm check must not use the retired public Relay tool catalog smoke");
 assert(!scripts.check.includes("agent:officecli-registry-smoke"), "pnpm check must not use the retired Relay-owned OfficeCLI smoke");
 assert(!scripts.check.includes("agent:office-pdf-read-smoke"), "pnpm check must not use the retired Relay-owned Office/PDF extraction smoke");
+assert(!activeScriptText.includes("agent:"), "root package scripts must not expose retired agent:* smoke aliases");
+assert(activeScriptText.includes("workbench:bridge-surface-smoke"), "pnpm scripts must include the Bridge Workbench surface smoke");
+assert(activeScriptText.includes("workbench:bridge-chat-smoke"), "pnpm scripts must include the Bridge Workbench chat smoke");
 assert(scripts["sidecar:publish:linux"]?.includes("appserver:fetch:linux"), "linux publish must fetch the pinned app server");
 assert(scripts["sidecar:publish:windows"]?.includes("appserver:fetch:windows"), "windows publish must fetch the pinned app server");
 assert(!scripts["sidecar:publish:linux"]?.includes("tools:fetch"), "linux publish must not fetch retired Relay-side tool bundles");
@@ -144,6 +161,18 @@ assert(!release.includes("tauri build"), "release workflow must not build the Ta
 assert(!release.includes("apps/desktop"), "release workflow must not package resources from apps/desktop");
 assert(!release.toLowerCase().includes("aionui"), "release workflow must not package AionUi resources");
 assert(!release.toLowerCase().includes("opencode"), "release workflow must not package OpenCode/OpenWork resources");
+
+for (const path of trackedFiles) {
+  const lower = path.toLowerCase();
+  assert(!path.startsWith("integrations/aionui/"), `tracked AionUi integration asset remains: ${path}`);
+  assert(!path.startsWith("apps/desktop/"), `tracked Tauri desktop asset remains: ${path}`);
+  assert(!path.startsWith("docs/archive/"), `tracked archived prompt asset remains: ${path}`);
+  assert(path === "docs/IMPLEMENTATION.md" || !/^docs\/[^/]+\.md$/.test(path), `tracked root-level legacy doc remains: ${path}`);
+  assert(!/relaydocumentsearch/i.test(path), `tracked RelayDocumentSearch asset remains: ${path}`);
+  assert(!/workspace_document_search_sqlite_fts/i.test(path), `tracked SQLite/FTS document-search asset remains: ${path}`);
+  assert(!/(office-pdf-read-smoke|officecli-registry-smoke|agui-client-tool-smoke|agui-replay-smoke|agent-golden-smoke|agent-tool-catalog-smoke|dci-.*smoke|rg-stream-cap-smoke|patch-conformance-smoke|protocol-state-smoke|provider-timeout-retry-smoke|framework-native-prevention-smoke|framework-trace-smoke)/.test(lower), `tracked retired smoke asset remains: ${path}`);
+  assert(!/(openwork|aionui|src-tauri|tauri_webdriver|windows_openwork)/.test(lower), `tracked retired runtime/report asset remains: ${path}`);
+}
 
 const activeSourceFiles = [
   ...walk("apps/sidecar").filter((path) => /\.(cs|csproj)$/.test(path)),

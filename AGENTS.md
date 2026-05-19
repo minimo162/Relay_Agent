@@ -10,11 +10,13 @@
   or mode-specific desktop workbench.
 - The active local host/sidecar lives under `apps/sidecar/`.
 - The active launcher lives under `apps/launcher/`.
-- The previous Tauri v2 + SolidJS desktop application under `apps/desktop/`,
-  AionUi overlay code under `integrations/aionui/`, OpenCode/OpenWork scripts,
-  the API-Hub-first HTML tool surface, the generic chatbot Workbench, and the
-  PDF review client are historical implementation context only. They are not
-  active product architecture, release targets, or fallback paths.
+- The previous Tauri v2 + SolidJS desktop application, AionUi overlay,
+  OpenCode/OpenWork bootstrap scripts, API-Hub-first HTML tool surface,
+  generic chatbot Workbench, RelayDocumentSearch engine, SQLite/FTS search
+  assets, Relay-owned OfficeCLI/PDF tool worker, and PDF review client have
+  been removed from active source. They remain recoverable through Git history
+  only and are not active product architecture, release targets, or fallback
+  paths.
 - M365 Copilot via Edge CDP remains the primary LLM controller. Relay Core's
   OpenAI-compatible `/v1` API is the lower-level `m365-copilot` provider used
   by the bundled app server, not the primary first-time user integration path.
@@ -47,7 +49,8 @@ decisions, verification runs, and known limitations.
   `tasks.md` unless a regression proves an older acceptance criterion is
   broken.
 - Do not reintroduce AionUi, OpenCode/OpenWork, Tauri, the API-Hub-first HTML
-  tool path, generic Workbench modes, or PDF review as active runtime or
+  tool path, generic Workbench modes, RelayDocumentSearch, SQLite/FTS search,
+  Relay-owned OfficeCLI/PDF tooling, or PDF review as active runtime or
   release fallback paths.
 - Do not remove or bypass `CodexAppServerBridgeService`, `/bridge/*`, the
   fixture app server, or `sidecar:app-server-bridge-smoke`; they are the active

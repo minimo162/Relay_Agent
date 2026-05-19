@@ -13,16 +13,18 @@
   OpenWork, Tauri, Python workflow wrappers, `/v1/tools` as a public catalog,
   and hidden fallback runners are not active product paths.
 - Repository state: active source lives under `apps/workbench/`,
-  `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
-  docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
-  those references are implementation history and must not steer new work.
+  `apps/sidecar/`, `apps/launcher/`, app-server fixtures, and
+  release/support scripts. Large historical source directories, root-level
+  design reports, and retired smoke scripts were removed from the active tree;
+  older details remain recoverable from Git history and from older entries in
+  this implementation log.
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
 - Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
   task metadata. The current executable plan is `PLANS.md`, with concrete
-  OpenCode-compatible migration steps in `tasks.md`.
+  app-server bridge and repository cleanup tasks in `tasks.md`.
 - Packaging policy: the primary release path is portable archives for Relay
   Core plus Relay Bridge Workbench: Windows zip plus Linux tarball. The Windows
   user-scope NSIS installer remains an optional convenience artifact for
@@ -33,6 +35,52 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-20 Legacy Asset Cleanup
+
+This slice removes tracked assets from retired product directions so the
+repository has one clear active story: browser Workbench, .NET sidecar,
+bundled Codex app server, Relay `/v1/responses`, and M365 Copilot over Edge
+CDP.
+
+Deleted asset classes:
+
+- AionUi overlay and RelayDocumentSearch source under `integrations/aionui/**`.
+- Large archived prompt packs under `docs/archive/**`.
+- Root-level historical design reports under `docs/*.md`, keeping only
+  `docs/IMPLEMENTATION.md`.
+- Retired AG-UI runner, DCI, tool-catalog, Relay-owned OfficeCLI/PDF,
+  grounding-fixture, and stale live-project smoke scripts.
+- Old examples, grounding fixtures, stale script fixtures, the old Relay tools
+  fetcher, and the Claw-style schema placeholder.
+
+Kept asset classes:
+
+- `apps/workbench/**`, `apps/sidecar/**`, `apps/launcher/**`.
+- `assets/app-icon/**`.
+- `docs/app-server/**` protocol fixtures.
+- `tools/codex-app-server/manifest.json`.
+- Current release, bridge, sidecar, Workbench, Copilot CDP, and app-server
+  smoke scripts.
+
+Verification commands:
+
+```bash
+node scripts/check-hard-cut-guard.mjs
+pnpm check
+git diff --check
+git ls-files 'integrations/**' 'apps/desktop/**' 'docs/archive/**'
+git ls-files docs | rg '^docs/[^/]+\\.md$'
+git ls-files | rg -i 'aion|tauri|openwork|opencode|relaydocumentsearch|sqlite|fts|officecli|pdf'
+```
+
+Outcome:
+
+- Passed on 2026-05-20. `pnpm check` completed after the cleanup. The stale
+  path inventory commands returned no tracked AionUi/Tauri/OpenWork/OpenCode
+  bootstrap, RelayDocumentSearch, SQLite/FTS, OfficeCLI, or PDF assets. The
+  root-level docs inventory now returns only `docs/IMPLEMENTATION.md`; active
+  app-server fixtures remain under `docs/app-server/**`.
 
 ### 2026-05-20 Live Copilot Bridge E2E Parser Hardening
 

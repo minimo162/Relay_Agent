@@ -11,9 +11,10 @@ served by a self-contained .NET sidecar. The Workbench talks to Relay's
 Codex app server and connect it to Relay Core's Copilot-backed provider API.
 
 The old API-Hub-first product, PDF review client, Tauri desktop shell, AionUi
-overlay, OpenCode/OpenWork provider paths, and separate mode-based Workbench
-are historical implementation inputs only. They are not active release or
-fallback paths.
+overlay, OpenCode/OpenWork bootstrap paths, RelayDocumentSearch engine,
+SQLite/FTS search assets, Relay-owned OfficeCLI/PDF tool worker, and separate
+mode-based Workbench have been removed from active source. They are available
+only through Git history and are not active release or fallback paths.
 
 ## Architecture
 

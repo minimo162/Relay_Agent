@@ -41,16 +41,16 @@ for (const forbidden of [
   assert(!app.includes(forbidden), `Bridge Workbench must not expose retired UI code: ${forbidden}`);
 }
 
-for (const scriptName of ["agent:workbench-standard-chat-smoke", "agent:api-tool-ux-smoke", "sidecar:app-server-bridge-smoke"]) {
+for (const scriptName of ["workbench:bridge-chat-smoke", "workbench:bridge-surface-smoke", "sidecar:app-server-bridge-smoke"]) {
   assert(packageJson.scripts[scriptName], `missing package script: ${scriptName}`);
 }
 
 assert(
-  packageJson.scripts.check.includes("pnpm agent:workbench-standard-chat-smoke"),
+  packageJson.scripts.check.includes("pnpm workbench:bridge-chat-smoke"),
   "pnpm check must include the default client smoke",
 );
 
-console.log("[workbench-standard-chat-smoke] ok");
+console.log("[bridge-workbench-chat-smoke] ok");
 
 function read(path) {
   return readFileSync(resolve(root, path), "utf8");
