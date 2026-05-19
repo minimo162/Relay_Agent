@@ -13,6 +13,13 @@ Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
+The next product cutover is no longer a generic Workbench. Relay Core remains
+the local API/tool/governance host, but the default client should become a
+focused HTML tool for PDF typo, omission, wording, and consistency review. The
+current generic Workbench is a migration source and should be removed from the
+default release surface once the PDF HTML client and Relay Core API acceptance
+gates pass.
+
 The completed active queue is `RESPONSIVE*`. It implements the 2026-05-18
 Installed Workbench Responsiveness Plan from `PLANS.md`: make installed
 Workbench first paint and readiness reflection faster, make readiness
@@ -71,28 +78,20 @@ Relay-owned search heuristics, simplify Copilot projection to OpenCode-style
 generic tool loops, keep Office/code as recipes over the same catalog, and
 make the Workbench read as a normal CopilotKit/AG-UI chatbot.
 
-The active queue is `OCLOOP*`. It implements the 2026-05-18 OpenCode Loop
-Continuation And Office Integrity Plan from `PLANS.md`: keep the generic
-OpenCode-style tool loop alive after empty filename discovery, and require
-Office package integrity before an approved Office mutation can be reported as
-successful.
+The previously active queue `OCLOOP*` is superseded by the PDFHTML/COREAPI
+cutover. Its completed harness lessons remain useful, but it should not be
+extended as a generic Workbench workstream.
 
-The active queue is `PORTABLE*`. It implements the 2026-05-18 Portable-First
-Distribution Plan from `PLANS.md`: make installer-free portable packages the
-primary release artifacts while keeping the Windows NSIS installer as an
-optional convenience.
+The previously active queue `PORTABLE*` is superseded by the PDFHTML packaging
+tasks. Portable-first distribution remains the rule, but the default launch
+target changes to the PDF HTML client.
 
-The active queue is `PDFUX*`. It implements the 2026-05-19 Portable PDF Review
-UX Plan from `PLANS.md`: expose local PDF proofreading and two-PDF comparison
-as first-run friendly recipes over the same CopilotKit/AG-UI chat and generic
-OpenCode-compatible `read`/`glob`/`grep` tools, while adding an HTML-first
-portable front door and a native PDF attachment picker.
+The previously active queue `PDFUX*` is superseded by `PDFHTML*`. PDF review is
+no longer a generic Workbench recipe; it is the target default product UI.
 
-The active queue is `PDFCHUNK*`. It implements the 2026-05-19 Page-Aware Long
-PDF Review Plan from `PLANS.md`: make long PDF proofreading and two-PDF
-comparison reliable by extending the generic `read` tool with page maps and
-page ranges, while preserving document-to-document correspondence and avoiding
-a dedicated PDF runner.
+The previously active queue `PDFCHUNK*` is superseded by `PDFHTML*`. Its
+page-aware and correspondence-preserving requirements remain mandatory inside
+Relay Core's PDF review pipeline.
 
 The completed active queue is `STANDARDCHAT*`. It implements the 2026-05-19 Standard
 Chatbot UX And Tool Harness Alignment Plan from `PLANS.md`: make the Workbench
@@ -105,6 +104,24 @@ One-Click First-Run Plan from `PLANS.md`: keep the portable package as the
 primary distribution, but make the first-run path one obvious launcher
 (`Relay Agent.exe` on Windows and `relay-agent` on Linux) while moving HTML to
 optional help.
+
+The completed active queue is `COREAPI*`. It implements the 2026-05-19 Copilot Gateway
+And Relay Core API Decoupling Plan from `PLANS.md`: make the .NET sidecar the
+stable local agent API boundary for Copilot connectivity, AG-UI runs, local
+tools, approvals, workspace policy, diagnostics, and future thin HTML clients,
+while keeping browser clients thin rather than runtime owners.
+
+The completed active queue is `PDFHTML*`. It implements the 2026-05-19 PDF Review HTML
+Tool And Distributable Relay Core API Plan from `PLANS.md`: retire the current
+generic Workbench as the long-term default UI, make a focused HTML client for
+one-PDF proofreading and two-PDF consistency comparison, and package Relay Core
+so users with a Microsoft 365 Copilot-capable signed-in Edge profile can run it
+without admin rights or separate LLM credentials.
+
+Forward implementation should treat `COREAPI*` and `PDFHTML*` as completed unless a
+regression in their acceptance gates is found. Older
+generic Workbench queues remain historical context unless a regression in their
+shared backend acceptance criteria blocks the PDFHTML cutover.
 
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
@@ -128,8 +145,469 @@ acceptance criteria have broken.
 - Every completed task must update `docs/IMPLEMENTATION.md` with the artifact
   and verification result.
 - Run at least `pnpm check` before marking a milestone complete.
+- Do not implement new generic Workbench UI features while the PDFHTML cutover
+  is active, except where required to extract reusable Relay Core API behavior.
+- Do not keep the generic Workbench as a release fallback after PDFHTML
+  acceptance passes.
 
 ## Task Queue
+
+### PDFHTML-01 - Document PDF HTML Product Cutover
+
+Status: completed
+
+Scope:
+
+- Update product documentation so the long-term default UI is the PDF review
+  HTML tool rather than the current generic Workbench.
+- Document that the current Workbench is a migration source and must not remain
+  as a visible fallback after cutover.
+- Document the user-facing product scope:
+  - single-PDF typo/omission/wording review;
+  - single-PDF internal consistency review;
+  - two-PDF consistency comparison;
+  - page-cited review report export.
+- Document that users need a Microsoft 365 Copilot-capable signed-in Edge
+  profile, not OpenAI API keys or extra service accounts.
+
+Artifacts:
+
+- Updated `README.md`.
+- Updated `docs/IMPLEMENTATION.md`.
+- Optional dedicated product spec under `docs/`.
+
+Acceptance:
+
+- Docs clearly say the PDF HTML tool is the target default client.
+- Docs clearly say the generic Workbench is removed from the default release
+  surface after cutover.
+- Docs clearly state the Copilot subscription/sign-in requirement and the
+  no-admin portable distribution target.
+
+### PDFHTML-02 - Specify Relay Core PDF Review API
+
+Status: completed
+
+Scope:
+
+- Extend the Relay Core API contract from `COREAPI*` with PDF-review endpoints
+  and AG-UI run semantics.
+- Specify APIs for:
+  - PDF file selection or upload handoff;
+  - user-local file staging when a browser selection cannot preserve a stable
+    local path;
+  - PDF extraction/page-map status;
+  - one-PDF proofreading run creation;
+  - one-PDF consistency run creation;
+  - two-PDF comparison run creation;
+  - AG-UI progress streaming;
+  - cancellation;
+  - job artifact deletion/retention;
+  - report export;
+  - redacted support bundle.
+- Keep raw PDF text, page extraction internals, CDP, and local tool execution
+  hidden behind Relay Core.
+
+Artifacts:
+
+- API contract documentation.
+- Smoke-test plan for the PDF API surface.
+
+Acceptance:
+
+- Each PDF API has purpose, method, request/response shape, token behavior,
+  failure behavior, and storage/redaction behavior specified.
+- The API contract states where staged files and extracted text are stored and
+  how users delete them.
+- The contract does not expose raw CDP, arbitrary shell, arbitrary OfficeCLI,
+  or mutation endpoints through the PDF HTML client.
+
+### PDFHTML-03 - Design The First-Time PDF HTML UX
+
+Status: completed
+
+Scope:
+
+- Design the static HTML client around first-time use:
+  - large PDF selection area;
+  - clear one-PDF and two-PDF review choices;
+  - one primary run button;
+  - progress state;
+  - page-cited findings table;
+  - export report action;
+  - cancellation action for long jobs;
+  - explicit extraction-limitation state for scanned/image-only PDFs;
+  - collapsed support details.
+- Keep visual design minimal and professional with generous whitespace.
+- Avoid generic chat/workbench terminology in the default product surface.
+- Keep diagnostics and API details out of the main flow.
+
+Artifacts:
+
+- UX spec and UI state inventory.
+- Accessibility checklist for keyboard, focus, `aria-live`, and error states.
+
+Acceptance:
+
+- A first-time user can infer the flow without reading architecture notes.
+- The design does not expose multiple product modes, generic tool catalogs, or
+  developer diagnostics by default.
+- The design can be implemented as a static HTML client served by Relay Core.
+- Users never need to manually type PDF paths.
+
+### PDFHTML-04 - Implement Page-Aware Extraction And Alignment Plan
+
+Status: completed
+
+Scope:
+
+- Build on existing PDF `read` extraction direction, but specify the final
+  page-aware review pipeline before code changes:
+  - page maps with page numbers and stable anchors;
+  - heading/label extraction when available;
+  - bounded review packets with overlap;
+  - page-map checksums and review packet IDs;
+  - finding evidence snippets tied to page anchors.
+- Specify two-PDF alignment before comparison:
+  - match headings, page labels, section numbers, table/figure labels, dates,
+    defined terms, and high-similarity passages;
+  - review aligned pairs and unmatched sections separately;
+  - preserve document-to-document correspondence across long documents.
+
+Artifacts:
+
+- Pipeline specification.
+- Fixture design for long PDF and two-PDF mismatch tests.
+
+Acceptance:
+
+- Long PDFs are not handled by blind independent chunking.
+- Two-PDF comparison preserves correspondence before Copilot review.
+- Findings can always cite the source document, page, and snippet.
+- Image-only/scanned pages are detected and reported as extraction limitations
+  unless OCR is explicitly added in a later plan.
+
+### PDFHTML-05 - Define Copilot Review Harness For PDF Findings
+
+Status: completed
+
+Scope:
+
+- Define structured Copilot prompts and validation contracts for:
+  - typo/omission findings;
+  - internal consistency findings;
+  - two-document mismatch findings.
+- Keep Copilot bounded to page-anchored review packets prepared by Relay Core.
+- Require valid structured output and fail fast on invalid JSON, stale
+  response, missing evidence, or unsupported claims.
+- Ensure Copilot cannot claim content evidence without Relay-provided page
+  snippets.
+- Define the final finding schema: `id`, `reviewType`, `severity`, `category`,
+  `documentId`, `page`, `anchor`, `evidence`, `issue`, `suggestion`,
+  `confidence`, and `status`.
+- Define report sections for likely typos, consistency mismatches, extraction
+  limitations, and human-judgment items.
+
+Artifacts:
+
+- Prompt contract documentation.
+- Validation schema plan.
+- Fail-fast diagnostics plan.
+
+Acceptance:
+
+- Every finding has page-level evidence supplied by Relay Core.
+- Two-PDF mismatch findings cite both documents when applicable.
+- Copilot cannot invent file/page references outside the packet.
+- Invalid Copilot output is an error to fix, not a silent fallback.
+
+### PDFHTML-06 - Define Job State, Retention, And Cancellation
+
+Status: completed
+
+Scope:
+
+- Define review job states: created, extracting, aligning, reviewing,
+  validating, completed, partial, cancelled, failed, and expired.
+- Define how progress is streamed through AG-UI and how the HTML client renders
+  long-running work.
+- Define cancellation behavior for extraction, alignment, Copilot review, and
+  report generation.
+- Define retention and deletion for staged PDFs, extracted text, page maps,
+  review packets, reports, logs, and support bundles.
+- Ensure partial results are labeled and cannot be mistaken for a complete
+  review.
+
+Artifacts:
+
+- Job-state contract documentation.
+- Retention/deletion policy.
+- Cancellation smoke-test plan.
+
+Acceptance:
+
+- Users can cancel a long review from the PDF HTML client.
+- Cancelled and partial jobs never present incomplete findings as complete.
+- Staged files and extracted text are removable from user-local storage.
+- Support bundles remain redacted unless the user explicitly opts into raw
+  document content.
+
+### PDFHTML-07 - Package Relay Core As A Reusable Local API Tool
+
+Status: completed
+
+Scope:
+
+- Specify packaging so the portable artifact includes:
+  - one obvious launcher;
+  - Relay Core sidecar;
+  - the PDF HTML client;
+  - PDF extraction dependencies;
+  - app icon;
+  - concise first-run help;
+  - support bundle tooling.
+- Keep runtime state under user-local app data.
+- Keep selected PDFs and shared folders free of Relay caches, indexes, logs,
+  and temp files.
+- Keep NSIS optional convenience only.
+- Make release notes clear that Relay requires the user's own Microsoft 365
+  Copilot access and does not provide or bypass licensing.
+
+Artifacts:
+
+- Packaging spec updates.
+- Release inventory expectations.
+- Smoke-test plan for package contents and default launch target.
+
+Acceptance:
+
+- The portable package can be shared without admin rights.
+- A user with a Copilot-capable signed-in Edge profile can run it without
+  OpenAI API keys or tenant app registration.
+- The launcher opens the PDF HTML tool by default, not the generic Workbench.
+
+### PDFHTML-08 - Replace Workbench Gates With PDF HTML Client Gates
+
+Status: completed
+
+Scope:
+
+- Plan the removal of Workbench-specific smokes from the release gate after the
+  PDF HTML client is implemented.
+- Add replacement gates for:
+  - first open and readiness;
+  - PDF selection;
+  - one-PDF typo review;
+  - one-PDF consistency review;
+  - two-PDF comparison;
+  - scanned/image-only extraction limitation;
+  - long-job cancellation and partial-result labeling;
+  - report export;
+  - support details collapsed and redacted;
+  - old generic Workbench not exposed as competing entrypoint.
+
+Artifacts:
+
+- Updated test plan.
+- `pnpm check` integration plan.
+
+Acceptance:
+
+- Release gates verify the PDF HTML product surface, not the old generic
+  Workbench.
+- The old Workbench cannot reappear in release packaging unnoticed.
+
+### PDFHTML-09 - Decommission Generic Workbench After Cutover
+
+Status: completed
+
+Scope:
+
+- Once the PDF HTML client and Relay Core API pass acceptance, remove the
+  generic Workbench from active release artifacts.
+- Remove or archive Workbench-only code paths that are not needed by the PDF
+  HTML client.
+- Keep shared AG-UI, Agent Framework, Copilot provider, and Relay Core API
+  contracts.
+- Do not keep a parallel fallback UI.
+
+Artifacts:
+
+- Decommission checklist.
+- Release packaging update plan.
+- Documentation update plan.
+
+Acceptance:
+
+- Default release exposes one product UI: the PDF review HTML tool.
+- No stale docs describe the generic Workbench as the active product.
+- No AionUi/OpenWork/Tauri/generic Workbench fallback path is reintroduced.
+
+### COREAPI-01 - Document Relay Core API Boundary
+
+Status: completed
+
+Scope:
+
+- Treat `apps/sidecar` as Relay Core: the owner of Copilot provider adapters,
+  Agent Framework execution, local tools, approvals, workspace policy, backups,
+  diffs, logs, and diagnostics.
+- Treat `apps/workbench` as a transitional CopilotKit/AG-UI client, not the
+  owner of Copilot CDP or tool execution logic.
+- Treat the planned PDF HTML client and future HTML helper tools as thin
+  clients that connect to Relay Core over localhost HTTP/WebSocket/AG-UI.
+- Keep standalone HTML-only execution explicitly out of scope because local
+  tools, CDP, approvals, backups, and diffs require the sidecar.
+
+Artifacts:
+
+- Updated architecture docs in `docs/IMPLEMENTATION.md` and README.
+- Endpoint ownership notes for sidecar/workbench boundaries.
+
+Acceptance:
+
+- Docs clearly state that browser clients, including the planned PDF HTML
+  client, use Relay Core APIs.
+- Docs clearly state that clients must not duplicate CDP, tool execution,
+  approval, or workspace policy logic.
+- No runtime code changes are made in this documentation-only task.
+
+### COREAPI-02 - Specify Stable Local API Contract
+
+Status: completed
+
+Scope:
+
+- Inventory the current sidecar endpoints and map them to the stable Relay Core
+  API contract.
+- Keep `/agui/relay` as the canonical run stream for task execution.
+- Specify read-only endpoints:
+  - `/health`;
+  - `/v1/copilot/session`;
+  - `/v1/workspace`;
+  - `/v1/tools`.
+- Specify action endpoints:
+  - `/v1/workspace/select`;
+  - `/v1/approvals`;
+  - `/v1/support-bundle`.
+- Explicitly reject raw CDP endpoints, arbitrary shell endpoints, arbitrary
+  OfficeCLI argv endpoints, and unapproved mutation paths.
+
+Artifacts:
+
+- API contract section in `docs/IMPLEMENTATION.md` or a dedicated docs file.
+- Updated smoke-test plan in `PLANS.md` if endpoint names need adjustment.
+- JSON schema or OpenAPI-style reference for client-facing `/v1` responses.
+
+Acceptance:
+
+- Each endpoint has purpose, method, request/response shape, auth/token
+  requirements, and failure behavior defined before implementation starts.
+- Client-facing response shapes are versioned and schema-validated.
+- The contract reuses AG-UI, Microsoft Agent Framework, and OpenCode-style tool
+  concepts rather than inventing another Relay-specific run protocol.
+
+### COREAPI-03 - Extract Copilot Provider Behind Relay Core Interface
+
+Status: completed
+
+Scope:
+
+- Define a provider boundary for Copilot prompt delivery, send timing, response
+  extraction, stale-response detection, JSON validation, and fail-fast errors.
+- Keep Edge CDP as the default provider.
+- Add only an interface seam for future official Microsoft 365 Copilot Chat API
+  or Graph-based Copilot API adapters. Do not require those permissions in the
+  current product.
+- Ensure browser clients cannot see CDP selectors or invoke CDP operations
+  directly.
+
+Artifacts:
+
+- Sidecar provider interface and adapter naming plan.
+- Provider diagnostics contract for `/v1/copilot/session`.
+- Targeted provider smoke plan.
+
+Acceptance:
+
+- Client-facing APIs remain unchanged if the provider implementation changes.
+- CDP failures surface as fail-fast AG-UI/API errors with diagnostics.
+- There is no fallback model, weaker planner, or prompt-only recovery path.
+
+### COREAPI-04 - Make Browser Clients Thin Relay Core Clients
+
+Status: completed
+
+Scope:
+
+- Route client session state, workspace state, tool catalog display,
+  approvals, support-bundle export, and run execution through the stable Relay
+  Core API contract.
+- Keep CopilotKit/AG-UI as the UI protocol.
+- Remove any remaining client assumptions that the browser owns runtime
+  decisions or direct Copilot connection behavior.
+
+Artifacts:
+
+- Browser client API cleanup plan.
+- Updated client smokes for API-driven state.
+
+Acceptance:
+
+- Browser clients do not contain CDP selector logic, local tool execution
+  logic, or mutation policy logic.
+- The generic Workbench can be replaced by the PDF HTML client without
+  changing Relay Core.
+- Existing client UX stays minimal and first-time friendly until cutover.
+
+### COREAPI-05 - Add Thin HTML Client Fixture
+
+Status: completed
+
+Scope:
+
+- Add a small static HTML fixture that demonstrates how a future task-specific
+  HTML helper connects to Relay Core.
+- The fixture may check health, display Copilot/session readiness, submit an
+  AG-UI task, and show fail-fast errors.
+- The fixture must not execute local tools, automate Copilot, or implement its
+  own approval harness.
+
+Artifacts:
+
+- Static fixture under tests or docs assets.
+- Thin-client smoke script.
+
+Acceptance:
+
+- The fixture works only when the sidecar is running.
+- The fixture uses Relay Core APIs and AG-UI events, not raw CDP or direct tool
+  execution.
+- The smoke proves future HTML helper tools can be built without duplicating
+  the Workbench runtime.
+
+### COREAPI-06 - Add Relay Core API Regression Gates
+
+Status: completed
+
+Scope:
+
+- Add contract smokes for `/health`, `/v1/copilot/session`, `/v1/workspace`,
+  `/v1/tools`, `/agui/relay`, approval resume, and support-bundle redaction.
+- Include the new gates in `pnpm check`.
+- Update `docs/IMPLEMENTATION.md` with verification outcomes when implemented.
+
+Artifacts:
+
+- New or updated smoke scripts.
+- `pnpm check` integration.
+- Implementation log entry.
+
+Acceptance:
+
+- `pnpm check` fails if a client-visible API disappears, exposes unsafe raw
+  operations, bypasses approval, or emits unredacted support data.
+- Existing Workbench, packaging, and tool-catalog gates still pass.
 
 ### PORTABLEENTRY-01 - Document One-Click Portable Direction
 

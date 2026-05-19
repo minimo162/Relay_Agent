@@ -2,17 +2,18 @@
 
 ## Status
 
-- Current phase: Relay_Agent now uses the unified browser-hosted Workbench and
-  self-contained .NET sidecar as the active product path. The next work is
-  Microsoft Agent Framework backend hardening plus AG-UI-first Workbench
-  hardening: keep the custom runner/event protocol removed, keep the React
-  Workbench consuming AG-UI through `@ag-ui/client`, and continue narrowing
-  Relay code to Copilot CDP adaptation, local tools, policy, diagnostics, and
-  packaging. File search, Office editing, and coding are high-frequency recipes
-  over one generic tool catalog, not product modes or separate runners.
-  OpenCode's built-in local tool model is now the reference contract for
-  model-visible file/code tools, while AionUi, OpenWork, Tauri, Python workflow
-  wrappers, and hidden fallback runners are not fallback paths.
+- Current phase: Relay_Agent uses a focused PDF review HTML client served by a
+  self-contained .NET Relay Core sidecar. Relay Core remains the owner of M365
+  Copilot CDP adaptation, Microsoft Agent Framework/AG-UI execution, local
+  tools, approvals, user-local storage, diagnostics, and packaging. The default
+  browser client is thin: it selects PDFs, starts reviews through `/v1/pdf/*`,
+  shows page-cited findings, exports reports, supports cancellation, and keeps
+  diagnostics collapsed. File search, Office editing, and coding remain
+  high-frequency recipes over the generic tool catalog and `/agui/relay`, not
+  default visible modes. OpenCode's built-in local tool model remains the
+  reference contract for model-visible file/code tools, while AionUi, OpenWork,
+  Tauri, Python workflow wrappers, Codex app-server, and hidden fallback
+  runners are not fallback paths.
 - Repository state: active source lives under `apps/workbench/`,
   `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
   docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
@@ -24,14 +25,73 @@
 - Active task graph: `.taskmaster/tasks/tasks.json` is retained as historical
   task metadata. The current executable plan is `PLANS.md`, with concrete
   OpenCode-compatible migration steps in `tasks.md`.
-- Packaging policy: the primary release path is now portable archives for the
-  sidecar Workbench: Windows zip plus Linux tarball. The Windows user-scope
-  NSIS installer remains an optional convenience artifact for shortcuts and
-  uninstall integration. Tauri NSIS packaging is historical and not an active
-  release path.
+- Packaging policy: the primary release path is portable archives for Relay
+  Core plus the PDF review HTML client: Windows zip plus Linux tarball. The
+  Windows user-scope NSIS installer remains an optional convenience artifact
+  for shortcuts and uninstall integration. Tauri NSIS packaging is historical
+  and not an active release path.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-19 PDF HTML Client And Relay Core API Cutover
+
+This slice completes the `COREAPI*` and `PDFHTML*` execution queues. The
+generic chatbot Workbench is no longer the default release surface; the
+browser client is now a focused PDF review tool backed by Relay Core APIs.
+
+Change:
+
+- Added Relay Core PDF review endpoints:
+  - `GET /health`;
+  - `GET /v1/copilot/session`;
+  - `GET /v1/workspace`;
+  - `GET /v1/tools`;
+  - `POST /v1/workspace/select`;
+  - `GET /v1/pdf/capabilities`;
+  - `POST /v1/pdf/review`;
+  - `POST /v1/pdf/review-paths`;
+  - `GET /v1/pdf/jobs/{jobId}`;
+  - `GET /v1/pdf/jobs/{jobId}/report.md`;
+  - `DELETE /v1/pdf/jobs/{jobId}`.
+- Added `PdfReviewService`, which stages browser-selected PDFs under
+  user-local app data, extracts page-aware text through the existing PDF
+  extractor, detects text-layer limitations, writes `job.json` and
+  `report.md`, and never writes caches or temp files beside source PDFs.
+- Replaced the default React browser surface with a minimal PDF review HTML
+  client: review type selection, browser PDF picker, one primary run button,
+  cancellation, page-cited findings, Markdown report export, deletion, and
+  collapsed support details.
+- Updated hard-cut and smoke coverage so release gates verify the PDF HTML
+  client and Relay Core PDF API instead of the old generic Workbench UI.
+- Updated portable packaging copy and inventory metadata to describe the PDF
+  review client + Relay Core sidecar architecture.
+- Bumped client, sidecar, and launcher versions to `0.3.21`.
+
+Verification commands for this slice:
+
+```bash
+pnpm check
+pnpm sidecar:portable:windows
+pnpm sidecar:portable:linux
+pnpm sidecar:installer:windows
+pnpm release:inventory
+sha256sum dist/relay-agent-0.3.21-win-x64.zip dist/relay-agent-0.3.21-linux-x64.tar.gz dist/installer/Relay.Agent-0.3.21-win-x64-setup.exe dist/release/relay-release-inventory.json dist/release/relay-sbom.json > dist/release/relay-agent-0.3.21-sha256.txt
+```
+
+Result:
+
+- Full `pnpm check` passed, including the updated hard-cut guard, PDF client
+  typecheck/build, sidecar Release build, Relay Core PDF API smoke, AG-UI
+  smokes, DCI/read smokes, Office/PDF extraction smoke, OfficeCLI registry
+  smoke, sidecar security smoke, and release inventory/SBOM generation.
+- Windows portable packaging passed and produced
+  `dist/relay-agent-0.3.21-win-x64.zip` at 81 MiB.
+- Linux portable packaging passed and produced
+  `dist/relay-agent-0.3.21-linux-x64.tar.gz`.
+- Windows installer packaging passed and produced
+  `dist/installer/Relay.Agent-0.3.21-win-x64-setup.exe` at 84 MiB.
+- Wrote `dist/release/relay-agent-0.3.21-sha256.txt`.
 
 ### 2026-05-19 Portable One-Click First-Run
 

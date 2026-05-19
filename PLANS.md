@@ -4,30 +4,31 @@ Date: 2026-05-18
 
 ## Product Direction
 
-Relay_Agent has moved from a three-mode utility app into a single local
-business-agent workbench:
+Relay_Agent moved from a three-mode utility app into a single local
+business-agent workbench, and is now pivoting again toward a focused PDF review
+product backed by the same local Relay Core:
 
 > **Copilot thinks. Relay executes local tools safely.**
 
 The user-facing product should not ask users to choose between `資料を探す`,
 `Officeファイルを編集する`, and `コードを書く`. Those are implementation
-capabilities, not primary UX modes. The Workbench should expose one
-workspace, one task composer, one agent trace, and one result/approval surface.
-M365 Copilot chooses which local tools are needed from the user's natural
-language request; Relay validates and executes those tools locally.
+capabilities, not primary UX modes. The next product surface should expose a
+focused PDF review flow backed by one local Relay Core API. M365 Copilot
+reasons over bounded, page-anchored review packets; Relay validates,
+executes local extraction/alignment, and reports page-cited findings.
 
 The product no longer treats AionUi, OpenWork, custom Relay run streams, or
-Tauri as active product architecture. The active architecture is a
-**framework-native Agent Framework + AG-UI workbench with an OpenCode-compatible
-local tool contract**: Microsoft Agent Framework owns agent turns, tool
-invocation, sessions, middleware, approvals, and streaming run lifecycle; AG-UI
-owns the Workbench-facing event/state/tool/approval protocol; OpenCode's
-built-in tool model is the primary reference for model-visible local workspace
-tools; Relay adds only the minimum adapters needed for M365 Copilot over Edge
-CDP, OpenCode-compatible local tool function bodies, workspace policy,
-packaging, and diagnostics.
+Tauri as active product architecture. The active backend architecture remains
+**framework-native Agent Framework + AG-UI with an OpenCode-compatible local
+tool contract**: Microsoft Agent Framework owns agent turns, tool invocation,
+sessions, middleware, approvals, and streaming run lifecycle; AG-UI owns the
+browser-facing event/state/tool/approval protocol; OpenCode's built-in tool
+model is the primary reference for model-visible local workspace tools; Relay
+adds only the minimum adapters needed for M365 Copilot over Edge CDP,
+OpenCode-compatible local tool function bodies, PDF extraction/alignment,
+workspace policy, packaging, and diagnostics.
 
-The active product target is a **generic Relay Workbench**:
+The current implementation target is a **generic Relay Workbench**:
 
 - natural-language task input;
 - Copilot-led step planning and tool selection;
@@ -37,6 +38,37 @@ The active product target is a **generic Relay Workbench**:
   exact file edits;
 - AG-UI-first user experience and event protocol, with a minimal visual surface
   and no diagnostic-first clutter.
+
+The next product target supersedes that generic Workbench with a
+**PDF review HTML tool backed by Relay Core API**:
+
+- the current generic Workbench is a migration source, not the long-term
+  default UI;
+- the default user-facing client becomes a focused HTML tool for PDF typo,
+  omission, wording, and cross-document consistency review;
+- Relay Core remains the local API and execution host;
+- the PDF HTML tool connects to Relay Core instead of embedding Copilot CDP,
+  local file execution, approval, or workspace policy logic;
+- once the PDF HTML tool and Relay Core API pass their acceptance gates, the
+  current generic Workbench should be removed from release artifacts rather
+  than kept as a parallel fallback UI.
+
+The next architecture boundary is **Relay Core as a local agent API**:
+
+- Relay Core owns Copilot connectivity, Agent Framework execution, AG-UI run
+  streams, local tool governance, approvals, backups, diffs, logs, workspace
+  policy, and app-local storage.
+- Browser clients are clients of Relay Core, not the place where Copilot CDP,
+  tool validation, or tool execution logic should live. The current Workbench
+  is transitional; the planned default browser client is the PDF review HTML
+  tool.
+- Future HTML-based helper tools are thin clients that connect to Relay Core
+  over localhost HTTP/WebSocket/AG-UI. They may provide task-specific
+  affordances, but they must not implement their own Copilot automation,
+  local tool execution, workspace policy, or approval harness.
+- CDP selector details, prompt delivery, response extraction, JSON validation,
+  retries, and fail-fast diagnostics stay inside Relay Core. Client code only
+  sees stable run/session/tool/approval APIs.
 
 Distribution direction:
 
@@ -51,10 +83,11 @@ Distribution direction:
 - Linux users should be able to extract the tarball and launch
   `./relay-agent`. Compatibility scripts such as `./start-relay-agent.sh` may
   remain, but should not be the primary first-run path.
-- HTML files in the portable package are guidance documents, not launch
-  prerequisites. `README-FIRST.html` should explain the one-click launcher,
-  Copilot sign-in, workspace selection, and safe approvals; it must not be the
-  first required step.
+- Root-level HTML files in the portable package are guidance documents, not
+  launch prerequisites. `README-FIRST.html` should explain the one-click
+  launcher, Copilot sign-in, PDF selection, and privacy boundaries; it must not
+  be the first required step. The PDF review UI itself is served by Relay Core
+  after the launcher starts the local sidecar.
 - The Windows NSIS installer remains an optional convenience artifact for Start
   Menu/uninstall integration, but product docs, release notes, and default
   sharing guidance should lead with the portable package.
@@ -88,10 +121,10 @@ Plan-coherence rule for older sections in this file:
   `RunEvent`, `RelayTurnState` as the canonical runtime state, or
   `rg_files`/`rg_search` as public tool names is superseded by the
   framework-native + OpenCode-compatible direction in this section.
-- Public Workbench traffic must be AG-UI. Public tool/runtime semantics must be
-  Agent Framework function/MCP/client tools plus middleware and approvals.
-  Model-visible local workspace tool semantics must be OpenCode-compatible
-  unless a documented gap makes that impossible.
+- Public browser-client traffic must be AG-UI. Public tool/runtime semantics
+  must be Agent Framework function/MCP/client tools plus middleware and
+  approvals. Model-visible local workspace tool semantics must be
+  OpenCode-compatible unless a documented gap makes that impossible.
 - Legacy names may remain only as internal provider aliases during migration:
   `rg_files` maps to the Agent Framework `glob` function tool, and
   `rg_search` maps to the Agent Framework `grep` function tool. New plan tasks
@@ -99,6 +132,10 @@ Plan-coherence rule for older sections in this file:
 - Any older text that treats `patch` as the canonical mutation tool name is
   superseded. The OpenCode-compatible canonical name is `apply_patch`; `patch`
   is only a compatibility alias.
+- Any older text that treats the generic Workbench as the permanent default UI
+  is superseded by the PDF review HTML tool cutover plan. The generic
+  Workbench may be used as migration source only; it must not remain as a
+  visible fallback release surface after PDFHTML acceptance passes.
 
 ## Active Harness Architecture Plan
 
@@ -122,6 +159,8 @@ Reference sources checked for this plan:
 - `https://learn.microsoft.com/en-us/agent-framework/integrations/ag-ui/human-in-the-loop`
 - `https://docs.ag-ui.com/introduction`
 - `https://docs.ag-ui.com/concepts/events`
+- `https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/overview`
+- `https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/copilot-apis-overview`
 
 ### 2026-05-19 Standard Chatbot UX And Tool Harness Alignment Plan
 
@@ -211,6 +250,308 @@ Implementation plan:
      `RelayDocumentSearch*`, AionUi, OpenWork, Tauri, or per-mode runners.
    - `pnpm check`, release inventory, portable packages, and the optional
      Windows user-scope installer pass for the bumped release version.
+
+### 2026-05-19 Copilot Gateway And Relay Core API Decoupling Plan
+
+The next structural improvement is to stop treating the Workbench as the only
+consumer of Copilot connectivity. Relay should expose a stable local API
+surface that behaves like an app-local Copilot/agent gateway, while keeping all
+unsafe or brittle implementation details inside the .NET sidecar. The browser
+clients, portable HTML help, and any future HTML task tools should become
+clients of this Relay Core API.
+
+This is not a move to standalone HTML-only execution. A `file://` HTML page
+cannot safely run ripgrep, OfficeCLI, workspace edits, Edge CDP, backups, diffs,
+or approvals. The target is **PDF HTML/browser clients as UI, Relay Core as
+localhost agent API**.
+
+Reference sources checked for this plan:
+
+- Microsoft 365 Copilot extensibility now includes Copilot Chat API preview,
+  Retrieval/Search APIs, connectors, and API plugins, but these depend on
+  organization licensing, consent, and admin availability. Relay should keep a
+  provider abstraction so a future official API adapter can replace Edge CDP
+  when the tenant permits it:
+  `https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/overview`.
+- Microsoft 365 Copilot APIs are Graph-based REST APIs under the Copilot
+  namespace for retrieval/search/interactions and require Microsoft 365 Copilot
+  licensing. They are a future provider option, not an immediate replacement
+  for the current signed-in Edge CDP bridge:
+  `https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/copilot-apis-overview`.
+- AG-UI remains the public event protocol for run lifecycle, messages, tool
+  calls, tool results, state, interrupts, errors, and completion.
+- Microsoft Agent Framework remains the backend runtime for agent sessions,
+  tools, middleware, and approvals.
+- OpenCode remains the reference for model-visible local workspace tool names
+  and permission semantics.
+
+Implementation plan:
+
+1. **Name the boundary explicitly**
+   - Treat `apps/sidecar` as Relay Core: the only owner of Copilot provider
+     adapters, Agent Framework orchestration, local tool execution, approvals,
+     workspace containment, backups, diffs, logs, and diagnostics.
+   - Treat `apps/workbench` as a transitional client. The long-term default
+     client is a focused PDF review HTML tool that calls Relay Core, not a
+     runtime owner.
+   - Treat future HTML tools as optional clients. They can be shipped in the
+     portable package, but must connect to Relay Core instead of duplicating
+     CDP or tool logic.
+
+2. **Define a stable localhost API**
+   - Keep `/agui/relay` as the canonical run endpoint for task execution and
+     streaming. This is the main contract for Workbench and any advanced HTML
+     tool client.
+   - Formalize read-only state endpoints:
+     - `/health` for sidecar readiness and version;
+     - `/v1/copilot/session` for Copilot provider readiness, signed-in Edge
+       connection metadata, and fail-fast diagnostics;
+     - `/v1/workspace` for current workspace state and folder-picker handoff;
+     - `/v1/tools` for the model-visible OpenCode-compatible tool catalog and
+       capability metadata.
+   - Formalize action endpoints:
+     - `/v1/workspace/select` for native folder selection handoff;
+     - `/v1/approvals` for approve/reject/resume operations when AG-UI
+       client-tool approval needs a direct client action;
+     - `/v1/support-bundle` for explicit, redacted diagnostics export.
+   - Do not expose raw CDP, raw selector operations, arbitrary OfficeCLI argv,
+     or unrestricted shell endpoints.
+   - Version the client-facing API under `/v1`, document request/response
+     shapes with JSON schemas or an OpenAPI-style reference, and keep
+     backward-incompatible changes explicit instead of silently changing HTML
+     client behavior.
+
+3. **Make provider adapters swappable without changing clients**
+   - Keep the current Edge CDP provider as the default M365 Copilot provider.
+   - Put prompt delivery, send timing, response extraction, stale-response
+     detection, JSON validation, and fail-fast errors behind a single provider
+     interface.
+   - Add the planned official-provider seam only as an interface and contract
+     placeholder. Do not require Microsoft Graph/Copilot API permissions in the
+     current product.
+   - If official Copilot Chat API access becomes available later, it replaces
+     the provider adapter only. PDF HTML tools, Workbench migration code, tool
+     execution, approval, and AG-UI contracts should not change.
+
+4. **Keep client tools thin and safe**
+   - The PDF review HTML client and any future HTML helper tools may provide
+     task-specific affordances, but each helper should still submit structured
+     AG-UI client actions or natural-language review tasks to Relay Core.
+   - Do not add per-helper search engines, Office edit runners, code runners,
+     or Copilot prompt bridges.
+   - All mutation requests must still flow through Relay Core approval,
+     backup, diff, and verification.
+
+5. **Security and distribution constraints**
+   - Bind public local API traffic to loopback only.
+   - Require the existing launch token/session token for browser clients and
+     future HTML clients.
+   - Keep CORS/origin rules narrow. Portable HTML clients shipped with Relay
+     may connect to localhost only after the sidecar is launched.
+   - Keep all caches, temp data, logs, backups, and support bundles in
+     user-local storage unless the user explicitly chooses another location.
+   - Do not write Relay artifacts into searched/shared folders.
+
+6. **Regression gates**
+   - Add a Relay Core API contract smoke that verifies `/health`,
+     `/v1/copilot/session`, `/v1/workspace`, `/v1/tools`, `/agui/relay`,
+     approval resume, and support-bundle redaction.
+   - Add schema validation for public API responses consumed by the PDF HTML
+     client.
+   - Add a thin-client smoke that loads a standalone HTML client fixture
+     against a running sidecar and verifies it can read health, start an AG-UI
+     run, and receive fail-fast errors without direct CDP access.
+   - Keep `pnpm check` as the required acceptance gate.
+
+7. **Acceptance criteria**
+   - Copilot connectivity can be tested and diagnosed without opening the old
+     generic Workbench UI.
+   - Browser clients use only stable Relay Core APIs for session state,
+     workspace state, tools, approvals, support bundles, and AG-UI runs.
+   - Future HTML helper tools can be added without touching Copilot CDP or
+     local tool execution code.
+   - No client can access raw CDP, arbitrary shell, arbitrary OfficeCLI argv,
+     or unapproved mutation paths.
+   - Official Microsoft 365 Copilot APIs remain a future provider adapter
+     option, not a current dependency or fallback.
+
+### 2026-05-19 PDF Review HTML Tool And Distributable Relay Core API Plan
+
+The product should pivot from a generic Workbench to a focused PDF review tool:
+users open Relay, select one or two PDFs, and ask Copilot-backed Relay to find
+typos, omissions, awkward wording, terminology drift, numerical mismatches, and
+cross-document inconsistencies. The goal is a tool that can be distributed
+simply inside a portable Relay package and used by anyone who has access to
+Microsoft 365 Copilot in their signed-in Edge profile.
+
+This plan intentionally removes the current generic Workbench from the
+long-term product surface. Search, Office editing, and coding remain possible
+future API/tool capabilities, but they are not the default UI. The first
+productized client is the PDF review HTML tool.
+
+Product scope:
+
+- **Single PDF proofreading**
+  - Detect typographical errors, duplicated words, obvious omissions,
+    inconsistent spelling, inconsistent terminology, broken references, and
+    suspicious punctuation.
+  - Return findings with page number, short evidence excerpt, severity, and
+    suggested correction.
+- **Single PDF internal consistency review**
+  - Detect mismatched headings, section references, table/figure references,
+    dates, labels, defined terms, numbers, and repeated statements that drift
+    across pages.
+- **Two-PDF consistency comparison**
+  - Compare two documents while preserving page/section correspondence.
+  - Detect mismatched names, dates, amounts, labels, headings, definitions,
+    exhibit/table references, and statements that should align.
+  - Avoid simple blind chunking that loses document-to-document alignment.
+- **Review report**
+  - Produce a concise review table in the HTML UI and exportable Markdown/CSV
+    report.
+  - Every finding must link back to page-level evidence. Copilot may reason,
+    but Relay must keep the cited source pages and extracted snippets.
+- **Input constraints and explicit limits**
+  - Text-layer PDFs are the initial supported path.
+  - Scanned/image-only pages must be detected and reported as review gaps
+    unless a later OCR dependency is explicitly added to the plan.
+  - Password-protected, corrupted, or extraction-blocked PDFs should fail with
+    actionable errors before Copilot review starts.
+- **Job control**
+  - Long reviews must show progress, support cancellation, and preserve
+    completed page-level findings when safe.
+  - Partial results must be labeled as partial; Relay must not present them as
+    full-document conclusions.
+
+Architecture plan:
+
+1. **Make the PDF HTML tool the default client**
+   - Replace the current generic Workbench release entry with a focused static
+     HTML client served by Relay Core.
+   - The client should be understandable on first open: select PDF(s), choose
+     review type, run review, inspect findings, export report.
+   - Keep the UI minimal, with a large document selection area, one review
+     action, a clear progress region, and a findings table. Avoid developer
+     diagnostics unless the user opens support details.
+   - Use a native Relay Core file picker or explicit browser file selection.
+     Do not require users to manually type paths. If browser file inputs cannot
+     provide stable local paths, stage the selected files in user-local Relay
+     storage and keep the original filename/display metadata.
+   - Do not keep the old Workbench as a visible fallback after cutover.
+
+2. **Keep Relay Core as the custom API/tool package**
+   - Relay Core remains the self-contained .NET sidecar distributed with the
+     HTML client.
+   - The portable package should still launch with one obvious executable, open
+     the local PDF HTML tool, and require no administrator rights.
+   - Relay Core exposes stable localhost APIs for health, Copilot session,
+     PDF selection/upload, page extraction, review job creation, AG-UI progress
+     streaming, report export, and redacted support bundles.
+   - The API must be easy to reuse by future HTML tools, but the PDF client is
+     the first supported client.
+
+3. **Use M365 Copilot as the reasoning layer**
+   - Users should not need OpenAI API keys or a separate LLM subscription.
+   - The default provider is the signed-in Edge M365 Copilot bridge.
+   - Relay should fail fast if Copilot is not signed in, unavailable, blocked
+     by tenant policy, or cannot return valid structured results.
+   - A future official Microsoft 365 Copilot API adapter may replace Edge CDP
+     when tenant permissions allow it, but the current tool must not depend on
+     that API.
+
+4. **Design page-aware PDF review instead of naive chunking**
+   - Extract page maps with page number, text blocks, headings when available,
+     and stable page anchors.
+   - For long PDFs, create review windows with overlap and page anchors so
+     findings can be traced back.
+   - For two-PDF comparison, build an alignment map first: title/heading
+     matches, page labels, section numbers, table/figure labels, dates, defined
+     terms, and high-similarity passages.
+   - Review aligned pairs and unmatched sections separately. Do not simply
+     split each PDF independently and ask Copilot to compare unrelated chunks.
+   - Keep extraction, alignment, chunk budgeting, and evidence packaging inside
+     Relay Core. Copilot receives bounded, page-anchored review packets.
+   - Keep a deterministic review ledger: extraction version, page map checksum,
+     alignment decisions, Copilot packet IDs, validated findings, rejected
+     findings, and final report metadata.
+
+5. **Define finding and report contracts**
+   - Use a stable finding schema: `id`, `reviewType`, `severity`, `category`,
+     `documentId`, `page`, `anchor`, `evidence`, `issue`, `suggestion`,
+     `confidence`, and `status`.
+   - Two-PDF comparison findings must include both document references when the
+     issue concerns a mismatch.
+   - Reports must separate likely typos, consistency mismatches, extraction
+     limitations, and items requiring human judgment.
+   - The UI should allow users to mark findings as accepted, ignored, or needs
+     review without modifying the source PDF.
+
+6. **Keep the API distributable and safe**
+   - Bind to loopback only and require the launch/session token for browser
+     clients.
+   - Store staged files, extracted text, temp files, logs, reports, and backups
+     in user-local app storage, not beside the source PDFs and not in shared
+     folders.
+   - Define a retention policy: job artifacts are removable from the UI, and
+     support bundles do not include raw PDF text unless explicitly requested.
+   - Redact support bundles by default. Do not include raw PDF text unless the
+     user explicitly opts in.
+   - Avoid arbitrary local shell or raw CDP exposure from the PDF client.
+   - Keep all mutation tools out of the PDF review UI. This product surface is
+     read/review/report, not document mutation.
+
+7. **Distribution plan**
+   - Keep the portable package as the primary distribution.
+   - The launcher opens the PDF review HTML tool by default.
+   - Include Relay Core, bundled PDF extraction dependencies, ripgrep only if
+     still needed for support/search helpers, app icon, first-run HTML help,
+     and a concise README.
+   - Users with a Microsoft 365 Copilot contract and a signed-in Edge profile
+     should be able to extract and run the package without admin rights.
+   - NSIS remains optional convenience only; portable remains the primary
+     sharing path.
+   - Release notes must say the package is for users who already have access to
+     Microsoft 365 Copilot through their organization; Relay does not provide a
+     Copilot license or bypass tenant controls.
+
+8. **Decommission plan for the current Workbench**
+   - Remove generic Workbench UI from default release artifacts after the PDF
+     HTML client has parity with required launch/session/support behavior.
+   - Remove Workbench-specific smokes or replace them with PDF HTML client
+     smokes.
+   - Keep AG-UI and Agent Framework backend contracts. The cutover changes the
+     client surface, not the backend execution discipline.
+   - Do not keep two visible first-run UIs in the release package.
+
+9. **Regression gates**
+   - Add PDF HTML client UX smoke: first open, Copilot readiness, PDF selection
+     affordance, one-PDF review, two-PDF comparison, export report, support
+     details collapsed.
+   - Add PDF extraction/page-map smoke for long PDFs.
+   - Add scanned/image-only PDF limitation smoke.
+   - Add two-PDF alignment smoke with deliberately mismatched dates, labels,
+     amounts, and terminology.
+   - Add Copilot structured-output smoke for proofreading findings and
+     consistency findings.
+   - Add cancellation/partial-result smoke for long jobs.
+   - Add packaging smoke proving the launcher opens the PDF HTML tool and the
+     old Workbench is not exposed as a competing entrypoint.
+
+10. **Acceptance criteria**
+   - A first-time user can run the portable package, select one PDF, and get a
+     page-cited typo/consistency report.
+   - A first-time user can select two PDFs and get a page-cited consistency
+     comparison report with document-to-document correspondence preserved.
+   - A scanned/image-only PDF reports an explicit extraction limitation instead
+     of producing unsupported claims.
+   - Long PDF jobs show progress, support cancellation, and label partial
+     results accurately.
+   - The user only needs an existing Microsoft 365 Copilot-capable signed-in
+     Edge profile; no OpenAI API key, admin install, or extra service account
+     is required.
+   - Relay Core APIs are documented and reusable by future HTML tools.
+   - The current generic Workbench is not part of the default release surface
+     after cutover.
 
 ### 2026-05-19 Portable One-Click First-Run Plan
 

@@ -76,7 +76,7 @@ writeFileSync(
   JSON.stringify({
     schemaVersion: "RelayDefaultConfig.v1",
     version: workbenchPackage.version,
-    architecture: "browser-workbench-dotnet-sidecar",
+    architecture: "pdf-html-client-relay-core-sidecar",
     dataDirectory: "user-local",
     localHttp: {
       bind: "127.0.0.1",
@@ -101,14 +101,14 @@ if (sources.officecli) {
 writeFileSync(
   join(output, "RELAY_RELEASE_CONTENTS.txt"),
   [
-    "Relay Agent sidecar Workbench package",
+    "Relay Agent PDF review package",
     `Version: ${workbenchPackage.version}`,
     `RID: ${rid}`,
     "",
     "Included runtime components:",
     "- Relay.Sidecar",
     rid === "win-x64" ? "- Relay Agent.exe launcher" : "- relay-agent launcher",
-    "- Workbench static assets",
+    "- PDF review HTML client static assets",
     "- Relay app icon under relay-assets",
     "- ripgrep under relay-tools/ripgrep",
     rid === "win-x64" ? "- OfficeCLI under relay-tools/officecli" : "- OfficeCLI is optional on this platform",
@@ -131,8 +131,8 @@ writeFileSync(
     "",
     "How to start:",
     rid === "win-x64"
-      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Relay Agent.exe.\n3. Your browser opens the local Workbench automatically."
-      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./relay-agent.\n3. Your browser opens the local Workbench automatically.",
+      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Relay Agent.exe.\n3. Your browser opens the local PDF review tool automatically."
+      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./relay-agent.\n3. Your browser opens the local PDF review tool automatically.",
     "",
     "No administrator rights are required.",
     "Relay stores runtime data under the current user's local application data directory, not in the selected work folder.",
@@ -354,14 +354,14 @@ function portableFrontDoorHtml(rid, version) {
     <header>
       <span class="mark" aria-hidden="true">R</span>
       <h1>Relay Agent Portable</h1>
-      <p>インストールせずに使える、M365 Copilot連携のローカル作業ワークベンチです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
+      <p>インストールせずに使える、M365 Copilot連携のPDF確認ツールです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
     </header>
     <section class="grid" aria-labelledby="start-title">
       <h2 id="start-title">はじめかた</h2>
       <ol class="steps">
         <li><span class="num">1</span><span><span class="file">${escapeHtml(launchName)}</span> を開きます。${escapeHtml(platformHint)}</span></li>
-        <li><span class="num">2</span><span>ブラウザでWorkbenchが開いたら、作業フォルダを選択します。</span></li>
-        <li><span class="num">3</span><span>チャットに依頼を入力します。PDF確認、ファイル検索、Office編集、コード作成を同じ画面で扱えます。</span></li>
+        <li><span class="num">2</span><span>ブラウザでRelay PDF Reviewが開いたら、確認したいPDFを選択します。</span></li>
+        <li><span class="num">3</span><span>誤字・表記、文書内整合、または2つのPDF比較を選んでレビューを開始します。</span></li>
       </ol>
       <p>通常は ${escapeHtml(launchName)} だけを使います。別の起動方法: ${escapeHtml(secondaryLaunch)}。Relayのデータはユーザーのローカルアプリデータに保存され、選択した共有フォルダにはキャッシュを書き込みません。</p>
     </section>
@@ -370,11 +370,11 @@ function portableFrontDoorHtml(rid, version) {
       <div class="recipes">
         <section class="recipe">
           <strong>誤字・表記ゆれ</strong>
-          <p>Workbenchの「PDFを選んで誤字確認」からPDFを選択します。下書きには選択したPDFパスが入ります。</p>
+          <p>画面中央のファイル選択からPDFを選びます。手作業でPDFパスを入力する必要はありません。</p>
         </section>
         <section class="recipe">
           <strong>2つのPDF比較</strong>
-          <p>「2つのPDFを選んで比較」からPDF A / PDF B を順に選択します。</p>
+          <p>「2つのPDF比較」を選び、PDF A / PDF B を同じファイル選択で指定します。</p>
         </section>
       </div>
       <p>ページ数が多いPDFは、ページ構成を先に確認して必要な範囲だけを読みます。2つのPDF比較では、両方のページ構成をそろえてから対応範囲を比較します。</p>

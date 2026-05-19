@@ -51,22 +51,24 @@ for (const forbidden of [
 }
 
 assert(fileExists("apps/sidecar/Relay.Sidecar.csproj"), "missing .NET sidecar project");
-assert(fileExists("apps/workbench/package.json"), "missing browser workbench package");
+assert(fileExists("apps/workbench/package.json"), "missing browser client package");
 assert(read("PLANS.md").includes("No transitional fallback architecture"), "PLANS.md must retain hard-cutover rule");
-assert(read("README.md").includes("browser-hosted local web workbench"), "README.md must describe the sidecar workbench architecture");
-assert(/browser-hosted local web\s+workbench/.test(read("AGENTS.md")), "AGENTS.md must describe the sidecar workbench architecture");
+assert(read("README.md").includes("PDF review HTML client"), "README.md must describe the PDF HTML client architecture");
+assert(read("AGENTS.md").includes("PDF review HTML client"), "AGENTS.md must describe the PDF HTML client architecture");
 const workbenchSource = walk("apps/workbench/src")
   .filter((path) => /\.(ts|tsx|css)$/.test(path))
   .map((path) => read(path))
   .join("\n");
-assert(workbenchSource.includes("@ag-ui/client"), "Workbench must consume AG-UI through @ag-ui/client");
-assert(workbenchSource.includes("/agui/relay"), "Workbench must consume the official AG-UI run endpoint");
+assert(workbenchSource.includes("Relay PDF Review"), "default browser client must be the PDF review HTML client");
+assert(workbenchSource.includes("/v1/pdf/review"), "PDF client must call the Relay Core PDF review API");
+assert(!workbenchSource.includes("CopilotChat"), "generic CopilotKit Workbench must not remain the default client");
 const sidecarProgram = read("apps/sidecar/Program.cs");
 const sidecarSource = walk("apps/sidecar")
   .filter((path) => /\.(cs|csproj)$/.test(path))
   .map((path) => read(path))
   .join("\n");
 assert(sidecarProgram.includes("/agui/relay"), "Sidecar must expose the official Agent Framework AG-UI endpoint");
+assert(sidecarProgram.includes("/v1/pdf/review"), "Sidecar must expose the Relay Core PDF review endpoint");
 assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the legacy run REST product path");
 assert(!sidecarSource.includes("Run" + "Manager"), "Sidecar must not retain the legacy RunManager runtime");
 assert(!sidecarSource.includes("Run" + "Response"), "Sidecar must not retain the legacy RunResponse protocol");
@@ -74,10 +76,10 @@ assert(!sidecarSource.includes("Pending" + "Approval"), "Sidecar must not retain
 assert(!sidecarSource.includes('"rg_files"'), "Sidecar model-facing catalog must not expose rg_files");
 assert(!sidecarSource.includes('"rg_search"'), "Sidecar model-facing catalog must not expose rg_search");
 assert(!sidecarSource.includes('"run_command"'), "Sidecar model-facing catalog must not expose run_command");
-assert(!workbenchSource.includes("/agui-events"), "Workbench must not consume the old custom AG-UI run stream");
-assert(!workbenchSource.includes("/api/runs"), "Workbench must not use the legacy run REST product path");
-assert(!/\/events[`'"]/.test(workbenchSource), "Workbench must not consume the old custom run-event stream");
-assert(!workbenchSource.includes("pendingApproval"), "Workbench approval UI must be driven by AG-UI state, not RunResponse.pendingApproval");
+assert(!workbenchSource.includes("/agui-events"), "PDF client must not consume the old custom AG-UI run stream");
+assert(!workbenchSource.includes("/api/runs"), "PDF client must not use the legacy run REST product path");
+assert(!/\/events[`'"]/.test(workbenchSource), "PDF client must not consume the old custom run-event stream");
+assert(!workbenchSource.includes("pendingApproval"), "PDF client must not revive RunResponse.pendingApproval");
 
 const ci = read(".github/workflows/ci.yml");
 assert(ci.includes("pnpm check") && ci.includes("Set up .NET"), "CI must build the sidecar through the active acceptance gate");

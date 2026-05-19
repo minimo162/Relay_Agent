@@ -2,9 +2,10 @@
 
 ## Repository State
 
-- Relay_Agent now uses a browser-hosted local web workbench served by a
-  self-contained .NET sidecar as the active product architecture.
-- The active user-facing UI lives under `apps/workbench/`.
+- Relay_Agent now uses a focused PDF review HTML client served by a
+  self-contained .NET Relay Core sidecar as the active product architecture.
+- The active user-facing UI lives under `apps/workbench/`, but that package is
+  now the PDF review HTML client rather than the old generic Workbench.
 - The active local host/sidecar lives under `apps/sidecar/`.
 - The active launcher lives under `apps/launcher/`.
 - The previous Tauri v2 + SolidJS desktop application under `apps/desktop/`,
@@ -19,13 +20,11 @@
   `officecli_mutate`, `edit`, `write`, `patch`, `workspace_status`,
   `diff`, `bash`, and `ask_user`. Final answers are normal Agent Framework
   assistant responses, not a Relay tool.
-- Current implementation focus is the review remediation plan in `PLANS.md`:
-  Microsoft Agent Framework backend adoption, AG-UI full adoption for the
-  Workbench-facing UX/event contract, fail-fast Copilot provider behavior,
-  Office/PDF `read` extraction, semantic OfficeCLI operations, generic
-  workspace/diff/verification tools, explicit redacted support-bundle export,
-  ripgrep streaming/capping, `grep` argument hardening, and Workbench
-  official `/agui/relay` execution with AG-UI client-tool approvals.
+- Current implementation focus is the PDFHTML/COREAPI cutover in `PLANS.md`:
+  Relay Core owns Copilot connectivity, Agent Framework/AG-UI execution, local
+  tools, approvals, user-local storage, diagnostics, and PDF review APIs; the
+  browser client stays thin and focused on PDF selection, progress, findings,
+  report export, cancellation, and collapsed support details.
 
 ## Source of Truth
 
@@ -55,14 +54,13 @@ decisions, verification runs, and known limitations.
 
 ## Tool Implementation Rules
 
-- AG-UI is the target Workbench-facing protocol and UX model. New run UI work
-  should emit/consume AG-UI lifecycle, message, tool, state, interrupt/resume,
-  error, and completion events through `/agui/relay` instead of extending or
-  reviving the custom Relay run routes.
-- The Workbench visual implementation should follow AG-UI/CopilotKit/Dojo
-  agent UI interaction patterns while preserving Relay's minimal professional
-  surface. The target frontend stack is React + Vite + TypeScript + Tailwind
-  CSS + shadcn/ui + Radix UI + `@ag-ui/client`, with lucide-react for icons.
+- AG-UI remains the backend run/event/approval protocol through `/agui/relay`.
+  The default browser client is the PDF review HTML client and should call
+  stable Relay Core `/v1` APIs rather than owning tool execution or CDP logic.
+- The PDF review visual implementation should stay minimal and professional:
+  React + Vite + TypeScript + Tailwind CSS, browser file picker, one primary
+  review flow, page-cited findings, report export, cancellation, and collapsed
+  diagnostics. Use lucide-react for icons.
   Do not choose Next.js or Chakra UI by default unless `PLANS.md` is explicitly
   changed with the reason and verification impact.
 - Use Microsoft Agent Framework in the .NET sidecar as the production backend
@@ -99,18 +97,19 @@ decisions, verification runs, and known limitations.
   cancellation, and deny rules for destructive, network, package-install,
   secret-reading, or cross-workspace behavior unless the user explicitly
   approves a narrowly displayed command.
-- File search, Office editing, and coding are common recipes over the generic
-  tool catalog, not separate UX modes or separate backend runners.
+- File search, Office editing, and coding remain common recipes over the
+  generic tool catalog and `/agui/relay`; they are not visible modes in the
+  default PDF review client.
 - Support bundles must be explicit and redacted by default. They must not
   include raw document contents unless the user explicitly opts in.
 
 ## Verification Discipline
 
 - Use root `pnpm check` as the canonical acceptance gate for the active
-  sidecar/workbench path.
+  PDF client and Relay Core sidecar path.
 - `pnpm check` must cover:
   - hard-cut guard;
-  - Workbench typecheck/build;
+  - PDF client typecheck/build;
   - sidecar build;
   - sidecar smoke;
   - official AG-UI agent golden smoke for search, Office, coding, generic
@@ -119,8 +118,8 @@ decisions, verification runs, and known limitations.
     mutation approval, rejection, and resume;
   - sidecar security smoke;
   - release inventory/SBOM generation.
-- Use `pnpm workbench:ux-e2e` for user-visible Workbench flow changes when
-  Edge is available.
+- Use `pnpm workbench:ux-e2e` for user-visible browser-client flow changes when
+  Edge is available and that smoke is aligned to the current PDF client.
 - Use `pnpm workbench:live-copilot-e2e` before release or after changes to
   Copilot CDP selectors, prompt delivery, send timing, response extraction, or
   Copilot readiness when a signed-in Edge CDP session is available.
@@ -129,13 +128,13 @@ decisions, verification runs, and known limitations.
 
 ## Documentation Discipline
 
-- `README.md` must reflect the active browser Workbench + .NET sidecar product,
-  not the old Tauri desktop product.
+- `README.md` must reflect the active PDF review HTML client + .NET Relay Core
+  sidecar product, not the old generic Workbench or Tauri desktop product.
 - Historical docs may mention AionUi/OpenCode/OpenWork/Tauri only as archived
   context. Active setup, development, CI, and release instructions must use the
   sidecar workbench path.
 - When editing planning docs, keep `PLANS.md`, `AGENTS.md`,
   `docs/IMPLEMENTATION.md`, and `README.md` aligned on the same active
-  architecture story: one browser Workbench, one .NET sidecar, Microsoft Agent
-  Framework as backend runtime, M365 Copilot through Relay's CDP adapter as
-  planner, and Relay as local tool governance/execution layer.
+  architecture story: one PDF review HTML client, one .NET Relay Core sidecar,
+  Microsoft Agent Framework as backend runtime, M365 Copilot through Relay's
+  CDP adapter as planner, and Relay as local tool governance/execution layer.

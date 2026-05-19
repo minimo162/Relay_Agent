@@ -1,4 +1,5 @@
 export type StatusResponse = {
+  schemaVersion?: string;
   app: string;
   version: string;
   ready: boolean;
@@ -11,75 +12,51 @@ export type StatusResponse = {
   }>;
 };
 
-export type WorkspacePickResponse = {
-  cancelled: boolean;
-  path?: string | null;
-  exists: boolean;
-  displayPath?: string | null;
-  error?: string | null;
+export type ReviewType = "proofread" | "consistency" | "compare";
+
+export type PdfReviewJobResponse = {
+  schemaVersion: "RelayPdfReviewJob.v1";
+  jobId: string;
+  status: "completed" | "partial" | "cancelled" | "failed" | string;
+  reviewType: ReviewType;
+  createdAt: string;
+  documents: PdfReviewDocument[];
+  findings: PdfReviewFinding[];
+  limitations: string[];
+  reportMarkdown: string;
 };
 
-export type PdfPickResponse = {
-  cancelled: boolean;
-  path?: string | null;
-  exists: boolean;
-  displayPath?: string | null;
-  error?: string | null;
+export type PdfReviewDocument = {
+  documentId: string;
+  displayName: string;
+  sha256: string;
+  pageCount: number;
+  pages: PdfReviewPage[];
+  warnings: string[];
+  extractionTruncated: boolean;
 };
 
-export type RunEvent = {
-  type:
-    | "status"
-    | "tool"
-    | "approval"
-    | "final"
-    | "copilot_turn_started"
-    | "copilot_turn_completed"
-    | "tool_call_started"
-    | "tool_call_completed"
-    | "approval_requested"
-    | "approval_resolved"
-    | "artifact_created"
-    | "completed"
-    | "cancelled"
-    | "error";
-  message: string;
-  detail?: string;
-  data?: unknown;
-  runId?: string;
-  sequence?: number;
-  timestamp?: string;
+export type PdfReviewPage = {
+  page: number;
+  charCount: number;
+  preview: string;
+  hasText: boolean;
 };
 
-export type ApprovalState = {
-  approvalId: string;
-  clientToolCall?: {
-    id: string;
-    name: string;
-    args: string;
-  };
-  toolCall: {
-    id: string;
-    tool: string;
-    args: Record<string, unknown>;
-  };
+export type PdfReviewFinding = {
+  id: string;
+  reviewType: ReviewType;
+  severity: "info" | "low" | "medium" | "high" | string;
+  category: string;
+  documentId: string;
+  page: number;
+  anchor: string;
+  evidence: string;
+  issue: string;
+  suggestion: string;
+  confidence: "low" | "medium" | "high" | string;
+  status: string;
+  comparedDocumentId?: string | null;
+  comparedPage?: number | null;
+  comparedEvidence?: string | null;
 };
-
-export type RunStatus = "running" | "completed" | "failed" | "approval_required" | "cancelled";
-
-export const runEventTypes: readonly RunEvent["type"][] = [
-  "status",
-  "tool",
-  "approval",
-  "final",
-  "copilot_turn_started",
-  "copilot_turn_completed",
-  "tool_call_started",
-  "tool_call_completed",
-  "approval_requested",
-  "approval_resolved",
-  "artifact_created",
-  "completed",
-  "cancelled",
-  "error",
-];

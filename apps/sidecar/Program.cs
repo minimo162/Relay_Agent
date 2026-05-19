@@ -21,6 +21,7 @@ var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
 var agUiHostedAgent = agentRunner.CreateHostedAgent();
+var pdfReview = new PdfReviewService(options.DataDirectory);
 
 var app = builder.Build();
 await using var lifecycle = new SidecarLifecycle(app.Lifetime, options.IdleExit);
@@ -79,6 +80,44 @@ app.MapGet("/api/status", async (CancellationToken cancellationToken) =>
         Version: version,
         Ready: checks.Where(check => check.Required).All(check => check.Ready),
         Checks: checks));
+});
+
+app.MapGet("/health", async (CancellationToken cancellationToken) =>
+{
+    var checks = await tools.CheckAllAsync(cancellationToken);
+    return Results.Json(new HealthResponse(
+        SchemaVersion: "RelayCoreHealth.v1",
+        App: "Relay Agent",
+        Version: version,
+        Ready: checks.Where(check => check.Required).All(check => check.Ready),
+        Checks: checks));
+});
+
+app.MapGet("/v1/copilot/session", async (CancellationToken cancellationToken) =>
+{
+    var check = await copilot.CheckAsync(cancellationToken);
+    return Results.Json(new CopilotSessionResponse(
+        SchemaVersion: "RelayCopilotSession.v1",
+        Ready: check.Ready,
+        State: check.State ?? (check.Ready ? "ready" : "unknown"),
+        Detail: check.Detail));
+});
+
+app.MapGet("/v1/workspace", () =>
+    Results.Json(new WorkspaceCoreResponse(
+        SchemaVersion: "RelayWorkspace.v1",
+        Path: null,
+        DisplayPath: null,
+        Exists: false,
+        SelectionMode: "native-picker-or-browser-upload")));
+
+app.MapGet("/v1/tools", () =>
+    Results.Json(RelayToolCatalogSnapshot.FromCurrentCatalog(), JsonOptions.Default));
+
+app.MapPost("/v1/workspace/select", async (WorkspacePickRequest request, CancellationToken cancellationToken) =>
+{
+    var result = await WorkspacePicker.PickAsync(request.CurrentPath, cancellationToken);
+    return Results.Json(result, JsonOptions.Default);
 });
 
 app.MapGet("/api/tool-catalog", () =>
@@ -167,6 +206,70 @@ app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken
     var path = await SupportBundle.CreateAsync(options.DataDirectory, includeSensitive, cancellationToken);
     return Results.File(path, "application/zip", Path.GetFileName(path));
 });
+
+app.MapGet("/v1/pdf/capabilities", () =>
+    Results.Json(new PdfReviewCapabilities(
+        SchemaVersion: "RelayPdfReviewCapabilities.v1",
+        ReviewTypes: ["proofread", "consistency", "compare"],
+        SupportedFileTypes: ["pdf"],
+        MaxDocuments: 2,
+        Storage: "user-local-app-data/pdf-review/jobs",
+        Limitations: [
+            "Text-layer PDF extraction is supported.",
+            "OCR for image-only or scanned PDFs is not included.",
+            "Findings are page-cited candidates for human review."
+        ]), JsonOptions.Default));
+
+app.MapPost("/v1/pdf/review", async (HttpRequest request, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await pdfReview.ReviewMultipartAsync(request, cancellationToken), JsonOptions.Default);
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.Json(new ErrorResponse("PDF review was cancelled."), statusCode: StatusCodes.Status499ClientClosedRequest);
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new ErrorResponse(ex.Message));
+    }
+});
+
+app.MapPost("/v1/pdf/review-paths", async (PdfReviewPathRequest request, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Json(await pdfReview.ReviewPathsAsync(request, cancellationToken), JsonOptions.Default);
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.Json(new ErrorResponse("PDF review was cancelled."), statusCode: StatusCodes.Status499ClientClosedRequest);
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+    {
+        return Results.BadRequest(new ErrorResponse(ex.Message));
+    }
+});
+
+app.MapGet("/v1/pdf/jobs/{jobId}", async (string jobId, CancellationToken cancellationToken) =>
+{
+    var job = await pdfReview.GetJobAsync(jobId, cancellationToken);
+    return job is null ? Results.NotFound(new ErrorResponse("PDF review job was not found.")) : Results.Json(job, JsonOptions.Default);
+});
+
+app.MapGet("/v1/pdf/jobs/{jobId}/report.md", (string jobId) =>
+{
+    var path = pdfReview.GetReportPath(jobId);
+    return path is null
+        ? Results.NotFound(new ErrorResponse("PDF review report was not found."))
+        : Results.File(path, "text/markdown; charset=utf-8", $"{jobId}-report.md");
+});
+
+app.MapDelete("/v1/pdf/jobs/{jobId}", (string jobId) =>
+    pdfReview.DeleteJob(jobId)
+        ? Results.Json(new { schemaVersion = "RelayPdfReviewDelete.v1", deleted = true, jobId })
+        : Results.NotFound(new ErrorResponse("PDF review job was not found.")));
 
 app.MapGet("/v1/models", () => Results.Json(new
 {
@@ -396,6 +499,26 @@ public sealed record ReadinessCheck(string Name, bool Ready, string Detail, bool
 public sealed record ErrorResponse(string Error);
 
 public sealed record SupportBundleRequest(bool IncludeSensitive = false);
+
+public sealed record HealthResponse(
+    string SchemaVersion,
+    string App,
+    string Version,
+    bool Ready,
+    IReadOnlyList<ReadinessCheck> Checks);
+
+public sealed record CopilotSessionResponse(
+    string SchemaVersion,
+    bool Ready,
+    string State,
+    string Detail);
+
+public sealed record WorkspaceCoreResponse(
+    string SchemaVersion,
+    string? Path,
+    string? DisplayPath,
+    bool Exists,
+    string SelectionMode);
 
 public sealed record RelayToolCatalogSnapshot(
     string SchemaVersion,
