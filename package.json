@@ -6,7 +6,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm sidecar:idle-exit-smoke && pnpm sidecar:copilot-cdp-smoke && pnpm sidecar:workspace-picker-smoke && pnpm release:icon-smoke && pnpm agent:tool-catalog-smoke && pnpm agent:patch-conformance-smoke && pnpm agent:golden-smoke && pnpm agent:glob-read-path-smoke && pnpm agent:dci-corpus-fixture-smoke && pnpm agent:dci-metrics-smoke && pnpm agent:dci-grep-smoke && pnpm agent:dci-context-window-grep-smoke && pnpm agent:dci-heterogeneous-read-smoke && pnpm agent:dci-final-refinement-smoke && pnpm agent:dci-guide-scoped-grep-smoke && pnpm agent:dci-cited-evidence-read-smoke && pnpm agent:dci-invented-read-smoke && pnpm agent:dci-context-smoke && pnpm agent:dci-golden-smoke && pnpm agent:protocol-state-smoke && pnpm agent:framework-native-prevention-smoke && pnpm agent:choice-error-reduction-smoke && pnpm agent:provider-timeout-retry-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:agui-replay-smoke && pnpm agent:framework-trace-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:pdf-review-ux-smoke && pnpm agent:workbench-standard-chat-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm sidecar:idle-exit-smoke && pnpm sidecar:copilot-cdp-smoke && pnpm sidecar:workspace-picker-smoke && pnpm release:icon-smoke && pnpm agent:tool-catalog-smoke && pnpm agent:patch-conformance-smoke && pnpm agent:golden-smoke && pnpm agent:glob-read-path-smoke && pnpm agent:dci-corpus-fixture-smoke && pnpm agent:dci-metrics-smoke && pnpm agent:dci-grep-smoke && pnpm agent:dci-context-window-grep-smoke && pnpm agent:dci-heterogeneous-read-smoke && pnpm agent:dci-final-refinement-smoke && pnpm agent:dci-guide-scoped-grep-smoke && pnpm agent:dci-cited-evidence-read-smoke && pnpm agent:dci-invented-read-smoke && pnpm agent:dci-context-smoke && pnpm agent:dci-golden-smoke && pnpm agent:protocol-state-smoke && pnpm agent:framework-native-prevention-smoke && pnpm agent:choice-error-reduction-smoke && pnpm agent:provider-timeout-retry-smoke && pnpm agent:agui-client-tool-smoke && pnpm agent:agui-replay-smoke && pnpm agent:framework-trace-smoke && pnpm agent:rg-stream-smoke && pnpm agent:office-pdf-read-smoke && pnpm agent:api-tool-ux-smoke && pnpm agent:workbench-standard-chat-smoke && pnpm agent:officecli-registry-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "agent:agui-client-tool-smoke": "node scripts/agui-client-tool-smoke.mjs",
     "agent:agui-replay-smoke": "node scripts/agui-replay-smoke.mjs",
     "agent:framework-trace-smoke": "node scripts/framework-trace-smoke.mjs",
@@ -26,7 +26,6 @@
     "agent:framework-native-prevention-smoke": "node scripts/framework-native-prevention-smoke.mjs",
     "agent:choice-error-reduction-smoke": "node scripts/choice-error-reduction-smoke.mjs",
     "agent:office-pdf-read-smoke": "node scripts/office-pdf-read-smoke.mjs",
-    "agent:pdf-review-ux-smoke": "node scripts/pdf-review-ux-smoke.mjs",
     "agent:workbench-standard-chat-smoke": "node scripts/workbench-standard-chat-smoke.mjs",
     "agent:officecli-registry-smoke": "node scripts/officecli-registry-smoke.mjs",
     "agent:patch-conformance-smoke": "node scripts/patch-conformance-smoke.mjs",
@@ -61,7 +60,8 @@
     "test:e2e:local": "pnpm --filter @relay-agent/workbench build",
     "relay:dev:linux": "bash scripts/relay-copilot-linux.sh",
     "relay:edge": "bash scripts/start-relay-edge-cdp.sh",
-    "test:grounding-fixture": "bash scripts/verify-grounding-fixture.sh"
+    "test:grounding-fixture": "bash scripts/verify-grounding-fixture.sh",
+    "agent:api-tool-ux-smoke": "node scripts/api-tool-ux-smoke.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

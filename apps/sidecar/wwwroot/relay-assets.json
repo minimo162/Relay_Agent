@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "RelayPdfReviewAssets.v1",
+  "schemaVersion": "RelayApiHubAssets.v1",
   "source": "apps/workbench/dist",
   "generatedBy": "scripts/prepare-sidecar-assets.mjs"
 }

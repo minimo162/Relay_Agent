@@ -1,26 +1,18 @@
 import {
   AlertCircle,
   CheckCircle2,
+  Clipboard,
   Download,
-  FileText,
+  Play,
   RotateCw,
-  ShieldCheck,
-  Trash2,
-  UploadCloud,
-  XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
-import type {
-  PdfReviewFinding,
-  PdfReviewJobResponse,
-  StatusResponse,
-} from "./types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { RelayManifestResponse, StatusResponse } from "./types";
 
 const token = new URLSearchParams(window.location.search).get("token") ?? "";
-const sessionStorageKey = "relay.pdfReview.clientId";
+const sessionStorageKey = "relay.apiHub.clientId";
 
-const maxPdfFiles = 8;
+const defaultPrompt = "このHTMLツールからRelay Core経由でCopilotに接続できているか、短く確認してください。";
 
 type ReadinessState = {
   ready: boolean;
@@ -38,14 +30,13 @@ const initialReadiness: ReadinessState = {
 
 export function App() {
   const [readiness, setReadiness] = useState<ReadinessState>(initialReadiness);
-  const [files, setFiles] = useState<File[]>([]);
-  const [job, setJob] = useState<PdfReviewJobResponse | null>(null);
-  const [error, setError] = useState("");
+  const [manifest, setManifest] = useState<RelayManifestResponse | null>(null);
+  const [prompt, setPrompt] = useState(defaultPrompt);
+  const [answer, setAnswer] = useState("");
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState("");
+  const [copied, setCopied] = useState("");
+  const [error, setError] = useState("");
   const [supportBusy, setSupportBusy] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const api = useCallback((path: string): string => {
     const url = new URL(path, window.location.origin);
@@ -58,17 +49,23 @@ export function App() {
   }, []);
 
   const refreshStatus = useCallback(async () => {
-    const response = await fetch(api("/health"), { headers: authHeaders() });
-    if (!response.ok) throw new Error(`Relay Core status failed: ${response.status}`);
-    const status = (await response.json()) as StatusResponse;
+    const [healthResponse, manifestResponse] = await Promise.all([
+      fetch(api("/health"), { headers: authHeaders() }),
+      fetch(api("/v1/relay/manifest"), { headers: authHeaders() }),
+    ]);
+    if (!healthResponse.ok) throw new Error(`Relay Core status failed: ${healthResponse.status}`);
+    if (!manifestResponse.ok) throw new Error(`Relay manifest failed: ${manifestResponse.status}`);
+    const status = (await healthResponse.json()) as StatusResponse;
+    const nextManifest = (await manifestResponse.json()) as RelayManifestResponse;
     const raw = JSON.stringify(status, null, 2);
     const requiredIssue = status.checks.find((check) => check.required !== false && !check.ready);
     setReadiness({
       ready: status.ready,
       label: status.ready ? "Ready" : requiredIssue?.state === "sign_in_required" ? "Sign in needed" : "Not ready",
-      detail: requiredIssue?.detail ?? "PDFレビューを開始できます。",
+      detail: requiredIssue?.detail ?? "HTMLツールからRelay APIを利用できます。",
       raw,
     });
+    setManifest(nextManifest);
   }, [api, authHeaders]);
 
   useEffect(() => {
@@ -123,94 +120,52 @@ export function App() {
     };
   }, [api, authHeaders]);
 
-  const canRun = readiness.ready && files.length > 0 && files.length <= maxPdfFiles && !running;
-  const reviewMode = files.length <= 1
-    ? "1つのPDFをまとめて確認"
-    : `${files.length}つのPDFを対応表で比較`;
-  const visibleFiles = useMemo(() => files.map((file) => ({
-    name: file.name,
-    size: formatBytes(file.size),
-  })), [files]);
+  const baseUrl = manifest?.baseUrl ?? window.location.origin;
+  const starterHtml = useMemo(() => buildStarterHtml(baseUrl, token), [baseUrl]);
+  const canRun = readiness.ready && prompt.trim().length > 0 && !running;
 
-  const onFileChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    const nextFiles = Array.from(event.target.files ?? [])
-      .filter((file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"))
-      .slice(0, maxPdfFiles);
-    setFiles(nextFiles);
-    setJob(null);
-    setError(nextFiles.length === 0 ? "PDFファイルを選択してください。" : "");
-  }, []);
-
-  const clearSelection = useCallback(() => {
-    setFiles([]);
-    setJob(null);
-    setError("");
-    if (inputRef.current) inputRef.current.value = "";
-  }, []);
-
-  const runReview = useCallback(async () => {
+  const runPrompt = useCallback(async () => {
     if (!canRun) return;
     setRunning(true);
     setError("");
-    setJob(null);
-    setProgress("PDFをRelay Coreへ渡しています。");
-    const controller = new AbortController();
-    abortRef.current = controller;
+    setAnswer("");
     try {
-      const form = new FormData();
-      form.append("reviewType", "auto");
-      for (const file of files) form.append("files", file, file.name);
-      setProgress("ページ単位でテキストを抽出しています。");
-      const response = await fetch(api("/v1/pdf/review"), {
+      const response = await fetch(api("/v1/chat/completions"), {
         method: "POST",
-        headers: authHeaders(),
-        body: form,
-        signal: controller.signal,
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          model: "m365-copilot",
+          messages: [{ role: "user", content: prompt.trim() }],
+        }),
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(extractError(text) ?? `PDF review failed: ${response.status}`);
+        throw new Error(extractError(text) ?? `Copilot request failed: ${response.status}`);
       }
-      setProgress("ページ付きの結果を整理しています。");
-      setJob((await response.json()) as PdfReviewJobResponse);
-      setProgress("完了しました。");
+      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+      setAnswer(json.choices?.[0]?.message?.content ?? "");
     } catch (reason) {
-      if (controller.signal.aborted) {
-        setProgress("キャンセルしました。");
-      } else {
-        setError(reason instanceof Error ? reason.message : String(reason));
-        setProgress("");
-      }
+      setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      abortRef.current = null;
       setRunning(false);
     }
-  }, [api, authHeaders, canRun, files]);
+  }, [api, authHeaders, canRun, prompt]);
 
-  const cancelReview = useCallback(() => {
-    abortRef.current?.abort();
+  const copyText = useCallback(async (label: string, value: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopied(label);
+    window.setTimeout(() => setCopied(""), 1800);
   }, []);
 
-  const downloadReport = useCallback(() => {
-    if (!job) return;
-    const blob = new Blob([job.reportMarkdown], { type: "text/markdown;charset=utf-8" });
+  const downloadStarter = useCallback(() => {
+    const blob = new Blob([starterHtml], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${job.jobId}-report.md`;
+    anchor.download = "relay-html-tool-starter.html";
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [job]);
-
-  const deleteJob = useCallback(async () => {
-    if (!job) return;
-    await fetch(api(`/v1/pdf/jobs/${encodeURIComponent(job.jobId)}`), {
-      method: "DELETE",
-      headers: authHeaders(),
-    }).catch(() => undefined);
-    setJob(null);
-    setProgress("レビュー結果を削除しました。");
-  }, [api, authHeaders, job]);
+  }, [starterHtml]);
 
   const downloadSupportBundle = useCallback(async () => {
     setSupportBusy(true);
@@ -236,16 +191,14 @@ export function App() {
     }
   }, [api, authHeaders]);
 
-  const groupedFindings = useMemo(() => groupFindings(job?.findings ?? []), [job]);
-
   return (
-    <main className="shell" data-testid="relay-pdf-review-shell">
+    <main className="shell" data-testid="relay-api-hub-shell">
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">R</span>
           <div>
-            <h1>Relay PDF Review</h1>
-            <p className="subtitle">PDFの誤字・表記・整合性をページ付きで確認します。</p>
+            <h1>Relay API Hub</h1>
+            <p className="subtitle">任意のHTMLツールからM365 Copilotを安全に呼び出すローカルAPIです。</p>
           </div>
         </div>
         <button
@@ -261,143 +214,96 @@ export function App() {
         </button>
       </header>
 
-      <section className="hero-card" aria-labelledby="review-title">
+      <section className="hero-card" aria-labelledby="hub-title">
         <div className="hero-copy">
-          <p className="eyebrow">PDF review</p>
-          <h2 id="review-title">PDFを選ぶだけでまとめて確認できます</h2>
+          <p className="eyebrow">Local Copilot API</p>
+          <h2 id="hub-title">HTMLをつなぐだけでCopilotを使えます</h2>
           <p>
-            1つなら誤字脱字・表記・文書内整合を一括チェックします。
-            2つ以上なら章見出しの対応表を作ってから文書間の違いも確認します。
+            Relay CoreがCopilot接続、トークン認証、AG-UI実行、ローカルツールの安全確認を受け持ちます。
+            HTMLツール側はAPIを呼ぶだけです。
           </p>
         </div>
 
-        <label className="drop-zone">
-          <input
-            ref={inputRef}
-            type="file"
-            accept="application/pdf,.pdf"
-            multiple
-            onChange={onFileChange}
-          />
-          <UploadCloud size={26} aria-hidden="true" />
-          <span>PDFを選択</span>
-          <small>1〜{maxPdfFiles}件まで。処理データはユーザーローカル領域に保存されます。</small>
-        </label>
-
-        <p className="review-description">{reviewMode}</p>
-
-        {visibleFiles.length > 0 ? (
-          <ul className="file-list" aria-label="選択中のPDF">
-            {visibleFiles.map((file) => (
-              <li key={file.name}>
-                <FileText size={16} aria-hidden="true" />
-                <span>{file.name}</span>
-                <small>{file.size}</small>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <div className="actions">
-          <button className="primary-button" type="button" disabled={!canRun} onClick={() => void runReview()}>
-            {running ? <RotateCw className="spin" size={16} aria-hidden="true" /> : <ShieldCheck size={16} aria-hidden="true" />}
-            {running ? "確認中..." : "レビューを開始"}
-          </button>
-          {running ? (
-            <button className="secondary-button" type="button" onClick={cancelReview}>
-              <XCircle size={16} aria-hidden="true" />
-              キャンセル
-            </button>
-          ) : (
-            <button className="secondary-button" type="button" disabled={files.length === 0} onClick={clearSelection}>
-              選択をクリア
-            </button>
-          )}
+        <div className="quick-steps" aria-label="使い方">
+          <article>
+            <strong>1. Relayを起動</strong>
+            <span>この画面が開いてReadyになればAPIが利用できます。</span>
+          </article>
+          <article>
+            <strong>2. HTMLからPOST</strong>
+            <span><code>/v1/chat/completions</code> でCopilotに依頼します。</span>
+          </article>
+          <article>
+            <strong>3. 必要ならAG-UI</strong>
+            <span><code>/agui/relay</code> でローカルツール実行まで扱えます。</span>
+          </article>
         </div>
       </section>
 
-      <section className="status-region" aria-live="polite">
-        {progress ? <p>{progress}</p> : <p>PDFを選択するとレビューを開始できます。</p>}
-        {error ? <p className="error" role="alert">{error}</p> : null}
-      </section>
-
-      {job ? (
-        <section className="results" aria-labelledby="result-title">
-          <div className="results-heading">
+      <section className="console-grid" aria-label="Relay API console">
+        <section className="panel test-panel" aria-labelledby="test-title">
+          <div className="panel-heading">
             <div>
-              <p className="eyebrow">Result</p>
-              <h2 id="result-title">レビュー結果</h2>
-              <p>{job.findings.length}件の候補 · {job.documents.length}文書 · {job.sectionAlignments.length}件の対応 · {job.status}</p>
+              <p className="eyebrow">Test</p>
+              <h2 id="test-title">接続テスト</h2>
             </div>
-            <div className="result-actions">
-              <button className="secondary-button" type="button" onClick={downloadReport}>
-                <Download size={16} aria-hidden="true" />
-                レポート
-              </button>
-              <button className="icon-button" type="button" onClick={() => void deleteJob()} aria-label="レビュー結果を削除">
-                <Trash2 size={16} aria-hidden="true" />
-              </button>
-            </div>
+            <button className="primary-button" type="button" disabled={!canRun} onClick={() => void runPrompt()}>
+              {running ? <RotateCw className="spin" size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}
+              {running ? "送信中..." : "Copilotに送信"}
+            </button>
           </div>
-
-          {job.limitations.length > 0 ? (
-            <div className="limitations">
-              <strong>確認範囲</strong>
-              <ul>
-                {job.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}
-              </ul>
-            </div>
-          ) : null}
-
-          {job.sectionAlignments.length > 0 ? (
-            <section className="alignment-panel" aria-labelledby="alignment-title">
-              <div>
-                <p className="eyebrow">Alignment</p>
-                <h3 id="alignment-title">章見出しの対応表</h3>
-              </div>
-              <div className="alignment-list">
-                {job.sectionAlignments.slice(0, 24).map((alignment) => (
-                  <article key={alignment.alignmentId} className="alignment-row" data-status={alignment.status}>
-                    <div>
-                      <strong>{alignment.baseTitle}</strong>
-                      <small>{documentLabel(job, alignment.baseDocumentId)} · p.{alignment.basePageStart}-{alignment.basePageEnd}</small>
-                    </div>
-                    <div>
-                      <strong>{alignment.comparedTitle ?? "対応なし"}</strong>
-                      <small>
-                        {documentLabel(job, alignment.comparedDocumentId)}
-                        {alignment.comparedPageStart ? ` · p.${alignment.comparedPageStart}-${alignment.comparedPageEnd}` : ""}
-                      </small>
-                    </div>
-                    <span>{alignment.status} · {alignment.score}</span>
-                  </article>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          <div className="finding-groups">
-            {groupedFindings.map((group) => (
-              <section key={group.category} className="finding-group">
-                <h3>{group.category}</h3>
-                <div className="finding-list">
-                  {group.findings.map((finding) => (
-                    <article key={finding.id} className="finding-card">
-                      <div className="finding-meta">
-                        <span>{finding.severity}</span>
-                        <span>{documentLabel(job, finding.documentId)} · p.{finding.page}</span>
-                      </div>
-                      <p className="finding-issue">{finding.issue}</p>
-                      <blockquote>{finding.evidence || "引用可能なテキストはありません。"}</blockquote>
-                      <p className="finding-suggestion">{finding.suggestion}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ))}
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            aria-label="Copilot test prompt"
+            spellCheck={false}
+          />
+          <div className="status-region" aria-live="polite">
+            {error ? <p className="error" role="alert">{error}</p> : null}
+            {answer ? <pre className="answer">{answer}</pre> : <p>ここで疎通確認できます。自作HTMLツールからも同じAPIを呼びます。</p>}
           </div>
         </section>
-      ) : null}
+
+        <section className="panel" aria-labelledby="endpoint-title">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Endpoints</p>
+              <h2 id="endpoint-title">HTMLツール用API</h2>
+            </div>
+            <button className="secondary-button" type="button" onClick={() => void copyText("base", baseUrl)}>
+              <Clipboard size={16} aria-hidden="true" />
+              {copied === "base" ? "コピー済み" : "Base URL"}
+            </button>
+          </div>
+          <dl className="endpoint-list">
+            <div><dt>Health</dt><dd><code>GET /health</code></dd></div>
+            <div><dt>Manifest</dt><dd><code>GET /v1/relay/manifest</code></dd></div>
+            <div><dt>Chat</dt><dd><code>POST /v1/chat/completions</code></dd></div>
+            <div><dt>Agent</dt><dd><code>POST /agui/relay</code></dd></div>
+            <div><dt>Tools</dt><dd><code>GET /v1/tools</code></dd></div>
+          </dl>
+        </section>
+      </section>
+
+      <section className="panel starter-panel" aria-labelledby="starter-title">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Starter</p>
+            <h2 id="starter-title">HTMLスターター</h2>
+          </div>
+          <div className="actions">
+            <button className="secondary-button" type="button" onClick={() => void copyText("starter", starterHtml)}>
+              <Clipboard size={16} aria-hidden="true" />
+              {copied === "starter" ? "コピー済み" : "コピー"}
+            </button>
+            <button className="secondary-button" type="button" onClick={downloadStarter}>
+              <Download size={16} aria-hidden="true" />
+              HTML保存
+            </button>
+          </div>
+        </div>
+        <pre className="code-sample">{starterHtml}</pre>
+      </section>
 
       <details className="support">
         <summary>診断</summary>
@@ -407,6 +313,7 @@ export function App() {
             {supportBusy ? "作成中..." : "サポート情報を保存"}
           </button>
           <pre>{readiness.raw || "No status yet."}</pre>
+          {manifest ? <pre>{JSON.stringify(manifest, null, 2)}</pre> : null}
         </div>
       </details>
     </main>
@@ -430,22 +337,45 @@ function extractError(text: string): string | null {
   }
 }
 
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function groupFindings(findings: PdfReviewFinding[]): Array<{ category: string; findings: PdfReviewFinding[] }> {
-  const groups = new Map<string, PdfReviewFinding[]>();
-  for (const finding of findings) {
-    const group = groups.get(finding.category) ?? [];
-    group.push(finding);
-    groups.set(finding.category, group);
-  }
-  return Array.from(groups, ([category, grouped]) => ({ category, findings: grouped }));
-}
-
-function documentLabel(job: PdfReviewJobResponse, documentId: string): string {
-  return job.documents.find((document) => document.documentId === documentId)?.displayName ?? documentId;
+function buildStarterHtml(baseUrl: string, launchToken: string): string {
+  const safeBase = JSON.stringify(baseUrl);
+  const safeToken = JSON.stringify(launchToken || "PASTE_RELAY_TOKEN_HERE");
+  return `<!doctype html>
+<html lang="ja">
+<meta charset="utf-8" />
+<title>Relay HTML Tool Starter</title>
+<body>
+  <textarea id="prompt" rows="6" style="width:100%">このHTMLツールからCopilotに接続できているか確認してください。</textarea>
+  <button id="send">Send to Copilot</button>
+  <pre id="output"></pre>
+  <script>
+    const relayBase = ${safeBase};
+    const relayToken = ${safeToken};
+    async function askCopilot(message) {
+      const url = new URL('/v1/chat/completions', relayBase);
+      url.searchParams.set('token', relayToken);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm365-copilot',
+          messages: [{ role: 'user', content: message }]
+        })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const json = await response.json();
+      return json.choices?.[0]?.message?.content ?? '';
+    }
+    document.querySelector('#send').onclick = async () => {
+      const output = document.querySelector('#output');
+      output.textContent = 'Running...';
+      try {
+        output.textContent = await askCopilot(document.querySelector('#prompt').value);
+      } catch (error) {
+        output.textContent = String(error);
+      }
+    };
+  </script>
+</body>
+</html>`;
 }

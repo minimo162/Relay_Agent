@@ -21,7 +21,6 @@ var toolResolver = new ToolResolver(options.DataDirectory);
 var tools = new ToolReadiness(copilot, toolResolver, options.DataDirectory);
 var agentRunner = new RelayAgentFrameworkRunner(copilotChatClient, new RelayToolExecutor(options.DataDirectory, toolResolver));
 var agUiHostedAgent = agentRunner.CreateHostedAgent();
-var pdfReview = new PdfReviewService(options.DataDirectory);
 
 var app = builder.Build();
 await using var lifecycle = new SidecarLifecycle(app.Lifetime, options.IdleExit);
@@ -47,7 +46,25 @@ app.Use(async (context, next) =>
         return;
     }
 
-    if (IsStateChanging(context.Request.Method) && !HasAllowedOrigin(context.Request, options.PublicOrigin))
+    var origin = context.Request.Headers.Origin.ToString();
+    if (!string.IsNullOrWhiteSpace(origin) && HasAllowedOrigin(origin, options.PublicOrigin))
+    {
+        ApplyCorsHeaders(context.Response, origin);
+    }
+
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        if (!HasAllowedOrigin(origin, options.PublicOrigin))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new ErrorResponse("Origin is not allowed."));
+            return;
+        }
+        context.Response.StatusCode = StatusCodes.Status204NoContent;
+        return;
+    }
+
+    if (IsStateChanging(context.Request.Method) && !HasAllowedOrigin(origin, options.PublicOrigin))
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         await context.Response.WriteAsJsonAsync(new ErrorResponse("Origin is not allowed."));
@@ -114,6 +131,12 @@ app.MapGet("/v1/workspace", () =>
 app.MapGet("/v1/tools", () =>
     Results.Json(RelayToolCatalogSnapshot.FromCurrentCatalog(), JsonOptions.Default));
 
+app.MapGet("/v1/relay/manifest", (HttpRequest request) =>
+{
+    var requestBase = $"{request.Scheme}://{request.Host}";
+    return Results.Json(RelayHtmlToolManifest.Create(version, requestBase, options.PublicOrigin), JsonOptions.Default);
+});
+
 app.MapPost("/v1/workspace/select", async (WorkspacePickRequest request, CancellationToken cancellationToken) =>
 {
     var result = await WorkspacePicker.PickAsync(request.CurrentPath, cancellationToken);
@@ -143,12 +166,6 @@ app.MapPost("/api/workspace", (WorkspaceRequest request) =>
 app.MapPost("/api/workspace/pick", async (WorkspacePickRequest request, CancellationToken cancellationToken) =>
 {
     var result = await WorkspacePicker.PickAsync(request.CurrentPath, cancellationToken);
-    return Results.Json(result, JsonOptions.Default);
-});
-
-app.MapPost("/api/pdf/pick", async (PdfPickRequest request, CancellationToken cancellationToken) =>
-{
-    var result = await WorkspacePicker.PickPdfAsync(request.CurrentPath, request.Title, cancellationToken);
     return Results.Json(result, JsonOptions.Default);
 });
 
@@ -206,72 +223,6 @@ app.MapPost("/api/support-bundle", async (HttpRequest request, CancellationToken
     var path = await SupportBundle.CreateAsync(options.DataDirectory, includeSensitive, cancellationToken);
     return Results.File(path, "application/zip", Path.GetFileName(path));
 });
-
-app.MapGet("/v1/pdf/capabilities", () =>
-    Results.Json(new PdfReviewCapabilities(
-        SchemaVersion: "RelayPdfReviewCapabilities.v1",
-        ReviewTypes: ["auto"],
-        SupportedFileTypes: ["pdf"],
-        MaxDocuments: 8,
-        Storage: "user-local-app-data/pdf-review/jobs",
-        Limitations: [
-            "Text-layer PDF extraction is supported.",
-            "One PDF is reviewed for typos, wording, and internal consistency in one pass.",
-            "Two or more PDFs are section-aligned before cross-document comparison.",
-            "OCR for image-only or scanned PDFs is not included.",
-            "Findings are page-cited candidates for human review."
-        ]), JsonOptions.Default));
-
-app.MapPost("/v1/pdf/review", async (HttpRequest request, CancellationToken cancellationToken) =>
-{
-    try
-    {
-        return Results.Json(await pdfReview.ReviewMultipartAsync(request, cancellationToken), JsonOptions.Default);
-    }
-    catch (OperationCanceledException)
-    {
-        return Results.Json(new ErrorResponse("PDF review was cancelled."), statusCode: StatusCodes.Status499ClientClosedRequest);
-    }
-    catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
-    {
-        return Results.BadRequest(new ErrorResponse(ex.Message));
-    }
-});
-
-app.MapPost("/v1/pdf/review-paths", async (PdfReviewPathRequest request, CancellationToken cancellationToken) =>
-{
-    try
-    {
-        return Results.Json(await pdfReview.ReviewPathsAsync(request, cancellationToken), JsonOptions.Default);
-    }
-    catch (OperationCanceledException)
-    {
-        return Results.Json(new ErrorResponse("PDF review was cancelled."), statusCode: StatusCodes.Status499ClientClosedRequest);
-    }
-    catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
-    {
-        return Results.BadRequest(new ErrorResponse(ex.Message));
-    }
-});
-
-app.MapGet("/v1/pdf/jobs/{jobId}", async (string jobId, CancellationToken cancellationToken) =>
-{
-    var job = await pdfReview.GetJobAsync(jobId, cancellationToken);
-    return job is null ? Results.NotFound(new ErrorResponse("PDF review job was not found.")) : Results.Json(job, JsonOptions.Default);
-});
-
-app.MapGet("/v1/pdf/jobs/{jobId}/report.md", (string jobId) =>
-{
-    var path = pdfReview.GetReportPath(jobId);
-    return path is null
-        ? Results.NotFound(new ErrorResponse("PDF review report was not found."))
-        : Results.File(path, "text/markdown; charset=utf-8", $"{jobId}-report.md");
-});
-
-app.MapDelete("/v1/pdf/jobs/{jobId}", (string jobId) =>
-    pdfReview.DeleteJob(jobId)
-        ? Results.Json(new { schemaVersion = "RelayPdfReviewDelete.v1", deleted = true, jobId })
-        : Results.NotFound(new ErrorResponse("PDF review job was not found.")));
 
 app.MapGet("/v1/models", () => Results.Json(new
 {
@@ -357,10 +308,23 @@ static bool HasValidToken(HttpRequest request, string token)
 static bool IsStateChanging(string method) =>
     HttpMethods.IsPost(method) || HttpMethods.IsPut(method) || HttpMethods.IsPatch(method) || HttpMethods.IsDelete(method);
 
-static bool HasAllowedOrigin(HttpRequest request, string publicOrigin)
+static bool HasAllowedOrigin(string origin, string publicOrigin)
 {
-    if (!request.Headers.TryGetValue("Origin", out var origin)) return true;
-    return StringComparer.OrdinalIgnoreCase.Equals(origin.ToString().TrimEnd('/'), publicOrigin.TrimEnd('/'));
+    if (string.IsNullOrWhiteSpace(origin)) return true;
+    var normalized = origin.TrimEnd('/');
+    if (StringComparer.OrdinalIgnoreCase.Equals(normalized, publicOrigin.TrimEnd('/'))) return true;
+    if (StringComparer.OrdinalIgnoreCase.Equals(normalized, "null")) return true;
+    if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri)) return false;
+    return (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && IsLocalHost(uri.Host);
+}
+
+static void ApplyCorsHeaders(HttpResponse response, string origin)
+{
+    response.Headers["Access-Control-Allow-Origin"] = origin;
+    response.Headers["Access-Control-Allow-Headers"] = "Content-Type, X-Relay-Token";
+    response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+    response.Headers["Access-Control-Max-Age"] = "600";
+    response.Headers["Vary"] = "Origin";
 }
 
 static bool IsLocalHost(string? host) =>
@@ -488,10 +452,6 @@ public sealed record WorkspacePickRequest(string? CurrentPath);
 
 public sealed record WorkspacePickResponse(bool Cancelled, string? Path, bool Exists, string? DisplayPath, string? Error = null);
 
-public sealed record PdfPickRequest(string? CurrentPath, string? Title);
-
-public sealed record PdfPickResponse(bool Cancelled, string? Path, bool Exists, string? DisplayPath, string? Error = null);
-
 public sealed record CopilotOpenResponse(bool Ready, string Detail, string State);
 
 public sealed record StatusResponse(string App, string Version, bool Ready, IReadOnlyList<ReadinessCheck> Checks);
@@ -521,6 +481,42 @@ public sealed record WorkspaceCoreResponse(
     string? DisplayPath,
     bool Exists,
     string SelectionMode);
+
+public sealed record RelayHtmlToolManifest(
+    string SchemaVersion,
+    string App,
+    string Version,
+    string BaseUrl,
+    RelayHtmlToolAuth Auth,
+    RelayHtmlToolCors Cors,
+    IReadOnlyList<RelayHtmlToolEndpoint> Endpoints)
+{
+    public static RelayHtmlToolManifest Create(string version, string baseUrl, string publicOrigin) =>
+        new(
+            SchemaVersion: "RelayHtmlToolManifest.v1",
+            App: "Relay Agent",
+            Version: version,
+            BaseUrl: baseUrl.TrimEnd('/'),
+            Auth: new RelayHtmlToolAuth("launch-token", "token", "X-Relay-Token"),
+            Cors: new RelayHtmlToolCors(
+                LocalHtmlTools: true,
+                AllowedOrigins: [publicOrigin.TrimEnd('/'), "null", "http://127.0.0.1:*", "http://localhost:*"]),
+            Endpoints: [
+                new RelayHtmlToolEndpoint("GET", "/health", "Read Relay Core readiness."),
+                new RelayHtmlToolEndpoint("GET", "/v1/relay/manifest", "Discover the HTML tool API contract."),
+                new RelayHtmlToolEndpoint("GET", "/v1/copilot/session", "Read Copilot provider state."),
+                new RelayHtmlToolEndpoint("GET", "/v1/tools", "Read the Agent Framework/OpenCode-style local tool catalog."),
+                new RelayHtmlToolEndpoint("POST", "/v1/chat/completions", "Ask M365 Copilot through an OpenAI-compatible chat shape."),
+                new RelayHtmlToolEndpoint("POST", "/agui/relay", "Run an Agent Framework turn with AG-UI events and local tool governance."),
+                new RelayHtmlToolEndpoint("POST", "/api/support-bundle", "Export an explicit redacted diagnostics bundle.")
+            ]);
+}
+
+public sealed record RelayHtmlToolAuth(string Type, string QueryParameter, string Header);
+
+public sealed record RelayHtmlToolCors(bool LocalHtmlTools, IReadOnlyList<string> AllowedOrigins);
+
+public sealed record RelayHtmlToolEndpoint(string Method, string Path, string Purpose);
 
 public sealed record RelayToolCatalogSnapshot(
     string SchemaVersion,

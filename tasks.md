@@ -4,21 +4,21 @@ Date: 2026-05-18
 
 ## Active Goal
 
-Move Relay away from a growing Relay-specific tool/runtime design and toward an
-OpenCode-compatible local tool contract hosted by Microsoft Agent Framework and
-projected through AG-UI.
+Move Relay away from default first-party feature modes and toward a stable
+local **HTML tool API hub**: arbitrary local HTML tools should be able to call
+Relay Core for M365 Copilot, AG-UI runs, and governed local tool execution.
 
 Relay still uses M365 Copilot through Edge CDP as the reasoning controller.
 Relay should not adopt Codex app-server as the runtime in this task queue, but
 Codex app-server remains useful prior art for approvals, sessions, tool
 results, sandboxing, streaming, and diagnostics.
 
-The next product cutover is no longer a generic Workbench. Relay Core remains
-the local API/tool/governance host, but the default client should become a
-focused HTML tool for PDF typo, omission, wording, and consistency review. The
-current generic Workbench is a migration source and should be removed from the
-default release surface once the PDF HTML client and Relay Core API acceptance
-gates pass.
+The current product cutover is no longer the PDF review HTML client. Relay Core
+remains the local API/tool/governance host, but the default client is now Relay
+API Hub: first-run guidance, manifest discovery, starter HTML generation,
+OpenAI-compatible chat API testing, AG-UI endpoint visibility, and collapsed
+diagnostics. PDF review, Office editing, file search, coding, and similar
+workflows are external thin HTML tools or AG-UI recipes over Relay Core.
 
 The completed active queue is `RESPONSIVE*`. It implements the 2026-05-18
 Installed Workbench Responsiveness Plan from `PLANS.md`: make installed
@@ -125,10 +125,13 @@ chapter/heading sections, preserve a section correspondence table for
 multi-PDF comparison, and keep the portable package as the primary release
 artifact.
 
-Forward implementation should treat `COREAPI*` and `PDFHTML*` as completed unless a
-regression in their acceptance gates is found. Older
-generic Workbench queues remain historical context unless a regression in their
-shared backend acceptance criteria blocks the PDFHTML cutover.
+The active queue is `HTMLTOOL*`. It supersedes the PDFHTML/PDFALIGN product
+surface while preserving Relay Core APIs, Microsoft Agent Framework, AG-UI, and
+OpenCode-style local tools as the backend substrate.
+
+Forward implementation should treat `COREAPI*`, `PDFHTML*`, and `PDFALIGN*` as
+completed history unless a regression in their shared backend acceptance gates
+is found. Older generic Workbench and PDF queues remain historical context.
 
 The completed active queue is `PROJECTIONFIX*`. It implements the 2026-05-18 Tool
 Projection Harness Remediation Plan from `PLANS.md`: keep search and Office
@@ -153,11 +156,79 @@ acceptance criteria have broken.
   and verification result.
 - Run at least `pnpm check` before marking a milestone complete.
 - Do not implement new generic Workbench UI features while the PDFHTML cutover
-  is active, except where required to extract reusable Relay Core API behavior.
-- Do not keep the generic Workbench as a release fallback after PDFHTML
-  acceptance passes.
+  text below is active; it is now superseded by the HTMLTOOL cutover.
+- Do not keep the generic Workbench or PDF review client as a release fallback
+  after HTMLTOOL acceptance passes.
 
 ## Task Queue
+
+### HTMLTOOL-01 - Document HTML Tool API Hub Cutover
+
+Status: completed
+
+Scope:
+
+- Update `PLANS.md`, `tasks.md`, `AGENTS.md`, `README.md`, and
+  `docs/IMPLEMENTATION.md` so the active product is Relay API Hub.
+- State that the PDF review client is retired as the default product surface.
+- State that arbitrary HTML tools call Relay Core over localhost using
+  `/v1/relay/manifest`, `/v1/chat/completions`, `/agui/relay`, and `/v1/tools`.
+
+Artifacts:
+
+- Updated planning and product docs.
+
+Acceptance:
+
+- Active docs describe HTML Tool API Hub, not PDF review, as the current
+  release surface.
+
+### HTMLTOOL-02 - Replace PDF Client With API Hub
+
+Status: completed
+
+Scope:
+
+- Replace the default React browser client with a minimal API Hub.
+- Provide first-time steps, endpoint discovery, starter HTML generation, copy
+  and download actions, a Copilot connectivity test, and collapsed diagnostics.
+- Remove PDF-specific UI copy, PDF routes, PDF picker routes, and PDF review
+  service from active code.
+- Keep visual design calm and professional with generous whitespace, clear
+  labels, visible focus, and `aria-live` status updates.
+
+Artifacts:
+
+- Updated `apps/workbench/`.
+- Removed `PdfReviewService`.
+- Updated sidecar routes and CORS handling.
+
+Acceptance:
+
+- Workbench typecheck and sidecar build pass.
+- API Hub smoke verifies the active UX and forbids retired PDF controls.
+
+### HTMLTOOL-03 - Update Smokes, Packaging Help, And Acceptance Gate
+
+Status: completed
+
+Scope:
+
+- Replace PDF UX smoke with API Hub smoke.
+- Update sidecar smoke to verify `/v1/relay/manifest` and local HTML CORS
+  preflight behavior.
+- Update hard-cut guard, standard client smoke, sidecar asset metadata, release
+  inventory metadata, and portable `README-FIRST.html` copy.
+- Keep `pnpm check` as the canonical gate.
+
+Artifacts:
+
+- Updated scripts under `scripts/`.
+- Version `0.3.23` package metadata.
+
+Acceptance:
+
+- `pnpm check` passes.
 
 ### PDFHTML-01 - Document PDF HTML Product Cutover
 

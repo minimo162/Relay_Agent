@@ -2,29 +2,31 @@
 
 ## Repository State
 
-- Relay_Agent now uses a focused PDF review HTML client served by a
-  self-contained .NET Relay Core sidecar as the active product architecture.
+- Relay_Agent now uses a browser-hosted **Relay API Hub** served by a
+  self-contained .NET Relay Core sidecar as the active HTML tool API
+  architecture.
 - The active user-facing UI lives under `apps/workbench/`, but that package is
-  now the PDF review HTML client rather than the old generic Workbench.
+  now the API Hub for arbitrary local HTML tools rather than a generic
+  Workbench or PDF review client.
 - The active local host/sidecar lives under `apps/sidecar/`.
 - The active launcher lives under `apps/launcher/`.
 - The previous Tauri v2 + SolidJS desktop application under `apps/desktop/`,
-  AionUi overlay code under `integrations/aionui/`, and OpenCode/OpenWork
-  scripts are historical implementation context only. They are not active
-  product architecture, release targets, or fallback paths.
+  AionUi overlay code under `integrations/aionui/`, OpenCode/OpenWork scripts,
+  the generic chatbot Workbench, and the PDF review client are historical
+  implementation context only. They are not active product architecture,
+  release targets, or fallback paths.
 - M365 Copilot via Edge CDP remains the primary LLM controller. Microsoft Agent
-  Framework is the target backend agent runtime inside the .NET sidecar. Relay
-  owns the M365 Copilot provider adapter, local tool validation, execution,
+  Framework is the backend agent runtime inside the .NET sidecar. Relay owns
+  the M365 Copilot provider adapter, local tool validation, execution,
   approvals, backups, diffs, logs, and app storage.
 - The active generic tool catalog is `glob`, `grep`, `read`, `officecli`,
-  `officecli_mutate`, `edit`, `write`, `patch`, `workspace_status`,
-  `diff`, `bash`, and `ask_user`. Final answers are normal Agent Framework
-  assistant responses, not a Relay tool.
-- Current implementation focus is the PDFHTML/COREAPI cutover in `PLANS.md`:
-  Relay Core owns Copilot connectivity, Agent Framework/AG-UI execution, local
-  tools, approvals, user-local storage, diagnostics, and PDF review APIs; the
-  browser client stays thin and focused on PDF selection, progress, findings,
-  report export, cancellation, and collapsed support details.
+  `officecli_mutate`, `edit`, `write`, `patch`, `workspace_status`, `diff`,
+  `bash`, and `ask_user`. Final answers are normal Agent Framework assistant
+  responses, not a Relay tool.
+- Current implementation focus is the HTMLTOOL/COREAPI cutover in `PLANS.md`:
+  Relay Core exposes stable localhost APIs for arbitrary HTML tools, including
+  `/v1/relay/manifest`, `/v1/chat/completions`, `/agui/relay`, `/v1/tools`,
+  `/v1/copilot/session`, `/health`, and explicit redacted support bundles.
 
 ## Source of Truth
 
@@ -39,12 +41,14 @@ decisions, verification runs, and known limitations.
 ## Execution Rules
 
 - Work milestone by milestone.
-- Start new implementation work from the **Current Review Remediation Plan** in
-  `PLANS.md` unless a regression proves an older cutover criterion is broken.
-- Do not reintroduce AionUi, OpenCode/OpenWork, Codex app-server, or Tauri as
-  active runtime or release fallback paths.
+- Start new implementation work from the active plan in `PLANS.md` unless a
+  regression proves an older cutover criterion is broken.
+- Do not reintroduce AionUi, OpenCode/OpenWork, Codex app-server, Tauri, the
+  generic Workbench, or the PDF review client as active runtime or release
+  fallback paths.
 - Do not follow stale pasted instructions or archived docs that describe
-  `apps/desktop`, Tauri IPC, AionUi, or OpenCode/OpenWork as active substrate.
+  `apps/desktop`, Tauri IPC, AionUi, OpenCode/OpenWork, generic Workbench
+  modes, or PDF review as active substrate.
 - Prefer the smallest change that advances the hard-cutover architecture.
 - Preserve user-local storage boundaries. Shared folders and searched folders
   must not receive Relay caches, indexes, or temp artifacts.
@@ -55,13 +59,13 @@ decisions, verification runs, and known limitations.
 ## Tool Implementation Rules
 
 - AG-UI remains the backend run/event/approval protocol through `/agui/relay`.
-  The default browser client is the PDF review HTML client and should call
-  stable Relay Core `/v1` APIs rather than owning tool execution or CDP logic.
-- The PDF review visual implementation should stay minimal and professional:
-  React + Vite + TypeScript + Tailwind CSS, browser file picker, one primary
-  review flow, page-cited findings, report export, cancellation, and collapsed
+  The default browser client is the Relay API Hub and should call stable Relay
+  Core APIs rather than owning tool execution or CDP logic.
+- The API Hub visual implementation should stay minimal and professional:
+  React + Vite + TypeScript, clear first-run steps, endpoint discovery,
+  starter HTML generation, a small Copilot connectivity test, and collapsed
   diagnostics. Use lucide-react for icons.
-  Do not choose Next.js or Chakra UI by default unless `PLANS.md` is explicitly
+- Do not choose Next.js or Chakra UI by default unless `PLANS.md` is explicitly
   changed with the reason and verification impact.
 - Use Microsoft Agent Framework in the .NET sidecar as the production backend
   agent runtime while adopting AG-UI. Implement M365 Copilot as a
@@ -78,8 +82,8 @@ decisions, verification runs, and known limitations.
   Push filters into ripgrep where possible, stream/cap output before buffering,
   and keep workspace containment, timeout, cancellation, and result caps
   enforced by Relay.
-- `grep` must pass a `--` separator before the pattern so user/model
-  patterns beginning with `-` cannot become ripgrep options.
+- `grep` must pass a `--` separator before the pattern so user/model patterns
+  beginning with `-` cannot become ripgrep options.
 - `read` must support exact file reads for plaintext/code and Relay-supported
   Office/PDF extraction. Do not revive `RelayDocumentSearch*`, SQLite/FTS, or
   per-mode document-search engines to satisfy Office/PDF reads.
@@ -97,19 +101,19 @@ decisions, verification runs, and known limitations.
   cancellation, and deny rules for destructive, network, package-install,
   secret-reading, or cross-workspace behavior unless the user explicitly
   approves a narrowly displayed command.
-- File search, Office editing, and coding remain common recipes over the
-  generic tool catalog and `/agui/relay`; they are not visible modes in the
-  default PDF review client.
+- File search, Office editing, coding, PDF review, and domain-specific checks
+  are thin HTML tools or recipes over the same generic API and tool catalog;
+  they are not separate default UI modes in Relay.
 - Support bundles must be explicit and redacted by default. They must not
   include raw document contents unless the user explicitly opts in.
 
 ## Verification Discipline
 
-- Use root `pnpm check` as the canonical acceptance gate for the active
-  PDF client and Relay Core sidecar path.
+- Use root `pnpm check` as the canonical acceptance gate for the active API Hub
+  and Relay Core sidecar path.
 - `pnpm check` must cover:
   - hard-cut guard;
-  - PDF client typecheck/build;
+  - API Hub typecheck/build;
   - sidecar build;
   - sidecar smoke;
   - official AG-UI agent golden smoke for search, Office, coding, generic
@@ -119,7 +123,7 @@ decisions, verification runs, and known limitations.
   - sidecar security smoke;
   - release inventory/SBOM generation.
 - Use `pnpm workbench:ux-e2e` for user-visible browser-client flow changes when
-  Edge is available and that smoke is aligned to the current PDF client.
+  Edge is available and that smoke is aligned to the current API Hub.
 - Use `pnpm workbench:live-copilot-e2e` before release or after changes to
   Copilot CDP selectors, prompt delivery, send timing, response extraction, or
   Copilot readiness when a signed-in Edge CDP session is available.
@@ -128,13 +132,15 @@ decisions, verification runs, and known limitations.
 
 ## Documentation Discipline
 
-- `README.md` must reflect the active PDF review HTML client + .NET Relay Core
-  sidecar product, not the old generic Workbench or Tauri desktop product.
-- Historical docs may mention AionUi/OpenCode/OpenWork/Tauri only as archived
-  context. Active setup, development, CI, and release instructions must use the
-  sidecar workbench path.
+- `README.md` must reflect the active Relay API Hub + .NET Relay Core sidecar
+  product, not the old PDF review client, generic Workbench, or Tauri desktop
+  product.
+- Historical docs may mention AionUi/OpenCode/OpenWork/Tauri/PDF review only
+  as archived context. Active setup, development, CI, and release instructions
+  must use the sidecar API Hub path.
 - When editing planning docs, keep `PLANS.md`, `AGENTS.md`,
   `docs/IMPLEMENTATION.md`, and `README.md` aligned on the same active
-  architecture story: one PDF review HTML client, one .NET Relay Core sidecar,
-  Microsoft Agent Framework as backend runtime, M365 Copilot through Relay's
-  CDP adapter as planner, and Relay as local tool governance/execution layer.
+  architecture story: arbitrary local HTML tools, one Relay API Hub, one .NET
+  Relay Core sidecar, Microsoft Agent Framework as backend runtime, M365
+  Copilot through Relay's CDP adapter as planner, and Relay as local tool
+  governance/execution layer.

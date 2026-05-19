@@ -9,9 +9,11 @@ const packageJson = JSON.parse(read("package.json"));
 const catalog = JSON.parse(read("scripts/fixtures/agent-tool-catalog-snapshot.json"));
 
 for (const needle of [
-  "Relay PDF Review",
+  "Relay API Hub",
   "/health",
-  "/v1/pdf/review",
+  "/v1/relay/manifest",
+  "/v1/chat/completions",
+  "/agui/relay",
   "aria-live=\"polite\"",
   "role=\"alert\"",
   "<summary>診断</summary>",
@@ -28,6 +30,8 @@ for (const forbidden of [
   "Office file",
   "RelayDocumentSearch",
   "document_search_mode",
+  "Relay PDF Review",
+  "/v1/pdf/review",
 ]) {
   assert(!app.includes(forbidden), `Default PDF client must not expose generic chat/workbench code: ${forbidden}`);
 }
@@ -52,7 +56,7 @@ assert(
   `model-visible tool catalog drifted: ${JSON.stringify(actualTools)}`,
 );
 
-for (const scriptName of ["agent:tool-catalog-smoke", "agent:workbench-standard-chat-smoke", "agent:pdf-review-ux-smoke"]) {
+for (const scriptName of ["agent:tool-catalog-smoke", "agent:workbench-standard-chat-smoke", "agent:api-tool-ux-smoke"]) {
   assert(packageJson.scripts[scriptName], `missing package script: ${scriptName}`);
 }
 

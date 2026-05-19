@@ -2,6 +2,71 @@
 
 Date: 2026-05-18
 
+## 2026-05-19 HTML Tool API Hub Cutover
+
+Relay_Agent is pivoting away from the focused PDF review client. The active
+product is now a **Relay API Hub**: a small browser page served by Relay Core
+that lets any local HTML tool connect to M365 Copilot through stable localhost
+APIs.
+
+The design goal is first-time clarity:
+
+- launch Relay Agent;
+- confirm Relay Core is Ready;
+- copy or download a starter HTML file;
+- build or open any task-specific HTML tool;
+- call Relay Core through `/v1/chat/completions` or `/agui/relay`.
+
+The PDF review feature is retired as a default product surface. Future PDF
+review, Office editing, file search, coding, proofreading, comparison, or
+domain-specific workflows should be implemented as thin HTML tools over the
+same API rather than separate Relay modes or separate backend runners.
+
+### Active Architecture
+
+- `apps/workbench/` hosts **Relay API Hub**, not the old generic Workbench and
+  not a PDF review client.
+- `apps/sidecar/` hosts **Relay Core**, the local API and execution boundary.
+- `apps/launcher/` starts Relay Core and opens the API Hub.
+- Relay Core owns M365 Copilot CDP connectivity, Microsoft Agent Framework,
+  AG-UI `/agui/relay`, local tool governance, approvals, backups, diagnostics,
+  and user-local storage.
+- HTML tools are thin clients. They may provide specialized UI, but they must
+  not implement their own CDP automation, local execution harness, approval
+  policy, cache/index storage, or workspace governance.
+
+### API Contract
+
+Relay Core must expose and smoke-test these stable APIs:
+
+- `GET /health`;
+- `GET /v1/relay/manifest`;
+- `GET /v1/copilot/session`;
+- `GET /v1/tools`;
+- `POST /v1/chat/completions`;
+- `POST /agui/relay`;
+- `POST /api/support-bundle`.
+
+The API Hub must show the manifest, endpoint list, authentication pattern,
+starter HTML, a one-click Copilot connectivity test, and collapsed diagnostics.
+It must not expose PDF-specific controls, generic workbench modes, developer
+runtime clutter, or stale AionUi/OpenCode/OpenWork/Tauri concepts.
+
+### Distribution
+
+The portable package remains the recommended distribution. The optional
+Windows installer remains available for Start Menu and uninstall integration.
+`README-FIRST.html` should explain how to start Relay Agent, open the API Hub,
+and use the starter HTML. Runtime state remains in the user's local app data
+directory and never in shared folders or selected work folders.
+
+### Superseded Plan Text
+
+Older sections below that describe the PDF review HTML client as the active
+default product are superseded by this HTML Tool API Hub cutover. PDF/Office/
+search/coding remain supported capabilities through Relay Core tools and
+external HTML clients, not first-party default UI modes.
+
 ## Product Direction
 
 Relay_Agent moved from a three-mode utility app into a single local

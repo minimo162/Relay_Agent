@@ -43,7 +43,7 @@ const files = inputs.flatMap((input) => walk(resolve(root, input))).map((file) =
 const inventory = {
   schemaVersion: "RelayReleaseInventory.v1",
   generatedAt: new Date().toISOString(),
-  activeArchitecture: "pdf-html-client-relay-core-sidecar",
+  activeArchitecture: "html-tool-api-hub-relay-core-sidecar",
   excludedLegacyActivePaths: [
     "AionUi",
     "OpenCode/OpenWork",

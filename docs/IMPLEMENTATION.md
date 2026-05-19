@@ -2,19 +2,20 @@
 
 ## Status
 
-- Current phase: Relay_Agent uses a focused PDF review HTML client served by a
-  self-contained .NET Relay Core sidecar. Relay Core remains the owner of M365
-  Copilot CDP adaptation, Microsoft Agent Framework/AG-UI execution, local
-  tools, approvals, user-local storage, diagnostics, and packaging. The default
-  browser client is thin: it selects one or more PDFs, starts reviews through
-  `/v1/pdf/*`, shows section correspondence tables for multi-PDF reviews,
-  shows page-cited findings, exports reports, supports cancellation, and keeps
-  diagnostics collapsed. File search, Office editing, and coding remain
-  high-frequency recipes over the generic tool catalog and `/agui/relay`, not
-  default visible modes. OpenCode's built-in local tool model remains the
+- Current phase: Relay_Agent uses Relay API Hub, a browser-hosted local HTML
+  tool gateway served by a self-contained .NET Relay Core sidecar. Relay Core
+  remains the owner of M365 Copilot CDP adaptation, Microsoft Agent
+  Framework/AG-UI execution, local tools, approvals, user-local storage,
+  diagnostics, and packaging. The default browser client is thin: it explains
+  how arbitrary local HTML tools connect to Relay Core, shows the API manifest,
+  provides starter HTML, tests `/v1/chat/completions`, exposes `/agui/relay`
+  and `/v1/tools`, and keeps diagnostics collapsed. PDF review is retired as
+  the default product surface. File search, Office editing, coding, PDF review,
+  and other workflows are expected to be thin HTML tools or AG-UI recipes over
+  the generic Relay Core API. OpenCode's built-in local tool model remains the
   reference contract for model-visible file/code tools, while AionUi, OpenWork,
-  Tauri, Python workflow wrappers, Codex app-server, and hidden fallback
-  runners are not fallback paths.
+  Tauri, Python workflow wrappers, Codex app-server, the old generic Workbench,
+  the old PDF client, and hidden fallback runners are not fallback paths.
 - Repository state: active source lives under `apps/workbench/`,
   `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
   docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
@@ -27,13 +28,55 @@
   task metadata. The current executable plan is `PLANS.md`, with concrete
   OpenCode-compatible migration steps in `tasks.md`.
 - Packaging policy: the primary release path is portable archives for Relay
-  Core plus the PDF review HTML client: Windows zip plus Linux tarball. The
-  Windows user-scope NSIS installer remains an optional convenience artifact
-  for shortcuts and uninstall integration. Tauri NSIS packaging is historical
-  and not an active release path.
+  Core plus the API Hub: Windows zip plus Linux tarball. The Windows user-scope
+  NSIS installer remains an optional convenience artifact for shortcuts and
+  uninstall integration. Tauri NSIS packaging is historical and not an active
+  release path.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-19 HTML Tool API Hub Cutover
+
+This slice retires the PDF review client as the default product surface and
+replaces it with Relay API Hub, a first-time-friendly localhost API launcher
+for arbitrary HTML tools.
+
+Change:
+
+- Replaced the browser client with Relay API Hub:
+  - readiness and manifest loading;
+  - endpoint list for `/health`, `/v1/relay/manifest`,
+    `/v1/chat/completions`, `/agui/relay`, and `/v1/tools`;
+  - starter HTML copy/download;
+  - small Copilot connectivity test;
+  - explicit redacted support-bundle export;
+  - collapsed diagnostics.
+- Added `GET /v1/relay/manifest` and local HTML CORS handling in Relay Core.
+- Removed the PDF review service and default PDF review routes from active
+  sidecar code.
+- Removed the PDF picker route from the workspace picker smoke path.
+- Replaced the PDF UX smoke with an API Hub smoke.
+- Updated hard-cut guard, sidecar smoke, standard client smoke, sidecar asset
+  metadata, release inventory metadata, and portable `README-FIRST.html` copy.
+- Bumped client, sidecar, and launcher versions to `0.3.23`.
+
+Verification commands for this slice:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm check
+```
+
+Result:
+
+- Typecheck and sidecar Release build passed during implementation.
+- Full `pnpm check` passed, including hard-cut guard, API Hub
+  typecheck/build, sidecar Release build, sidecar API smoke, CORS/manifest
+  smoke, workspace picker smoke, AG-UI smokes, DCI/read smokes, Office/PDF
+  extraction smoke, API Hub UX smoke, OfficeCLI registry smoke, sidecar
+  security smoke, and release inventory/SBOM generation.
 
 ### 2026-05-19 PDF Section Alignment And Simplified UX
 

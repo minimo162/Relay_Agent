@@ -1,87 +1,64 @@
 # Relay Agent
 
-Relay Agent is a local PDF review tool backed by a self-contained .NET Relay
-Core sidecar:
+Relay Agent is a local **HTML tool API hub** for Microsoft 365 Copilot:
 
-> Copilot thinks. Relay executes local work safely.
+> Copilot thinks. Relay exposes a local API and executes local work safely.
 
-The active user-facing surface is a **PDF review HTML client** served by Relay
-Core. Users select one or more PDFs in the browser and run page-cited checks
-for typos, wording issues, internal consistency, or cross-document consistency.
-Relay keeps extraction, staging, diagnostics, and support artifacts under the
-current user's local application data directory. It does not write caches,
-indexes, or temp files into selected PDFs, shared folders, or work folders.
+The active user-facing surface is the browser-hosted **Relay API Hub** served by
+a self-contained .NET Relay Core sidecar. The hub is intentionally simple for
+first-time users: start Relay Agent, confirm it is Ready, copy or download the
+starter HTML, and connect any local HTML tool to Relay's localhost API.
+
+The retired PDF review client is no longer the active product surface. PDF,
+Office, file search, coding, and other workflows should now be built as thin
+HTML tools over the same Relay Core APIs instead of becoming separate Relay
+Workbench modes.
 
 ## Architecture
 
 ```text
-PDF review HTML client
-  file selection, progress, section correspondence, page-cited findings, report export
+Any local HTML tool
+  lightweight UI, task-specific controls, no Copilot CDP or local execution code
+
+Relay API Hub
+  first-run guidance, API manifest, starter HTML, test prompt, diagnostics
 
 .NET Relay Core sidecar
-  serves the HTML client, owns /v1 APIs, AG-UI /agui/relay, Copilot provider
-  readiness, local extraction, user-local storage, support bundles, and release
-  packaging
+  localhost API, Microsoft Agent Framework runtime, AG-UI endpoint, M365
+  Copilot CDP adapter, local tool validation/execution, approvals, backups,
+  logs, support bundles, and user-local storage
 
 M365 Copilot via Edge CDP
-  primary reasoning controller for agent runs and future richer review passes
-
-Relay local tools
-  ripgrep, exact read with Office/PDF extraction, OfficeCLI, exact edits,
-  writes, apply_patch, bounded bash, approvals, logs, and diagnostics
+  primary reasoning controller; no OpenAI API key is required
 ```
 
 The old Tauri desktop shell, AionUi overlay, OpenCode/OpenWork provider paths,
-Codex app-server path, and the generic chatbot Workbench are historical
-implementation inputs only. They are not active release or fallback paths.
-
-## PDF Review Client
-
-The default browser client is intentionally narrow and first-time friendly:
-
-- select one or more PDFs with the standard browser file picker;
-- start one review;
-- let Relay infer the review behavior from the number of selected PDFs;
-- inspect the section correspondence table for multi-PDF reviews;
-- inspect page-cited findings;
-- export a Markdown report;
-- cancel long work from the browser;
-- keep diagnostics collapsed unless support data is needed.
-
-The client does not expose generic search, Office editing, coding, model,
-provider, workspace, or runtime controls. Those remain Relay Core capabilities
-behind stable local APIs and AG-UI.
-
-Current PDF support is text-layer based. Image-only or scanned pages are
-reported as extraction limitations unless OCR is added in a later release.
-Long-document handling is page-aware: Relay builds page maps and findings cite
-document IDs, page numbers, anchors, and evidence snippets. Long PDFs are
-split by numbered headings, chapter labels, and heading-like lines when
-available. If no headings are clear, Relay falls back to bounded page-range
-sections and labels that limitation. Multi-PDF comparison preserves
-document-to-document correspondence through a section alignment table before
-reporting date or amount differences.
+Codex app-server path, generic chatbot Workbench, and PDF review client are
+historical implementation inputs only. They are not active release or fallback
+paths.
 
 ## Relay Core API
 
-Relay Core binds to `127.0.0.1` and requires a per-run launch token for local
-APIs. Important client-facing endpoints include:
+Relay Core binds to `127.0.0.1` and requires a per-run launch token. HTML tools
+can discover the current contract through:
 
-- `GET /health` for app readiness;
+- `GET /health` for readiness;
+- `GET /v1/relay/manifest` for endpoint, auth, and CORS discovery;
 - `GET /v1/copilot/session` for Copilot provider state;
-- `GET /v1/tools` for the OpenCode-style tool catalog snapshot;
-- `POST /v1/workspace/select` for native folder selection where needed;
-- `GET /v1/pdf/capabilities`;
-- `POST /v1/pdf/review` for browser PDF uploads;
-- `POST /v1/pdf/review-paths` for local-path tests and native integrations;
-- `GET /v1/pdf/jobs/{jobId}`;
-- `GET /v1/pdf/jobs/{jobId}/report.md`;
-- `DELETE /v1/pdf/jobs/{jobId}`;
-- `POST /api/support-bundle` for explicit redacted support bundles;
-- `/agui/relay` for Agent Framework AG-UI runs.
+- `GET /v1/tools` for the OpenCode-style local tool catalog snapshot;
+- `POST /v1/chat/completions` for an OpenAI-compatible chat shape backed by
+  M365 Copilot;
+- `POST /agui/relay` for Agent Framework runs with AG-UI events, tool calls,
+  approvals, and local execution governance;
+- `POST /api/support-bundle` for explicit redacted diagnostics bundles.
 
-Relay does not expose raw CDP, arbitrary shell, arbitrary OfficeCLI argv, or
-unapproved mutation endpoints through the PDF client.
+Local HTML files are supported through a narrow CORS policy for `null`,
+`localhost`, and `127.0.0.1` origins. The launch token must be supplied either
+as `?token=...` or `X-Relay-Token`.
+
+Relay does not expose raw Edge CDP, arbitrary shell, arbitrary OfficeCLI argv,
+or unapproved mutation endpoints. Mutating tools are validated, approval-gated,
+audited, and backed up by Relay Core.
 
 ## Requirements
 
@@ -108,7 +85,7 @@ Install dependencies:
 pnpm install
 ```
 
-Build the PDF client and copy it into the sidecar:
+Build the API Hub and copy it into the sidecar:
 
 ```bash
 pnpm build
@@ -120,7 +97,7 @@ Run the active acceptance gate:
 pnpm check
 ```
 
-`pnpm check` covers the hard-cut guard, PDF client typecheck/build, sidecar
+`pnpm check` covers the hard-cut guard, API Hub typecheck/build, sidecar
 build/smokes, Relay Core API smokes, AG-UI agent/tool approval smokes, ripgrep
 and Office/PDF extraction smokes, OfficeCLI policy, sidecar security checks,
 and release inventory/SBOM generation.
@@ -132,21 +109,20 @@ pnpm dev
 ```
 
 The sidecar prints the localhost URL with the launch token. Opening that URL
-shows the PDF review HTML client.
+shows Relay API Hub.
 
 ## Packaging
 
-The primary distribution is the portable package. This is the recommended file
-to share with first-time users because it does not require administrator
-rights:
+The primary distribution is the portable package. It does not require
+administrator rights:
 
 ```bash
 pnpm sidecar:portable:linux
 pnpm sidecar:portable:windows
 ```
 
-Windows users should download `relay-agent-<version>-win-x64.zip`, extract it,
-and double-click `Relay Agent.exe`. Linux users extract the tarball and run
+Windows users download `relay-agent-<version>-win-x64.zip`, extract it, and
+double-click `Relay Agent.exe`. Linux users extract the tarball and run
 `./relay-agent`. `README-FIRST.html` is included as first-run help, not as the
 launcher.
 
@@ -165,6 +141,8 @@ state is stored under the current user's local application data directory.
 ## Boundaries
 
 - M365 Copilot may plan and synthesize; Relay executes local work.
+- HTML tools are thin clients. They must not implement their own Copilot CDP,
+  local execution, approval harness, or workspace policy.
 - Relay validates tool arguments before execution.
 - Office edits go through OfficeCLI, backups, approval, and verification.
 - Code edits use exact replacements, approved writes, or approved patches.

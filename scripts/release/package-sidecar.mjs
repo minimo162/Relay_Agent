@@ -76,7 +76,7 @@ writeFileSync(
   JSON.stringify({
     schemaVersion: "RelayDefaultConfig.v1",
     version: workbenchPackage.version,
-    architecture: "pdf-html-client-relay-core-sidecar",
+    architecture: "html-tool-api-hub-relay-core-sidecar",
     dataDirectory: "user-local",
     localHttp: {
       bind: "127.0.0.1",
@@ -101,14 +101,14 @@ if (sources.officecli) {
 writeFileSync(
   join(output, "RELAY_RELEASE_CONTENTS.txt"),
   [
-    "Relay Agent PDF review package",
+    "Relay Agent API Hub package",
     `Version: ${workbenchPackage.version}`,
     `RID: ${rid}`,
     "",
     "Included runtime components:",
     "- Relay.Sidecar",
     rid === "win-x64" ? "- Relay Agent.exe launcher" : "- relay-agent launcher",
-    "- PDF review HTML client static assets",
+    "- Relay API Hub static assets",
     "- Relay app icon under relay-assets",
     "- ripgrep under relay-tools/ripgrep",
     rid === "win-x64" ? "- OfficeCLI under relay-tools/officecli" : "- OfficeCLI is optional on this platform",
@@ -131,8 +131,8 @@ writeFileSync(
     "",
     "How to start:",
     rid === "win-x64"
-      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Relay Agent.exe.\n3. Your browser opens the local PDF review tool automatically."
-      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./relay-agent.\n3. Your browser opens the local PDF review tool automatically.",
+      ? "1. Extract the zip to a folder you can write to.\n2. Double-click Relay Agent.exe.\n3. Your browser opens Relay API Hub automatically."
+      : "1. Extract the tar.gz to a folder you can write to.\n2. Run ./relay-agent.\n3. Your browser opens Relay API Hub automatically.",
     "",
     "No administrator rights are required.",
     "Relay stores runtime data under the current user's local application data directory, not in the selected work folder.",
@@ -354,31 +354,31 @@ function portableFrontDoorHtml(rid, version) {
     <header>
       <span class="mark" aria-hidden="true">R</span>
       <h1>Relay Agent Portable</h1>
-      <p>インストールせずに使える、M365 Copilot連携のPDF確認ツールです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
+      <p>インストールせずに使える、M365 Copilot連携のローカルAPIツールです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
     </header>
     <section class="grid" aria-labelledby="start-title">
       <h2 id="start-title">はじめかた</h2>
       <ol class="steps">
         <li><span class="num">1</span><span><span class="file">${escapeHtml(launchName)}</span> を開きます。${escapeHtml(platformHint)}</span></li>
-        <li><span class="num">2</span><span>ブラウザでRelay PDF Reviewが開いたら、確認したいPDFを1つ以上選択します。</span></li>
-        <li><span class="num">3</span><span>1つなら誤字脱字・表記・文書内整合を一括確認し、2つ以上なら章見出しの対応表を作って比較します。</span></li>
+        <li><span class="num">2</span><span>ブラウザでRelay API Hubが開き、Readyになっていることを確認します。</span></li>
+        <li><span class="num">3</span><span>画面のスターターHTML、または自作HTMLからRelay Core APIを呼び出します。</span></li>
       </ol>
       <p>通常は ${escapeHtml(launchName)} だけを使います。別の起動方法: ${escapeHtml(secondaryLaunch)}。Relayのデータはユーザーのローカルアプリデータに保存され、選択した共有フォルダにはキャッシュを書き込みません。</p>
     </section>
-    <section class="grid" aria-labelledby="pdf-title" style="margin-top: 18px;">
-      <h2 id="pdf-title">PDFを確認する</h2>
+    <section class="grid" aria-labelledby="api-title" style="margin-top: 18px;">
+      <h2 id="api-title">HTMLツールから使う</h2>
       <div class="recipes">
         <section class="recipe">
-          <strong>1つのPDF</strong>
-          <p>誤字脱字、表記ゆれ、日付や数値の文書内整合性を一括で確認します。</p>
+          <strong>Chat API</strong>
+          <p><code>/v1/chat/completions</code> を呼ぶと、自作HTMLからCopilotに依頼できます。</p>
         </section>
         <section class="recipe">
-          <strong>複数のPDF</strong>
-          <p>章見出しやページ範囲の対応表を作成し、対応範囲ごとに差分候補を確認します。</p>
+          <strong>Agent API</strong>
+          <p><code>/agui/relay</code> を呼ぶと、AG-UIイベントとローカルツール実行を扱えます。</p>
         </section>
       </div>
-      <p>ページ数が多いPDFは、章見出しを優先して分割します。見出しが明確でない場合だけ、ページ範囲で安全に分けます。</p>
-      <p>PDFはローカルのtext layerを読み取ります。画像だけのPDFやOCRが必要なページは、確認不可として扱われます。</p>
+      <p>APIには起動時のlaunch tokenが必要です。Relay API HubのスターターHTMLをコピーすると、最小構成の呼び出し例から始められます。</p>
+      <p>Relayのデータはユーザーのローカルアプリデータに保存され、共有フォルダにはキャッシュを書き込みません。</p>
     </section>
     <p style="margin-top: 22px;">Version ${escapeHtml(version)} / ${escapeHtml(rid)}</p>
   </main>

@@ -53,14 +53,17 @@ for (const forbidden of [
 assert(fileExists("apps/sidecar/Relay.Sidecar.csproj"), "missing .NET sidecar project");
 assert(fileExists("apps/workbench/package.json"), "missing browser client package");
 assert(read("PLANS.md").includes("No transitional fallback architecture"), "PLANS.md must retain hard-cutover rule");
-assert(read("README.md").includes("PDF review HTML client"), "README.md must describe the PDF HTML client architecture");
-assert(read("AGENTS.md").includes("PDF review HTML client"), "AGENTS.md must describe the PDF HTML client architecture");
+assert(read("README.md").includes("HTML tool API"), "README.md must describe the HTML tool API architecture");
+assert(read("AGENTS.md").includes("HTML tool API"), "AGENTS.md must describe the HTML tool API architecture");
 const workbenchSource = walk("apps/workbench/src")
   .filter((path) => /\.(ts|tsx|css)$/.test(path))
   .map((path) => read(path))
   .join("\n");
-assert(workbenchSource.includes("Relay PDF Review"), "default browser client must be the PDF review HTML client");
-assert(workbenchSource.includes("/v1/pdf/review"), "PDF client must call the Relay Core PDF review API");
+assert(workbenchSource.includes("Relay API Hub"), "default browser client must be the Relay API Hub");
+assert(workbenchSource.includes("/v1/relay/manifest"), "API Hub must call the Relay Core manifest API");
+assert(workbenchSource.includes("/v1/chat/completions"), "API Hub must expose the OpenAI-compatible Copilot API");
+assert(!workbenchSource.includes("Relay PDF Review"), "PDF review UI must not remain the default client");
+assert(!workbenchSource.includes("/v1/pdf/"), "PDF review client routes must not remain in the default client");
 assert(!workbenchSource.includes("CopilotChat"), "generic CopilotKit Workbench must not remain the default client");
 const sidecarProgram = read("apps/sidecar/Program.cs");
 const sidecarSource = walk("apps/sidecar")
@@ -68,7 +71,9 @@ const sidecarSource = walk("apps/sidecar")
   .map((path) => read(path))
   .join("\n");
 assert(sidecarProgram.includes("/agui/relay"), "Sidecar must expose the official Agent Framework AG-UI endpoint");
-assert(sidecarProgram.includes("/v1/pdf/review"), "Sidecar must expose the Relay Core PDF review endpoint");
+assert(sidecarProgram.includes("/v1/relay/manifest"), "Sidecar must expose the HTML tool manifest endpoint");
+assert(sidecarProgram.includes("/v1/chat/completions"), "Sidecar must expose the Copilot chat API endpoint");
+assert(!sidecarProgram.includes("/v1/pdf/"), "Sidecar must not expose retired PDF review endpoints");
 assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the legacy run REST product path");
 assert(!sidecarSource.includes("Run" + "Manager"), "Sidecar must not retain the legacy RunManager runtime");
 assert(!sidecarSource.includes("Run" + "Response"), "Sidecar must not retain the legacy RunResponse protocol");
