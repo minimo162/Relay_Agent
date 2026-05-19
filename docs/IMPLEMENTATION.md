@@ -6,8 +6,9 @@
   by a self-contained .NET Relay Core sidecar. The default browser client is
   Relay Bridge Workbench: it checks Relay Core and `/bridge/*` readiness,
   exposes the bridge/session/turn/event-stream route map, and treats direct
-  `/v1/models` plus `/v1/chat/completions` as the lower-level
-  `m365-copilot` provider surface consumed by the app server. PDF review,
+  `/v1/models` plus `/v1/responses` as the lower-level `m365-copilot`
+  provider surface consumed by the app server. `/v1/chat/completions` remains
+  a developer diagnostic compatibility endpoint only. PDF review,
   API-Hub-first HTML tool guidance, mode-based Workbench surfaces, AionUi,
   OpenWork, Tauri, Python workflow wrappers, `/v1/tools` as a public catalog,
   and hidden fallback runners are not active product paths.
@@ -32,6 +33,50 @@
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
+
+### 2026-05-20 Codex App-Server Responses Provider Compatibility
+
+This slice finishes the real app-server/provider compatibility task for the
+current main path. The pinned Codex app server rejects Chat Completions wire
+mode, so Relay now exposes an internal OpenAI Responses-compatible provider
+facade for the app-server path and generates app-server config with
+`wire_api = "responses"`.
+
+Change:
+
+- Added `POST /v1/responses` as the provider facade used by the bundled Codex
+  app server.
+- Kept `POST /v1/chat/completions` as a lower-level developer diagnostic
+  compatibility endpoint, not the app-server wire mode.
+- Converted bridge turn-start payloads to the schema-correct `input` item
+  array expected by the pinned app server.
+- Represented staged attachments as app-server `mention` input items instead
+  of custom Relay attachment fields.
+- Added a deterministic real app-server/provider smoke that materializes the
+  pinned app-server runtime, starts it through Relay, verifies assistant text,
+  and verifies a Copilot tool-call response drives app-server native
+  `commandExecution`.
+
+Verification commands:
+
+```bash
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release -v:minimal
+pnpm sidecar:smoke
+pnpm sidecar:app-server-bridge-smoke
+pnpm sidecar:app-server-real-provider-smoke
+pnpm sidecar:portable:linux
+pnpm sidecar:portable:windows
+pnpm check
+```
+
+Outcome:
+
+- Passed on 2026-05-20. Provider compatibility is now proven through
+  `/v1/responses`; there is no browser/direct `/v1` fallback for normal
+  Workbench turns.
+- Rebuilt Linux and Windows portable packages so both include the pinned Codex
+  app-server runtime under `app/app-server`, then passed the canonical
+  `pnpm check` gate including portable-root and release inventory/SBOM smokes.
 
 ### 2026-05-20 Codex App-Server Native Tool Ownership Correction
 
@@ -134,11 +179,9 @@ Outcome on 2026-05-20:
 
 Remaining work:
 
-- Pin and license a real app-server artifact.
-- Validate real app-server provider compatibility against Relay `/v1`.
-- Add attachment staging, local tool worker, approval roundtrips, deterministic
-  bridge smokes for edge cases, portable bundling, chatbot UI, and live Copilot
-  E2E.
+- Add generated protocol schema drift checks.
+- Broaden native app-server approval/event rendering and deterministic smokes.
+- Complete package-level runtime verification and live Copilot bridge E2E.
 
 ### 2026-05-20 App-Server Contract And Portable Root Hardening
 

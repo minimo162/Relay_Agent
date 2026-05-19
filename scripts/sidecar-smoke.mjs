@@ -19,6 +19,8 @@ const env = {
     "{\"ok\":true}",
     "{\"tool_calls\":[{\"name\":\"find_file\",\"arguments\":{\"query\":\"車名\"}}]}",
     "not json",
+    "responses plain text",
+    "{\"tool_calls\":[{\"name\":\"exec_command\",\"arguments\":{\"cmd\":\"ls\"}}]}",
   ]),
 };
 
@@ -162,6 +164,37 @@ try {
     throw new Error(`stream=true should fail with 400, got ${unsupportedStream.status}: ${await unsupportedStream.text()}`);
   }
 
+  const responses = await responseApi({
+    model: "m365-copilot",
+    input: "ping responses",
+  });
+  if (!responses.ok) throw new Error(`responses endpoint failed: ${responses.status} ${await responses.text()}`);
+  const responsesJson = await responses.json();
+  if (responsesJson.output?.[0]?.content?.[0]?.text !== "responses plain text") {
+    throw new Error(`unexpected responses output: ${JSON.stringify(responsesJson)}`);
+  }
+
+  const responsesStream = await responseApi({
+    model: "m365-copilot",
+    stream: true,
+    input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "list files" }] }],
+    tools: [{
+      type: "function",
+      name: "exec_command",
+      parameters: {
+        type: "object",
+        properties: { cmd: { type: "string" } },
+        required: ["cmd"],
+      },
+    }],
+    tool_choice: "auto",
+  });
+  if (!responsesStream.ok) throw new Error(`responses stream endpoint failed: ${responsesStream.status} ${await responsesStream.text()}`);
+  const responsesStreamText = await responsesStream.text();
+  if (!responsesStreamText.includes("event: response.completed") || !responsesStreamText.includes("\"type\":\"function_call\"")) {
+    throw new Error(`responses stream did not include completed function call: ${responsesStreamText}`);
+  }
+
   async function chat(body) {
     return fetch(`http://127.0.0.1:${port}/v1/chat/completions?token=${encodeURIComponent(token)}`, {
     method: "POST",
@@ -174,6 +207,18 @@ try {
   });
   }
 
+  async function responseApi(body) {
+    return fetch(`http://127.0.0.1:${port}/v1/responses?token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Relay-Token": token,
+        Origin: `http://127.0.0.1:${port}`,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
   const manifest = await fetch(`http://127.0.0.1:${port}/v1/relay/manifest?token=${encodeURIComponent(token)}`, {
     headers: { "X-Relay-Token": token },
   });
@@ -184,6 +229,9 @@ try {
   }
   if (!manifestJson.endpoints?.some((endpoint) => endpoint.path === "/v1/chat/completions")) {
     throw new Error(`manifest did not advertise chat completions: ${JSON.stringify(manifestJson)}`);
+  }
+  if (!manifestJson.endpoints?.some((endpoint) => endpoint.path === "/v1/responses")) {
+    throw new Error(`manifest did not advertise responses: ${JSON.stringify(manifestJson)}`);
   }
   if (!manifestJson.endpoints?.some((endpoint) => endpoint.path === "/v1/models")) {
     throw new Error(`manifest did not advertise models: ${JSON.stringify(manifestJson)}`);

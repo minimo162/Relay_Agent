@@ -6,7 +6,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm sidecar:app-server-artifact-smoke && pnpm sidecar:app-server-bridge-smoke && pnpm sidecar:idle-exit-smoke && pnpm sidecar:copilot-cdp-smoke && pnpm sidecar:workspace-picker-smoke && pnpm release:icon-smoke && pnpm release:portable-root-smoke && pnpm agent:api-tool-ux-smoke && pnpm agent:workbench-standard-chat-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm sidecar:app-server-artifact-smoke && pnpm sidecar:app-server-bridge-smoke && pnpm sidecar:app-server-real-provider-smoke && pnpm sidecar:idle-exit-smoke && pnpm sidecar:copilot-cdp-smoke && pnpm sidecar:workspace-picker-smoke && pnpm release:icon-smoke && pnpm release:portable-root-smoke && pnpm agent:api-tool-ux-smoke && pnpm agent:workbench-standard-chat-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "agent:agui-client-tool-smoke": "node scripts/agui-client-tool-smoke.mjs",
     "agent:agui-replay-smoke": "node scripts/agui-replay-smoke.mjs",
     "agent:framework-trace-smoke": "node scripts/framework-trace-smoke.mjs",
@@ -37,6 +37,7 @@
     "sidecar:smoke": "node scripts/sidecar-smoke.mjs",
     "sidecar:app-server-artifact-smoke": "node scripts/app-server-artifact-smoke.mjs",
     "sidecar:app-server-bridge-smoke": "node scripts/app-server-bridge-smoke.mjs",
+    "sidecar:app-server-real-provider-smoke": "node scripts/app-server-real-provider-smoke.mjs",
     "sidecar:idle-exit-smoke": "node scripts/sidecar-idle-exit-smoke.mjs",
     "sidecar:copilot-cdp-smoke": "node scripts/copilot-cdp-manager-smoke.mjs",
     "sidecar:security-smoke": "node scripts/sidecar-security-smoke.mjs",

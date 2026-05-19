@@ -478,7 +478,7 @@ export function App() {
             <h2 id="bridge-title">Copilotを頭脳にして、Codex app server がローカル作業を進めます</h2>
             <p>
               WorkbenchはRelayの <code>/bridge/*</code> にだけ接続します。Codex app server が会話とtool loopを管理し、
-              Relay Coreの <code>/v1/chat/completions</code> provider 経由でM365 Copilotに推論を渡します。
+              Relay Coreの <code>/v1/responses</code> provider 経由でM365 Copilotに推論を渡します。
             </p>
           </div>
           <button className="secondary-button" type="button" onClick={() => void refreshStatus()}>
@@ -632,7 +632,7 @@ export function App() {
               <div><dt>Session</dt><dd><code>POST /bridge/sessions</code></dd></div>
               <div><dt>Turn</dt><dd><code>POST /bridge/sessions/{"{sessionId}"}/turns</code></dd></div>
               <div><dt>Events</dt><dd><code>GET /bridge/turns/{"{turnId}"}/events</code></dd></div>
-              <div><dt>Provider</dt><dd><code>POST /v1/chat/completions</code></dd></div>
+              <div><dt>Provider</dt><dd><code>POST /v1/responses</code></dd></div>
             </dl>
           </div>
         </section>

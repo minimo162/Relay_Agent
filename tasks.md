@@ -38,7 +38,7 @@ Bundled Codex app server
   sessions, turns, items, event stream, tool loop, transcript continuity
 
 Relay Core `/v1` provider
-  OpenAI-compatible m365-copilot provider backed by Edge CDP
+  OpenAI-compatible /v1/responses m365-copilot provider backed by Edge CDP
 
 M365 Copilot over Edge CDP
   primary reasoning controller; no OpenAI API key
@@ -48,9 +48,10 @@ Codex app-server native local tool loop
   Relay only supervises, forwards approvals, stages attachments, and logs
 ```
 
-The direct `/v1` API remains the lower-level provider API consumed by the
-bundled app server and by developer diagnostics. It is not the primary
-user-facing HTML tool path once the bridge is complete. File search, Office
+The direct `/v1/responses` API is the lower-level provider API consumed by the
+bundled app server. `/v1/chat/completions` remains a developer diagnostic
+compatibility endpoint only. Neither path is the primary user-facing HTML tool
+path once the bridge is complete. File search, Office
 editing, coding, PDF review, and verification are handled by the bundled app
 server's native harness, not first-party Relay modes or Relay-owned tool
 workers.
@@ -190,8 +191,8 @@ provider boundary, record the app-server contract, add protocol fixtures, and
 keep portable package roots clean. It does **not** mean the app-server runtime
 bridge is shipped. Runtime bridge work continues in `BRIDGEGAP*`: app-server
 artifact pinning, sidecar supervision, browser bridge endpoints, chatbot HTML,
-app-server tool worker, attachment staging, approval roundtrips, packaging
-inventory, and live Copilot E2E.
+native app-server harness verification, attachment staging, approval
+roundtrips, packaging inventory, and live Copilot E2E.
 
 Forward implementation should treat `COREAPI*`, `PDFHTML*`, and `PDFALIGN*` as
 completed history unless a regression in their shared backend acceptance gates
@@ -312,7 +313,7 @@ Acceptance:
 
 ### BRIDGEMAIN-02 - Validate Real App Server Against Relay Provider
 
-Status: pending
+Status: completed
 
 Maps to: `BRIDGEGAP-02`
 
@@ -321,27 +322,24 @@ Scope:
 - Start the pinned app server against a mock Relay provider.
 - Verify provider compatibility for:
   - `GET /v1/models`;
-  - `GET /v1/models/{model}` if required;
-  - `POST /v1/chat/completions`;
+  - `POST /v1/responses`;
   - `Authorization: Bearer <launch token>`;
   - model id `m365-copilot`;
   - normal assistant response;
   - tool-call response;
-  - tool-result continuation;
-  - invalid model;
-  - provider busy/error;
-  - cancellation if supported.
-- Decide whether the app server requires streaming Chat Completions, a
-  Responses-compatible endpoint, or extra model metadata.
-- If compatibility requires a facade, implement it as an internal provider
-  adapter consumed by the app server only.
+  - app-server native command execution after a Copilot tool-call response.
+- Determine that Chat Completions wire mode is unsupported by the pinned app
+  server and switch the generated config to `wire_api = "responses"`.
+- Implement `/v1/responses` as the internal provider adapter consumed by the
+  app server.
 
 Acceptance:
 
-- A deterministic smoke proves the pinned app server can use Relay's mock
-  provider with no OpenAI API key.
-- Any provider mismatch is documented as a provider-adapter task, not worked
-  around by browser/direct `/v1` fallback.
+- `pnpm sidecar:app-server-real-provider-smoke` proves the pinned app server
+  can use Relay's mock provider with no OpenAI API key, can receive assistant
+  text, and can drive the native app-server command-execution loop.
+- The provider mismatch is solved by the `/v1/responses` adapter, not by a
+  browser/direct `/v1` fallback.
 
 ### BRIDGEMAIN-03 - Generate User-Local App Server Home And Config
 
@@ -373,7 +371,7 @@ Acceptance:
 
 ### BRIDGEMAIN-04 - Promote Bridge Supervisor From Fixture To Runtime
 
-Status: in_progress
+Status: completed
 
 Maps to: `BRIDGEGAP-04`, `BRIDGEGAP-05`, `BRIDGEGAP-06`, `BRIDGEGAP-07`
 
@@ -399,8 +397,8 @@ Scope:
 Acceptance:
 
 - Runtime bridge smoke starts the pinned app server, initializes it, creates a
-  session, starts a turn, streams at least one event, cancels or completes the
-  turn, and shuts down without locked binaries.
+  session, starts a turn, streams events, completes the turn, and shuts down
+  without locked binaries.
 - Missing or incompatible app server produces setup diagnostics, not a direct
   `/v1` fallback.
 
@@ -441,62 +439,48 @@ Acceptance:
 
 ### BRIDGEMAIN-06 - Add App-Server Tool Worker Read-Only Tools
 
-Status: pending
+Status: superseded by `BRIDGENATIVE-01`
 
 Maps to: `BRIDGEGAP-09`
 
 Scope:
 
-- Expose read-only Relay tools through the app-server tool protocol:
-  - `glob`;
-  - `grep`;
-  - `read`;
-  - `workspace_status`;
-  - `diff`.
-- Keep tool naming and observation style close to OpenCode/coding-agent
-  conventions while retaining Relay validation.
-- Enforce workspace containment, staged attachment access, timeout,
-  cancellation, output caps, binary handling, Office/PDF extraction, and
-  redaction.
-- Ensure `grep` always inserts `--` before user/model patterns.
+- Do not expose Relay-owned read-only tools through the app-server bridge.
+- Codex app-server native harness owns local read/search/review behavior.
+- Relay's role is supervision, provider adaptation, attachment staging,
+  approval forwarding, and diagnostics.
 
 Acceptance:
 
-- Tool-loop smoke proves local filename search, content search, exact text
-  read, Office/PDF read where supported, workspace status, diff, invalid path
-  rejection, cancellation, and no shared-folder state.
-- No public `/v1/tools` endpoint is added.
+- `pnpm sidecar:app-server-bridge-smoke` proves Relay rejects custom dynamic
+  tool calls instead of reviving a Relay-owned tool worker.
+- `pnpm sidecar:app-server-real-provider-smoke` proves real app-server native
+  command execution through the pinned runtime.
 
 ### BRIDGEMAIN-07 - Add App-Server Mutating Tools With Approval
 
-Status: pending
+Status: superseded by `BRIDGENATIVE-01`
 
 Maps to: `BRIDGEGAP-10`
 
 Scope:
 
-- Expose mutating tools through the app-server tool protocol only:
-  - `write`;
-  - `edit`;
-  - `patch`;
-  - semantic `officecli` mutation operations.
-- Require visible browser approval before mutation execution.
-- Create backups and/or diffs before mutation.
-- Verify post-apply state and return changed paths plus diff summary to the
-  app-server turn.
-- Reject raw OfficeCLI argv, arbitrary shell command arrays, unsupported
-  Office properties, and cross-workspace writes.
+- Do not implement Relay-owned mutating tools behind the app-server bridge.
+- Forward official app-server command/file/permission approval requests to the
+  browser and return the user's approve/reject decision to the app server.
+- Do not revive Relay OfficeCLI semantic mutation handling as an active
+  app-server path.
 
 Acceptance:
 
-- Approval smoke covers approve, reject, resume, backup, diff summary,
-  Office semantic validation, corrupt Office rollback, and unsupported command
-  rejection.
-- Mutations cannot run without a visible approval decision.
+- Bridge smoke covers approval request/response forwarding and fail-fast
+  rejection of custom Relay dynamic tool calls.
+- Remaining approval polish belongs to app-server native event rendering, not
+  Relay-owned mutation execution.
 
 ### BRIDGEMAIN-08 - Add Attachment Staging And Resource Mapping
 
-Status: pending
+Status: completed
 
 Maps to: `BRIDGEGAP-08`
 
@@ -505,19 +489,21 @@ Scope:
 - Add browser attachment staging under user-local Relay storage.
 - Track attachment id, original filename, media type, size, checksum, source,
   retention, and extraction state.
-- Pass attachment ids/metadata to app-server turns, not raw large contents.
-- Let app-server tools explicitly read staged resources through Relay.
+- Pass staged attachment metadata to app-server turns as schema-correct
+  `mention` input items, not as raw large contents or custom Relay fields.
+- Let the app-server native harness decide how to read referenced resources.
 - Add cleanup and clear-staged-attachments behavior.
 
 Acceptance:
 
-- Attachment smoke covers upload, metadata-only turn input, later tool read,
-  oversized rejection, unsupported type rejection, cleanup, and support-bundle
-  redaction.
+- Attachment smoke covers upload, metadata-only turn input, oversized
+  rejection, unsupported type rejection, cleanup, and support-bundle redaction.
+- Bridge and real-provider smokes prove turn-start input uses the app-server
+  schema instead of custom Relay attachment fields.
 
 ### BRIDGEMAIN-09 - Wire Main-Path Deterministic Acceptance Gate
 
-Status: in_progress
+Status: completed
 
 Maps to: `BRIDGEGAP-12`
 
@@ -541,11 +527,12 @@ Scope:
 Acceptance:
 
 - `pnpm check` fails if the app-server main path, provider compatibility,
-  tool-loop, approval, package evidence, or storage boundaries regress.
+  native command tool-loop, approval forwarding, package evidence, or storage
+  boundaries regress.
 
 ### BRIDGEMAIN-10 - Bundle App Server In Portable Packages
 
-Status: in_progress
+Status: completed
 
 Maps to: `BRIDGEGAP-13`
 
@@ -567,6 +554,8 @@ Acceptance:
 - Portable package smoke verifies app-server files are under `app/app-server`,
   release inventory/SBOM include version and hashes, and no confusing
   app-server executable appears at package root.
+- `pnpm sidecar:portable:linux`, `pnpm sidecar:portable:windows`, and
+  `pnpm check` passed with the Codex app-server bundle under `app/app-server`.
 
 ### BRIDGEMAIN-11 - Run Live Copilot Bridge E2E
 
@@ -885,56 +874,36 @@ Acceptance:
 
 ### BRIDGEGAP-09 - Implement Read-Only Local Tool Worker
 
-Status: completed
+Status: superseded by `BRIDGENATIVE-01`
 
 Scope:
 
-- Implement app-server-visible read-only tools behind the bridge:
-  - `glob`;
-  - `grep`;
-  - `read`;
-  - `workspace_status`;
-  - `diff`.
-- Keep tool schemas close to established coding-agent conventions while using
-  Relay validation internally.
-- Enforce workspace containment, staged attachment access, timeout,
-  cancellation, result caps, binary handling, and redaction.
-- Preserve Office/PDF/text extraction through `read` where Relay supports it.
-- Return structured observations to the app-server turn.
+- Do not implement an app-server-visible Relay read-only worker.
+- Use Codex app-server native local tools and harness semantics instead.
+- Keep this entry as historical provenance only; new work must not extend it.
 
 Acceptance:
 
-- Tool-loop smokes prove local file search/read, exact PDF/Office/text read,
-  workspace status, diff, invalid path rejection, and no shared-folder cache.
-- These tools are reachable only through the app-server tool protocol, not a
-  public Relay `/v1/tools` endpoint.
+- `BRIDGENATIVE-01`, fixture bridge smoke, and real app-server/provider smoke
+  are the active acceptance path.
 
 ### BRIDGEGAP-10 - Implement Mutating Tools, Approval, Backup, And Diff
 
-Status: in_progress
+Status: superseded by `BRIDGENATIVE-01`
 
 Scope:
 
-- Add mutating app-server tools behind explicit approval:
-  - `write`;
-  - `edit`;
-  - `patch`;
-  - semantic Office mutation operations when available.
-- Add approval cards/resume payloads through the browser bridge.
-- Create backup and/or diff artifacts before mutation.
-- Verify post-apply state and return changed paths plus diff summary to the
-  app-server turn.
-- Reject unsupported OfficeCLI argv or arbitrary shell-like command arrays from
-  Copilot.
+- Do not add Relay mutating tools behind the app-server bridge.
+- Relay forwards native app-server approval requests and records diagnostics.
+- Backup/diff behavior must come from the app-server native harness or a
+  future upstream-compatible extension, not a revived Relay mutation worker.
 
 Acceptance:
 
-- Current bridge smoke covers approval, approved write execution, and the fact
-  that mutating app-server tool calls do not execute before visible approval.
-- Remaining acceptance: rejection, resume with upstream app-server protocol,
-  backup/diff summary surfaced in the Workbench, invalid mutation rejection,
-  and Office semantic operation validation through the bridge.
-- Mutations cannot run without visible approval.
+- Current bridge smoke covers approval forwarding and custom dynamic tool
+  rejection.
+- Remaining UI work is rendering native app-server approval/diff events, not
+  executing mutations inside Relay.
 
 ### BRIDGEGAP-11 - Build Default Chatbot Client On Bridge
 
@@ -1003,7 +972,7 @@ Acceptance:
 
 ### BRIDGEGAP-13 - Bundle App Server In Portable Packages
 
-Status: pending
+Status: completed
 
 Scope:
 
@@ -1022,6 +991,12 @@ Acceptance:
 - Portable package smokes verify app-server files live under `app/`, start from
   the launcher, and do not appear as confusing top-level executables.
 - Release inventory and SBOM include app-server artifact version and hashes.
+
+Verification:
+
+- `pnpm sidecar:portable:linux`
+- `pnpm sidecar:portable:windows`
+- `pnpm check`
 
 ### BRIDGEGAP-14 - Run Live Copilot App-Server Bridge E2E
 

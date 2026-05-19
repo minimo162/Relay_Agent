@@ -14,7 +14,7 @@ for (const needle of [
   "/bridge/health",
   "/bridge/sessions",
   "/bridge/turns/",
-  "/v1/chat/completions",
+  "/v1/responses",
   "aria-live=\"polite\"",
   "role=\"alert\"",
   "<summary>診断</summary>",

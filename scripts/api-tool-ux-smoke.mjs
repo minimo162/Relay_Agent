@@ -15,7 +15,7 @@ for (const needle of [
   "/bridge/health",
   "/bridge/sessions",
   "/bridge/turns/",
-  "/v1/chat/completions",
+  "/v1/responses",
   "message-list",
   "フォルダを選択",
   "sendTurn",
@@ -64,7 +64,7 @@ for (const needle of [
   "/bridge/sessions",
   "/bridge/turns/{turnId}/events",
   "/v1/models",
-  "/v1/chat/completions",
+  "/v1/responses",
   "ApplyCorsHeaders",
 ]) {
   assert(program.includes(needle), `Sidecar bridge/provider route is missing: ${needle}`);

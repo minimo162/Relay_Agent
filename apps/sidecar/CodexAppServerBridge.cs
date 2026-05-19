@@ -115,10 +115,8 @@ public sealed class CodexAppServerBridgeService : IDisposable
         var result = await SendRequestAsync("turn/start", new JsonObject
         {
             ["threadId"] = session.AppThreadId,
-            ["input"] = request.Input,
+            ["input"] = BuildTurnInput(request.Input, request.AttachmentIds),
             ["cwd"] = request.WorkArea ?? session.WorkArea,
-            ["attachmentIds"] = request.AttachmentIds is null ? null : JsonSerializer.SerializeToNode(request.AttachmentIds, JsonOptions.Default),
-            ["attachments"] = BuildAttachmentMetadata(request.AttachmentIds),
         }, cancellationToken);
         var appTurnId = ExtractString(result, "turnId")
             ?? ExtractString(result, "turn", "id")
@@ -721,21 +719,31 @@ public sealed class CodexAppServerBridgeService : IDisposable
         };
     }
 
-    private JsonArray? BuildAttachmentMetadata(IReadOnlyList<string>? attachmentIds)
+    private JsonArray BuildTurnInput(string input, IReadOnlyList<string>? attachmentIds)
     {
+        var array = new JsonArray();
+        array.Add(new JsonObject
+        {
+            ["type"] = "text",
+            ["text"] = input,
+        });
         if (attachmentIds is null || attachmentIds.Count == 0)
         {
-            return null;
+            return array;
         }
 
-        var array = new JsonArray();
         lock (stateGate)
         {
             foreach (var id in attachmentIds)
             {
                 if (attachments.TryGetValue(id, out var attachment))
                 {
-                    array.Add(JsonSerializer.SerializeToNode(ToAttachmentResponse(attachment), JsonOptions.Default));
+                    array.Add(new JsonObject
+                    {
+                        ["type"] = "mention",
+                        ["name"] = attachment.FileName,
+                        ["path"] = attachment.Path,
+                    });
                 }
             }
         }
@@ -1079,7 +1087,7 @@ public sealed record CodexAppServerOptions(
             "name = \"Relay M365 Copilot\"",
             $"base_url = \"{EscapeToml(ProviderBaseUrl)}\"",
             "env_key = \"RELAY_CODEX_PROVIDER_TOKEN\"",
-            "wire_api = \"chat\"",
+            "wire_api = \"responses\"",
             "",
         });
     }

@@ -66,7 +66,7 @@ assert(workbenchSource.includes("Codex app server"), "Workbench must describe th
 assert(workbenchSource.includes("/bridge/health"), "Workbench must use the bridge health endpoint");
 assert(workbenchSource.includes("/bridge/sessions"), "Workbench must show the bridge session endpoint");
 assert(workbenchSource.includes("/bridge/turns/"), "Workbench must show the bridge turn event endpoint");
-assert(workbenchSource.includes("/v1/chat/completions"), "Workbench must identify /v1 as the low-level app-server provider API");
+assert(workbenchSource.includes("/v1/responses"), "Workbench must identify /v1/responses as the low-level app-server provider API");
 assert(!workbenchSource.includes("Relay API Hub"), "default browser client must not remain the Relay API Hub");
 assert(!workbenchSource.includes("HTMLスターター"), "default browser client must not advertise starter HTML as the primary product");
 assert(!workbenchSource.includes("Relay PDF Review"), "PDF review UI must not remain the default client");
@@ -87,6 +87,7 @@ assert(sidecarProgram.includes("/bridge/approvals/{approvalId}"), "Sidecar must 
 assert(sidecarProgram.includes("/bridge/attachments"), "Sidecar must expose bridge attachment staging");
 assert(sidecarProgram.includes("/v1/models"), "Sidecar must expose the OpenAI-compatible models endpoint");
 assert(sidecarProgram.includes("/v1/chat/completions"), "Sidecar must expose the Copilot provider endpoint");
+assert(sidecarProgram.includes("/v1/responses"), "Sidecar must expose the Responses provider facade required by the app server");
 assert(!sidecarProgram.includes("/agui/relay"), "Sidecar must not expose the retired AG-UI Relay runner as a product route");
 assert(!sidecarProgram.includes("/v1/tools"), "Sidecar must not expose the retired public Relay tool catalog");
 assert(!sidecarProgram.includes("/api/tool-catalog"), "Sidecar must not expose the retired public Relay tool-catalog endpoint");
@@ -100,6 +101,7 @@ assert(bridgeSource.includes("item/permissions/requestApproval"), "bridge must f
 assert(bridgeSource.includes("item/tool/call"), "bridge must explicitly reject custom dynamic tool calls");
 assert(activeScriptText.includes("sidecar:app-server-bridge-smoke"), "pnpm check must include the app-server bridge smoke");
 assert(activeScriptText.includes("sidecar:app-server-artifact-smoke"), "pnpm check must include the app-server artifact smoke");
+assert(activeScriptText.includes("sidecar:app-server-real-provider-smoke"), "pnpm check must include the real app-server/provider compatibility smoke");
 assert(!scripts.check.includes("agent:agui-client-tool-smoke"), "pnpm check must not use the retired AG-UI Relay runner smoke");
 assert(!scripts.check.includes("agent:tool-catalog-smoke"), "pnpm check must not use the retired public Relay tool catalog smoke");
 assert(!scripts.check.includes("agent:officecli-registry-smoke"), "pnpm check must not use the retired Relay-owned OfficeCLI smoke");

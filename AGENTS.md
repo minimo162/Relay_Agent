@@ -63,8 +63,9 @@ decisions, verification runs, and known limitations.
 ## Tool Implementation Rules
 
 - Browser clients should use the Relay browser bridge (`/bridge/*`) as their
-  normal path. Direct `/v1/chat/completions` is retained as the app server's
-  provider boundary and developer diagnostic surface.
+  normal path. `/v1/responses` is the app server's provider boundary.
+  Direct `/v1/chat/completions` is retained only as a lower-level developer
+  diagnostic compatibility surface.
 - Use the bundled Codex app server as the harness boundary for sessions,
   turns, event streams, transcript continuity, tool-call loops, approvals, and
   diagnostics where possible. Do not rebuild those concepts as independent

@@ -375,6 +375,61 @@ app.MapPost("/v1/chat/completions", async (HttpRequest httpRequest, Cancellation
     }
 });
 
+app.MapPost("/v1/responses", async (HttpContext context, CancellationToken cancellationToken) =>
+{
+    var (request, error) = await OpenAiApi.ReadResponsesRequestAsync(context.Request, cancellationToken);
+    if (error is not null || request is null)
+    {
+        await (error ?? OpenAiApi.Error(400, "Invalid request.")).ExecuteAsync(context);
+        return;
+    }
+
+    if (!await chatGate.WaitAsync(0, cancellationToken))
+    {
+        await OpenAiApi.Error(409, "Copilot is already handling another request. Retry after the current request completes.", type: "conflict_error", code: "copilot_busy")
+            .ExecuteAsync(context);
+        return;
+    }
+
+    try
+    {
+        var prompt = OpenAiApi.BuildCopilotPrompt(request);
+        var reply = (await copilotChatClient.GetResponseAsync(
+            [new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt)],
+            new Microsoft.Extensions.AI.ChatOptions { ModelId = OpenAiApi.ModelId },
+            cancellationToken)).Text;
+        var parsed = OpenAiApi.ParseResponsesCopilotOutput(request, reply);
+        if (parsed.Error is not null)
+        {
+            await OpenAiApi.Error(502, $"Copilot returned an invalid Responses output: {parsed.Error}", type: "relay_provider_error", code: "invalid_responses_output")
+                .ExecuteAsync(context);
+            return;
+        }
+
+        await OpenAiApi.WriteResponsesResponseAsync(context.Response, request, parsed, cancellationToken);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        if (!context.Response.HasStarted)
+        {
+            await OpenAiApi.Error(408, "The request was cancelled or timed out.", type: "timeout_error", code: "request_cancelled")
+                .ExecuteAsync(context);
+        }
+    }
+    catch (Exception ex)
+    {
+        if (!context.Response.HasStarted)
+        {
+            await OpenAiApi.Error(502, $"Copilot provider failed: {ex.Message}", type: "api_error", code: "provider_error")
+                .ExecuteAsync(context);
+        }
+    }
+    finally
+    {
+        chatGate.Release();
+    }
+});
+
 app.MapPost("/api/shutdown", (IHostApplicationLifetime lifetime) =>
 {
     lifetime.StopApplication();
@@ -608,6 +663,7 @@ public sealed record RelayHtmlToolManifest(
                 new RelayHtmlToolEndpoint("GET", "/v1/models", "List OpenAI-compatible Relay models."),
                 new RelayHtmlToolEndpoint("GET", "/v1/models/{model}", "Read a single OpenAI-compatible Relay model."),
                 new RelayHtmlToolEndpoint("POST", "/v1/chat/completions", "Ask M365 Copilot through an OpenAI-compatible chat shape. Client tools are declared with OpenAI function tools and executed by the client."),
+                new RelayHtmlToolEndpoint("POST", "/v1/responses", "Provider facade used by the bundled Codex app server. Browser tools should normally use /bridge/* instead."),
                 new RelayHtmlToolEndpoint("POST", "/api/support-bundle", "Export an explicit redacted diagnostics bundle.")
             ]);
 }

@@ -15,16 +15,18 @@ through:
 Workbench browser UI
   -> Relay `/bridge/*`
   -> bundled Codex app server
-  -> Relay `/v1` m365-copilot provider
+  -> Relay `/v1/responses` m365-copilot provider facade
   -> M365 Copilot via Edge CDP
   -> Codex app-server native local tool loop
 ```
 
-The direct `/v1/chat/completions` path remains available only as the provider
-surface consumed by the app server and as a developer diagnostic. It must not
-become the user-facing fallback when the app-server runtime is missing,
-misconfigured, or incompatible. Failure to initialize the bundled app server
-should be a visible setup error with diagnostics.
+The direct `/v1/chat/completions` path remains available only as a lower-level
+diagnostic compatibility endpoint. The bundled app-server runtime uses
+`/v1/responses` because the pinned Codex app server rejects Chat Completions
+wire mode. Neither endpoint may become a user-facing fallback when the
+app-server runtime is missing, misconfigured, or incompatible. Failure to
+initialize the bundled app server should be a visible setup error with
+diagnostics.
 
 ### Main-Path Milestones
 
@@ -38,13 +40,12 @@ should be a visible setup error with diagnostics.
      app-server support without artifact, schema, license, and hash evidence.
 
 2. **Provider Compatibility Gate**
-   - Run the pinned app server against a mock Relay `/v1` provider before live
-     Copilot.
+   - Run the pinned app server against a mock Relay `/v1/responses` provider
+     before live Copilot.
    - Verify model discovery, authorization, non-streaming/streaming
      requirements, tool-call and tool-result message handling, error shape,
      and busy/cancel behavior.
-   - If the app server needs a provider facade beyond current Chat
-     Completions, implement it as an internal provider-adapter endpoint, not a
+   - Keep the Responses provider facade internal to the app-server path, not a
      new public task API.
 
 3. **User-Local Runtime Gate**
@@ -120,6 +121,14 @@ high-risk gaps into ordered implementation tasks.
   creates bridge sessions, starts turns, streams bridge events, and can cancel
   an active turn.
 - Added browser attachment staging under Relay user-local app-server storage.
+- Added a Relay `/v1/responses` provider facade and switched generated Codex
+  app-server config to `wire_api = "responses"` after the pinned app server
+  rejected Chat Completions wire mode.
+- Updated bridge turn start payloads to the schema-correct `input` item array,
+  with staged attachments represented as app-server mentions.
+- Added a deterministic real app-server/provider smoke that proves a pinned
+  app-server turn can receive a Copilot mock response and can execute a native
+  `commandExecution` tool loop through the app-server harness.
 - Corrected the bridge away from a Relay-owned tool worker. Relay now forwards
   Codex app-server native command/file/permission approval requests and rejects
   custom dynamic tool calls instead of executing `glob`, `grep`, `read`,
@@ -127,10 +136,10 @@ high-risk gaps into ordered implementation tasks.
 - Extended deterministic bridge smoke coverage to prove attachment staging,
   native approval request/resolution roundtrips, and fail-fast rejection of
   custom dynamic tools through `/bridge/*`.
-- Remaining high-risk work is real pinned app-server/provider compatibility,
-  generated protocol schema drift checks, broader native approval/event
-  compatibility with the upstream app-server protocol, and live Copilot bridge
-  E2E.
+- Remaining high-risk work is generated protocol schema drift checks, broader
+  native approval/event compatibility with the upstream app-server protocol,
+  polished Workbench tool/diff rendering, package-level runtime verification,
+  and live Copilot bridge E2E.
 
 ## 2026-05-20 Current Implementation Review Remediation Plan
 
@@ -173,19 +182,21 @@ was already started, not remove it.
   copy, and hard-cut guard that still treat the API Hub/direct `/v1` path as
   the primary product.
 - The bridge is still incomplete as a product runtime: a pinned upstream
-  app-server artifact manifest and fetch/package path now exist, but generated
-  protocol schemas, real provider compatibility, release hash verification
-  against materialized packages, and live bundled-runtime E2E still need to be
-  completed.
-- Provider compatibility is still unproven against the real app server. Relay
-  must verify whether the app server can consume Relay's existing
-  OpenAI-compatible `/v1/chat/completions` provider or needs a provider-only
-  compatibility facade.
+  app-server artifact manifest, fetch/package path, and real provider smoke
+  now exist, but generated protocol schemas, release hash verification against
+  materialized packages, broader native approval/event compatibility, and live
+  bundled-runtime E2E still need to be completed.
+- Provider compatibility is now proven through the real pinned app server
+  against Relay's `/v1/responses` provider facade. Chat Completions wire mode
+  is retained only as a lower-level diagnostic compatibility endpoint because
+  the pinned app server rejects it.
 - The sidecar supervisor and stdio JSONL client are only skeleton-level. They
   need schema-backed protocol validation, lifecycle cleanup, error taxonomy,
   cancellation, backpressure, and version mismatch handling.
-- Browser bridge endpoints need attachment staging, native app-server approval
-  roundtrips, support-bundle correlation, and work-area isolation.
+- Browser bridge endpoints include attachment staging and native app-server
+  approval forwarding. Remaining work is polish and coverage for rejection
+  rendering, support-bundle correlation, work-area isolation smokes, and
+  package/live E2E.
 - A default chatbot client now exists over the bridge. It still needs complete
   app-server tool cards, approval/rejection roundtrips, attachment staging,
   diff summaries, and live bundled-runtime E2E.
@@ -196,9 +207,10 @@ was already started, not remove it.
   requests and rejects custom dynamic tool-call requests.
 - `scripts/check-hard-cut-guard.mjs`, README, AGENTS, and release packaging
   now protect the bridge direction and fail package creation when the
-  materialized app-server runtime is missing. Remaining guards should cover
-  real provider compatibility, tool-loop dispatch, approvals, and attachment
-  staging.
+  materialized app-server runtime is missing. Current guards also require the
+  real app-server/provider smoke. Remaining guards should cover protocol
+  schema drift, package-level runtime verification, broader native approval
+  event rendering, and support-bundle redaction.
 - The canonical verification gate should keep the bridge smoke and expand it
   toward artifact/schema/provider/tool/approval/package/live-E2E coverage.
 
@@ -209,7 +221,7 @@ Continue the `BRIDGEMAIN*` queue in `tasks.md`:
 1. keep the existing bridge skeleton and smoke as the starting point;
 2. finish generated schemas and release hashes on top of the pinned
    redistributable app-server artifact/license manifest;
-3. validate Relay `/v1` as the app-server's `m365-copilot` provider;
+3. keep Relay `/v1/responses` as the app-server's `m365-copilot` provider;
 4. keep hardening the user-local app-server home/config model;
 5. harden the supervisor and stdio JSONL client binding;
 6. implement browser-safe session/turn/attachment/approval/tool-result bridge
@@ -218,8 +230,8 @@ Continue the `BRIDGEMAIN*` queue in `tasks.md`:
 8. remove Relay-owned local tool workers from the app-server bridge and rely
    on Codex app-server native tools;
 9. complete the default chatbot HTML client over the bridge;
-10. add artifact, provider, tool-loop, attachment, approval, packaging, and
-    support-bundle smokes;
+10. keep artifact, provider, native tool-loop, attachment, approval,
+    packaging, and support-bundle smokes in the canonical gate;
 11. bundle the app server in portable packages only after artifact, license,
     schema, and smoke gates pass;
 12. run live Copilot bridge E2E before any release that advertises the bundled

@@ -28,7 +28,7 @@ Bundled Codex app server
   sessions, turns, event stream, transcript continuity, tool loop, approvals
 
 Relay Core provider
-  OpenAI-compatible /v1/models and /v1/chat/completions for m365-copilot
+  OpenAI-compatible /v1/models and /v1/responses for m365-copilot
 
 M365 Copilot via Edge CDP
   primary reasoning controller; no OpenAI API key is required
@@ -54,8 +54,12 @@ The active bridge surface is:
 - `POST /bridge/sessions/{sessionId}/turns` to start a turn;
 - `GET /bridge/turns/{turnId}/events` to stream turn events;
 - `POST /bridge/turns/{turnId}/cancel` to cancel a turn;
-- `GET /v1/models` and `POST /v1/chat/completions` as the app server's
-  `m365-copilot` provider.
+- `GET /v1/models` and `POST /v1/responses` as the app server's
+  `m365-copilot` provider facade.
+
+`POST /v1/chat/completions` remains a lower-level diagnostic compatibility
+endpoint. Normal Workbench turns and the bundled app server use the bridge and
+Responses provider path.
 
 The bridge implementation currently includes a sidecar supervisor skeleton,
 stdio JSONL fixture smoke, browser bridge endpoints, and release guards. The

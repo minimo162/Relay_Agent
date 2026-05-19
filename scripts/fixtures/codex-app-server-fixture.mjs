@@ -52,6 +52,26 @@ function completeTurn(turn, text) {
   });
 }
 
+function fixtureInputText(input) {
+  if (typeof input === "string") return input;
+  if (!Array.isArray(input)) return String(input ?? "");
+  return input
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (!item || typeof item !== "object") return "";
+      if (typeof item.text === "string") return item.text;
+      if (Array.isArray(item.content)) {
+        return item.content
+          .map((part) => part && typeof part === "object" && typeof part.text === "string" ? part.text : "")
+          .filter(Boolean)
+          .join("\n");
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 rl.on("line", (line) => {
   if (!line.trim()) return;
   trace(`recv ${line}`);
@@ -106,11 +126,12 @@ rl.on("line", (line) => {
     case "turn/start": {
       const turnId = `turn-fixture-${++turnSeq}`;
       const threadId = params.threadId ?? "thread-fixture-unknown";
+      const inputText = fixtureInputText(params.input);
       const turn = { id: turnId, threadId, status: "running" };
       send({ id, result: { turn } });
       setTimeout(() => {
         notify("turn/started", { turnId, turn });
-        if (String(params.input ?? "").includes("fixture-command-approval")) {
+        if (inputText.includes("fixture-command-approval")) {
           const requestId = 9000 + turnSeq;
           pendingApprovals.set(requestId, { turn, kind: "command" });
           send({
@@ -128,7 +149,7 @@ rl.on("line", (line) => {
           });
           return;
         }
-        if (String(params.input ?? "").includes("fixture-file-approval")) {
+        if (inputText.includes("fixture-file-approval")) {
           const requestId = 9100 + turnSeq;
           pendingApprovals.set(requestId, { turn, kind: "file" });
           send({
@@ -145,7 +166,7 @@ rl.on("line", (line) => {
           });
           return;
         }
-        if (String(params.input ?? "").includes("fixture-dynamic-tool")) {
+        if (inputText.includes("fixture-dynamic-tool")) {
           const requestId = 9200 + turnSeq;
           pendingDynamicToolRequests.set(requestId, { turn });
           send({
@@ -161,7 +182,7 @@ rl.on("line", (line) => {
           });
           return;
         }
-        completeTurn(turn, `Fixture response for: ${params.input ?? ""}`);
+        completeTurn(turn, `Fixture response for: ${inputText}`);
       }, 10);
       break;
     }

@@ -61,8 +61,9 @@ function inspectPublishedPackage(rid, allowedEntries) {
   }
 
   assert(existsSync(join(appRoot, "relay-core")), `${rid} package must keep Relay Core under app/relay-core`);
+  assert(existsSync(join(appRoot, "app-server")), `${rid} package must keep Codex app-server under app/app-server`);
   assert(existsSync(join(appRoot, "relay-assets", "relay-agent.ico")), `${rid} package must keep icon assets under app/relay-assets`);
-  assert(existsSync(join(appRoot, "relay-core", "relay-tools", "ripgrep")), `${rid} package must keep ripgrep under app/relay-core/relay-tools`);
+  assert(!existsSync(join(appRoot, "relay-core", "relay-tools")), `${rid} package must not revive retired Relay-owned tool bundles`);
 }
 
 function assert(condition, message) {
