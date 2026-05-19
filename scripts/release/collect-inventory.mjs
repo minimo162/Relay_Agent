@@ -43,7 +43,7 @@ const files = inputs.flatMap((input) => walk(resolve(root, input))).map((file) =
 const inventory = {
   schemaVersion: "RelayReleaseInventory.v1",
   generatedAt: new Date().toISOString(),
-  activeArchitecture: "html-tool-api-hub-relay-core-sidecar",
+  activeArchitecture: "codex-app-server-bridge-relay-core-sidecar",
   portableRootPolicy: {
     windows: ["Relay Agent.exe", "README-FIRST.html", "LICENSES/", "app/"],
     linux: ["relay-agent", "README-FIRST.html", "LICENSES/", "app/"],
@@ -80,6 +80,7 @@ const sbom = {
     { name: "Relay.Launcher", source: "self-contained dotnet publish" },
     { name: "ripgrep", source: "tools/ripgrep copied into app/relay-core/relay-tools/ripgrep" },
     { name: "officecli", source: "Windows release bundle when dist/relay-agent-win-x64/app/relay-core/relay-tools/officecli/officecli.exe is present", optional: true },
+    { name: "Codex app server", source: "pending BRIDGEGAP artifact/license/schema gate before production bundle", optional: true },
   ],
   intentionallyExcludedRuntimeFamilies: inventory.excludedLegacyActivePaths,
   fileHashes: files,

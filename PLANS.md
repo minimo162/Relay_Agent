@@ -4,92 +4,106 @@ Date: 2026-05-18
 
 ## 2026-05-20 Current Implementation Review Remediation Plan
 
-This review supersedes any older wording that implies the Codex app-server
-bridge is already shipped as a runtime feature. The current implemented product
-after the `0.3.25` release is:
+This review supersedes the temporary Agent-Framework-only correction. The
+active target architecture is now the bundled Codex app-server mediation path:
 
-- a browser-hosted Relay API Hub served by Relay Core;
-- a .NET sidecar exposing OpenAI-compatible `/v1/models` and
-  `/v1/chat/completions` backed by M365 Copilot over Edge CDP;
-- portable packages with a hardened visible root:
-  `Relay Agent.exe` or `relay-agent`, `README-FIRST.html`, `LICENSES/`, and
-  `app/`;
-- Codex app-server compatibility documents and protocol fixtures only.
+- a browser-hosted chatbot/workbench under `apps/workbench/`;
+- a self-contained .NET sidecar under `apps/sidecar/`;
+- a pinned, redistributable Codex app server bundled under `app/app-server`;
+- Relay browser bridge endpoints that expose the app server safely to local
+  browser clients;
+- Relay Core's OpenAI-compatible `/v1` provider backed by M365 Copilot over
+  Edge CDP;
+- Relay-owned local tool governance, validation, approvals, backups, diffs,
+  diagnostics, and user-local storage.
 
-The runtime Codex app-server bridge is **not** complete yet. Relay does not yet
-bundle a pinned app-server runtime, does not supervise an app-server process,
-does not expose browser-to-app-server turn/event endpoints, and does not ship a
-chatbot HTML client backed by that bridge. Direct `/v1` remains the current
-supported product path until the bridge runtime passes its own acceptance
-gates.
+The product runtime chain is:
+
+```text
+Workbench / task-specific HTML tools
+  -> Relay browser bridge
+  -> bundled Codex app server
+  -> Relay `/v1` m365-copilot provider
+  -> M365 Copilot via Edge CDP
+```
+
+Microsoft Agent Framework and AG-UI remain useful reference/compatibility
+surfaces where already implemented, but they are not the sole target runtime.
+The immediate work is to complete and harden the Codex app-server bridge that
+was already started, not remove it.
 
 ### Review Findings
 
-- `APPBRIDGE*` completed app-server contract research, fixture creation, and
-  release package-root hardening, but its task wording overstates runtime
-  completion.
-- `docs/IMPLEMENTATION.md` correctly says app-server is not an active product
-  path, while `PLANS.md` and `tasks.md` can be read as if the bridge already
-  exists.
-- There is no pinned redistributable app-server artifact, generated schema
-  bundle, license inventory, or hash recorded for a bundled runtime.
-- There is no sidecar app-server supervisor, stdio JSONL client, initialize
-  handshake, turn lifecycle management, or shutdown policy.
-- There are no browser-safe bridge endpoints for creating sessions, starting
-  turns, streaming events, cancelling turns, staging attachments, or submitting
-  approvals/tool results.
-- There is no default chatbot HTML client that uses the bridge. The current UI
-  is still an API Hub for direct OpenAI-compatible usage.
-- There is no app-server-visible local tool worker behind the bridge. Existing
-  public `/v1` deliberately returns client-managed tool calls and must not
-  execute client tools server-side.
-- There are no bridge-specific acceptance smokes proving app-server
-  initialize, turn streaming, tool-call roundtrip, attachment staging,
-  mutation approval, support-bundle correlation, or no-shared-folder-cache
-  behavior.
-- Current portable packaging reserves a clean `app/` layout but does not prove
-  an `app/app-server` runtime exists.
+- `apps/sidecar/CodexAppServerBridge.cs` and `/bridge/*` endpoints exist as a
+  useful skeleton, and `pnpm sidecar:app-server-bridge-smoke` proves fixture
+  initialization/session/turn/event streaming. This work should be kept and
+  completed.
+- The implementation is not wrong because it contains the bridge skeleton; the
+  wrong parts are the surrounding product defaults, documentation, release
+  copy, and hard-cut guard that still treat the API Hub/direct `/v1` path as
+  the primary product.
+- The bridge is still fixture-backed and incomplete as a product runtime:
+  there is no pinned upstream app-server artifact, generated schema bundle,
+  license inventory, release hash, or bundled `app/app-server` runtime.
+- Provider compatibility is still unproven against the real app server. Relay
+  must verify whether the app server can consume Relay's existing
+  OpenAI-compatible `/v1/chat/completions` provider or needs a provider-only
+  compatibility facade.
+- The sidecar supervisor and stdio JSONL client are only skeleton-level. They
+  need schema-backed protocol validation, lifecycle cleanup, error taxonomy,
+  cancellation, backpressure, and version mismatch handling.
+- Browser bridge endpoints need attachment staging, approval/tool-result
+  roundtrips, support-bundle correlation, and work-area isolation.
+- There is no default chatbot HTML client over the bridge. The current
+  `apps/workbench/src/App.tsx` is still an API Hub page that calls
+  `/v1/chat/completions` directly and advertises starter HTML.
+- There is no app-server-visible local tool worker for `glob`, `grep`, `read`,
+  workspace/diff, write/edit/patch, Office/PDF read, or semantic OfficeCLI
+  mutation. Existing Relay tool logic should be adapted behind the app-server
+  protocol instead of becoming public `/v1/tools` product surface.
+- `scripts/check-hard-cut-guard.mjs`, `README.md`, and the on-disk
+  `AGENTS.md` still describe the API Hub/client-managed-tools direction. They
+  need to be updated so they protect the bundled Codex app-server direction.
+- `scripts/release/package-sidecar.mjs` still writes release notes and
+  `README-FIRST.html` copy that say "Relay API Hub" and explicitly list
+  "Codex app-server binary bundle" as excluded/planned only. This must become
+  a packaging failure once the app-server artifact is pinned.
+- The canonical verification gate should keep the bridge smoke and expand it
+  toward artifact/schema/provider/tool/approval/package/live-E2E coverage.
 
 ### Remediation Direction
 
-Keep the current `/v1` API Hub honest as the released product while building a
-separate bridge runtime in ordered slices. Do not remove or hide the direct
-OpenAI-compatible API until the bridge has deterministic smokes and a live
-Copilot acceptance path. Do not reintroduce `/v1/tools`, `/agui/relay`,
-document-search modes, Office modes, code modes, or old Workbench fallback
-paths as public product surfaces.
+Continue the `BRIDGEGAP*` queue in `tasks.md`:
 
-The next implementation queue is `BRIDGEGAP*` in `tasks.md`:
-
-1. correct the planning truth and mark the current runtime gap;
-2. pin the redistributable app-server artifact, license set, and generated
-   schemas;
-3. validate Relay `/v1` as an app-server provider;
+1. keep the existing bridge skeleton and smoke as the starting point;
+2. pin the redistributable app-server artifact, license set, generated schemas,
+   and release hashes;
+3. validate Relay `/v1` as the app-server's `m365-copilot` provider;
 4. create the user-local app-server home/config model;
-5. implement the sidecar supervisor;
-6. implement the typed stdio JSONL client binding;
-7. implement browser-safe session/turn bridge endpoints;
-8. stream bridge events with app-server/Relay/Copilot correlation ids;
-9. stage browser attachments without writing to work areas;
-10. implement read-only local tools behind the app-server protocol;
-11. implement mutating tools with approval, backups, and diffs;
-12. build the default chatbot HTML client over the bridge;
-13. add bridge, tool-loop, attachment, approval, and packaging smokes;
-14. bundle the app-server runtime in portable packages only after artifact,
-   license, and schema checks pass;
-15. run live Copilot bridge E2E before any release that advertises the bridge;
-16. make the chatbot bridge the primary UX and demote direct `/v1` to
-    developer diagnostics after all gates pass.
+5. harden the supervisor and stdio JSONL client binding;
+6. implement browser-safe session/turn/attachment/approval/tool-result bridge
+   endpoints;
+7. stream bridge events with app-server/Relay/Copilot correlation ids;
+8. implement read-only and mutating local tool workers behind the app-server
+   protocol;
+9. build the default chatbot HTML client over the bridge;
+10. add artifact, provider, tool-loop, attachment, approval, packaging, and
+    support-bundle smokes;
+11. bundle the app server in portable packages only after artifact, license,
+    schema, and smoke gates pass;
+12. run live Copilot bridge E2E before any release that advertises the bundled
+    app-server runtime.
 
 Acceptance for this planning slice:
 
-- `PLANS.md` and `tasks.md` clearly state that the app-server bridge runtime is
-  pending, not shipped.
-- `tasks.md` contains pending runtime implementation tasks instead of treating
-  `APPBRIDGE*` as full completion.
-- No code or non-planning documentation is changed in this slice.
+- `PLANS.md` and `tasks.md` identify the concrete implementation gaps above.
+- `BRIDGEGAP*` is the active implementation queue.
+- `AFAGUI*` is not introduced as the active queue.
+- The Workbench, guard scripts, release copy, and top-level docs are allowed to
+  change only enough to stop protecting the superseded API-Hub-first story and
+  to make the existing `/bridge/*` skeleton the visible active path.
 
-## 2026-05-19 HTML Tool API Hub Cutover
+## Superseded: 2026-05-19 HTML Tool API Hub Cutover
 
 Relay_Agent is pivoting away from the focused PDF review client. The active
 product is now a **Relay API Hub**: a small browser page served by Relay Core

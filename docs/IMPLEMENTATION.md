@@ -2,22 +2,15 @@
 
 ## Status
 
-- Current phase: Relay_Agent uses Relay API Hub, a browser-hosted local HTML
-  tool gateway served by a self-contained .NET Relay Core sidecar. Relay Core
-  is now the public OpenAI-compatible localhost API for M365 Copilot:
-  `GET /v1/models`, `GET /v1/models/{model}`, and
-  `POST /v1/chat/completions`. The default browser client is thin: it explains
-  how arbitrary local HTML tools connect with `baseURL`, `apiKey`, and
-  `model`, shows the API manifest, provides starter HTML, tests the chat
-  endpoint, and keeps diagnostics collapsed. Public tool calling is
-  client-managed OpenAI function calling; Relay returns `tool_calls` and never
-  executes client tools server-side. PDF review is retired as the default
-  product surface. File search, Office editing, coding, PDF review, and other
-  workflows are expected to be external thin HTML tools or SDK clients over the
-  OpenAI-compatible API. AionUi, OpenWork, Tauri, Python workflow wrappers,
-  Codex app-server, the old generic Workbench, the old PDF client, AG-UI as a
-  public integration path, `/v1/tools` as a public catalog, and hidden fallback
-  runners are not active product paths.
+- Current phase: Relay_Agent targets a bundled Codex app-server bridge served
+  by a self-contained .NET Relay Core sidecar. The default browser client is
+  Relay Bridge Workbench: it checks Relay Core and `/bridge/*` readiness,
+  exposes the bridge/session/turn/event-stream route map, and treats direct
+  `/v1/models` plus `/v1/chat/completions` as the lower-level
+  `m365-copilot` provider surface consumed by the app server. PDF review,
+  API-Hub-first HTML tool guidance, mode-based Workbench surfaces, AionUi,
+  OpenWork, Tauri, Python workflow wrappers, `/v1/tools` as a public catalog,
+  and hidden fallback runners are not active product paths.
 - Repository state: active source lives under `apps/workbench/`,
   `apps/sidecar/`, `apps/launcher/`, and release/support scripts. Historical
   docs may still mention the removed desktop/Tauri/AionUi/OpenCode paths, but
@@ -30,10 +23,12 @@
   task metadata. The current executable plan is `PLANS.md`, with concrete
   OpenCode-compatible migration steps in `tasks.md`.
 - Packaging policy: the primary release path is portable archives for Relay
-  Core plus the API Hub: Windows zip plus Linux tarball. The Windows user-scope
-  NSIS installer remains an optional convenience artifact for shortcuts and
-  uninstall integration. Tauri NSIS packaging is historical and not an active
-  release path.
+  Core plus Relay Bridge Workbench: Windows zip plus Linux tarball. The Windows
+  user-scope NSIS installer remains an optional convenience artifact for
+  shortcuts and uninstall integration. Tauri NSIS packaging is historical and
+  not an active release path. A production release must not claim fully bundled
+  app-server runtime support until artifact, schema, license, provider,
+  tool-loop, approval, packaging, and live Copilot gates pass.
 - Historical note: older milestone entries below are preserved as implementation history. They may mention removed workbook-era or shared-contract-package work that is no longer part of the live repo truth.
 
 ## Milestone Log
@@ -20966,3 +20961,60 @@ Result:
   `relay-agent-0.3.15-win-x64.zip`,
   `relay-agent-0.3.15-linux-x64.tar.gz`, release inventory, SBOM, and
   `relay-agent-0.3.15-sha256.txt`.
+
+## 2026-05-20: Bundled App-Server Bridge Re-Alignment
+
+Change:
+
+- Re-aligned the active product story from the superseded API-Hub-first path
+  back to the bundled Codex app-server mediation path.
+- Kept the existing `CodexAppServerBridgeService`, `/bridge/*` endpoints,
+  fixture app server, and `sidecar:app-server-bridge-smoke` as active bridge
+  implementation starting points.
+- Updated the Workbench to present `Relay Bridge Workbench` and to surface
+  `/bridge/health`, session, turn, event-stream, and lower-level
+  `/v1/chat/completions` provider routes without advertising the API Hub as
+  the primary user path.
+- Updated hard-cut and Workbench smoke scripts so the canonical checks protect
+  the bridge direction and reject API-Hub-first UI copy.
+- Updated README, repository rules, and portable package copy to state the
+  target chain:
+
+```text
+Workbench -> Relay bridge -> bundled Codex app server -> Relay /v1 provider -> M365 Copilot
+```
+
+Notes:
+
+- This slice does not claim that a pinned app-server binary is already bundled
+  for production use. Artifact pinning, schema/license evidence, provider
+  compatibility, app-server tool workers, approval roundtrips, packaging gates,
+  and live Copilot bridge E2E remain in the `BRIDGEGAP*` queue.
+
+Verification commands run locally:
+
+```bash
+pnpm --filter @relay-agent/workbench typecheck
+node scripts/check-hard-cut-guard.mjs
+node scripts/api-tool-ux-smoke.mjs
+node scripts/workbench-standard-chat-smoke.mjs
+pnpm build
+dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release
+pnpm sidecar:app-server-bridge-smoke
+pnpm check
+```
+
+Result:
+
+- Workbench typecheck passed.
+- Hard-cut guard passed and now protects the bridge Workbench plus
+  `sidecar:app-server-bridge-smoke` path.
+- Bridge Workbench UX smokes passed.
+- Workbench production build passed and prepared sidecar assets with the new
+  bridge asset contract.
+- Sidecar Release build passed.
+- Fixture-backed Codex app-server bridge smoke passed.
+- Full `pnpm check` passed, including hard-cut guard, Workbench
+  typecheck/build, sidecar build/smokes, Codex app-server bridge smoke,
+  existing DCI/tool smokes, sidecar security smoke, and release inventory/SBOM
+  generation.

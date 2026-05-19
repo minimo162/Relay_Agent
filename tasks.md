@@ -4,42 +4,52 @@ Date: 2026-05-18
 
 ## Current Review Correction
 
-The current released implementation is the Relay API Hub plus Relay Core's
-OpenAI-compatible `/v1` provider API. The Codex app-server bridge is a target
-runtime architecture, but it is not yet shipped. `APPBRIDGE*` completed
-contract research, fixtures, and portable package-root hardening only.
+The active direction is the bundled Codex app-server mediation architecture,
+not the temporary Agent-Framework-only correction. The current implementation
+contains the right early bridge skeleton but still has gaps:
 
-The next active queue is `BRIDGEGAP*`. It closes the gap between the planned
-app-server architecture and the current implementation without reviving old
-Workbench modes, `/agui/relay`, `/v1/tools`, AionUi, OpenWork/OpenCode runtime
-fallbacks, or Relay-specific document-search/Office/code modes.
+- the default browser UI is still an API Hub that calls `/v1/chat/completions`
+  directly;
+- `CodexAppServerBridgeService`, `/bridge/*`, the fixture app server, and
+  `sidecar:app-server-bridge-smoke` exist and should remain active;
+- the bridge is not yet backed by a pinned redistributable app-server runtime;
+- provider compatibility, generated schemas, licensing, bundled packaging,
+  app-server-visible local tools, attachment staging, approvals, and live E2E
+  are still incomplete.
+
+The next active queue is `BRIDGEGAP*`. `AFAGUI*` was a mistaken correction and
+must not be introduced.
 
 ## Active Goal
 
-Move Relay away from default first-party feature modes and toward a stable
-local provider + harness architecture: Relay Core exposes M365 Copilot through
-an OpenAI-compatible provider API, and a Codex app server-compatible local
-harness becomes the preferred endpoint for task-specific HTML tools. Tool
-calling remains client/app-server managed; Relay-side local tool execution is
-not part of the target public product contract.
+Move Relay to one bundled app-server product path:
 
-Relay still uses M365 Copilot through Edge CDP as the reasoning controller.
-The next direction is to put a Codex app server-compatible harness between
-HTML tools and Relay's `/v1` provider so each HTML tool does not reinvent
-sessions, tool loops, transcripts, approvals, and event streaming. Because the
-preferred app-server transport is stdio, browser clients reach it through a
-Relay-owned browser/app-server bridge, not by opening stdio directly.
-The default user-facing client should be a normal chatbot-style HTML page that
-connects to that app server, uses M365 Copilot through Relay as the reasoning
-provider, and performs local file work through app-server tools.
+```text
+Workbench and task-specific HTML tools
+  normal chatbot/browser UI, no direct Copilot CDP automation
 
-The current product cutover is no longer the PDF review HTML client. Relay Core
-is now planned as a local OpenAI-compatible Copilot gateway, and the default
-client is Relay API Hub: first-run guidance, manifest discovery, starter HTML
-generation, OpenAI-compatible chat API testing, client-managed tool-calling
-examples, and collapsed diagnostics. PDF review, Office editing, file search,
-coding, and similar workflows should be external thin HTML tools that call the
-normal API; Relay-side local tools are not part of the target public product.
+Relay browser/app-server bridge
+  token-protected loopback HTTP/SSE facade for browser clients
+
+Bundled Codex app server
+  sessions, turns, items, event stream, tool loop, transcript continuity
+
+Relay Core `/v1` provider
+  OpenAI-compatible m365-copilot provider backed by Edge CDP
+
+M365 Copilot over Edge CDP
+  primary reasoning controller; no OpenAI API key
+
+Relay local tool worker
+  workspace-contained read/write/search/Office/PDF/verification tools with
+  validation, approvals, backups, diffs, logs, and user-local storage
+```
+
+The direct `/v1` API remains the lower-level provider API consumed by the
+bundled app server and by developer diagnostics. It is not the primary
+user-facing HTML tool path once the bridge is complete. File search, Office
+editing, coding, PDF review, and verification are recipes over the bundled app
+server's tool loop, not first-party Relay modes.
 
 The completed active queue is `RESPONSIVE*`. It implements the 2026-05-18
 Installed Workbench Responsiveness Plan from `PLANS.md`: make installed
@@ -126,7 +136,7 @@ primary distribution, but make the first-run path one obvious launcher
 (`Relay Agent.exe` on Windows and `relay-agent` on Linux) while moving HTML to
 optional help.
 
-The completed active queue is `COREAPI*`. It implements the 2026-05-19 Copilot Gateway
+The completed historical queue is `COREAPI*`. It implements the 2026-05-19 Copilot Gateway
 And Relay Core API Decoupling Plan from `PLANS.md`: make the .NET sidecar the
 stable local agent API boundary for Copilot connectivity, AG-UI runs, local
 tools, approvals, workspace policy, diagnostics, and future thin HTML clients,
@@ -146,21 +156,23 @@ chapter/heading sections, preserve a section correspondence table for
 multi-PDF comparison, and keep the portable package as the primary release
 artifact.
 
-The completed active queue is `HTMLTOOL*`. It superseded the PDFHTML/PDFALIGN
-product surface with an API Hub. Its AG-UI/local-tool assumptions are now
-superseded by the `OPENAIAPI*` queue, which makes the public product a normal
-OpenAI-compatible API with client-managed tool calling only.
+The completed historical queue is `HTMLTOOL*`. It superseded the PDFHTML/PDFALIGN
+product surface with an API Hub, but that API-Hub-first direction is now
+superseded by the bundled Codex app-server bridge direction.
 
-The completed active queue is `OPENAIAPI*`. It implements the 2026-05-19
+The completed historical queue is `OPENAIAPI*`. It implements the 2026-05-19
 OpenAI-Compatible Local API Rules from `PLANS.md`: make the primary product
 contract a normal OpenAI-compatible local API backed by M365 Copilot. Any
 self-made HTML file, script, or OpenAI-compatible client should be able to
 connect by setting `baseURL`, `apiKey`, and `model`, and ordinary
 client-managed OpenAI tool calling should work through `/v1/chat/completions`.
 Relay-side local tools, `/v1/tools`, and `/agui/relay` are removed from the
-target public product contract.
+target public product contract. That public-product framing is now superseded:
+`/v1` remains a lower-level provider/developer diagnostic surface, while the
+primary user-facing path becomes Workbench/browser bridge -> bundled app
+server -> Relay `/v1` provider.
 
-The completed planning/package-root queue is `APPBRIDGE*`. It implements only
+The completed historical planning/package-root queue is `APPBRIDGE*`. It implements only
 the research and release-hardening slice of the 2026-05-20 Codex App Server
 Mediation Plan from `PLANS.md`: keep Relay's `/v1` API as the Copilot-backed
 provider boundary, record the app-server contract, add protocol fixtures, and
@@ -188,26 +200,24 @@ acceptance criteria have broken.
 ## Execution Rules
 
 - Execute tasks in order unless a task explicitly says it can run in parallel.
-- Do not add Relay-side public tool endpoints or model-visible Relay-specific
-  tool names.
-- Do not fix Copilot mistakes by adding broad prompt-only folklore.
-- Prefer existing Codex app server-compatible harness semantics over inventing
-  new Relay app protocols.
-- Keep Relay's direct `/v1` API as provider/diagnostic surface. Do not make it
-  the recommended first path for task-specific HTML tools once `APPBRIDGE*`
-  lands.
-- Do not expose AG-UI as a public product path while the `OPENAIAPI*` /
-  `APPBRIDGE*` cutover is active.
+- Do not add AionUi, OpenCode/OpenWork runtime, Tauri, PDF review mode, or
+  API-Hub-first fallback paths.
+- Do not remove or bypass the Codex app-server bridge skeleton unless this
+  plan is explicitly changed.
+- Do not add Relay-side public local-tool endpoints as a new product surface.
+  The model-visible tool catalog should be exposed through the app-server tool
+  protocol.
+- Do not fix Copilot mistakes by adding broad prompt-only folklore; prefer
+  app-server/tool-state constraints, schema validation, and visible recovery.
 - Do not create separate first-party modes for file search, Office editing, or
-  coding. Those are recipes over the app-server tool loop surfaced through the
-  chatbot HTML client.
+  coding. They are recipes over the app-server tool loop.
+- Keep `/v1` as a lower-level provider/developer diagnostic path. It should be
+  consumed by the bundled app server for normal user-facing work.
 - Every completed task must update `docs/IMPLEMENTATION.md` with the artifact
   and verification result.
 - Run at least `pnpm check` before marking a milestone complete.
-- Do not implement new generic Workbench UI features while the PDFHTML cutover
-  text below is active; it is now superseded by the HTMLTOOL cutover.
-- Do not keep the generic Workbench or PDF review client as a release fallback
-  after HTMLTOOL acceptance passes.
+- Do not mark a task complete while the canonical checks still enforce the
+  superseded API-Hub-first path.
 
 ## Task Queue
 
@@ -217,21 +227,62 @@ Status: completed
 
 Scope:
 
-- Review the current implementation against the `APPBRIDGE*` plan.
-- State that the released product is still Relay API Hub plus Relay Core's
-  OpenAI-compatible `/v1` provider API.
-- State that `APPBRIDGE*` completed contract research, fixtures, and
-  package-root hardening, not the runtime app-server bridge.
-- Create the `BRIDGEGAP*` runtime implementation queue.
-- Keep this slice limited to `PLANS.md` and `tasks.md`.
+- Historical planning correction that created the first `BRIDGEGAP*` runtime
+  implementation queue.
+- Its "API Hub is the current product" wording is now superseded by
+  `BRIDGEGAP-00A`; keep this entry only as provenance for the queue.
 
 Acceptance:
 
-- `PLANS.md` includes the 2026-05-20 Current Implementation Review
-  Remediation Plan.
-- `tasks.md` marks `APPBRIDGE*` as planning/package-root work only and lists
-  pending runtime bridge tasks.
-- No code or non-planning documentation changes are part of this slice.
+- Historical entry remains present, but active implementation follows
+  `BRIDGEGAP-00A` and later.
+
+### BRIDGEGAP-00A - Re-Align Implementation Review To Bundled App Server
+
+Status: completed
+
+Scope:
+
+- Treat the existing `CodexAppServerBridgeService`, `/bridge/*` routes,
+  fixture app server, and `sidecar:app-server-bridge-smoke` as active starting
+  points, not drift to remove.
+- Update stale planning/docs/release language that still says:
+  - Relay API Hub is the primary product;
+  - direct `/v1/chat/completions` is the recommended HTML tool path;
+  - tools are client-managed only;
+  - Codex app-server bundle is excluded or planned only.
+- Rebase `scripts/check-hard-cut-guard.mjs` so it protects the bundled
+  app-server direction:
+  - requires `/bridge/health`, `/bridge/sessions`, turn start/cancel, and
+    event streaming routes;
+  - requires `sidecar:app-server-bridge-smoke` in `pnpm check`;
+  - allows direct `/v1` only as provider/developer diagnostics;
+  - rejects API-Hub-first Workbench copy as the default product surface;
+  - rejects release copy that says the app-server bundle is excluded once
+    `BRIDGEGAP-01` is complete.
+- Update `README.md`, `AGENTS.md`, `docs/IMPLEMENTATION.md`, and
+  `scripts/release/package-sidecar.mjs` copy to align with this direction.
+
+Acceptance:
+
+- Active docs state the target runtime chain:
+  Workbench -> Relay bridge -> bundled Codex app server -> Relay `/v1`
+  provider -> M365 Copilot.
+- Guard and release scripts no longer protect the obsolete API-Hub-first
+  story.
+- `pnpm check` still includes `pnpm sidecar:app-server-bridge-smoke`.
+- No app-server runtime completion is claimed before `BRIDGEGAP-01`,
+  `BRIDGEGAP-02`, `BRIDGEGAP-12`, `BRIDGEGAP-13`, and `BRIDGEGAP-14` pass.
+
+Verification:
+
+- `pnpm --filter @relay-agent/workbench typecheck`
+- `node scripts/check-hard-cut-guard.mjs`
+- `node scripts/api-tool-ux-smoke.mjs`
+- `node scripts/workbench-standard-chat-smoke.mjs`
+- `pnpm build`
+- `dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release`
+- `pnpm sidecar:app-server-bridge-smoke`
 
 ### BRIDGEGAP-01 - Pin App-Server Artifact, License, And Generated Schemas
 

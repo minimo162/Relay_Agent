@@ -8,19 +8,23 @@ const app = read("apps/workbench/src/App.tsx");
 const packageJson = JSON.parse(read("package.json"));
 
 for (const needle of [
-  "Relay API Hub",
+  "Relay Bridge Workbench",
+  "Codex app server",
   "/health",
-  "/v1/relay/manifest",
-  "/v1/models",
+  "/bridge/health",
+  "/bridge/sessions",
+  "/bridge/turns/",
   "/v1/chat/completions",
   "aria-live=\"polite\"",
   "role=\"alert\"",
   "<summary>診断</summary>",
 ]) {
-  assert(app.includes(needle), `PDF client surface is missing: ${needle}`);
+  assert(app.includes(needle), `bridge workbench surface is missing: ${needle}`);
 }
 
 for (const forbidden of [
+  "Relay API Hub",
+  "HTMLスターター",
   "CopilotChat",
   "CopilotKitProvider",
   "useDefaultRenderTool",
@@ -34,7 +38,7 @@ for (const forbidden of [
   "/agui/relay",
   "/v1/tools",
 ]) {
-  assert(!app.includes(forbidden), `Default PDF client must not expose generic chat/workbench code: ${forbidden}`);
+  assert(!app.includes(forbidden), `Bridge Workbench must not expose retired UI code: ${forbidden}`);
 }
 
 for (const scriptName of ["agent:tool-catalog-smoke", "agent:workbench-standard-chat-smoke", "agent:api-tool-ux-smoke"]) {

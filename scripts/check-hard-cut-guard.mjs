@@ -53,29 +53,38 @@ for (const forbidden of [
 assert(fileExists("apps/sidecar/Relay.Sidecar.csproj"), "missing .NET sidecar project");
 assert(fileExists("apps/workbench/package.json"), "missing browser client package");
 assert(read("PLANS.md").includes("No transitional fallback architecture"), "PLANS.md must retain hard-cutover rule");
-assert(read("README.md").includes("HTML tool API"), "README.md must describe the HTML tool API architecture");
-assert(read("AGENTS.md").includes("HTML tool API"), "AGENTS.md must describe the HTML tool API architecture");
+assert(read("PLANS.md").includes("bundled Codex app-server mediation path"), "PLANS.md must describe the bundled app-server architecture");
+assert(read("README.md").includes("Codex app-server bridge"), "README.md must describe the Codex app-server bridge architecture");
+assert(read("AGENTS.md").includes("Codex app-server bridge"), "AGENTS.md must describe the Codex app-server bridge architecture");
 const workbenchSource = walk("apps/workbench/src")
   .filter((path) => /\.(ts|tsx|css)$/.test(path))
   .map((path) => read(path))
   .join("\n");
-assert(workbenchSource.includes("Relay API Hub"), "default browser client must be the Relay API Hub");
-assert(workbenchSource.includes("/v1/relay/manifest"), "API Hub must call the Relay Core manifest API");
-assert(workbenchSource.includes("/v1/models"), "API Hub must expose the OpenAI-compatible model API");
-assert(workbenchSource.includes("/v1/chat/completions"), "API Hub must expose the OpenAI-compatible Copilot API");
+assert(workbenchSource.includes("Relay Bridge Workbench"), "default browser client must be the Relay Bridge Workbench");
+assert(workbenchSource.includes("Codex app server"), "Workbench must describe the Codex app server bridge");
+assert(workbenchSource.includes("/bridge/health"), "Workbench must use the bridge health endpoint");
+assert(workbenchSource.includes("/bridge/sessions"), "Workbench must show the bridge session endpoint");
+assert(workbenchSource.includes("/bridge/turns/"), "Workbench must show the bridge turn event endpoint");
+assert(workbenchSource.includes("/v1/chat/completions"), "Workbench must identify /v1 as the low-level app-server provider API");
+assert(!workbenchSource.includes("Relay API Hub"), "default browser client must not remain the Relay API Hub");
+assert(!workbenchSource.includes("HTMLスターター"), "default browser client must not advertise starter HTML as the primary product");
 assert(!workbenchSource.includes("Relay PDF Review"), "PDF review UI must not remain the default client");
 assert(!workbenchSource.includes("/v1/pdf/"), "PDF review client routes must not remain in the default client");
-assert(!workbenchSource.includes("CopilotChat"), "generic CopilotKit Workbench must not remain the default client");
-assert(!workbenchSource.includes("/agui/relay"), "default API Hub must not advertise AG-UI as the public HTML tool contract");
-assert(!workbenchSource.includes("/v1/tools"), "default API Hub must not advertise Relay-owned local tools as the public HTML tool contract");
+assert(!workbenchSource.includes("CopilotChat"), "old CopilotKit Workbench must not remain the default client");
+assert(!workbenchSource.includes("/agui/relay"), "default Workbench must not route through AG-UI while the bundled app-server bridge is active");
+assert(!workbenchSource.includes("/v1/tools"), "default Bridge Workbench must not advertise Relay-owned local tools as a public HTML tool contract");
 const sidecarProgram = read("apps/sidecar/Program.cs");
 const sidecarSource = walk("apps/sidecar")
   .filter((path) => /\.(cs|csproj)$/.test(path))
   .map((path) => read(path))
   .join("\n");
-assert(sidecarProgram.includes("/v1/relay/manifest"), "Sidecar must expose the HTML tool manifest endpoint");
+assert(sidecarProgram.includes("CodexAppServerBridgeService"), "Sidecar must construct the Codex app-server bridge service");
+assert(sidecarProgram.includes("/bridge/health"), "Sidecar must expose bridge health");
+assert(sidecarProgram.includes("/bridge/sessions"), "Sidecar must expose bridge sessions");
+assert(sidecarProgram.includes("/bridge/turns/{turnId}/events"), "Sidecar must expose bridge turn events");
 assert(sidecarProgram.includes("/v1/models"), "Sidecar must expose the OpenAI-compatible models endpoint");
-assert(sidecarProgram.includes("/v1/chat/completions"), "Sidecar must expose the Copilot chat API endpoint");
+assert(sidecarProgram.includes("/v1/chat/completions"), "Sidecar must expose the Copilot provider endpoint");
+assert(activeScriptText.includes("sidecar:app-server-bridge-smoke"), "pnpm check must include the app-server bridge smoke");
 assert(!sidecarProgram.includes("/v1/pdf/"), "Sidecar must not expose retired PDF review endpoints");
 assert(!sidecarProgram.includes("/api/" + "runs"), "Sidecar must not expose the legacy run REST product path");
 assert(!sidecarSource.includes("Run" + "Manager"), "Sidecar must not retain the legacy RunManager runtime");

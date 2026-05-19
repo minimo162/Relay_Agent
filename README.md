@@ -1,61 +1,65 @@
 # Relay Agent
 
-Relay Agent is a local **HTML tool API hub** for Microsoft 365 Copilot:
+Relay Agent is a local **Codex app-server bridge** for Microsoft 365 Copilot:
 
-> Copilot thinks. Relay exposes a local API and executes local work safely.
+> Copilot thinks. The bundled app server runs the agent loop. Relay governs
+> local execution.
 
-The active user-facing surface is the browser-hosted **Relay API Hub** served by
-a self-contained .NET Relay Core sidecar. The hub is intentionally simple for
-first-time users: start Relay Agent, confirm it is Ready, copy or download the
-starter HTML, and connect any local HTML tool to Relay's localhost API.
+The active product direction is a browser-hosted **Relay Bridge Workbench**
+served by a self-contained .NET sidecar. The Workbench talks to Relay's
+`/bridge/*` endpoints. Those endpoints supervise a pinned, redistributable
+Codex app server and connect it to Relay Core's Copilot-backed provider API.
 
-The retired PDF review client is no longer the active product surface. PDF,
-Office, file search, coding, and other workflows should now be built as thin
-HTML tools over the same Relay Core APIs instead of becoming separate Relay
-Workbench modes.
+The old API-Hub-first product, PDF review client, Tauri desktop shell, AionUi
+overlay, OpenCode/OpenWork provider paths, and separate mode-based Workbench
+are historical implementation inputs only. They are not active release or
+fallback paths.
 
 ## Architecture
 
 ```text
-Any local HTML tool
-  lightweight UI, task-specific controls, no Copilot CDP or local execution code
+Workbench / task-specific browser tools
+  normal browser UI; no Edge CDP automation and no local tool execution code
 
-Relay API Hub
-  first-run guidance, API manifest, starter HTML, test prompt, diagnostics
+Relay browser bridge
+  launch-token protected /bridge/* HTTP and SSE facade
 
-.NET Relay Core sidecar
-  localhost OpenAI-compatible API, M365 Copilot CDP adapter, token/CORS
-  boundaries, support bundles, and user-local storage
+Bundled Codex app server
+  sessions, turns, event stream, transcript continuity, tool loop, approvals
+
+Relay Core provider
+  OpenAI-compatible /v1/models and /v1/chat/completions for m365-copilot
 
 M365 Copilot via Edge CDP
   primary reasoning controller; no OpenAI API key is required
 ```
 
-The old Tauri desktop shell, AionUi overlay, OpenCode/OpenWork provider paths,
-Codex app-server path, generic chatbot Workbench, and PDF review client are
-historical implementation inputs only. They are not active release or fallback
-paths.
+Relay owns the parts that are unique to this project: the M365 Copilot CDP
+provider adapter, local tool validation, approvals, backups, diffs, logs,
+support bundles, and user-local storage boundaries.
 
-## Relay Core API
+The direct `/v1` API remains available as the lower-level provider and
+developer diagnostic surface. It is not the recommended first-time HTML tool
+integration path once the bundled app-server bridge gates are complete.
 
-Relay Core binds to `127.0.0.1` and requires a per-run launch token. HTML tools
-can discover the current contract through:
+## Current Bridge Contract
 
-- `GET /health` for readiness;
-- `GET /v1/relay/manifest` for endpoint, auth, and CORS discovery;
-- `GET /v1/copilot/session` for Copilot provider state;
-- `GET /v1/models` and `GET /v1/models/{model}` for model discovery;
-- `POST /v1/chat/completions` for an OpenAI-compatible chat shape backed by
-  M365 Copilot;
-- `POST /api/support-bundle` for explicit redacted diagnostics bundles.
+The active bridge surface is:
 
-Local HTML files are supported through a narrow CORS policy for `null`,
-`localhost`, and `127.0.0.1` origins. The launch token must be supplied either
-as `?token=...`, `X-Relay-Token`, or `Authorization: Bearer ...`.
+- `GET /health` for Relay Core readiness;
+- `GET /bridge/health` for app-server bridge readiness;
+- `POST /bridge/sessions` to create an app-server-backed session;
+- `POST /bridge/sessions/{sessionId}/turns` to start a turn;
+- `GET /bridge/turns/{turnId}/events` to stream turn events;
+- `POST /bridge/turns/{turnId}/cancel` to cancel a turn;
+- `GET /v1/models` and `POST /v1/chat/completions` as the app server's
+  `m365-copilot` provider.
 
-Relay does not execute client-side tools. When an HTML app uses OpenAI function
-tools, Relay returns normal OpenAI-compatible `tool_calls`; the HTML app owns
-tool execution, approvals, and follow-up tool messages.
+The bridge implementation currently includes a sidecar supervisor skeleton,
+stdio JSONL fixture smoke, browser bridge endpoints, and release guards. The
+runtime must not be advertised as fully bundled until the app-server artifact,
+license inventory, generated schemas, provider compatibility, tool loop,
+approval flow, packaging, and live Copilot E2E gates pass.
 
 ## Requirements
 
@@ -72,7 +76,8 @@ Live Copilot use:
 - no extra tenant app registration
 
 Tests may use the explicit mock transport only when
-`RELAY_ALLOW_MOCK_COPILOT=1` and `RELAY_COPILOT_MOCK_RESPONSE` are set.
+`RELAY_ALLOW_MOCK_COPILOT=1` and `RELAY_COPILOT_MOCK_RESPONSE` or
+`RELAY_COPILOT_MOCK_RESPONSES_JSON` is set.
 
 ## Development
 
@@ -82,7 +87,7 @@ Install dependencies:
 pnpm install
 ```
 
-Build the API Hub and copy it into the sidecar:
+Build the Workbench and copy it into the sidecar:
 
 ```bash
 pnpm build
@@ -94,9 +99,9 @@ Run the active acceptance gate:
 pnpm check
 ```
 
-`pnpm check` covers the hard-cut guard, API Hub typecheck/build, sidecar
-build/smokes, Relay Core API smokes, sidecar security checks, and release
-inventory/SBOM generation.
+`pnpm check` covers the hard-cut guard, Workbench typecheck/build, sidecar
+build/smokes, Codex app-server bridge smoke, Relay Core API smokes, security
+smokes, and release inventory/SBOM generation.
 
 Start the local sidecar:
 
@@ -104,12 +109,12 @@ Start the local sidecar:
 pnpm dev
 ```
 
-The sidecar prints the localhost URL with the launch token. Opening that URL
-shows Relay API Hub.
+The sidecar prints a localhost URL with the launch token. Opening that URL
+shows Relay Bridge Workbench.
 
 ## Packaging
 
-The primary distribution is the portable package. It does not require
+The primary distribution remains the portable package. It does not require
 administrator rights:
 
 ```bash
@@ -133,8 +138,9 @@ Relay Agent/
   app/
 ```
 
-Implementation files, tools, assets, and runtime payloads live under `app/`.
-They should not appear beside the primary launcher.
+Implementation files, tools, assets, sidecar binaries, schemas, and bundled
+runtime payloads live under `app/`. They should not appear beside the primary
+launcher.
 
 The Windows NSIS installer is optional convenience for Start Menu, desktop
 shortcut, and uninstall integration:
@@ -150,11 +156,12 @@ state is stored under the current user's local application data directory.
 
 ## Boundaries
 
-- M365 Copilot may plan and synthesize; Relay executes local work.
-- HTML tools are thin clients. They must not implement their own Copilot CDP,
-  local execution, approval harness, or workspace policy.
-- Relay validates tool arguments before execution.
-- Office edits go through OfficeCLI, backups, approval, and verification.
-- Code edits use exact replacements, approved writes, or approved patches.
-- Shared folders are never used for Relay caches, indexes, logs, or temp state.
+- M365 Copilot may plan and synthesize; Relay executes local work only through
+  validated bridge/tool contracts.
+- Browser clients must not implement their own Copilot CDP automation,
+  app-server process management, cache/index storage, or workspace policy.
+- Mutating local tools require explicit approval, backups, verification, and
+  auditable events.
+- Shared folders are never used for Relay caches, indexes, logs, or temp
+  state.
 - Unrestricted shell is not part of the default tool catalog.

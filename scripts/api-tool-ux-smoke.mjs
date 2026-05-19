@@ -10,19 +10,21 @@ const program = read("apps/sidecar/Program.cs");
 const packageJson = JSON.parse(read("package.json"));
 
 for (const needle of [
-  "Relay API Hub",
-  "任意のHTMLツール",
-  "/v1/relay/manifest",
-  "/v1/models",
+  "Relay Bridge Workbench",
+  "Codex app server",
+  "/bridge/health",
+  "/bridge/sessions",
+  "/bridge/turns/",
   "/v1/chat/completions",
-  "HTMLスターター",
-  "Copilotに送信",
+  "Next runtime gate",
   "サポート情報を保存",
 ]) {
-  assert(app.includes(needle), `API Hub client is missing: ${needle}`);
+  assert(app.includes(needle), `bridge Workbench is missing: ${needle}`);
 }
 
 for (const forbidden of [
+  "Relay API Hub",
+  "HTMLスターター",
   "Relay PDF Review",
   "PDFを選択",
   "/v1/pdf/review",
@@ -36,7 +38,7 @@ for (const forbidden of [
   "/agui/relay",
   "/v1/tools",
 ]) {
-  assert(!app.includes(forbidden), `API Hub client must not expose retired feature UI: ${forbidden}`);
+  assert(!app.includes(forbidden), `bridge Workbench must not expose retired feature UI: ${forbidden}`);
 }
 
 for (const needle of [
@@ -47,17 +49,19 @@ for (const needle of [
   ".code-sample",
   ".support",
 ]) {
-  assert(styles.includes(needle), `API Hub styling is missing: ${needle}`);
+  assert(styles.includes(needle), `Bridge Workbench styling is missing: ${needle}`);
 }
 
 for (const needle of [
-  "/v1/relay/manifest",
-  "RelayHtmlToolManifest.v1",
+  "CodexAppServerBridgeService",
+  "/bridge/health",
+  "/bridge/sessions",
+  "/bridge/turns/{turnId}/events",
   "/v1/models",
   "/v1/chat/completions",
   "ApplyCorsHeaders",
 ]) {
-  assert(program.includes(needle), `Sidecar HTML tool API route is missing: ${needle}`);
+  assert(program.includes(needle), `Sidecar bridge/provider route is missing: ${needle}`);
 }
 
 for (const forbidden of [
@@ -70,6 +74,7 @@ for (const forbidden of [
 
 assert(packageJson.scripts["agent:api-tool-ux-smoke"], "missing API tool UX smoke script");
 assert(packageJson.scripts.check.includes("pnpm agent:api-tool-ux-smoke"), "pnpm check must include API tool UX smoke");
+assert(packageJson.scripts.check.includes("pnpm sidecar:app-server-bridge-smoke"), "pnpm check must include app-server bridge smoke");
 
 console.log("[api-tool-ux-smoke] ok");
 

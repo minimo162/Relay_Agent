@@ -82,7 +82,7 @@ writeFileSync(
   JSON.stringify({
     schemaVersion: "RelayDefaultConfig.v1",
     version: workbenchPackage.version,
-    architecture: "html-tool-api-hub-relay-core-sidecar",
+    architecture: "codex-app-server-bridge-relay-core-sidecar",
     packageLayout: "portable-root-v2",
     dataDirectory: "user-local",
     localHttp: {
@@ -117,15 +117,16 @@ writeFileSync(
     "Included runtime components under app/:",
     "- relay-core/Relay.Sidecar",
     "- relay-core/wwwroot",
+    "- relay bridge endpoints for Codex app-server mediation",
     "- relay-assets",
     "- relay-tools/ripgrep",
     rid === "win-x64" ? "- relay-tools/officecli" : "- OfficeCLI is optional on this platform",
+    "- app-server bundle is enabled only after BRIDGEGAP artifact, license, schema, and smoke gates pass",
     "",
     "Excluded active runtime families:",
     "- AionUi",
     "- OpenCode/OpenWork",
     "- Tauri desktop shell",
-    "- Codex app-server binary bundle (planned bridge work only)",
     "",
   ].join("\n"),
 );
@@ -139,8 +140,8 @@ writeFileSync(
     "",
     "How to start:",
     rid === "win-x64"
-      ? "1. Extract the zip.\n2. Double-click the top-level Relay Agent.exe.\n3. Your browser opens Relay API Hub automatically."
-      : "1. Extract the tar.gz.\n2. Run the top-level ./relay-agent.\n3. Your browser opens Relay API Hub automatically.",
+      ? "1. Extract the zip.\n2. Double-click the top-level Relay Agent.exe.\n3. Your browser opens Relay Bridge Workbench automatically."
+      : "1. Extract the tar.gz.\n2. Run the top-level ./relay-agent.\n3. Your browser opens Relay Bridge Workbench automatically.",
     "",
     "No administrator rights are required.",
     "Relay stores runtime data under the current user's local application data directory, not in the selected work folder.",
@@ -333,30 +334,30 @@ function portableFrontDoorHtml(rid, version) {
     <header>
       <span class="mark" aria-hidden="true">R</span>
       <h1>Relay Agent Portable</h1>
-      <p>インストールせずに使える、M365 Copilot連携のローカルAPIツールです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
+      <p>インストールせずに使える、M365 Copilot連携のローカルブリッジです。このHTMLは説明書です。起動は同じフォルダの実行ファイルから行います。</p>
     </header>
     <section class="grid" aria-labelledby="start-title">
       <h2 id="start-title">はじめかた</h2>
       <ol class="steps">
         <li><span class="num">1</span><span><span class="file">${escapeHtml(launchName)}</span> を開きます。${escapeHtml(platformHint)}</span></li>
-        <li><span class="num">2</span><span>ブラウザでRelay API Hubが開き、Readyになっていることを確認します。</span></li>
-        <li><span class="num">3</span><span>画面のスターターHTML、または自作HTMLからRelay Core APIを呼び出します。</span></li>
+        <li><span class="num">2</span><span>ブラウザでRelay Bridge Workbenchが開き、Readyになっていることを確認します。</span></li>
+        <li><span class="num">3</span><span>WorkbenchからCodex app-server bridgeの状態を確認します。通常の作業はこのブリッジ経路で実行します。</span></li>
       </ol>
       <p>通常は ${escapeHtml(launchName)} だけを使います。内部ファイルは <span class="file">app/</span> にまとめています。削除や移動はしないでください。</p>
     </section>
     <section class="grid" aria-labelledby="api-title" style="margin-top: 18px;">
-      <h2 id="api-title">HTMLツールから使う</h2>
+      <h2 id="api-title">ブリッジ経路</h2>
       <div class="recipes">
         <section class="recipe">
-          <strong>Chat API</strong>
-          <p><code>/v1/chat/completions</code> を呼ぶと、自作HTMLからCopilotに依頼できます。</p>
+          <strong>Workbench bridge</strong>
+          <p><code>/bridge/*</code> がブラウザからCodex app serverへ接続する標準経路です。</p>
         </section>
         <section class="recipe">
-          <strong>OpenAI互換</strong>
-          <p><code>/v1/models</code> と <code>/v1/chat/completions</code> を通常のOpenAI互換APIとして使います。ツール実行はHTML側で扱います。</p>
+          <strong>Copilot provider</strong>
+          <p><code>/v1/models</code> と <code>/v1/chat/completions</code> はapp server向けの低レベルproviderです。</p>
         </section>
       </div>
-      <p>APIには起動時のlaunch tokenが必要です。Relay API HubのスターターHTMLをコピーすると、最小構成の呼び出し例から始められます。</p>
+      <p>APIには起動時のlaunch tokenが必要です。Relay Bridge Workbenchは起動URLからtokenを受け取り、必要な診断情報を表示します。</p>
       <p>Relayのデータはユーザーのローカルアプリデータに保存され、共有フォルダにはキャッシュを書き込みません。</p>
     </section>
     <p style="margin-top: 22px;">Version ${escapeHtml(version)} / ${escapeHtml(rid)}</p>
@@ -370,34 +371,27 @@ function starterHtml() {
   return `<!doctype html>
 <html lang="ja">
 <meta charset="utf-8" />
-<title>Relay HTML Tool Starter</title>
+<title>Relay Bridge Starter</title>
 <body>
-  <textarea id="prompt" rows="6" style="width:100%">このHTMLツールからCopilotに接続できているか確認してください。</textarea>
-  <button id="send">Send to Copilot</button>
+  <button id="send">Check Relay Bridge</button>
   <pre id="output"></pre>
   <script>
-    const relayBase = prompt('Relay API HubのBase URLを入力してください');
+    const relayBase = prompt('Relay Bridge WorkbenchのBase URLを入力してください');
     const relayToken = prompt('Relay launch tokenを入力してください');
-    async function askCopilot(message) {
-      const url = new URL('/v1/chat/completions', relayBase);
+    async function checkBridge() {
+      const url = new URL('/bridge/health', relayBase);
       url.searchParams.set('token', relayToken);
       const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'm365-copilot',
-          messages: [{ role: 'user', content: message }]
-        })
+        headers: { 'X-Relay-Token': relayToken }
       });
       if (!response.ok) throw new Error(await response.text());
-      const json = await response.json();
-      return json.choices?.[0]?.message?.content ?? '';
+      return JSON.stringify(await response.json(), null, 2);
     }
     document.querySelector('#send').onclick = async () => {
       const output = document.querySelector('#output');
       output.textContent = 'Running...';
       try {
-        output.textContent = await askCopilot(document.querySelector('#prompt').value);
+        output.textContent = await checkBridge();
       } catch (error) {
         output.textContent = String(error);
       }
