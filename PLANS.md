@@ -88,14 +88,36 @@ reintroduced as active assets.
 
 ## Remaining Real Work
 
-1. Expand live Copilot E2E beyond the current canary into representative
+1. Maintain the `/v1/responses` provider safety contract: Copilot raw text may
+   contain UI prose around JSON, but Relay must execute only the first balanced
+   JSON object after allow-list and schema validation. Invalid tool names,
+   missing required arguments, wrong primitive types, enum mismatches, and
+   `additionalProperties:false` violations must fail fast before reaching the
+   bundled app server.
+2. Expand live Copilot E2E beyond the current canary into representative
    bundled app-server native tool scenarios.
-2. Add generated protocol schema drift checks against the pinned app-server
+3. Add generated protocol schema drift checks against the pinned app-server
    artifact.
-3. Polish Workbench event, approval, and diagnostic rendering around native
+4. Polish Workbench event, approval, and diagnostic rendering around native
    app-server events.
-4. Keep release inventory/SBOM and portable-root smokes aligned with the
+5. Keep release inventory/SBOM and portable-root smokes aligned with the
    bundled app-server package layout.
+
+## Current Safety Remediation
+
+Completed in this slice:
+
+- Hardened `/v1/responses` tool-call argument validation so Relay checks:
+  - tool name allow-list;
+  - `required`;
+  - primitive `type` including `integer`;
+  - nested object and array item schemas;
+  - `enum`;
+  - `additionalProperties:false`.
+- Kept balanced JSON extraction for Copilot UI/prose wrappers, but only the
+  validated JSON object is converted into app-server Responses output items.
+- Added `sidecar:responses-schema-validation-smoke` to prove malformed
+  Copilot tool-call arguments fail with `invalid_responses_output`.
 
 ## Verification Gate
 

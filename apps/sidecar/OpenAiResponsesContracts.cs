@@ -592,22 +592,157 @@ public static partial class OpenAiApi
         {
             return null;
         }
-        if (schema["type"]?.GetValue<string>() is { } rootType && rootType != "object")
+        return ValidateResponsesSchemaNode(toolName, "$", arguments, schema);
+    }
+
+    private static string? ValidateResponsesSchemaNode(string toolName, string path, JsonNode? value, JsonObject schema)
+    {
+        if (schema.TryGetPropertyValue("enum", out var enumNode) && enumNode is JsonArray enumArray)
         {
-            return $"schema for '{toolName}' must be an object schema";
-        }
-        if (schema["required"] is JsonArray required)
-        {
-            foreach (var item in required)
+            var matched = enumArray.Any(item => JsonNode.DeepEquals(item, value));
+            if (!matched)
             {
-                if (item?.GetValueKind() == JsonValueKind.String && !arguments.ContainsKey(item.GetValue<string>()))
+                return $"{path} for '{toolName}' must match one of the allowed enum values";
+            }
+        }
+
+        var expectedTypes = GetResponsesSchemaTypes(schema).ToArray();
+        if (expectedTypes.Length > 0 && !expectedTypes.Any(type => ResponsesValueMatchesType(value, type)))
+        {
+            return $"{path} for '{toolName}' must be {string.Join(" or ", expectedTypes)}";
+        }
+
+        var effectiveType = expectedTypes.FirstOrDefault(type => type is "object" or "array")
+            ?? (value is JsonObject ? "object" : value is JsonArray ? "array" : null);
+
+        if (effectiveType == "object")
+        {
+            if (value is not JsonObject obj)
+            {
+                return $"{path} for '{toolName}' must be object";
+            }
+            if (schema["required"] is JsonArray required)
+            {
+                foreach (var item in required)
                 {
-                    return $"arguments for '{toolName}' missing required property '{item.GetValue<string>()}'";
+                    if (item?.GetValueKind() == JsonValueKind.String && !obj.ContainsKey(item.GetValue<string>()))
+                    {
+                        return $"{path} for '{toolName}' missing required property '{item.GetValue<string>()}'";
+                    }
+                }
+            }
+
+            var properties = schema["properties"] as JsonObject;
+            foreach (var (key, childValue) in obj)
+            {
+                if (properties?.TryGetPropertyValue(key, out var childSchemaNode) == true)
+                {
+                    if (childSchemaNode is JsonObject childSchema)
+                    {
+                        var childError = ValidateResponsesSchemaNode(toolName, $"{path}.{key}", childValue, childSchema);
+                        if (childError is not null)
+                        {
+                            return childError;
+                        }
+                    }
+                    continue;
+                }
+
+                if (schema.TryGetPropertyValue("additionalProperties", out var additionalProperties))
+                {
+                    if (additionalProperties is JsonValue jsonValue &&
+                        jsonValue.TryGetValue<bool>(out var allowed) &&
+                        !allowed)
+                    {
+                        return $"{path} for '{toolName}' contains unexpected property '{key}'";
+                    }
+                    if (additionalProperties is JsonObject additionalSchema)
+                    {
+                        var additionalError = ValidateResponsesSchemaNode(toolName, $"{path}.{key}", childValue, additionalSchema);
+                        if (additionalError is not null)
+                        {
+                            return additionalError;
+                        }
+                    }
                 }
             }
         }
+
+        if (effectiveType == "array")
+        {
+            if (value is not JsonArray array)
+            {
+                return $"{path} for '{toolName}' must be array";
+            }
+            if (schema["items"] is JsonObject itemSchema)
+            {
+                for (var index = 0; index < array.Count; index++)
+                {
+                    var itemError = ValidateResponsesSchemaNode(toolName, $"{path}[{index}]", array[index], itemSchema);
+                    if (itemError is not null)
+                    {
+                        return itemError;
+                    }
+                }
+            }
+        }
+
         return null;
     }
+
+    private static IEnumerable<string> GetResponsesSchemaTypes(JsonObject schema)
+    {
+        if (!schema.TryGetPropertyValue("type", out var typeNode) || typeNode is null)
+        {
+            yield break;
+        }
+        if (typeNode.GetValueKind() == JsonValueKind.String)
+        {
+            yield return typeNode.GetValue<string>();
+            yield break;
+        }
+        if (typeNode is not JsonArray typeArray)
+        {
+            yield break;
+        }
+        foreach (var item in typeArray)
+        {
+            if (item?.GetValueKind() == JsonValueKind.String)
+            {
+                yield return item.GetValue<string>();
+            }
+        }
+    }
+
+    private static bool ResponsesValueMatchesType(JsonNode? value, string type) =>
+        type switch
+        {
+            "object" => value is JsonObject,
+            "array" => value is JsonArray,
+            "string" => value?.GetValueKind() == JsonValueKind.String,
+            "integer" => ResponsesValueIsInteger(value),
+            "number" => ResponsesValueIsNumber(value),
+            "boolean" => value?.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
+            "null" => value is null || value.GetValueKind() == JsonValueKind.Null,
+            _ => true,
+        };
+
+    private static bool ResponsesValueIsInteger(JsonNode? value)
+    {
+        if (value is null || value.GetValueKind() != JsonValueKind.Number)
+        {
+            return false;
+        }
+        return value.AsValue().TryGetValue<int>(out _) ||
+               value.AsValue().TryGetValue<long>(out _) ||
+               (value.AsValue().TryGetValue<decimal>(out var decimalValue) && decimal.Truncate(decimalValue) == decimalValue);
+    }
+
+    private static bool ResponsesValueIsNumber(JsonNode? value) =>
+        value is not null &&
+        value.GetValueKind() == JsonValueKind.Number &&
+        (value.AsValue().TryGetValue<double>(out _) ||
+         value.AsValue().TryGetValue<decimal>(out _));
 }
 
 public sealed record OpenAiResponsesRequest(

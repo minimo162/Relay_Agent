@@ -36,6 +36,43 @@
 
 ## Milestone Log
 
+### 2026-05-20 Responses Tool-Call Safety Validation
+
+Live Copilot testing showed that M365 Copilot can select the correct tool call
+while the raw visible response text contains Copilot UI prose or suggested
+follow-up prompts before or after the JSON object. Relay keeps balanced JSON
+extraction for that UI wrapper, but the extracted object must pass strict
+validation before it is converted into Responses API output items for the
+bundled Codex app server.
+
+Implemented:
+
+- Recursive JSON-schema subset validation for `/v1/responses` function-tool
+  arguments.
+- Fail-fast rejection for unknown tool names, missing required properties,
+  primitive type mismatches, enum mismatches, nested object/array item schema
+  violations, and `additionalProperties:false` violations.
+- New deterministic mock-Copilot regression smoke:
+  `pnpm sidecar:responses-schema-validation-smoke`.
+- Added the smoke to the canonical `pnpm check` gate.
+
+Verification commands:
+
+```bash
+pnpm sidecar:responses-schema-validation-smoke
+pnpm check
+git diff --check
+```
+
+Outcome:
+
+- Completed on 2026-05-20. The safety smoke covers valid JSON wrapped in
+  surrounding text, unknown tools, missing required fields, wrong primitive
+  types, unexpected additional properties, and enum mismatch.
+- `pnpm check` passed with the new smoke in the canonical gate.
+- `pnpm workbench:live-copilot-e2e` passed after the change against signed-in
+  Edge CDP port 9360.
+
 ### 2026-05-20 Legacy Asset Cleanup
 
 This slice removes tracked assets from retired product directions so the

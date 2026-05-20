@@ -6,7 +6,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm sidecar:app-server-artifact-smoke && pnpm sidecar:app-server-bridge-smoke && pnpm sidecar:app-server-real-provider-smoke && pnpm sidecar:idle-exit-smoke && pnpm sidecar:copilot-cdp-smoke && pnpm sidecar:workspace-picker-smoke && pnpm release:icon-smoke && pnpm release:portable-root-smoke && pnpm workbench:bridge-surface-smoke && pnpm workbench:bridge-chat-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
+    "check": "node scripts/check-hard-cut-guard.mjs && pnpm typecheck && pnpm build && pnpm sidecar:build && pnpm sidecar:smoke && pnpm sidecar:app-server-artifact-smoke && pnpm sidecar:app-server-bridge-smoke && pnpm sidecar:app-server-real-provider-smoke && pnpm sidecar:responses-schema-validation-smoke && pnpm sidecar:idle-exit-smoke && pnpm sidecar:copilot-cdp-smoke && pnpm sidecar:workspace-picker-smoke && pnpm release:icon-smoke && pnpm release:portable-root-smoke && pnpm workbench:bridge-surface-smoke && pnpm workbench:bridge-chat-smoke && pnpm sidecar:security-smoke && pnpm release:inventory",
     "build": "pnpm --filter @relay-agent/workbench build && node scripts/prepare-sidecar-assets.mjs",
     "dev": "pnpm build && dotnet run --project apps/sidecar/Relay.Sidecar.csproj",
     "sidecar:build": "dotnet build apps/sidecar/Relay.Sidecar.csproj --configuration Release",
@@ -14,6 +14,7 @@
     "sidecar:app-server-artifact-smoke": "node scripts/app-server-artifact-smoke.mjs",
     "sidecar:app-server-bridge-smoke": "node scripts/app-server-bridge-smoke.mjs",
     "sidecar:app-server-real-provider-smoke": "node scripts/app-server-real-provider-smoke.mjs",
+    "sidecar:responses-schema-validation-smoke": "node scripts/responses-schema-validation-smoke.mjs",
     "sidecar:idle-exit-smoke": "node scripts/sidecar-idle-exit-smoke.mjs",
     "sidecar:copilot-cdp-smoke": "node scripts/copilot-cdp-manager-smoke.mjs",
     "sidecar:security-smoke": "node scripts/sidecar-security-smoke.mjs",

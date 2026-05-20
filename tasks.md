@@ -20,6 +20,32 @@ packaging, and user-local storage boundaries.
 
 ## Current Queue
 
+### RESPSEC-01 - Harden Responses Tool-Call Schema Validation
+
+Status: completed
+
+Result:
+
+- Replaced shallow required-only validation in `/v1/responses` with recursive
+  JSON-schema subset validation.
+- Relay now rejects invalid Copilot tool-call output for:
+  - unknown tool names;
+  - missing required properties;
+  - primitive type mismatches;
+  - enum mismatches;
+  - unexpected properties when `additionalProperties:false`;
+  - nested object and array item schema violations.
+- JSON wrappers or trailing/prologue UI text from Copilot remain tolerated only
+  as raw text around the first balanced JSON object. The extracted object still
+  must pass allow-list and schema validation before app-server conversion.
+
+Verification:
+
+```bash
+pnpm sidecar:responses-schema-validation-smoke
+pnpm check
+```
+
 ### REPOCLEAN-01 - Inventory Tracked Legacy Assets
 
 Status: completed
